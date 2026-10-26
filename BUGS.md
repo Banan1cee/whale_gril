@@ -1,0 +1,31 @@
+# BUGS — 修过的 bug（回归看这里）
+
+每一行都是一次真实故障：先有现象，再定位根因，最后落一个能重复验证的修复。
+修新 bug 时照这个格式加到最上面，并在 `tests/` 里补一条能复现它的测试。
+
+| # | 现象 | 根因 | 修复 | 版本 | 回归测试 |
+| --- | --- | --- | --- | --- | --- |
+| 16 | 长时间挂着不管，桥接偶尔报 `Bridge exited with code -1073741819` 然后断开 | 那个码 = 0xC0000005（访问违规，原生崩溃）。微信挂久了窗口被回收/自更新，uiautomation 还攥着旧窗口的 COM 指针/句柄；心跳每 20 秒碰一次 UIA，一碰就炸（Python 的 try/except 拦不住原生崩溃）；且启动脚本崩溃后不自动拉起，桥接就永久断开 | ①碰 UIA 前先现查微信主窗还在不在（`IsWindow`），没了就先把缓存引擎丢掉、别碰；②心跳 / 发送 / 热激活三处都埋这道挡板；③`faulthandler` 崩溃前把「当时在跑哪句」留到 `data/bridge-crash.log`；④启动脚本改守护循环，负数错码 3 秒内自动拉起；⑤看门狗重启码 2→7，与「找不到数据库」的优雅报错分开 | 3.4.4 | `tests/bridge-crash.test.js` 6 条 |
+| 15 | UIA 彻底不可用时完全发不出去（OCR 兜底会卡在截屏） | 只依赖 accessibility gate；UIA 一挂，OCR 兜底又卡死 25 秒，等于没有发送通道 | 新增键盘兜底 keyboard_send()：Ctrl+F 搜索会话 → 剪贴板粘贴 → 回车，发完回读数据库确认；抢前台用「ALT 解锁 + SetForegroundWindow」；开关 wechat.keyboardFallback | 3.0.13 | 	ests/bridge-recovery.test.js「键盘兜底」|
+| 14 | 挂一段时间就不理人，必须重启桥接 | ①微信跑久后把 accessibility gate byte 归零，UIA 引擎「假死」（能读消息、发不出去）；②桥接缓存引擎、只在缓存为空时才重新获取 → 永远不自愈；③收消息线程退出后无人重启；④表情包转码写死 imageio_ffmpeg（未装）持续刷错 | 每次发送都过一遍库里引擎（自带 30s 节流自愈）；失败时 _get_uia(refresh=True) 强制重激活并重试一次；新增 listener_watch 重启收消息线程并在心跳上报 listener；表情包转码改用已找到的 ffmpeg | 3.0.11 | 	ests/bridge-recovery.test.js 4 条 |
+| 13 | 调教台「颜文字用量」调了没用，她也几乎不说颜文字 | ①控制器只改提示词半句话，真正决定加不加料的是 chat.emojiChance，默认 0 → 四档全废；②加料池里只有 emoji，没有颜文字；③已带 emoji 时直接跳过，不会补颜文字 | 四档 → 概率（关 0/少 12%/正常 30%/多 65%），emojiChance 留 0 跟着档位走；命中时一半颜文字一半 emoji；新增 10 个颜文字池；调试台显示实际概率 | 3.0.10 | 	ests/emoji.test.js 8 条 |
+| 12 | 填了千问的 Key 连不上（提示「问得太快啦」/直接失败） | ①千问预设默认模型是 qwen-turbo，而该账号 qwen-turbo 免费额度已耗尽 → HTTP 429；②候选列表混了两个 404 的名字（qwen-max-latest / qwen3-max）；③429 被映射成「问得太快」的撒娇文案，且不会自动切备用 | 默认改 qwen-flash，候选只留实测可用的 5 个；429/404 文案给出可替换模型名；429 与模型 404 也会触发 switchFallback() | 3.0.9 | 	ests/providers.test.js「千问默认模型…」「429 / 模型 404 的提示…」|
+| 11 | 用户分不清「桥接在不在、为什么微信收不到回复」，只能靠两个黑窗口猜 | 服务端只统计「收到多少条」，完全不知道回复有没有能力发出去；桥接的 UIA/ffmpeg 状态也没有上报通道 | 桥接每 20 秒 POST /api/bridge/heartbeat（带 uia/ffmpeg），/api/status 暴露 ridge.online/lastSeenSec/uia/ffmpeg，网页显示「桥接在线 · UIA 正常 / UIA 不可用 / 桥接离线」 | 3.0.7 | 	ests/server.test.js「桥接心跳」+ 	ests/scripts.test.js「桥接会定时发心跳」|
+| 10 | 用户看到日志「未配置 outboundUrl，回复只打印在控制台」，以为程序坏了；实际微信里也收不到回复 | ①这条 WARN 在本地桥接模式下是**正常路径**（回复走 HTTP 响应交还桥接），文案却像错误；②对方只启动了服务窗口、没启动桥接窗口，回复确实只落在控制台 | 桥接带 x-whale-bridge: 1 头，服务端区分：桥接请求打 INFO「已交给本地桥接发送」，非桥接且无 outboundUrl 才 WARN 并说明缺哪个窗口；启动横幅新增「回复发送：…」 | 3.0.6 | 	ests/server.test.js「本地桥接请求不会被误报」|
+| 9 | 设置里找不到「看图 API」 | 打包是从一份没同步全的副本取的，zip 里 `web/index.html` 是旧的（源码里明明是好的） | 以单一源码目录为准重新打包；新增 `scripts/release-check.js` + `scripts/build-release.ps1`，出包前检查「用户看得到的功能」是否真在包里，出包后再从 zip 里读文件复核 | 3.0.4 | 出包脚本第 5 步；`release-check` 21 项 |
+| 8 | 「有时能认图、有时不能」，日志「图片输入格式/解析错误」 | 微信 4.x 图片是 `wxgf`（HEVC 容器），桥接只看扩展名就按 `image/jpeg` 原样发；`imageio_ffmpeg` 未装、`C:\ffmpeg\bin` 不在 PATH，转码一直返回空 | 桥接按**文件头**判格式，`wxgf` 先 `_wxgf_to_jpg()` 转 JPEG；`ensure_ffmpeg_env()` 自动找 ffmpeg 并塞进 PATH；长截图（高宽比>2.2）切 2~3 段识别；服务端按文件头校正 mime、拒绝 wxgf；智谱 `max_tokens` 上限改为 1024 | 3.0.2 | `tests/vision.test.js`（wxgf 嗅探/拦截、max_tokens 上限、桥接 ffmpeg+长截图） |
+| 7 | 看图填了 Key 仍报「未配置视觉模型 Key」 | `vision.js` 只读 `config.vision.apiKey`（注释承诺的 `settings.json` 兜底从没实现）；`/api/settings` 不收 `visionApiKey`；网页设置里没有该字段 | Key 查找链：`vision.apiKey` → `settings.visionApiKey` → `keys.vision` → `keys.zhipu` → `ZHIPU_API_KEY`；网页新增「图片识别 · 看图 API Key」+「测试看图」+ `POST /api/vision/test` | 3.0.1 | `tests/vision.test.js` 6 条 |
+| 6 | 「热激活 UIA 失败」，发送全挂，日志只有一句 | 该日志合并了三种原因；且微信有 5 个进程、只有主窗那个带 `Weixin.dll`，拿错 pid 必然「未找到 Weixin.dll」 | 新增 `tools/uia-diag.py`（只读 + `--probe` + `--all`），桥接预热失败时自动打印「UIA 诊断（原因A/B/C）」 | 3.0.3 | `tests/uia-diag.test.js` |
+| 5 | 发送一直报 `error(5,'SetWindowPos','拒绝访问')`，桥接被反复重启 | 程序路径含中文（例如 `C:\Users\<中文用户名>\...`）时微信 Qt accessibility 热激活失败，`ensure_window()` 超时 37s；另外 `find_weixin_hwnd` 会选中「托盘消息窗」（面积比主窗大，且不可定位） | 路径含非 ASCII 时启动即告警；选窗排除 `TrayIcon/MessageWindow` 等并把 `标题=微信 / QWindowClass / 最小化按钮` 加权；挪不动窗口不再算发送失败；失败日志 2 分钟一次 | 3.0.0 | `tests/master.test.js`、桥接自检 |
+| 4 | 微信里怎么改都不认主人 | ①`master.wxids` 填的是微信号（`微信号示例`）不是 `wxid_xxx`；②旧逻辑「wxids 非空就禁用昵称兜底」→ 填错等于谁都认不出；③调试台和真实链路用两套规则 | 统一到 `src/master.js::matchMaster()`；识别并告警「这不像 wxid」；调试台改用同一判定；日志每条私聊打印 `[master] … → 主人/非主人` | 3.0.0 | `tests/master-match.test.js` 13 条 |
+| 3 | 名单填对了，她还是否认「你是主人」 | 会话历史里有几十条她自己说的「你不是主人」，模型顺着历史走（实测 51 轮，连问两遍还是「不是」） | 提示词加【身份纠错】；`stripMasterDispute()` 在主人说话时把这段争执从喂给模型的历史里剔除（记忆文件不动）；`finalize()` 兜底把否认改成认下来 | 3.0.0 | `tests/master.test.js` 6 条 |
+| 2 | 跑一次测试就把真实 `data/settings.json` 覆盖成 `sk-dead` | `tests/providers.test.js` 写成 `loadConfig(root, {})`，`root` 落到真实项目目录 | 改为 `loadConfig({ root, env })`；`saveSettings` 不再丢别的服务商的 Key | 3.0.0 | `tests/providers.test.js` |
+| 1 | `npm test` 一堆假失败（含 `runtime/python` 里的 `.js`） | `node --test tests/` 把 `runtime/python/Lib/site-packages` 也扫了；另有 `.bat` 是 LF、`data/persona.json` 不存在导致 ENOENT | `npm test` 改为 `node --test "tests/*.test.js"`；`一键修复并自检.bat` 转 CRLF；voice 测试容忍 `data/persona.json` 缺失 | 3.0.0 | `tests/scripts.test.js`、`tests/voice.test.js` |
+
+## 修 bug 的固定动作
+
+1. **先复现**：能拿日志/线上接口/真实文件复现，就别猜。今天的 5 个关键结论都来自读数，不是推断。
+2. **定位到最底层**：现象 → 直接原因 → 根因（哪个判断/哪行代码/哪个环境假设）。
+3. **一处修复**：同类判断只保留一份实现（主人判定、mime 判定、ffmpeg 查找都是这么收的）。
+4. **补回归测试**：`tests/` 里要有能在修复前失败、修复后通过的用例。
+5. **写进这里**：一行一个问题，别让下一个人重踩。

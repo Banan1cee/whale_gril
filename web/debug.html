@@ -1,0 +1,624 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>鲸鲸调试台</title>
+<style>
+  :root { --bg:#04121f; --card:rgba(10,36,58,.85); --line:rgba(120,210,255,.18); --text:#e6f8ff; --dim:#a9cfe4; --cyan:#57d6ff; --ok:#7ff0c0; --bad:#ffb3c0; --warn:#ffd166; }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:20px; font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif; color:var(--text);
+    background: radial-gradient(1200px 700px at 15% -10%, #0d3f63, transparent 60%), linear-gradient(180deg,#041625,#02101d); min-height:100dvh; }
+  a { color: var(--cyan); }
+  header { display:flex; align-items:center; gap:12px; flex-wrap:wrap; max-width:1180px; margin:0 auto 16px; }
+  header h1 { margin:0; font-size:20px; }
+  header small { color:var(--dim); font-size:12px; }
+  header .spacer { flex:1; }
+  button, select, input, textarea { font-family:inherit; font-size:13px; color:var(--text); background:rgba(2,14,26,.7); border:1px solid var(--line); border-radius:10px; padding:8px 10px; outline:none; }
+  button { cursor:pointer; background:rgba(87,214,255,.12); }
+  button:hover { background:rgba(87,214,255,.22); }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  button.primary { background:rgba(87,214,255,.28); border-color:rgba(87,214,255,.55); font-weight:600; }
+  button.danger { color:#ffb3c0; border-color:rgba(255,120,140,.35); }
+  main { max-width:1180px; margin:0 auto; display:flex; flex-direction:column; gap:14px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:14px 16px; backdrop-filter:blur(10px); }
+  .card h2 { margin:0 0 10px; font-size:15px; color:var(--cyan); font-weight:600; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(400px,1fr)); gap:14px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  td { padding:4px 6px; vertical-align:top; border-bottom:1px dashed rgba(120,210,255,.1); }
+  td.k { color:var(--dim); width:150px; white-space:nowrap; }
+  code, pre { font-family:ui-monospace,Consolas,monospace; }
+  .tag { display:inline-block; padding:1px 8px; border-radius:99px; font-size:12px; border:1px solid var(--line); }
+  .tag.ok { color:var(--ok); border-color:rgba(127,240,192,.35); }
+  .tag.bad { color:var(--bad); border-color:rgba(255,179,192,.35); }
+  .tag.warn { color:var(--warn); border-color:rgba(255,209,102,.35); }
+  .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:8px; }
+  .row label { font-size:12.5px; color:var(--dim); display:flex; gap:6px; align-items:center; }
+  textarea { width:100%; min-height:34px; resize:vertical; line-height:1.5; }
+  #promptOut { white-space:pre-wrap; word-break:break-word; font-size:12.5px; line-height:1.6; background:rgba(2,14,26,.65); border:1px solid var(--line); border-radius:12px; padding:12px; max-height:520px; overflow:auto; margin:10px 0 0; }
+  .sess { border:1px solid var(--line); border-radius:12px; padding:10px 12px; margin-bottom:10px; background:rgba(2,14,26,.4); }
+  .sess .head { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .sess .head strong { font-size:13.5px; }
+  .sess .head .spacer { flex:1; }
+  .sess .notes { font-size:12.5px; color:var(--dim); margin:6px 0 0; }
+  .sess ul { margin:6px 0 0; padding-left:16px; font-size:12.5px; color:var(--dim); }
+  .sess li { margin:2px 0; }
+  .muted { color:var(--dim); font-size:12.5px; }
+  .ok { color:var(--ok); } .bad { color:var(--bad); } .warn { color:var(--warn); }
+  .copybar { display:flex; gap:8px; align-items:center; }
+
+  /* ---- 设置表单 ---- */
+  #cfgForm .sec { border:1px solid var(--line); border-radius:14px; padding:12px 14px; background:rgba(2,14,26,.35); margin-bottom:12px; }
+  #cfgForm .sec > h3 { margin:0 0 4px; font-size:14px; color:var(--cyan); }
+  #cfgForm .secHint { margin:0 0 10px; font-size:12px; color:var(--dim); }
+  #cfgForm .sub { border-left:2px solid rgba(120,210,255,.22); margin:10px 0 4px; padding:2px 0 2px 12px; }
+  #cfgForm .sub > h4 { margin:0 0 6px; font-size:13px; color:var(--text); font-weight:600; }
+  #cfgForm .fields { display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:10px 16px; }
+  #cfgForm .field { display:flex; flex-direction:column; gap:4px; min-width:0; }
+  #cfgForm .field.wide { grid-column:1/-1; }
+  #cfgForm .field > label { font-size:12.5px; color:var(--dim); }
+  #cfgForm .hint { font-size:11.5px; color:rgba(169,207,228,.72); }
+  #cfgForm input[type=text], #cfgForm input[type=number], #cfgForm select { width:100%; }
+  #cfgForm input[type=checkbox] { width:16px; height:16px; accent-color:var(--cyan); }
+  #cfgForm .switch { display:flex; align-items:center; gap:8px; font-size:13px; color:var(--text); }
+  #cfgForm .field.changed > label { color:var(--warn); }
+  #cfgForm .field.changed input, #cfgForm .field.changed textarea, #cfgForm .field.changed select { border-color:rgba(255,209,102,.6); }
+  #cfgForm .field.invalid input, #cfgForm .field.invalid textarea { border-color:rgba(255,120,140,.75); }
+  .savebar { position:sticky; bottom:0; display:flex; gap:10px; align-items:center; flex-wrap:wrap;
+    padding:10px 0 2px; margin-top:4px; background:linear-gradient(180deg,rgba(4,18,31,0),rgba(4,18,31,.92) 45%); }
+  .savebar .spacer { flex:1; }
+  #dirtyTag { font-size:12.5px; color:var(--warn); }
+  #saveMsg { font-size:12.5px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🧪 鲸鲸调试台</h1>
+  <small>本机可见 · 下面的设置直接写进 config.json，点保存就生效（桥接的项 5 秒内自动重读，不用重启）</small>
+  <span class="spacer"></span>
+  <a href="/">← 回聊天</a>
+  <a href="/persona">人设调教</a>
+  <button id="btnReload">刷新</button>
+</header>
+
+<main>
+  <div class="card" id="cfgCard">
+    <h2>全部设置（每一项都能改，改完点“保存修改”）</h2>
+    <p class="muted">这里保存的内容会写回 <code>config.json</code>，并且立刻生效，不用重启（只有「服务 / 网页」里的地址、端口要重启）。<br>
+      网页「⚙️ 设置」里存过的几项（模型服务、Key、温度、群聊开关、称呼）会盖住 config.json —— 在这里改到它们时，保存会顺手把网页设置里那一项清掉，所以改哪项、哪项就生效。</p>
+    <div id="cfgForm"><p class="muted">加载中…</p></div>
+    <div class="savebar">
+      <button class="primary" id="btnSave" disabled>保存修改</button>
+      <button id="btnRevert" disabled>撤销未保存的改动</button>
+      <button id="btnFetch">重新读取 config.json</button>
+      <span id="dirtyTag"></span>
+      <span class="spacer"></span>
+      <span id="saveMsg"></span>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="card"><h2>身份 / 主人</h2><table id="tIdentity"><tr><td class="muted">加载中…</td></tr></table></div>
+    <div class="card"><h2>模型 / 生成参数</h2><table id="tModel"></table></div>
+    <div class="card"><h2>聊天规则</h2><table id="tChat"></table></div>
+    <div class="card"><h2>网关 / 记忆</h2><table id="tGate"></table></div>
+  </div>
+
+  <div class="card">
+    <h2>提示词预览（她真正发给模型的东西）</h2>
+    <p class="muted">输入一个发送者和一句话，就能看到这次会拼出来的系统提示词；用它确认「主人段」「链接段」「群聊规则」有没有生效。</p>
+    <div class="row">
+      <label>发送者昵称 <input type="text" id="senderName" value="测试用户" /></label>
+      <label>wxid（可空） <input type="text" id="senderId" value="" style="min-width:200px" /></label>
+      <label>场景
+        <select id="chatType">
+          <option value="private">私聊</option>
+          <option value="group">群聊</option>
+        </select>
+      </label>
+      <label>群名 <input type="text" id="chatTitle" value="深海鱼塘" /></label>
+      <label><input type="checkbox" id="readLink" /> 顺带读链接（慢）</label>
+      <button id="btnPrompt">生成提示词</button>
+      <span id="promptTag"></span>
+    </div>
+    <div class="row"><textarea id="msgText">在吗</textarea></div>
+    <div class="copybar"><button id="btnCopy">复制提示词</button><span class="muted" id="promptLen"></span></div>
+    <pre id="promptOut">（还没生成）</pre>
+  </div>
+
+  <div class="card">
+    <h2>会话与记忆</h2>
+    <p class="muted">这里能看到每个聊天记住的称呼、笔记和最近几条消息；「忘掉这个聊天」只清这一个会话。</p>
+    <div id="sessions"><p class="muted">加载中…</p></div>
+  </div>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const fmtTime = (ts) => { try { const d = new Date(ts); return d.toLocaleString('zh-CN', { hour12: false }); } catch { return String(ts || ''); } };
+const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+
+function kvRows(rows) {
+  return rows.map(([k, v]) => '<tr><td class="k">' + esc(k) + '</td><td>' + v + '</td></tr>').join('');
+}
+
+/* ------------------------------------------------------------------ */
+/* 设置表单：字段说明 / 渲染 / 收集 / 保存                              */
+/* ------------------------------------------------------------------ */
+
+// [标题, 提示]
+const META = {
+  provider: ['模型服务', 'deepseek / zhipu / siliconflow / qwen / tju / ollama / custom；本机或内网地址可以免 Key'],
+  'server.host': ['监听地址', '只给本机用就保持 127.0.0.1；改成 0.0.0.0 同一 WiFi 的手机也能连（改了要重启）'],
+  'server.port': ['端口', '默认 8787；改了要重启服务，浏览器地址也要跟着改'],
+  'server.openBrowser': ['启动时自动开浏览器', '双击启动脚本时要不要弹出网页'],
+  'log.level': ['日志级别', 'debug 最啰嗦，平时用 info'],
+  'deepseek.provider': ['旧版服务商名', '一般不用动'],
+  'deepseek.apiKey': ['API Key', '留空 = 不改（已配的 Key 不会显示出来）'],
+  'deepseek.baseUrl': ['接口地址', '比如 https://api.deepseek.com'],
+  'deepseek.model': ['模型名', 'deepseek-chat / deepseek-reasoner …'],
+  'deepseek.temperature': ['温度', '0~2，越大越放得开；默认 0.95。超过 1.2 容易「越聊越离谱」，别指望它变得更活泼'],
+  'deepseek.frequencyPenalty': ['频率惩罚', '-2~2，减少复读'],
+  'deepseek.presencePenalty': ['在场惩罚', '-2~2，鼓励换话题'],
+  'deepseek.maxTokens': ['单次最多生成 tokens', '默认 320'],
+  'deepseek.timeoutMs': ['请求超时（毫秒）', ''],
+  'persona.name': ['她的名字', ''],
+  'persona.aliases': ['别名 / 外号', '一行一个；群里喊这些也算叫她'],
+  'persona.age': ['年龄', ''],
+  'persona.job': ['职业', ''],
+  'persona.ownerName': ['她叫你什么', '默认「主人」'],
+  'persona.masterRoast': ['主人骂她时允许还嘴', '关掉 = 只委屈不顶嘴'],
+  'persona.master.names': ['主人名单（微信昵称）', '一行一个；谁填谁就是主人，留空 = 没有主人（微信里改昵称就能冒充，建议同时填 wxid）'],
+  'persona.master.wxids': ['主人名单（wxid）', '一行一个 wxid_xxx —— 微信内部 id，不是你设的微信号；下面「最近说过话的人」里能直接抄'],
+  'persona.appearance': ['外貌', '会进系统提示词'],
+  'persona.personality': ['性格', ''],
+  'persona.background': ['背景设定', ''],
+  'chat.privateMaxChars': ['私聊每条最多多少字', ''],
+  'chat.groupMaxChars': ['群聊每条最多多少字', ''],
+  'chat.historyTurns': ['私聊带多少轮历史', ''],
+  'chat.groupHistoryTurns': ['群聊带多少轮历史', ''],
+  'chat.maxBubbles': ['一次最多连发几条', '像真人分几条发'],
+  'chat.discussionMaxChars': ['「分析一下」的长度上限', ''],
+  'chat.emojiChance': ['带 emoji/颜文字的概率', '0 = 跟着调教台的「颜文字用量」自动算（关 0 / 少 12% / 正常 30% / 多 65%）；填 0.2 就强制两成'],
+  'group.requireAt': ['群聊只回被叫到的', '开 = 只有 @ 她 / 回复她 / 明显叫她说话时才回；关 = 群里不 @ 也会回（仍受「两次回复最少间隔」和冷场限制）'],
+  'group.freeChat': ['允许她偶尔主动接话', '只在上面开着时有用：按下面的概率在群里插一句，不会每条都接'],
+  'group.freeChatChance': ['主动接话概率', '0~1；0.06 = 6%'],
+  'group.cooldownSec': ['两次回复最少间隔（秒）', ''],
+  'group.masterAlwaysReply': ['主人在群里说话永远回', ''],
+  'group.engagedMinutes': ['接话后保持参与多少分钟', ''],
+  'group.silentMinutes': ['冷场多少分钟算话题结束', ''],
+  'group.maxRepliesPerHour': ['每小时最多回几条', '防刷屏'],
+  'group.muteDefaultMinutes': ['免打扰默认时长（分钟）', ''],
+  'wechat.dbDir': ['微信文件保存位置', '留空 = 自动找（看正在运行的微信打开了哪些文件，再扫各盘根目录）。实在找不到就填微信「设置 → 文件管理」里的路径，填到 xwechat_files 这一层；改完要重启「启动微信桥接.bat」'],
+  'wechat.staleAfterSec': ['多久没消息算「去忙了」（秒）', ''],
+  'wechat.gameWhitelist': ['在打这些游戏时先不打扰', '一行一个进程名，比如 valorant'],
+  'wechat.awayNotice': ['离开时说一声', ''],
+  'wechat.returnNotice': ['回来时打个招呼', ''],
+  'wechat.queuedMaxAgeSec': ['忙时消息最多排队多久（秒）', '超过就丢掉'],
+  'wechat.queuedMaxChats': ['最多同时排几个会话', ''],
+  'wechat.digestMinutes': ['回来时把错过的消息合并成摘要', '0 = 不合并'],
+  'wechat.quoteReply': ['回复时引用原消息', ''],
+  'wechat.backgroundSend': ['后台发送（不抢前台）', '开着：微信最小化、被别的窗口挡住也能发，电脑照常用；关掉：每次发送先把微信拉到前台（会打断你正在干的事）'],
+  'wechat.lowBatteryPercent': ['电量低于几 % 说晚安', '0 = 不管电量'],
+  'wechat.ignoreSenders': ['这些会话永不回复', '一行一个（微信团队、订阅号…）'],
+  'wechat.goodnightText': ['电量低时的告别语', ''],
+  'links.enabled': ['读链接标题 / 摘要', ''],
+  'links.timeoutMs': ['读链接超时（毫秒）', ''],
+  'links.cacheMinutes': ['链接缓存多少分钟', ''],
+  'share.enabled': ['主动分享视频', ''],
+  'share.everyMinutes': ['每隔多少分钟分享一次', ''],
+  'share.sources': ['来源', '一行一个，目前支持 bilibili'],
+  'care.enabled': ['主动找你聊天', '没事的时候她会自己发一条，问问你在干啥、累不累'],
+  'care.windows': ['允许搭话的时间段', '一行一个，24 小时制，格式 09:00-12:00；跨零点也认（22:00-02:00）；留空 = 全天'],
+  'care.everyMinutes': ['平均多久搭一次话（分钟）', '90 = 大约一个半小时；这是平均值，会加上下面的浮动'],
+  'care.jitterMinutes': ['时间前后浮动（分钟）', '25 = 在 65~115 分钟之间随机，不至于准点得像机器人'],
+  'care.maxPerDay': ['每天最多几次', '0 = 不限'],
+  'care.quietAfterMinutes': ['刚聊过的会话先跳过（分钟）', '这个会话在这么多分钟内有过消息，就不打扰'],
+  'memory.maxSessions': ['最多记几个会话', ''],
+  'memory.maxMessages': ['每个会话记多少条', ''],
+  'memory.maxNotesPerUser': ['每人记几条笔记', ''],
+  'admin.spell': ['魔咒口令', '在微信里发这段口令可获得管理员权限；留空 = 关闭'],
+  'admin.minutes': ['管理员有效期（分钟）', ''],
+  'admin.allowAll': ['谁发口令都给权限', '关 = 只有主人发才给'],
+  'vision.apiKey': ['看图 API Key', '默认智谱 GLM-4V-Flash（免费）；留空 = 不改'],
+  'vision.baseUrl': ['看图接口地址', ''],
+  'vision.model': ['看图模型名', ''],
+  'vision.timeoutMs': ['看图超时（毫秒）', ''],
+  'voice.enabled': ['语音转文字', ''],
+  'voice.apiKey': ['语音 API Key', '留空则用主模型的 Key'],
+  'voice.baseUrl': ['语音接口地址', ''],
+  'voice.model': ['语音模型名', ''],
+  'voice.timeoutMs': ['语音超时（毫秒）', ''],
+  'voice.maxSeconds': ['超过多少秒的语音不转', ''],
+  'gateway.wechat.enabled': ['微信网关（方案B）', '本地桥接用不到这个开关'],
+  'gateway.wechat.inboundToken': ['微信入站口令', '必须和桥接脚本一致，否则服务端返回 401'],
+  'gateway.wechat.outboundUrl': ['微信出站地址', '本地桥接留空即可（回复走 HTTP 响应体）'],
+  'gateway.wechat.outboundHeaders': ['出站附加请求头', 'JSON，比如 {"Authorization":"Bearer x"}'],
+  'gateway.douyin.enabled': ['抖音网关', ''],
+  'gateway.douyin.inboundToken': ['抖音入站口令', ''],
+  'gateway.douyin.outboundUrl': ['抖音出站地址', ''],
+  'gateway.douyin.outboundHeaders': ['抖音出站附加请求头', 'JSON'],
+};
+
+const SECRET = new Set(['deepseek.apiKey', 'vision.apiKey', 'voice.apiKey', 'gateway.wechat.inboundToken', 'gateway.douyin.inboundToken']);
+const JSON_FIELDS = new Set(['gateway.wechat.outboundHeaders', 'gateway.douyin.outboundHeaders']);
+const SKIP_TOP = new Set(['paths', 'env', 'root', 'configExists']);
+
+const ORDER = ['provider', 'server', 'log', 'deepseek', 'persona', 'chat', 'group', 'wechat', 'links', 'share', 'care', 'memory', 'admin', 'vision', 'voice', 'gateway'];
+const SECTION_TITLES = {
+  server: '服务 / 网页（改地址、端口要重启）',
+  log: '日志',
+  deepseek: '模型参数（不改也行，用网页设置里的）',
+  persona: '人设',
+  chat: '聊天',
+  group: '群聊',
+  wechat: '微信桥接（桥接进程要重启才读新值）',
+  links: '链接阅读',
+  share: '主动分享',
+  care: '主动找你聊天（时间窗 / 频率）',
+  memory: '记忆',
+  admin: '魔咒（管理员权限）',
+  vision: '看图说话',
+  voice: '语音转文字',
+  gateway: '网关（方案B，一般不用）',
+};
+
+let CFG = null;        // 服务端当前的 config
+let SECRETS = {};      // 哪些密钥已经配好了
+let PROVIDERS = {};    // 模型服务预设
+let ORIG = {};         // 上次读取/保存时的表单值，用来算「改了哪些」
+
+function fieldId(path) { return 'f_' + path.replace(/[.\-\[\]]/g, '_'); }
+
+function fieldHtml(path, value) {
+  const m = META[path] || [];
+  const label = m[0] || path.split('.').slice(-1)[0];
+  const hint = m[1] || '';
+  const id = fieldId(path);
+  let input;
+  if (path === 'provider') {
+    const opts = Object.keys(PROVIDERS).map((k) => {
+      const p = PROVIDERS[k] || {};
+      return '<option value="' + esc(k) + '"' + (k === value ? ' selected' : '') + '>' + esc((p.label || k) + '（' + k + '）') + '</option>';
+    }).join('');
+    input = '<select id="' + id + '" data-path="' + path + '" data-type="text">' + opts + '</select>';
+  } else if (typeof value === 'boolean') {
+    input = '<label class="switch"><input type="checkbox" id="' + id + '" data-path="' + path + '" data-type="bool"' + (value ? ' checked' : '') + '><span data-sw="' + id + '">' + (value ? '开' : '关') + '</span></label>';
+  } else if (typeof value === 'number') {
+    input = '<input type="number" step="any" id="' + id + '" data-path="' + path + '" data-type="num" value="' + esc(value) + '">';
+  } else if (Array.isArray(value)) {
+    input = '<textarea id="' + id + '" data-path="' + path + '" data-type="list" rows="' + Math.min(8, Math.max(2, value.length + 1)) + '">' + esc(value.join('\n')) + '</textarea>';
+  } else if (isPlainObject(value) && JSON_FIELDS.has(path)) {
+    input = '<textarea id="' + id + '" data-path="' + path + '" data-type="json" rows="3">' + esc(JSON.stringify(value, null, 2)) + '</textarea>';
+  } else if (String(value).length > 48) {
+    input = '<textarea id="' + id + '" data-path="' + path + '" data-type="text" rows="3">' + esc(value) + '</textarea>';
+  } else {
+    const secret = SECRET.has(path);
+    const ph = secret ? (SECRETS[path] ? '已设置（留空 = 不改）' : '还没配') : '';
+    input = '<input type="text" id="' + id + '" data-path="' + path + '" data-type="text" value="' + esc(value) + '"' +
+      (ph ? ' placeholder="' + esc(ph) + '"' : '') + (secret ? ' autocomplete="off" spellcheck="false"' : '') + '>';
+  }
+  const wide = Array.isArray(value) || (isPlainObject(value) && JSON_FIELDS.has(path)) || String(value).length > 48;
+  return '<div class="field' + (wide ? ' wide' : '') + '" data-field="' + path + '"><label for="' + id + '">' + esc(label) + '</label>' + input +
+    (hint ? '<div class="hint">' + esc(hint) + '</div>' : '') + '</div>';
+}
+
+function fieldsHtml(obj, prefix) {
+  const flat = [];
+  const subs = [];
+  for (const [k, v] of Object.entries(obj)) {
+    if (k.startsWith('_')) continue;
+    const path = prefix ? prefix + '.' + k : k;
+    if (isPlainObject(v) && !JSON_FIELDS.has(path)) subs.push(subHtml(path, v));
+    else flat.push(fieldHtml(path, v));
+  }
+  return (flat.length ? '<div class="fields">' + flat.join('') + '</div>' : '') + subs.join('');
+}
+
+function subHtml(path, obj) {
+  const m = META[path];
+  return '<div class="sub"><h4>' + esc(m ? m[0] : path.split('.').slice(-1)[0]) + '</h4>' + fieldsHtml(obj, path) + '</div>';
+}
+
+function renderForm(config) {
+  const keys = [];
+  for (const k of ORDER) if (k in config && !SKIP_TOP.has(k) && !k.startsWith('_')) keys.push(k);
+  for (const k of Object.keys(config)) if (!keys.includes(k) && !SKIP_TOP.has(k) && !k.startsWith('_')) keys.push(k);
+
+  let html = '';
+  const scalars = [];
+  for (const k of keys) {
+    if (k === 'provider') continue;
+    const v = config[k];
+    if (isPlainObject(v)) {
+      html += '<div class="sec"><h3>' + esc(SECTION_TITLES[k] || k) + '</h3>' +
+        (META[k] ? '<p class="secHint">' + esc(META[k][1]) + '</p>' : '') + fieldsHtml(v, k) + '</div>';
+    } else {
+      scalars.push(fieldHtml(k, v));
+    }
+  }
+  const basics = [];
+  if ('provider' in config) basics.push(fieldHtml('provider', config.provider));
+  if (basics.length || scalars.length) {
+    html = '<div class="sec"><h3>模型服务</h3><p class="secHint">换服务商后，地址和模型名留空就会用该服务商的预设值</p><div class="fields">' +
+      basics.concat(scalars).join('') + '</div></div>' + html;
+  }
+  $('cfgForm').innerHTML = html;
+  wireForm();
+  ORIG = collect();
+  refreshDirty();
+}
+
+function parseValue(el) {
+  const t = el.dataset.type;
+  if (t === 'bool') return el.checked;
+  if (t === 'num') {
+    if (el.value.trim() === '') return null;
+    const n = Number(el.value);
+    return Number.isFinite(n) ? n : NaN;
+  }
+  if (t === 'list') return el.value.split('\n').map((s) => s.trim()).filter((s) => s.length > 0);
+  if (t === 'json') { try { return JSON.parse(el.value); } catch { return undefined; } }
+  return el.value;
+}
+
+function collect() {
+  const map = {};
+  document.querySelectorAll('#cfgForm [data-path]').forEach((el) => { map[el.dataset.path] = parseValue(el); });
+  return map;
+}
+
+function sameValue(a, b) {
+  if (a === b) return true;
+  try { return JSON.stringify(a) === JSON.stringify(b); } catch { return false; }
+}
+
+function refreshDirty() {
+  if (!ORIG) return [];
+  const now = collect();
+  const changed = [];
+  for (const [p, v] of Object.entries(now)) {
+    if (SECRET.has(p) && v === '') continue;   // 密钥留空 = 不改
+    if (!sameValue(v, ORIG[p])) changed.push(p);
+  }
+  document.querySelectorAll('#cfgForm .field').forEach((box) => {
+    const p = box.dataset.field;
+    const el = box.querySelector('[data-path]');
+    box.classList.toggle('changed', changed.includes(p));
+    box.classList.toggle('invalid', Boolean(el) && el.dataset.type === 'json' && parseValue(el) === undefined);
+  });
+  const btn = $('btnSave');
+  if (btn) {
+    btn.disabled = changed.length === 0;
+    btn.textContent = changed.length ? '保存修改（' + changed.length + ' 项）' : '保存修改';
+  }
+  const rv = $('btnRevert');
+  if (rv) rv.disabled = changed.length === 0;
+  const tag = $('dirtyTag');
+  if (tag) tag.textContent = changed.length ? '已修改 ' + changed.length + ' 项，还没保存' : '';
+  return changed;
+}
+
+function wireForm() {
+  document.querySelectorAll('#cfgForm [data-path]').forEach((el) => {
+    const ev = (el.tagName === 'SELECT' || el.dataset.type === 'bool') ? 'change' : 'input';
+    el.addEventListener(ev, () => {
+      if (el.dataset.type === 'bool') {
+        const tag = document.querySelector('[data-sw="' + el.id + '"]');
+        if (tag) tag.textContent = el.checked ? '开' : '关';
+      }
+      refreshDirty();
+    });
+  });
+}
+
+async function loadConfig() {
+  let d;
+  try {
+    const r = await fetch('/api/config');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    d = await r.json();
+  } catch (e) {
+    $('cfgForm').innerHTML = '<p class="bad">读不到 /api/config（' + esc(String(e && e.message || e)) + '）。'
+      + '如果是刚更新过程序，先双击一次「重启鲸鱼娘.bat」让服务加载新代码，然后刷新本页。</p>';
+    return;
+  }
+  if (!d.ok) { $('cfgForm').innerHTML = '<p class="bad">读取失败：' + esc(d.error || '未知错误') + '</p>'; return; }
+  CFG = d.config;
+  SECRETS = d.secrets || {};
+  ORIG = null;
+  renderForm(CFG);
+}
+
+async function saveConfig() {
+  loadState();
+  const now = collect();
+  const patch = {};
+  for (const [p, v] of Object.entries(now)) {
+    if (SECRET.has(p) && v === '') continue;
+    if (sameValue(v, ORIG[p])) continue;
+    if (typeof v === 'number' && Number.isNaN(v)) { $('saveMsg').innerHTML = '<span class="bad">「' + esc(p) + '」不是数字</span>'; return; }
+    if (v === undefined) { $('saveMsg').innerHTML = '<span class="bad">「' + esc(p) + '」的 JSON 写错了</span>'; return; }
+    patch[p] = v;
+  }
+  const keys = Object.keys(patch);
+  if (!keys.length) return;
+  $('btnSave').disabled = true;
+  $('saveMsg').innerHTML = '<span class="muted">保存中…</span>';
+  const r = await fetch('/api/config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ patch }),
+  });
+  const d = await r.json();
+  if (!d.ok) {
+    $('saveMsg').innerHTML = '<span class="bad">保存失败：' + esc(d.error || '未知错误') + '</span>';
+    refreshDirty();
+    return;
+  }
+  const needRestart = keys.some((k) => k === 'server.port' || k === 'server.host');
+  const cleared = (d.clearedSettings || []).length;
+  $('saveMsg').innerHTML = '<span class="ok">已保存 ' + keys.length + ' 项并生效' +
+    (cleared ? '，顺带清掉网页设置里会盖住它的 ' + cleared + ' 项' : '') + '</span>' +
+    (needRestart ? '<span class="warn"> · 端口 / 地址改动要重启服务才生效</span>' : '');
+  CFG = d.config;
+  SECRETS = d.secrets || SECRETS;
+  ORIG = null;
+  renderForm(CFG);
+  loadState();
+}
+
+function revertForm() {
+  if (!CFG) return;
+  ORIG = null;
+  renderForm(CFG);
+}
+
+/* ------------------------------------------------------------------ */
+/* 概览                                                                */
+/* ------------------------------------------------------------------ */
+
+async function loadState() {
+  const s = await (await fetch('/api/debug/state')).json();
+  const p = s.persona;
+  const masterRows = [
+    ['名字', '<strong>' + esc(p.name) + '</strong>'],
+    ['别名（叫她这些会回应）', esc(p.aliases.join('、'))],
+    ['唯一的主人（昵称）', p.master.names.length ? esc(p.master.names.join('、')) : '<span class="bad">未设置</span>'],
+    ['唯一的主人（wxid）', p.master.wxids.length ? esc(p.master.wxids.join('、')) : '<span class="warn">未设置（只靠昵称识别）</span>'],
+  ];
+  const mw = p.master.warnings || [];
+  if (mw.length) masterRows.push(['⚠ 主人名单有问题', '<span class="warn">' + mw.map(esc).join('<br>') + '</span>']);
+  const senders = s.senders || [];
+  masterRows.push(['最近说过话的人（真实 senderId）', senders.length
+    ? senders.map((x) => esc(x.name || '(无名)') + ' · <code>' + esc(x.uid) + '</code>' + (x.platform === 'wechat' ? '' : ' <span class="muted">(' + esc(x.platform || 'web') + ')</span>')).join('<br>')
+      + '<br><span class="muted">主人名单的 wxids 该填的是上面这串 id，不是你设置的微信号</span>'
+    : '<span class="muted">还没有记录</span>']);
+  masterRows.push(['当前心情 / 在干嘛', esc(s.mood.name) + ' · ' + esc(s.activity)]);
+  masterRows.push(['现在时间', esc(s.nowLabel)]);
+  $('tIdentity').innerHTML = kvRows(masterRows);
+  $('tModel').innerHTML = kvRows([
+    ['模式', s.llm.mock ? '<span class="tag warn">演示模式（内置台词）</span>' : '<span class="tag ok">真实模型</span>'],
+    ['模型服务', esc(s.llm.providerLabel)],
+    ['模型名', '<code>' + esc(s.llm.model) + '</code>'],
+    ['接口地址', '<code>' + esc(s.llm.baseUrl) + '</code>'],
+    ['API Key', s.llm.apiKeyMasked ? '<code>' + esc(s.llm.apiKeyMasked) + '</code>' : (s.llm.needsKey ? '<span class="bad">未配置</span>' : '不需要')],
+    ['温度 / 频率惩罚 / 在场惩罚', esc(s.llm.temperature) + ' / ' + esc(s.llm.frequencyPenalty) + ' / ' + esc(s.llm.presencePenalty)],
+    ['演示模式开关（settings.json）', s.llm.mockSetting === null ? '自动' : esc(s.llm.mockSetting)],
+  ]);
+  $('tChat').innerHTML = kvRows([
+    ['私聊回复上限', esc(s.chat.privateMaxChars) + ' 字'],
+    ['群聊回复上限', esc(s.chat.groupMaxChars) + ' 字'],
+    ['群聊只回被叫到的', s.group.requireAt ? '是' : '否'],
+    ['允许主动接话', s.group.freeChat ? '是（' + Math.round(s.group.freeChatChance * 100) + '%）' : '否'],
+    ['接话冷却 / 每小时上限', s.group.cooldownSec + ' 秒 / ' + s.group.maxRepliesPerHour + ' 句'],
+    ['链接阅读', s.links.enabled ? '开启（超时 ' + s.links.timeoutMs + 'ms）' : '关闭'],
+    ['语态（主人在微信里调的）', (s.personaStyle.preset || s.personaStyle.text) ? esc((s.personaStyle.preset || '自定义') + (s.personaStyle.text ? '：' + s.personaStyle.text : '')) : '默认'],
+    ['禁言的群', (s.personaStyle.mutedGroups || []).length ? esc(s.personaStyle.mutedGroups.map((x) => (x === '*' ? '所有群' : x)).join('、')) : '无'],
+    ['颜文字用量', esc(s.personaStyle.emoji || '正常') + ' <span class="muted">（实际概率 ' + Math.round(((s.chat && s.chat.emojiChance) || 0) * 100) + '%，调这一档才会真的出现颜文字）</span>'],
+    ['魔咒（管理员权限）', s.admin.configured ? '已配置 <code>' + esc(s.admin.spellMasked) + '</code>，生效 ' + s.admin.minutes + ' 分钟' : '<span class="warn">未配置</span>'],
+  ]);
+  const gw = s.gateways.map((g) => esc(g.platform) + '：' + (g.enabled ? '<span class="ok">已启用</span>' : '<span class="warn">未启用</span>') +
+    '，收到 ' + g.received + ' 条，发出 ' + g.sent + ' 条' + (g.lastError ? '，<span class="bad">最后错误：' + esc(g.lastError) + '</span>' : '')).join('<br>');
+  $('tGate').innerHTML = kvRows([
+    ['微信 / 抖音网关', gw],
+    ['记忆会话数', esc(s.memory.sessions)],
+    ['消息 / 笔记', esc(s.memory.messages) + ' / ' + esc(s.memory.notes)],
+    ['累计收到 / 回复', esc(s.memory.totalMessages) + ' / ' + esc(s.memory.totalReplies)],
+    ['记忆文件', '<code>' + esc(s.paths.storeFile) + '</code>'],
+    ['配置文件', '<code>' + esc(s.paths.configFile) + '</code>'],
+  ]);
+}
+
+async function loadSessions() {
+  const d = await (await fetch('/api/debug/sessions')).json();
+  const host = $('sessions');
+  if (!d.sessions.length) { host.innerHTML = '<p class="muted">还没有任何会话记忆。</p>'; return; }
+  host.innerHTML = d.sessions.map((s) => {
+    const notes = (s.profiles || []).filter((p) => p.notes.length).map((p) => esc(p.name) + '：' + esc(p.notes.join('；'))).join('<br>');
+    const msgs = (s.messages || []).slice(-8).map((m) => '<li>' + (m.role === 'assistant' ? '鲸鲸' : esc(m.name)) + '：' + esc(String(m.text).slice(0, 90)) + '</li>').join('');
+    return '<div class="sess"><div class="head"><strong>' + esc(s.title || s.key) + '</strong>'
+      + '<span class="tag">' + (s.chatType === 'group' ? '群聊' : '私聊') + '</span>'
+      + '<span class="muted">' + esc(s.key) + '</span>'
+      + '<span class="muted">' + s.messageCount + ' 条消息 · 最后活跃 ' + fmtTime(s.lastActiveAt) + '</span>'
+      + (s.adminUntil && s.adminUntil > Date.now() ? '<span class="tag ok">管理员生效中</span>' : '')
+      + '<span class="spacer"></span><button class="danger" data-reset="' + esc(s.key) + '">忘掉这个聊天</button></div>'
+      + (notes ? '<p class="notes">记住的事：<br>' + notes + '</p>' : '')
+      + (msgs ? '<ul>' + msgs + '</ul>' : '')
+      + '</div>';
+  }).join('');
+  host.querySelectorAll('[data-reset]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const key = btn.getAttribute('data-reset');
+      if (!confirm('确定清空这个聊天的记忆？\n' + key)) return;
+      await fetch('/api/debug/reset', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key }) });
+      loadSessions();
+      loadState();
+    });
+  });
+}
+
+async function makePrompt() {
+  $('promptTag').textContent = '生成中…';
+  const body = {
+    senderName: $('senderName').value.trim(),
+    senderId: $('senderId').value.trim(),
+    chatType: $('chatType').value,
+    chatTitle: $('chatTitle').value.trim(),
+    text: $('msgText').value,
+    readLink: $('readLink').checked,
+  };
+  const r = await fetch('/api/debug/prompt', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const d = await r.json();
+  if (!d.ok) { $('promptTag').innerHTML = '<span class="bad">' + esc(d.error || '出错') + '</span>'; return; }
+  $('promptOut').textContent = d.system;
+  $('promptLen').textContent = '共 ' + d.system.length + ' 字 · 链接段：' + (d.linkText ? '有' : '无');
+  const why = !d.master ? '' : d.master.reason === 'wxid'
+    ? '（按 wxid 认的）'
+    : d.master.reason === 'nickname'
+      ? '（按昵称认的）'
+      : d.master.reason === 'name_blocked'
+        ? '（昵称对得上，但 master.wxids 里配了真 wxid，微信里不认昵称）'
+        : '';
+  $('promptTag').innerHTML = (d.isMaster
+    ? '<span class="tag ok">识别为主人' + esc(why) + '</span>'
+    : '<span class="tag">普通关系（不叫主人）' + esc(why) + '</span>')
+    + ((d.master && d.master.warnings && d.master.warnings.length)
+      ? '<div class="muted">' + d.master.warnings.map(esc).join('<br>') + '</div>'
+      : '');
+}
+
+$('btnReload').addEventListener('click', () => { loadConfig(); loadState(); loadSessions(); });
+$('btnFetch').addEventListener('click', async () => {
+  if (refreshDirty().length && !confirm('有没保存的改动，重新读取会丢掉它们，继续？')) return;
+  await loadConfig();
+  $('saveMsg').innerHTML = '<span class="muted">已重新读取 config.json</span>';
+});
+$('btnSave').addEventListener('click', saveConfig);
+$('btnRevert').addEventListener('click', () => {
+  if (confirm('放弃所有没保存的改动？')) { revertForm(); $('saveMsg').innerHTML = '<span class="muted">已撤销未保存的改动</span>'; }
+});
+$('btnPrompt').addEventListener('click', makePrompt);
+$('btnCopy').addEventListener('click', async () => {
+  try { await navigator.clipboard.writeText($('promptOut').textContent); $('promptLen').textContent = '已复制'; }
+  catch { $('promptLen').textContent = '复制失败，手动选中吧'; }
+});
+window.addEventListener('beforeunload', (e) => {
+  try {
+    if (refreshDirty().length) { e.preventDefault(); e.returnValue = ''; }
+  } catch { /* ignore */ }
+});
+
+(async () => {
+  try {
+    const s = await (await fetch('/api/settings')).json();
+    PROVIDERS = s.providers || {};
+  } catch { PROVIDERS = {}; }
+  await loadConfig();
+  loadState();
+  loadSessions();
+})();
+</script>
+</body>
+</html>

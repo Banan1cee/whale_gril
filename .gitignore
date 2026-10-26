@@ -1,0 +1,30 @@
+# 运行时数据：包含 API Key、聊天记录、人设、词库、日志、微信数据库快照，绝不入库
+data/
+config.json
+wechatauto_logs/
+wechatauto_db/
+
+# 包内自带的 Node/Python 运行时（发行包用，不入库；换机时从 Release 包里取）
+runtime/
+
+# 依赖 / 缓存
+node_modules/
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# 日志 / 临时产物
+*.log
+*.tmp
+*.zip
+dist/
+release/
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# 微信安装包 / 本地工具（tools/ 是项目自己的热键脚本，要入库）
+vendor/
+scripts/node-path.local
