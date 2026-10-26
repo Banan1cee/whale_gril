@@ -51,8 +51,19 @@ DIGEST_MINUTES = 30
 MASTER_WXID = ''
 # 超过这么多秒的旧消息直接不回，避免“回上一条”
 STALE_AFTER = float(os.environ.get("WHALE_STALE_AFTER", "4"))
+_cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "config.json")
+# 新版发行包不再自带 config.json（免得覆盖安装时把用户的主人名单/token 冲掉）。
+# 如果用户先双击了桥接、服务还没起过，这里用 example 生成一份，避免「token 空 → 401 → 她不回话」。
+if not os.path.exists(_cfg_path):
+    _example = os.path.join(os.path.dirname(_cfg_path), "config.example.json")
+    if os.path.exists(_example):
+        try:
+            import shutil
+            shutil.copyfile(_example, _cfg_path)
+            log_call = True
+        except Exception:
+            pass
 try:
-    _cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "config.json")
     with open(_cfg_path, "r", encoding="utf-8-sig") as _f:
         _cfg = json.load(_f)
     _stale = (_cfg.get("wechat") or {}).get("staleAfterSec")
