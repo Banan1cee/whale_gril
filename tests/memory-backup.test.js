@@ -97,3 +97,76 @@ test('快照最多留 20 份，不会把盘塞满', () => {
   assert.ok(snaps.length <= backup.KEEP, `最多留 ${backup.KEEP} 份，实际 ${snaps.length}`);
   fs.rmSync(root, { recursive: true, force: true });
 });
+
+test('导出默认脱敏：文件里不能出现 API Key', () => {
+  const root = seed();
+  fs.writeFileSync(
+    path.join(root, 'data', 'settings.json'),
+    JSON.stringify({ userName: '爸爸', provider: 'qwen', apiKey: 'sk-secret-1234567890', keys: { qwen: 'sk-secret-1234567890' } })
+  );
+  const dest = path.join(root, 'mem.json');
+  backup.exportTo(root, dest);
+  const raw = fs.readFileSync(dest, 'utf8');
+  assert.ok(!raw.includes('sk-secret-1234567890'), '导出的文件里不能有 Key（要发人/传U盘）');
+  assert.ok(raw.includes('爸爸'), '称呼这种有用的信息要留着');
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('显式 --secrets 才把 Key 一起导出', () => {
+  const root = seed();
+  fs.writeFileSync(
+    path.join(root, 'data', 'settings.json'),
+    JSON.stringify({ provider: 'qwen', apiKey: 'sk-secret-1234567890' })
+  );
+  const dest = path.join(root, 'mem-full.json');
+  backup.exportTo(root, dest, { withSecrets: true });
+  assert.ok(fs.readFileSync(dest, 'utf8').includes('sk-secret-1234567890'));
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('用脱敏备份恢复，不会把本机 Key 抹掉（否则恢复完就不说话了）', () => {
+  const root = seed();
+  fs.writeFileSync(
+    path.join(root, 'data', 'settings.json'),
+    JSON.stringify({ provider: 'qwen', apiKey: 'sk-keep-me-123456' })
+  );
+  const dest = path.join(root, 'mem.json');
+  backup.exportTo(root, dest);
+  // 模拟「先丢了记忆、但 Key 还在」的机器
+  fs.writeFileSync(path.join(root, 'data', 'settings.json'), JSON.stringify({ provider: 'qwen', apiKey: 'sk-keep-me-123456' }));
+  backup.restoreFromFile(root, dest);
+  const after = JSON.parse(fs.readFileSync(path.join(root, 'data', 'settings.json'), 'utf8'));
+  assert.equal(after.apiKey, 'sk-keep-me-123456', '恢复记忆不能顺手把 Key 清掉');
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('结构不对的备份要被拦下，别覆盖现有记忆', () => {
+  const root = seed();
+  assert.throws(() => backup.restoreFrom(root, { kind: 'whale-girl-memory', files: { store: { nope: 1 } } }), /sessions/);
+  const store = JSON.parse(fs.readFileSync(path.join(root, 'data', 'store.json'), 'utf8'));
+  assert.ok(store.sessions['wechat:p:wxid_a'], '原记忆必须还在');
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('导出接口默认不带 Key（HTTP 层也要验一遍，别只测模块）', async () => {
+  const { startServer } = require('../server');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-mem-api-'));
+  fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ server: { port: 0, openBrowser: false } }));
+  fs.mkdirSync(path.join(root, 'data'), { recursive: true });
+  fs.writeFileSync(
+    path.join(root, 'data', 'settings.json'),
+    JSON.stringify({ provider: 'qwen', apiKey: 'sk-live-secret-999', keys: { qwen: 'sk-live-secret-999' } })
+  );
+  fs.writeFileSync(path.join(root, 'data', 'store.json'), JSON.stringify({ sessions: { a: { messages: [], profiles: {} } } }));
+  const inst = await startServer({ root, env: {}, port: 0, openBrowser: false });
+  try {
+    const plain = await (await fetch(`${inst.url}/api/memory/export`)).text();
+    assert.ok(!plain.includes('sk-live-secret-999'), '默认导出不能带 Key');
+    assert.ok(plain.includes('"sessions"'), '但记忆要带上');
+    const full = await (await fetch(`${inst.url}/api/memory/export?secrets=1`)).text();
+    assert.ok(full.includes('sk-live-secret-999'), '显式 secrets=1 才带 Key');
+  } finally {
+    await inst.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

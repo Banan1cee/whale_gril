@@ -14,7 +14,8 @@ const path = require('node:path');
 const backup = require('../src/memoryBackup');
 
 const root = path.resolve(__dirname, '..');
-const [cmd = 'info', arg = ''] = process.argv.slice(2);
+const [cmd = 'info', arg = '', ...rest] = process.argv.slice(2);
+const withSecrets = rest.includes('--secrets') || arg === '--secrets';
 
 function fmtTime(d) {
   const t = new Date(d);
@@ -59,10 +60,16 @@ function main() {
       console.error('用法：node scripts/memory-tool.js export <目标文件>');
       return 1;
     }
-    const dest = path.isAbsolute(arg) ? arg : path.resolve(process.cwd(), arg);
-    const info = backup.exportTo(root, dest);
+    const target = arg === '--secrets' ? (rest.find((x) => x !== '--secrets') || '') : arg;
+    if (!target) {
+      console.error('用法：node scripts/memory-tool.js export <目标文件> [--secrets]');
+      return 1;
+    }
+    const dest = path.isAbsolute(target) ? target : path.resolve(process.cwd(), target);
+    const info = backup.exportTo(root, dest, { withSecrets });
     console.log(`已导出：${info.file}`);
     console.log(`内容：${info.sessions} 个会话 / ${info.messages} 条消息 / ${info.notes} 条笔记`);
+    console.log(withSecrets ? '（这次连 Key 一起导出了，别发给别人）' : '（已自动去掉 API Key，可以放心发人；要连 Key 一起带走加 --secrets）');
     console.log('换电脑或重装后，用 restore 把这个文件放回去就行。');
     return 0;
   }
