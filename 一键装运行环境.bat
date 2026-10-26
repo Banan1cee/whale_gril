@@ -9,6 +9,7 @@ echo   然后装微信桥接的依赖。以后就不用再装了。
 echo.
 "%PS%" -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\setup-runtime.ps1"
 set "CODE=%ERRORLEVEL%"
+if not "%~1"=="" exit /b %CODE%
 echo.
 echo Done. Exit code %CODE%
 pause >nul
