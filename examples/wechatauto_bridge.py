@@ -101,7 +101,7 @@ def reload_config(path=None):
     global QUOTE_REPLY, KEYBOARD_FALLBACK, BACKGROUND_SEND, LOW_BATTERY_PCT, GOODNIGHT_TEXT
     global SHARE_ENABLED, SHARE_EVERY, CARE_ENABLED, CARE_QUIET_MIN, DIGEST_MINUTES
     global STALE_AFTER, SYSTEM_SENDER_NAMES, BASE_SYSTEM_SENDERS, MASTER_WXID
-    global VOICE_ENABLED, VOICE_BASE_URL, VOICE_MODEL
+    global VOICE_ENABLED, VOICE_BASE_URL, VOICE_MODEL, VOICE_API_KEY, VOICE_TIMEOUT, VOICE_MAX_SECONDS
     target = path or CONFIG_PATH
     try:
         with open(target, "r", encoding="utf-8-sig") as f:
@@ -157,6 +157,15 @@ def reload_config(path=None):
         VOICE_BASE_URL = str(vo.get("baseUrl"))
     if vo.get("model"):
         VOICE_MODEL = str(vo.get("model"))
+    # 语音这几项以前只在启动时读一次：网页里换了 Key / 调了超时，必须重启才生效
+    try:
+        if vo.get("timeoutMs") is not None:
+            VOICE_TIMEOUT = float(vo.get("timeoutMs")) / 1000.0
+        if vo.get("maxSeconds") is not None:
+            VOICE_MAX_SECONDS = float(vo.get("maxSeconds"))
+    except Exception:
+        pass
+    VOICE_API_KEY = _resolve_voice_key(cfg)
 
     wxids = (((cfg.get("persona") or {}).get("master") or {}).get("wxids") or [])
     if wxids:
@@ -183,13 +192,19 @@ DB_ROOT_NAMES = ("xwechat_files", "WeChat Files", "xwechat_files_data")
 def looks_like_db_root(p):
     """这个目录像不像微信 4.x 的数据根（下面有 <账号>/db_storage）。
 
-    兼容三种布局：
+    兼容四种布局（以前只认第一种，文档写了后面几种却没实现）：
       E:\\xwechat_files\\<账号>\\db_storage
       E:\\xwechat_files\\db_storage            （账号目录层级被拍平）
-      直接把 <账号> 目录填进来
+      直接把 <账号> 目录填进来（p\\db_storage）
+      直接把 db_storage 目录填进来
     """
     if not p or not os.path.isdir(p):
         return False
+    # 直填账号目录 / 直填 db_storage
+    if os.path.isdir(os.path.join(p, "db_storage")):
+        return True
+    if os.path.basename(os.path.normpath(p)).lower() == "db_storage":
+        return True
     bases = [p]
     for name in DB_ROOT_NAMES:
         bases.append(os.path.join(p, name))
@@ -202,6 +217,28 @@ def looks_like_db_root(p):
             if os.path.isdir(os.path.join(base, name, "db_storage")):
                 return True
     return False
+
+
+def iter_drive_roots():
+    """列出真实的磁盘根（含 L:、网络映射盘、UNC），不再写死 C..K。"""
+    roots = []
+    try:
+        import string
+        for letter in string.ascii_uppercase:
+            root = letter + ":\\"
+            if os.path.isdir(root):
+                roots.append(root)
+    except Exception:
+        pass
+    try:
+        import psutil
+        for part in psutil.disk_partitions(all=False):
+            mp = str(part.mountpoint or "")
+            if mp and mp not in roots and os.path.isdir(mp):
+                roots.append(mp)
+    except Exception:
+        pass
+    return roots
 
 
 def resolve_db_dir(config_path=None, drives="CDEFGHIJK"):
@@ -246,10 +283,10 @@ def resolve_db_dir(config_path=None, drives="CDEFGHIJK"):
     except Exception:
         pass
 
-    # 3) 所有固定盘的根目录
-    for letter in drives:
+    # 3) 所有真实磁盘根（以前写死 C..K，L: 盘和网络盘永远找不到）
+    for root in iter_drive_roots():
         for name in DB_ROOT_NAMES:
-            cand = os.path.join(letter + ":\\", name)
+            cand = os.path.join(root, name)
             if looks_like_db_root(cand):
                 return cand
     return ""
@@ -279,22 +316,49 @@ VOICE_API_KEY = ""
 VOICE_TIMEOUT = 90
 VOICE_MAX_SECONDS = 120
 VOICE_SAMPLE_RATE = 16000
+
+
+def _resolve_voice_key(cfg):
+    """语音 Key 的查找链：voice.apiKey → settings.voiceApiKey → settings.apiKey → config.deepseek.apiKey。
+
+    以前只回退到 settings.apiKey，配置文件里写的 deepseek.apiKey 永远用不上（注释承诺了却没实现）；
+    而且 reload_config 不刷新语音 Key，网页里换 Key 必须重启桥接才生效。
+    """
+    vo = (cfg.get("voice") or {}) if isinstance(cfg, dict) else {}
+    key = str(vo.get("apiKey") or "").strip()
+    if key:
+        return key
+    try:
+        with open(os.path.join(ROOT, "data", "settings.json"), "r", encoding="utf-8-sig") as sf:
+            st = json.load(sf)
+        for name in ("voiceApiKey", "apiKey"):
+            v = str(st.get(name) or "").strip()
+            if v:
+                return v
+        keys = st.get("keys") or {}
+        for name in ("vision", "qwen", "zhipu", "deepseek"):
+            v = str(keys.get(name) or "").strip()
+            if v:
+                return v
+    except Exception:
+        pass
+    try:
+        v = str(((cfg.get("deepseek") or {}).get("apiKey") or "")).strip()
+        if v:
+            return v
+    except Exception:
+        pass
+    return ""
+
+
 try:
     _voice_cfg = (_cfg.get("voice") or {})
     VOICE_ENABLED = bool(_voice_cfg.get("enabled", True))
     VOICE_BASE_URL = str(_voice_cfg.get("baseUrl") or VOICE_BASE_URL)
     VOICE_MODEL = str(_voice_cfg.get("model") or VOICE_MODEL)
-    VOICE_API_KEY = str(_voice_cfg.get("apiKey") or "")
     VOICE_TIMEOUT = float(_voice_cfg.get("timeoutMs", 90000)) / 1000.0
     VOICE_MAX_SECONDS = float(_voice_cfg.get("maxSeconds", 120))
-    if not VOICE_API_KEY:
-        try:
-            _settings_path = os.path.join(ROOT, "data", "settings.json")
-            with open(_settings_path, "r", encoding="utf-8-sig") as _sf:
-                _st = json.load(_sf)
-            VOICE_API_KEY = str(_st.get("apiKey") or "")
-        except Exception:
-            VOICE_API_KEY = ""
+    VOICE_API_KEY = _resolve_voice_key(_cfg)
 except Exception:
     pass
 
@@ -605,7 +669,22 @@ def main():
         if _media_box["downloader"] is None:
             save_dir = os.path.join(ROOT, "data", "media-cache")
             os.makedirs(save_dir, exist_ok=True)
-            _media_box["downloader"] = MediaDownloader(db, save_dir=save_dir)
+            dl = MediaDownloader(db, save_dir=save_dir)
+            # 微信改过「文件保存位置」后，图片缓存可能留在旧目录（msg/attach），而
+            # 数据库已经搬到了新位置。这时只看 db.account_dir 图片就永远找不到：
+            # 「图片识别只认默认微信文件地址，改了就不行」就是这个原因。
+            # 加一层只读兜底：当前目录找不到，就按会话 md5 去其它账号目录/盘里找。
+            try:
+                from media_fallback import install_media_fallback
+                installed = install_media_fallback(
+                    dl, db, log=log,
+                    root_names=DB_ROOT_NAMES,
+                )
+                if installed:
+                    log("图片目录兜底已就位（%d 处补丁）" % installed)
+            except Exception as _e:
+                log("图片目录兜底没装上（默认路径不受影响）：", repr(_e))
+            _media_box["downloader"] = dl
         return _media_box["downloader"]
 
     me = db.wxid
@@ -1080,6 +1159,7 @@ def main():
         if not snap:
             return
         try:
+            import ctypes
             import win32gui
             import win32con
             wx = snap.get("hwnd")
@@ -1678,148 +1758,6 @@ def main():
             log("语音识别失败：", repr(e))
             return ""
 
-    def _account_root():
-        try:
-            for rel, path, _ in db._db_files:
-                if os.path.basename(path).startswith("message_"):
-                    p = os.path.dirname(path)
-                    while p and not os.path.basename(p).startswith(("wxid", "all_users")):
-                        parent = os.path.dirname(p)
-                        if parent == p:
-                            break
-                        p = parent
-                    return p
-        except Exception:
-            pass
-        return ""
-
-    def _find_sticker_file(md5):
-        root = _account_root()
-        if not root or not md5:
-            return ""
-        roots = [os.path.join(root, "cache"), os.path.join(root, "msg", "attach")]
-        for base in roots:
-            for dirpath, _dirs, files in os.walk(base):
-                for name in files:
-                    if md5 in name:
-                        return os.path.join(dirpath, name)
-        return ""
-
-    def _sticker_label(content):
-        """从表情 XML 的 desc（base64 protobuf）里提取表情名，比如「鲸鱼娘」"""
-        try:
-            import base64
-            import re
-            m = re.search(r'desc\s*=\s*"([^"]*)"', content or "")
-            if not m:
-                return ""
-            raw = base64.b64decode(m.group(1))
-            txt = raw.decode("utf-8", "ignore")
-            parts = [x for x in re.findall(r"[\u4e00-\u9fa5A-Za-z0-9_]{2,}", txt) if x.lower() != "default"]
-            return " ".join(parts[:3])
-        except Exception:
-            return ""
-
-    def screenshot_sticker(who):
-        """截图当前聊天窗口，让视觉模型找最新那条表情包（缓存解不开时的兜底）"""
-        try:
-            import io
-            import base64
-            import win32gui
-            from PIL import ImageGrab
-            hwnd = find_weixin_hwnd()
-            if not hwnd:
-                return ""
-            try:
-                u = UIA_CACHE.get("u") or (gui._get_uia() if gui is not None else None)
-                if u is not None and who:
-                    u.open_chat(who)
-                    time.sleep(0.8)
-            except Exception:
-                pass
-            force_foreground(hwnd)
-            time.sleep(0.4)
-            r = win32gui.GetWindowRect(hwnd)
-            # 只截聊天区最底部一条消息，避免看到上面的旧表情包
-            box = (int(r[0] + (r[2] - r[0]) * 0.30), int(r[1] + (r[3] - r[1]) * 0.45), r[2] - 8, r[3] - 120)
-            img = ImageGrab.grab(bbox=box)
-            # 放大一点，避免小表情包被视觉模型看糊
-            img = img.resize((int(img.width * 1.3), int(img.height * 1.3)), 1)
-            buf = io.BytesIO()
-            img.save(buf, "JPEG", quality=90)
-            base = bot_url.rsplit("/webhook", 1)[0]
-            resp = requests.post(base + "/api/vision", json={
-                "image": base64.b64encode(buf.getvalue()).decode(),
-                "mime": "image/jpeg",
-                "prompt": "这是微信聊天窗口下半部分截图，最新消息在最底部、紧贴输入框。只看最底部那一条消息：如果它是表情包/图片，描述画面内容（人物/动物/文字梗）；如果最底部不是表情包，回答「看不清」。不要描述它上面的任何历史消息。",
-            }, timeout=60)
-            text = str(resp.json().get("text") or "").strip()
-            log("表情包截图识别：", text[:40])
-            if "看不清" in text or "模糊" in text:
-                return ""
-            return text
-        except Exception as e:
-            log("表情包截图识别失败：", repr(e))
-            return ""
-
-    def describe_sticker(msg):
-        """表情包：按 XML 里的 md5 找本地缓存，转成 jpg 再交给视觉模型。"""
-        try:
-            import base64
-            import re
-            import subprocess
-            content = str(msg.get("content") or "")
-            who = display_name(msg.get("username") or "")
-            m = re.search(r'md5="([0-9a-fA-F]{32})"', content)
-            md5 = m.group(1).lower() if m else ""
-            if not md5:
-                shot = screenshot_sticker(who)
-                return shot or _sticker_label(content)
-            path = _find_sticker_file(md5)
-            if not path:
-                shot = screenshot_sticker(who)
-                if shot:
-                    return shot
-                return _sticker_label(content)
-            with open(path, "rb") as f:
-                raw = f.read()
-            jpg = None
-            if raw[:4] == b"wxgf":
-                jpg = _get_media()._wxgf_to_jpg(raw)
-            elif raw[:3] == b"\xff\xd8\xff" or raw[:8] == b"\x89PNG\r\n\x1a\n":
-                jpg = raw
-            else:
-                try:
-                    import shutil as _sh
-                    exe = _sh.which("ffmpeg")
-                    if not exe:
-                        exe = _get_media()._ffmpeg_exe()
-                    if exe:
-                        out = path + ".jpg"
-                        subprocess.run([exe, "-y", "-i", path, "-frames:v", "1", out],
-                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20)
-                        if os.path.exists(out):
-                            with open(out, "rb") as f:
-                                jpg = f.read()
-                    else:
-                        log("表情包转码跳过：没找到 ffmpeg（装到 C:\\ffmpeg 即可）")
-                except Exception as e:                # noqa: BLE001
-                    log("表情包转码失败：", repr(e))
-            if not jpg:
-                shot = screenshot_sticker(who)
-                if shot:
-                    return shot
-                return _sticker_label(content)
-            ext = "image/png" if jpg[:8] == b"\x89PNG\r\n\x1a\n" else "image/jpeg"
-            base = bot_url.rsplit("/webhook", 1)[0]
-            r = requests.post(base + "/api/vision",
-                              json={"image": base64.b64encode(jpg).decode(), "mime": ext}, timeout=60)
-            text = str(r.json().get("text") or "").strip()
-            log("表情包识别：", text[:40])
-            return text
-        except Exception as e:
-            log("表情包识别异常：", repr(e))
-            return _sticker_label(str(msg.get("content") or ""))
 
     def on_message_inner(msg, listener):
         try:
@@ -1828,6 +1766,11 @@ def main():
                 return
             mtype = msg.get("type") or ""
             content = (msg.get("content") or "").strip()
+            # 有的微信版本把表情包报成「图片」，正文里还是 <emoji md5=...>：
+            # 一律按表情包装死，绝不能送进视觉模型当图片认。
+            if "<emoji" in content:
+                log("收到表情包（被标成图片），装死（不识别不回）")
+                return
             if mtype == "图片":
                 desc = describe_image(msg)
                 if not desc:
@@ -1840,11 +1783,10 @@ def main():
                     return
                 content = "（对方发了一条语音，说的是：%s）" % said
             if mtype in ("表情", "动画表情"):
-                desc = describe_sticker(msg)
-                if not desc:
-                    log("表情包没认出来，先不说话")
-                    return
-                content = "（对方刚刚新发了一个表情包，内容是：%s）" % desc
+                # 表情包发了装死：不去识别、不回话。以前会把表情包当图片认（截图/转码/
+                # 送视觉模型），认出来还硬回一句，容易接岔；现在明确要的是「发了就装死」。
+                log("收到表情包，装死（不识别不回）")
+                return
             if mtype not in ("文本", "语音", "图片", "表情", "动画表情"):
                 if "移出群聊" in content or "移出" in content:
                     dead_chats.add(username)

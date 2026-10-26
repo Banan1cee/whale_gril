@@ -112,6 +112,9 @@ function sanitizeId(id) {
 function createRuntime({ root = projectRoot(), env = process.env, loggerLevel } = {}) {
   ensureConfigFile(root);
   const config = loadConfig({ root, env });
+  // 称呼只认一个真源：config.json 的 persona.ownerName。
+  // 老版本把它存在 data/settings.json 的 userName 里，这里做一次迁移，之后网页设置和调试台改的是同一个值。
+  migrateOwnerName(config);
   // 加载主人在微信里调过的语态 / 能力（data/persona.json）
   personaStore.apply(config, personaStore.load(config));
   const logger = createLogger({ level: loggerLevel || config.log.level, file: config.paths.logFile });
@@ -291,6 +294,22 @@ function clearSettingsShadow(runtime, paths) {
     try { fs.writeFileSync(file, JSON.stringify(cur, null, 2), 'utf8'); } catch { /* 写不了就算了 */ }
   }
   return cleared;
+}
+
+function isLoopbackRequest(req) {
+  const ip = String((req.socket && req.socket.remoteAddress) || '');
+  return ip === '' || ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
+}
+
+/** 远程写操作：必须显式打开 allowRemote，并且带一个非默认的 x-bot-token */
+function remoteAuthorized(req, runtime) {
+  const allow = Boolean(runtime.config.server && runtime.config.server.allowRemote);
+  if (!allow) return false;
+  const token = String(
+    (runtime.config.gateway && runtime.config.gateway.wechat && runtime.config.gateway.wechat.inboundToken) || ''
+  ).trim();
+  if (!token || token === 'change-me-wechat') return false;
+  return String(req.headers['x-bot-token'] || '').trim() === token;
 }
 
 /** 把网页提交的 { "persona.name": "新名字" } 写进 config.json 并立刻生效 */
@@ -673,6 +692,37 @@ async function debugPrompt(runtime, body) {
   };
 }
 
+/**
+ * 称呼迁移：老版本存在 settings.userName，新版本只认 config.json 的 persona.ownerName。
+ * 启动时把旧值搬过去，避免「网页改了、调试台又看到旧值」。
+ */
+function migrateOwnerName(config) {
+  if (!config.persona) config.persona = {};
+  let fromSettings = '';
+  try {
+    fromSettings = String((loadSettings(config) || {}).userName || '').trim();
+  } catch { /* 没设置文件就是空的 */ }
+  const fromConfig = String(config.persona.ownerName || '').trim();
+  if (fromSettings && (!fromConfig || fromConfig === '主人')) {
+    config.persona.ownerName = fromSettings;
+    try {
+      const file = config.paths.configFile;
+      let raw = {};
+      try {
+        raw = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')) || {};
+      } catch { raw = {}; }
+      if (!raw.persona) raw.persona = {};
+      raw.persona.ownerName = fromSettings;
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, JSON.stringify(raw, null, 2) + '\n', 'utf8');
+      // 只迁移一次：搬完就把老字段清掉，否则以后把称呼改回「主人」重启又会被它盖回去
+      try { saveSettings(config, { userName: '' }); } catch { /* 清不掉也没关系 */ }
+    } catch { /* 写不了就只改内存，不至于启动失败 */ }
+  }
+  config.persona.ownerName = String(config.persona.ownerName || '').trim() || '主人';
+  return config.persona.ownerName;
+}
+
 /* ------------------------------------------------------------------ */
 /* 接口处理                                                            */
 /* ------------------------------------------------------------------ */
@@ -879,6 +929,18 @@ async function applySettings(runtime, body) {
     }
   }
   saveSettings(config, patch);
+  // 称呼：网页设置和调试台改的是同一份数据，写进 config.json，重启也不会被旧值盖回来
+  if (typeof body.userName === 'string') {
+    // 清空 = 恢复默认称呼，不是「不改」（以前清空后依然叫旧称呼）
+    const name = String(patch.userName || '').trim() || '主人';
+    config.persona.ownerName = name;
+    try {
+      applyConfigPatch(runtime, { 'persona.ownerName': name });
+      runtime.logger.info(`称呼已改为「${name}」`);
+    } catch (err) {
+      runtime.logger.warn('称呼写入 config.json 失败，仅本次生效：' + err.message);
+    }
+  }
   llm.reload();
   const mode = llm.isMock ? '演示' : `${llm.providerLabel} · ${llm.model}`;
   runtime.logger.info(`设置已更新：${mode}`);
@@ -948,6 +1010,15 @@ function createHandler(runtime) {
     const method = req.method || 'GET';
 
     try {
+      // 安全闸：这些接口能改配置、注入聊天、上传图片。默认只许本机；
+      // 真要放到局域网（server.allowRemote=true）也必须带对的 x-bot-token，否则一律 403。
+      if (pathname.startsWith('/api/') && method !== 'GET' && !isLoopbackRequest(req) && !remoteAuthorized(req, runtime)) {
+        logger.warn(`拒绝远程写操作：${method} ${pathname} from ${req.socket && req.socket.remoteAddress}`);
+        return json(res, 403, {
+          ok: false,
+          error: '远程调用被拒绝：请在运行本程序的电脑上操作，或设 server.allowRemote=true 并在请求头带 x-bot-token',
+        });
+      }
       if (pathname === '/healthz') return json(res, 200, { ok: true, up: true });
 
       if (pathname === '/api/status' && method === 'GET') {
@@ -1287,7 +1358,15 @@ async function startServer({ root = projectRoot(), env = process.env, port, host
   // 注意：port = 0 是「让系统分配随机端口」，不能被 || 吞掉
   const requestedPort = port !== undefined && port !== null ? Number(port) : Number(config.server.port);
   const listenPort = Number.isFinite(requestedPort) && requestedPort >= 0 && requestedPort <= 65535 ? requestedPort : 8787;
-  const listenHost = host || config.server.host || '127.0.0.1';
+  let listenHost = host || config.server.host || '127.0.0.1';
+  const loopback = new Set(['127.0.0.1', 'localhost', '::1']);
+  if (!loopback.has(String(listenHost).toLowerCase()) && !(config.server && config.server.allowRemote)) {
+    logger.warn(
+      `server.host=${listenHost} 会把控制台暴露给局域网/公网，已强制改回 127.0.0.1。` +
+        '确实要远程访问：在 config.json 设 server.allowRemote=true，并把 gateway.wechat.inboundToken 改成随机串。'
+    );
+    listenHost = '127.0.0.1';
+  }
   await new Promise((resolve, reject) => {
     server.once('error', reject);
     server.listen(listenPort, listenHost, resolve);

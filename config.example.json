@@ -118,6 +118,12 @@
       "outboundHeaders": {}
     }
   },
+  "websearch": {
+    "_说明": "问天气/新闻等实时问题时联网现搜。city 填你所在的城市（比如「上海」），问她天气时才准；留空就按她收到的原话搜（可能搜到别的城市）。enabled=false 关闭所有联网",
+    "enabled": true,
+    "city": "",
+    "timeoutMs": 8000
+  },
   "links": {
     "_说明": "别人发链接时要不要读标题/摘要/正文（视频只读得到文案）",
     "enabled": true,

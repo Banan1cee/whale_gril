@@ -29,6 +29,10 @@ function getText(url, timeoutMs = 8000) {
   });
 }
 
+function getJson(url, timeoutMs = 8000) {
+  return getText(url, timeoutMs).then((body) => JSON.parse(body));
+}
+
 function stripTags(s) {
   return String(s || '')
     .replace(/<script[\s\S]*?<\/script>/gi, ' ')
@@ -115,4 +119,123 @@ async function hotNewsText(limit = 8) {
   return list.map((x, i) => `${i + 1}. ${x.title}`).join('\n');
 }
 
-module.exports = { search, searchText, parseBing, hotNews, hotNewsText };
+// ---------------------------------------------------------------------------
+// 天气：只靠 Bing 摘要答不准（常常只有「多云」没有温度，还容易搜到别的城市），
+// 所以单独接 open-meteo（免费、不要 key、支持中文地名）。
+// ---------------------------------------------------------------------------
+
+const WMO = {
+  0: '晴', 1: '晴间多云', 2: '多云', 3: '阴',
+  45: '有雾', 48: '雾凇',
+  51: '小毛毛雨', 53: '毛毛雨', 55: '大毛毛雨',
+  56: '冻毛毛雨', 57: '强冻毛毛雨',
+  61: '小雨', 63: '中雨', 65: '大雨',
+  66: '冻雨', 67: '强冻雨',
+  71: '小雪', 73: '中雪', 75: '大雪', 77: '雪粒',
+  80: '阵雨', 81: '强阵雨', 82: '暴雨',
+  85: '阵雪', 86: '强阵雪',
+  95: '雷阵雨', 96: '雷阵雨伴冰雹', 99: '强雷暴伴冰雹',
+};
+
+function wmoText(code) {
+  const n = Number(code);
+  return WMO[n] || (Number.isFinite(n) ? '天气代码' + n : '未知');
+}
+
+/** 按本机公网 IP 猜城市（没配 city 时用；拿不到就返回空，不影响别的） */
+let _ipCity = { value: '', at: 0 };
+async function ipCity(timeoutMs = 6000) {
+  const now = Date.now();
+  if (_ipCity.value && now - _ipCity.at < 6 * 3600 * 1000) return _ipCity.value;
+  try {
+    const j = await getJson('https://ipinfo.io/json', timeoutMs);
+    const city = String((j && j.city) || '').trim();
+    if (city) {
+      _ipCity = { value: city, at: now };
+      return city;
+    }
+  } catch { /* 拿不到就算了 */ }
+  return '';
+}
+
+/** 地名 → 经纬度（找不到返回 null） */
+async function geocodeCity(city, timeoutMs = 8000) {
+  const name = String(city || '').trim();
+  if (!name) return null;
+  const url =
+    'https://geocoding-api.open-meteo.com/v1/search?name=' +
+    encodeURIComponent(name) +
+    '&count=1&language=zh&format=json';
+  try {
+    const j = await getJson(url, timeoutMs);
+    const r = Array.isArray(j.results) && j.results[0];
+    if (!r) return null;
+    return {
+      name: r.name || name,
+      admin1: r.admin1 || '',
+      latitude: r.latitude,
+      longitude: r.longitude,
+      timezone: r.timezone || 'Asia/Shanghai',
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** 当前天气 + 今明两天（返回给模型看的一段中文） */
+async function weatherText(city, opts = {}) {
+  const timeoutMs = Number(opts.timeoutMs) || 8000;
+  const place = await geocodeCity(city, timeoutMs);
+  if (!place) return '';
+  const url =
+    'https://api.open-meteo.com/v1/forecast?latitude=' + place.latitude +
+    '&longitude=' + place.longitude +
+    '&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m' +
+    '&daily=temperature_2m_max,temperature_2m_min,weather_code,precipitation_probability_max' +
+    '&timezone=' + encodeURIComponent(place.timezone) +
+    '&forecast_days=2';
+  try {
+    const j = await getJson(url, timeoutMs);
+    const cur = j.current || {};
+    const d = j.daily || {};
+    const day = (i) => ({
+      date: (d.time || [])[i] || '',
+      max: (d.temperature_2m_max || [])[i],
+      min: (d.temperature_2m_min || [])[i],
+      code: (d.weather_code || [])[i],
+      rain: (d.precipitation_probability_max || [])[i],
+    });
+    const today = day(0);
+    const tomorrow = day(1);
+    const lines = [];
+    lines.push(`【${place.name}${place.admin1 && place.admin1 !== place.name ? '（' + place.admin1 + '）' : ''} 实时天气】`);
+    if (cur.temperature_2m != null) {
+      lines.push(
+        `现在 ${cur.temperature_2m}°C（体感 ${cur.apparent_temperature}°C，${wmoText(cur.weather_code)}，` +
+        `湿度 ${cur.relative_humidity_2m}%，风 ${cur.wind_speed_10m} km/h）`
+      );
+    }
+    if (today.max != null) {
+      lines.push(`今天 ${wmoText(today.code)}，${today.min}~${today.max}°C，降水概率 ${today.rain ?? 0}%`);
+    }
+    if (tomorrow.max != null) {
+      lines.push(`明天 ${wmoText(tomorrow.code)}，${tomorrow.min}~${tomorrow.max}°C，降水概率 ${tomorrow.rain ?? 0}%`);
+    }
+    lines.push('（数据源 open-meteo，按预报时间当地时区）');
+    return lines.join('\n');
+  } catch {
+    return '';
+  }
+}
+
+module.exports = {
+  search,
+  searchText,
+  parseBing,
+  hotNews,
+  hotNewsText,
+  geocodeCity,
+  ipCity,
+  weatherText,
+  wmoText,
+};

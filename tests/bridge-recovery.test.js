@@ -40,10 +40,28 @@ test('收消息线程死了会被自动拉起并上报', () => {
   assert.match(bridge, /Thread\(target=listener_watch/, '看门狗要真的启动');
 });
 
-test('表情包转码不再依赖 imageio_ffmpeg，改用能找到的 ffmpeg', () => {
-  assert.doesNotMatch(bridge, /import imageio_ffmpeg/, '这个包没装，不能写死');
-  assert.match(bridge, /_sh\.which\("ffmpeg"\)/, '要复用我们已经找到的 ffmpeg');
-  assert.match(bridge, /表情包转码跳过：没找到 ffmpeg/, '找不到时要给一句人话，而不是每条都报异常');
+test('表情包发了装死：不识别、不回话', () => {
+  // 用户要的是「表情包发了装死」，所以整条识别链（找缓存/截图/转码/送视觉模型）都删了
+  assert.doesNotMatch(bridge, /def describe_sticker/, '表情包识别函数要删掉');
+  assert.doesNotMatch(bridge, /def screenshot_sticker/, '表情包截图兜底要删掉');
+  assert.doesNotMatch(bridge, /def _find_sticker_file/, '表情包找缓存要删掉');
+  assert.doesNotMatch(bridge, /def _sticker_label/, '表情包取名要删掉');
+  assert.match(bridge, /收到表情包，装死/, '要写清是装死');
+  const fn = bridge.slice(bridge.indexOf('def on_message_inner'));
+  const body = fn.slice(0, fn.indexOf('\n    def ', 10));
+  assert.match(body, /表情包发了装死/, '处理分支里要说明为什么装死');
+  assert.doesNotMatch(body, /describe_sticker\(msg\)/, '不能再调用识别');
+});
+
+test('被标成「图片」的表情包也要装死，不能送视觉模型', () => {
+  // 有的微信版本把表情包报成「图片」，正文里仍是 <emoji md5=...>。
+  // 只删 describe_sticker 不够：那种消息会走 describe_image 被当图片认。
+  const fn = bridge.slice(bridge.indexOf('def on_message_inner'));
+  const body = fn.slice(0, fn.indexOf('\n    def ', 10));
+  assert.match(body, /if "<emoji" in content:/, '要按正文里的 emoji XML 兜底');
+  assert.ok(body.indexOf('if "<emoji" in content:') < body.indexOf('describe_image(msg)'),
+    '兜底必须排在图片识别之前');
+  assert.match(body, /收到表情包（被标成图片），装死/, '要留下日志');
 });
 test('UIA 彻底不行时有键盘兜底通道（Ctrl+F 搜索会话 → 粘贴 → 回车，并回读确认）', () => {
   assert.match(bridge, /def keyboard_send/);

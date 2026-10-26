@@ -12,6 +12,7 @@
  *   5. 环境变量 ZHIPU_API_KEY / VISION_API_KEY
  */
 const fs = require('node:fs');
+const http = require('node:http');
 const https = require('node:https');
 
 /** 64x64 纯色 PNG，用来做「测试看图」（不联网也能构造，不依赖外部资源） */
@@ -85,10 +86,21 @@ const DEFAULT_PROMPT = [
 function postJson(url, body, headers, timeoutMs = 30000) {
   return new Promise((resolve, reject) => {
     const payload = Buffer.from(JSON.stringify(body), 'utf8');
-    const u = new URL(url);
-    const req = https.request(
+    let u;
+    try {
+      u = new URL(url);
+    } catch (err) {
+      reject(new Error('看图接口地址不合法：' + url));
+      return;
+    }
+    // 以前写死 https.request 也不传端口：本地 http 视觉服务（127.0.0.1:11434）
+    // 和自定义端口（https://host:8443）都会连到 443 上失败。
+    const isHttps = u.protocol === 'https:';
+    const transport = isHttps ? https : http;
+    const req = transport.request(
       {
         hostname: u.hostname,
+        port: u.port || (isHttps ? 443 : 80),
         path: u.pathname + u.search,
         method: 'POST',
         headers: {

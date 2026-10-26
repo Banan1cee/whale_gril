@@ -612,8 +612,15 @@ class Bot {
       /(退下吧|一边去|忙你的去吧|去忙你的吧|你先去忙)/.test(dismissClean) ||
       (/(走了|走吧|散了|退下)/.test(dismissClean) && /(没你事|不用你|退下|一边去)/.test(dismissClean)) ||
       /^(你可以走了|你走吧|先退下吧|退下吧|退下|下去吧|走吧|走了|快走|行了你走吧)$/.test(dismissClean) ||
-      /^(滚|滚蛋|滚开|滚出去|你滚|爬|爬开|走开|走远点|一边去|一边凉快去|哪凉快哪待着|消失|退下|下去|去忙你的|忙你的去|别在这|别在这碍眼|别烦我|别烦了|少说两句|别说了|闭嘴|安静|安静点|别吵|不需要你|不用你|没你事|没你事了|别接话|没问你)(?:吧|啊|呀|了|嘛|哦)*$/.test(dismissClean);
-    if (dismissHit && (isMaster || atMe || msg.replyToBot || !isGroup)) {
+      /^(滚|滚蛋|滚开|滚出去|你滚|爬|爬开|走开|走远点|一边去|一边凉快去|哪凉快哪待着|消失|退下|下去|去忙你的|忙你的去|别在这|别在这碍眼|别烦我|别烦了|少说两句|别说了|闭嘴|安静|安静点|别吵|不需要你|不用你|没你事|没你事了|别接话|没问你)(?:吧|啊|呀|了|嘛|哦)*$/.test(dismissClean) ||
+      // 第三人称：群里说「让她滚」「叫它闭嘴」「把机器人赶走」——也是在赶她走。
+      // 以前只认「你滚/滚」这种直接命令，「让她滚」完全识别不到，于是不静默、还接着说话。
+      // 只用「她 / 它 / 鲸鲸」这类明确指向她的词，别把「让他滚」（指别的男生）也当成赶她。
+      /(让|叫|把|喊|请)(?:她|它|这货|这家伙|这玩意|这玩意儿|机器人|鲸鲸|小鲸|肥鱼|鲸)(?:赶紧|快点|马上)?(?:滚|滚蛋|滚开|滚出去|爬|走开|消失|退下|下去|闭嘴|安静|别说话|少说话|别接话|别插嘴|别吵|歇着)/.test(dismissClean);
+    // 群友也能让她闭嘴（不用 @）：只要是在赶她走，就认。
+    // 以前要求 isMaster / atMe / replyToBot 之一，群里别人说「让她滚」直接失效。
+    const dismissByGroup = isGroup && /(让她|叫她|让它|叫它|机器人|鲸鲸|小鲸|肥鱼)/.test(dismissClean);
+    if (dismissHit && (isMaster || atMe || msg.replyToBot || !isGroup || dismissByGroup)) {
       state.engagedUntil = 0;
       state.engagedBy = '';
       state.dismissedAt = nowMs;
@@ -676,13 +683,21 @@ class Bot {
 
     // 4) 群聊里没被叫到就先不说话
     const trigger = this.computeTrigger({ msg, atMe, clean, isGroup, state, nowMs, isMaster });
-    // 群里被人骂了但没 @：骂的是她（带「你」或叫机器人/名字）、上一句是她说的，或正在接话窗口
+    // 群里被人骂了但没 @：只有「骂的是她」才唤醒她反击。
+    // 以前这里只看「文本带脏字」+「她刚说过话/在接话窗口」就唤醒 —— 于是群里任何人
+    // 抱怨一句「这天气真垃圾」「股票跌了滚蛋吧」，她都会跳出来，还绕过静默期。
     if (!trigger.wake && isGroup && !atMe) {
       const said = String(clean.text || '');
       const insulted = INSULT_RE.test(said) || INSULT_LOOSE_RE.test(said);
-      const botJustSpoke = this.store.messages(key, 4).some((m) => m.role === 'assistant' && nowMs - Number(m.ts || 0) < 3 * 60000);
-      const aimedAtHer = /机器人|鲸|肥鱼/.test(said);
-      if (insulted && (botJustSpoke || Number(state.engagedUntil) > nowMs || aimedAtHer)) {
+      // 同样不能只凭「你」就认定在骂她（「张三你个傻逼」的「你」指的是张三）
+      const namedHer = /(鲸鲸|小鲸|肥鱼|机器人|人机|bot)/i.test(said);
+      const talkingToHer =
+        Boolean(msg.replyToBot) ||
+        (String(state.engagedBy || '') === String(msg.senderId || '') && Number(state.engagedUntil) > nowMs);
+      const aimedAtHer = namedHer || talkingToHer;
+      const silent = Number(state.silentUntil) > nowMs;
+      // 静默期内（被赶走了）不反击：除非 @ 她（上面 addressed 已解除静默）
+      if (insulted && aimedAtHer && !silent) {
         trigger.wake = true;
         trigger.reason = 'insulted';
       }
@@ -753,25 +768,64 @@ class Bot {
 
     // 需要最新信息时联网搜一下
     let webText = '';
+    const webCfg = this.config.websearch || {};
+    const webOn = webCfg.enabled !== false;
     const searchPattern = /(查一下|查查|搜一下|搜搜|帮我查|最新|热搜|新闻|发生了什么|怎么回事|多少钱|什么时候|是谁|谁是|行情|报价|天气)/;
-    if (clean.text && searchPattern.test(clean.text)) {
+    if (webOn && clean.text && searchPattern.test(clean.text)) {
       try {
+        const isWeather = /(天气|下雨|下雪|气温|多少度|冷不冷|热不热|台风|雾霾|空气)/.test(clean.text);
         let q = String(clean.text)
           .replace(/^(帮我|请|你)?(查一下|查查|搜一下|搜搜|搜索)/, '')
           .replace(/(是什么|有什么|有哪些|怎么回事|怎么样|吗|呢|啊|呀|？|\?)/g, ' ')
           .replace(/\s+/g, ' ')
           .trim()
           .slice(0, 40);
-        if (q && !/\d{4}/.test(q)) q += ' ' + now.getFullYear();
+        if (isWeather) {
+          // 天气走专门的接口（open-meteo）：Bing 摘要常常只有「多云」没温度，还爱串城市。
+          // 对方话里没提城市就用配置里的 city；都没配就退回搜索引擎。
+          const city = String(webCfg.city || '').trim();
+          const hasCity = /(北京|上海|天津|重庆|广州|深圳|杭州|南京|成都|武汉|西安|苏州|长沙|郑州|青岛|沈阳|大连|厦门|福州|济南|合肥|昆明|南宁|贵阳|太原|A 城市|哈尔滨|长春|兰州|银川|西宁|乌鲁木齐|呼和浩特|拉萨|海口|三亚|宁波|无锡|东莞|佛山|温州|珠海|中山|惠州|台州|常州|徐州|烟台|洛阳|保定|唐山|香港|澳门|台北|[\u4e00-\u9fa5]{2,4}市)/;
+          let weatherCity = '';
+          const hit = String(clean.text).match(hasCity);
+          if (hit) weatherCity = hit[0].replace(/市$/, '');
+          if (!weatherCity && city) weatherCity = city;
+          if (!weatherCity) {
+            // 话里没说、配置也没填 → 按本机公网 IP 猜一下（否则会搜到随机城市，
+            // 比如人在A 城市却答「B 城市今天晴」）。
+            try { weatherCity = await websearch.ipCity(Number(webCfg.timeoutMs) || 6000); } catch { /* 忽略 */ }
+          }
+          if (weatherCity) {
+            try {
+              webText = await websearch.weatherText(weatherCity, {
+                timeoutMs: Number(webCfg.timeoutMs) || 8000,
+              });
+              if (webText && this.logger) {
+                this.logger.info('天气查询：' + weatherCity);
+              }
+            } catch { /* 落到搜索引擎 */ }
+          }
+          if (!webText) {
+            if (!hit && city) q = city + ' 天气';
+            else if (!/天气/.test(q)) q = q + ' 天气';
+          }
+        }
+        if (q && !isWeather && !/\d{4}/.test(q)) q += ' ' + now.getFullYear();
         if (/(新闻|热点|热搜|发生了什么|大事件|头条)/.test(clean.text)) {
           webText = await websearch.hotNewsText(8);
         }
         if (!webText) {
-          webText = await websearch.searchText(q || String(clean.text).slice(0, 40), { limit: 4, timeoutMs: 8000 });
+          webText = await websearch.searchText(q || String(clean.text).slice(0, 40), {
+            limit: 4,
+            timeoutMs: Number(webCfg.timeoutMs) || 8000,
+          });
         }
         if (webText) this.logger && this.logger.info('联网搜索：' + String(clean.text).slice(0, 30));
       } catch { /* ignore */ }
     }
+    // 搜到的东西必须真的送进提示词。以前只赋给局部变量、写了个日志就完事，
+    // msg 上从没挂过 webText，于是 persona 里那段「【刚联网搜到的资料】」永远是空——
+    // 表现就是「问她天气她不知道」，明明日志里已经搜到了。
+    msg.webText = webText;
 
     // 认真讨论（不是随口闲聊）→ 允许说长一点、有观点
     const discussPattern = /(讨论|探讨|你觉得|你怎么看|你认为|为什么|该不该|要不要|是不是应该|如何选择|怎么选|怎么看|有道理吗|值得吗|价值观|人生|意义|观点|看法|利弊|优缺点)/;
@@ -814,8 +868,21 @@ class Bot {
     // 骂到她头上，或者骂到她主人头上，都算开战
     const masterNameList = (masterCfg.names || []).map((n) => String(n).toLowerCase()).filter(Boolean);
     const masterMentioned = /主人/.test(heardText) || masterNameList.some((n) => n && heardText.toLowerCase().includes(n));
-    let fight = !isMaster && insultRe.test(heardText);
-    let fightDirty = dirtyRe.test(heardText);
+    // 只有在「骂的是她」时才开火。以前这里是裸匹配：群里任何人抱怨一句
+    // 「这天气真垃圾」「股票跌了滚蛋吧」，她都会以为在骂自己，然后跳出来对喷 ——
+    // 表现就是「没人 @ 她，她还在说话」。
+    // 注意「你」不能单独算数：群里说「张三你个傻逼」那个「你」指的是张三，不是她。
+    // 只有在正跟她对话（@她 / 回复她 / 同一个人的接话窗口）时，「你」才指向她。
+    const inConversationWithSender =
+      Boolean(atMe || msg.replyToBot) ||
+      (isGroup && String(state.engagedBy || '') === String(msg.senderId || '') && Number(state.engagedUntil) > nowMs);
+    // 直接点名她/叫机器人，无论谁说的都算
+    const namedHer = /(鲸鲸|小鲸|肥鱼|机器人|人机|bot)/i.test(heardText);
+    // 正在跟她对话的人，哪怕只说「傻逼」两个字、不带「你」不带名字，也是在骂她；
+    // 但「张三你个傻逼」里的「你」指的是张三，不在对话中就不算。
+    const aimedAtHer = namedHer || inConversationWithSender;
+    let fight = !isMaster && aimedAtHer && insultRe.test(heardText);
+    let fightDirty = fight && dirtyRe.test(heardText);
     let fightOnMaster = Boolean(fight && masterMentioned);
     let fightTarget = null;
     // 主人说「有人骂我 / 帮我怼他」：翻最近的记录，把骂他的人揪出来当靶子
@@ -877,7 +944,6 @@ class Bot {
 
   computeTrigger({ msg, atMe, clean, isGroup, state, nowMs, isMaster }) {
     if (!isGroup) return { wake: true, reason: 'private' };
-    if (isMaster && this.config.group.masterAlwaysReply) return { wake: true, reason: 'master' };
     const addressed = atMe || msg.replyToBot;
     // 只要有人 @ 她（或回复她），一律回复，静默期也解除
     if (addressed) {
@@ -900,10 +966,12 @@ class Bot {
       state.engagedBy = String(msg.senderId || '');
       return { wake: true, reason: 'directed' };
     }
-    // 被赶走后的静默期：只压住没 @ 的闲聊
+    // 被赶走后的静默期：高于「主人说话就回」，否则主人说完「让她滚」下一句又把她叫起来。
+    // @ 她仍然能解除（上面 addressed 分支），所以不是永久失联。
     if (Number(state.silentUntil) > nowMs) {
       return { wake: false, reason: 'silent' };
     }
+    if (isMaster && this.config.group.masterAlwaysReply) return { wake: true, reason: 'master' };
     if (Number(state.engagedUntil) > nowMs) {
       const txt = String(clean.text || '');
       const sameSender = String(msg.senderId || '') === String(state.engagedBy || '');
