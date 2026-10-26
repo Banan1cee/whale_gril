@@ -1,0 +1,12 @@
+# 统一换行：.bat / .cmd 必须是 CRLF，否则 Windows cmd 会报「语法不正确」
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+*.ps1   text eol=crlf
+
+# 其余文本按 LF 存，跨平台友好
+*.js    text eol=lf
+*.py    text eol=lf
+*.md    text eol=lf
+*.json  text eol=lf
+*.yml   text eol=lf
+*.txt   text eol=lf

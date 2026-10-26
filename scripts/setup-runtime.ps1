@@ -36,17 +36,36 @@ if ((Test-Path $nodeExe) -and (Test-Path $pyExe)) {
 
 $url = "https://github.com/$REPO/releases/download/$REL/$ASSET"
 $zip = Join-Path $env:TEMP $ASSET
-Write-Host "  [1/2] 下载运行时（约 86MB）：$url"
-if (-not (Test-Path $zip) -or (Get-Item $zip).Length -lt 10MB) {
-  Invoke-WebRequest -Uri $url -OutFile "$zip.part" -UseBasicParsing -TimeoutSec 1800
-  Move-Item "$zip.part" $zip -Force
+$part = "$zip.part"
+Write-Host "  [1/2] 下载运行时（约 86MB，网慢要几分钟）：$url"
+if ((-not (Test-Path $zip)) -or (Get-Item $zip).Length -lt 10MB) {
+  # Windows 10+ 自带 curl：比 Invoke-WebRequest 稳，也不吃内存
+  $curl = (Get-Command curl.exe -ErrorAction SilentlyContinue)
+  $failCode = 0
+  if ($curl) {
+    & $curl.Source -L --fail --retry 3 --retry-delay 2 --connect-timeout 30 -o $part $url
+    $failCode = $LASTEXITCODE
+  } else {
+    try { Invoke-WebRequest -Uri $url -OutFile $part -UseBasicParsing -TimeoutSec 1800 } catch { $failCode = 1 }
+  }
+  # curl 偶尔在收尾时报 write error（exit 23），但文件其实是完整的——按大小判断，别白跑一遍
+  $partSize = if (Test-Path $part) { (Get-Item $part).Length / 1MB } else { 0 }
+  if ($partSize -gt 50) {
+    Move-Item $part $zip -Force
+  } else {
+    throw ("下载失败（exit $failCode，已下 {0:N1}MB）。可以手动下载后放到 {1}" -f $partSize, $zip)
+  }
 }
 
 Write-Host '  [2/2] 解压到 runtime\ …'
 if (Test-Path $runtime) { Remove-Item $runtime -Recurse -Force }
-New-Item -ItemType Directory -Path $runtime -Force | Out-Null
 Add-Type -AssemblyName System.IO.Compression.FileSystem
-[System.IO.Compression.ZipFile]::ExtractToDirectory($zip, $runtime)
+# 包里可能带一层 runtime\ 顶层目录，先解到临时目录再判断，别搞成 runtime\runtime
+$tmpDir = Join-Path $env:TEMP ('whale-rt-' + [guid]::NewGuid().ToString('N'))
+[System.IO.Compression.ZipFile]::ExtractToDirectory($zip, $tmpDir)
+$inner = Join-Path $tmpDir 'runtime'
+if (Test-Path $inner) { Move-Item $inner $runtime } else { Move-Item $tmpDir $runtime }
+Remove-Item $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
 
 Write-Host ''
 Write-Host '  自检：' -NoNewline
