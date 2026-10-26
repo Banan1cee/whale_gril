@@ -15,6 +15,22 @@
 
 ---
 
+## 3.51 更新
+
+**记忆能带走了。** 以前更新是把整个文件夹换成新版，新目录里没有 `data\`，看起来就是「记忆全没了」。现在：
+
+- 每次启动自动快照到 `data\backups\`（留最近 20 份）
+- 双击 **`备份记忆.bat`** 立刻备份；`GET /api/memory/export` 能直接下载一份 json
+- 双击 **`恢复记忆.bat`** 看快照列表；`node scripts/memory-tool.js restore <文件>` 也能把导出的 json 放回去
+- 恢复前会自动把当前记忆另存一份（`before-restore`），手滑也能回滚
+
+```bash
+node scripts/memory-tool.js info     # 现在有几段会话、几条消息
+node scripts/memory-tool.js backup   # 立刻备份
+node scripts/memory-tool.js export "D:\鲸鲸记忆.json"
+node scripts/memory-tool.js restore "D:\鲸鲸记忆.json"
+```
+
 ## 3.50 更新
 
 - **称呼**：网页设置和调试台改的是同一份 `persona.ownerName`；清空 = 恢复默认「主人」；老设置只迁移一次，不会重启又被盖回去。

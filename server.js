@@ -24,6 +24,7 @@ const persona = require('./src/persona');
 const care = require('./src/care');
 const { matchMaster, masterWarnings } = require('./src/master');
 const personaStore = require('./src/personaStore');
+const memoryBackup = require('./src/memoryBackup');
 const presets = require('./src/presets');
 const links = require('./src/links');
 const bilibili = require('./src/bilibili');
@@ -119,6 +120,13 @@ function createRuntime({ root = projectRoot(), env = process.env, loggerLevel } 
   personaStore.apply(config, personaStore.load(config));
   const logger = createLogger({ level: loggerLevel || config.log.level, file: config.paths.logFile });
   const store = new Store({ file: config.paths.storeFile, limits: config.memory, logger });
+  // 每次启动留一份记忆快照：换目录/重装/误点重置都能捞回来
+  try {
+    const snap = memoryBackup.writeSnapshot(root, 'startup');
+    if (snap) logger.info('记忆快照：' + snap);
+  } catch (err) {
+    logger.warn('记忆快照失败（不影响使用）：' + err.message);
+  }
   const llm = new DeepSeekClient({ config, logger });
   const bot = new Bot({ config, store, llm, logger });
   const gateways = createGateways({ config, bot, logger });
@@ -1020,6 +1028,59 @@ function createHandler(runtime) {
         });
       }
       if (pathname === '/healthz') return json(res, 200, { ok: true, up: true });
+
+      // ---- 记忆备份 / 恢复 ----
+      if (pathname === '/api/memory/info' && method === 'GET') {
+        const bundle = memoryBackup.collect(runtime.config.root);
+        const backups = memoryBackup.listBackups(runtime.config.root);
+        return json(res, 200, {
+          ok: true,
+          current: memoryBackup.summarize(bundle),
+          backups: backups.map((b) => ({ name: b.name, mtime: b.mtime, ...{ sessions: b.sessions, messages: b.messages, notes: b.notes } })),
+          dir: memoryBackup.backupDir(runtime.config.root),
+        });
+      }
+
+      if (pathname === '/api/memory/export' && method === 'GET') {
+        // 先把内存里的记忆落盘，再打包下载
+        try { runtime.store.flush(); } catch { /* ignore */ }
+        const bundle = memoryBackup.collect(runtime.config.root);
+        const name = 'whale-memory-' + new Date().toISOString().slice(0, 10) + '.json';
+        res.writeHead(200, {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Content-Disposition': `attachment; filename="${name}"`,
+          'Cache-Control': 'no-store',
+        });
+        res.end(JSON.stringify(bundle, null, 2));
+        return true;
+      }
+
+      if (pathname === '/api/memory/backup' && method === 'POST') {
+        try { runtime.store.flush(); } catch { /* ignore */ }
+        const file = memoryBackup.writeSnapshot(runtime.config.root, 'manual');
+        if (!file) return json(res, 200, { ok: true, file: '', message: '还没有记忆，不用备份' });
+        logger.info('手动记忆快照：' + file);
+        return json(res, 200, { ok: true, file });
+      }
+
+      if (pathname === '/api/memory/restore' && method === 'POST') {
+        const body = await readBody(req);
+        try {
+          let info;
+          if (body && body.bundle) {
+            info = memoryBackup.restoreFrom(runtime.config.root, body.bundle);
+          } else if (body && body.name) {
+            const target = path.join(memoryBackup.backupDir(runtime.config.root), String(body.name));
+            info = memoryBackup.restoreFromFile(runtime.config.root, target);
+          } else {
+            return json(res, 400, { ok: false, error: '要带 name（快照文件名）或 bundle（导出的内容）' });
+          }
+          logger.info('记忆已恢复：' + info.restored.join('、'));
+          return json(res, 200, { ok: true, restored: info.restored, current: { sessions: info.sessions, messages: info.messages, notes: info.notes }, needRestart: true });
+        } catch (err) {
+          return json(res, 400, { ok: false, error: err.message });
+        }
+      }
 
       if (pathname === '/api/status' && method === 'GET') {
         return json(res, 200, statusPayload(runtime));

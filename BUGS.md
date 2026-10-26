@@ -5,6 +5,7 @@
 
 | # | 现象 | 根因 | 修复 | 版本 | 回归测试 |
 | --- | --- | --- | --- | --- | --- |
+| 28 | 用户反馈「每次更新记忆就没了」，换版本后她谁都不认识 | 更新方式是整个文件夹换新，新目录没有 `data\`；程序又没有任何导出/自动快照，用户无从恢复 | ①启动自动快照到 `data\backups\`（保留 20 份）；②`备份记忆.bat` / `GET /api/memory/export` 导出 json；③`恢复记忆.bat` / `POST /api/memory/restore` 恢复，恢复前先存 `before-restore` 快照 | 3.51 | `tests/memory-backup.test.js` 5 条 |
 | 25 | 本地/自建看图服务（http://127.0.0.1:11434、https://host:8443）一直报连接失败 | `vision.js` 的 `postJson` 写死 `https.request`、也不传 `u.port`，http 服务和自定义端口全被当成 443 的 TLS 请求 | 按 `u.protocol` 选 http/https，显式传 `port`（https 默认 443、http 默认 80） | 3.4.13 | `tests/audit-fixes.test.js`（含真的起一个本地 http 视觉服务打通） |
 | 26 | 网页里换语音 Key / 调超时，必须重启桥接才生效；语音 Key 只读 settings.json，配置里的 deepseek.apiKey 用不上 | `reload_config()` 只刷新 VOICE_ENABLED/BASE_URL/MODEL，漏了 VOICE_API_KEY/TIMEOUT/MAX_SECONDS；启动时 Key 只回退到 `settings.apiKey` | 新增 `_resolve_voice_key()` 统一查找链（voice.apiKey → settings.voiceApiKey → settings.apiKey → keys.* → deepseek.apiKey）；reload 里刷新 Key/超时/时长上限 | 3.4.13 | `tests/audit-fixes.test.js` |
 | 27 | 微信改了「文件保存位置」后桥接找不到数据库（L: 盘 / 网络盘 / 直填账号目录都不行） | `looks_like_db_root` 文档说支持直填账号目录和拍平布局，实际只看 `<root>/<账号>/db_storage`；`resolve_db_dir` 与 `media_fallback` 都写死 C..K 盘 | 补直填/拍平判断；新增 `iter_drive_roots()` 枚举真实盘符 + psutil 挂载点（含网络盘）；媒体兜底同样按真实分区扫 | 3.4.13 | `tests/audit-fixes.test.js` |
