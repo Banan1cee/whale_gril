@@ -1,10 +1,31 @@
 # 🐋 鲸鲸 · DeepSeek 鲸鱼娘聊天机器人
 
+> **想直接跑？点右边的 [Releases](https://github.com/Banan1cee/whale_gril/releases/latest)，下 `whale-girl-3.50.zip`（86 MB）。**
+> 里面已经带好 Node 22 和 Python 3.12，解压双击就能用，**不用装任何环境**。
+>
+> 这里的 `Code → Download ZIP` 只有 **400 KB 源码**（不含运行时，也不含你本地的 Key 和聊天记录）。从源码跑有两条路：
+> 1. 双击 **`一键装运行环境.bat`** —— 自动下载 Node + Python 并把微信依赖装进 `runtime\`，之后和发行包一样用；
+> 2. 或者自己装 Node 18+（`npm start` 就能跑网页版），接微信再装 Python 3.12 + `pip install -r requirements.txt`。
+
 一个能真正聊天的「鲸鱼娘」：**网页私聊 + 微信群自动回复 + B 站视频分享 + 联网查资料**。
 
 人设是一个蓝发鲸鱼娘，说话短、有情绪、会撒娇也会毒舌；接 OpenAI 兼容的大模型（DeepSeek / 智谱 GLM / 通义 / Ollama 本地等），零 npm 依赖。
 
 ![鲸鲸](web/assets/jingjing.jpg)
+
+---
+
+## 3.50 更新
+
+- **称呼**：网页设置和调试台改的是同一份 `persona.ownerName`；清空 = 恢复默认「主人」；老设置只迁移一次，不会重启又被盖回去。
+- **状态播报降权**：以前每条消息都告诉她「你此刻在泡脚」，于是句句「我刚泡完脚，手还湿着呢」。现在只给时间，「在干嘛」按小时抽样且明确要求别主动说。
+- **抢屏修复**：`restore_win_state()` 少了 `import ctypes`，每次发完消息都抛 `NameError`，微信窗口被抬到前台就不还原了。
+- **安全闸**：`server.host` 不是回环地址时强制改回 `127.0.0.1`；真要远程访问必须 `server.allowRemote=true` 且带 `x-bot-token`。
+- **看图**：接口按 URL 协议选 http/https 并传端口，本地/自建视觉服务能用了。
+- **语音**：改 Key / 超时不用重启桥接；Key 查找链补上 `config.deepseek.apiKey`。
+- **数据库目录**：兼容「直填账号目录 / 拍平的 db_storage」，盘符不再写死 C..K（L 盘、网络盘都行）。
+
+完整列表见 [CHANGELOG.md](CHANGELOG.md)，每个 bug 的根因和回归测试见 [BUGS.md](BUGS.md)。
 
 ---
 
