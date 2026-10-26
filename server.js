@@ -170,6 +170,8 @@ function isPlainObject(v) {
 
 /** 监听 config.json：手动改完存盘就生效，不用再重启服务。 */
 function watchConfigFile(runtime) {
+  // 测试/沙箱里 fs.watch 可能不可用，允许关掉（config.watchConfig=false）
+  if (runtime.config.watchConfig === false) return;
   const file = runtime.config.paths.configFile;
   let timer = null;
   try {
@@ -1084,13 +1086,20 @@ function createHandler(runtime) {
           if (body && body.bundle) {
             info = memoryBackup.restoreFrom(runtime.config.root, body.bundle);
           } else if (body && body.name) {
-            const target = path.join(memoryBackup.backupDir(runtime.config.root), String(body.name));
+            const safeName = path.basename(String(body.name)); // 防 ../ 穿越：只认备份目录里的文件名
+            const target = path.join(memoryBackup.backupDir(runtime.config.root), safeName);
+            if (!fs.existsSync(target)) {
+              return json(res, 400, { ok: false, error: '找不到这个快照：' + safeName });
+            }
             info = memoryBackup.restoreFromFile(runtime.config.root, target);
           } else {
             return json(res, 400, { ok: false, error: '要带 name（快照文件名）或 bundle（导出的内容）' });
           }
-          logger.info('记忆已恢复：' + info.restored.join('、'));
-          return json(res, 200, { ok: true, restored: info.restored, current: { sessions: info.sessions, messages: info.messages, notes: info.notes }, needRestart: true });
+          // 让内存里的记忆立刻跟上文件，不然下一次写盘会把恢复的内容盖回去
+          let reloaded = 0;
+          try { reloaded = runtime.store.reloadFromDisk(); } catch (err) { logger.warn('恢复后重载记忆失败：' + err.message); }
+          logger.info('记忆已恢复：' + info.restored.join('、') + `（重载 ${reloaded} 个会话）`);
+          return json(res, 200, { ok: true, restored: info.restored, current: { sessions: info.sessions, messages: info.messages, notes: info.notes }, needRestart: false });
         } catch (err) {
           return json(res, 400, { ok: false, error: err.message });
         }
