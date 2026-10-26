@@ -46,6 +46,16 @@ class Store {
     this.load();
   }
 
+  /** 记忆文件被外部改过（比如恢复备份）之后，重新读一遍，不用重启服务 */
+  reloadFromDisk() {
+    this.sessions.clear();
+    this.digest = [];
+    this.stats = { messages: 0, replies: 0 };
+    this.load();
+    this.dirty = false;
+    return this.sessions.size;
+  }
+
   load() {
     try {
       const raw = JSON.parse(fs.readFileSync(this.file, 'utf8').replace(/^\uFEFF/, ''));

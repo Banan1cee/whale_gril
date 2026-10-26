@@ -151,7 +151,7 @@ test('结构不对的备份要被拦下，别覆盖现有记忆', () => {
 test('导出接口默认不带 Key（HTTP 层也要验一遍，别只测模块）', async () => {
   const { startServer } = require('../server');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-mem-api-'));
-  fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ server: { port: 0, openBrowser: false } }));
+  fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ server: { port: 0, openBrowser: false }, watchConfig: false }));
   fs.mkdirSync(path.join(root, 'data'), { recursive: true });
   fs.writeFileSync(
     path.join(root, 'data', 'settings.json'),
@@ -169,4 +169,83 @@ test('导出接口默认不带 Key（HTTP 层也要验一遍，别只测模块�
     await inst.close();
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('恢复后不用重启：内存里的记忆立刻跟着文件变', async () => {
+  const { startServer } = require('../server');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-mem-live-'));
+  fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ server: { port: 0, openBrowser: false }, watchConfig: false }));
+  fs.mkdirSync(path.join(root, 'data'), { recursive: true });
+  fs.writeFileSync(
+    path.join(root, 'data', 'store.json'),
+    JSON.stringify({ sessions: { 'wechat:p:a': { messages: [{ role: 'user', text: '一', ts: 1 }], profiles: {} } } })
+  );
+  const inst = await startServer({ root, env: {}, port: 0, openBrowser: false });
+  try {
+    // 造一份「两条消息」的备份，直接塞进 backups 目录
+    const bundle = {
+      kind: 'whale-girl-memory',
+      version: 1,
+      files: {
+        store: {
+          sessions: {
+            'wechat:p:a': {
+              messages: [
+                { role: 'user', text: '一', ts: 1 },
+                { role: 'assistant', text: '二', ts: 2 },
+              ],
+              profiles: {},
+            },
+          },
+        },
+      },
+    };
+    const dir = path.join(root, 'data', 'backups');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'memory-test-manual.json'), JSON.stringify(bundle));
+
+    const res = await fetch(`${inst.url}/api/memory/restore`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'memory-test-manual.json' }),
+    });
+    const data = await res.json();
+    assert.equal(data.ok, true);
+    assert.equal(data.needRestart, false, '恢复后应该立刻生效，不该还要求重启');
+    assert.equal(data.current.messages, 2);
+    // 服务内存里也要真的变了
+    const info = await (await fetch(`${inst.url}/api/memory/info`)).json();
+    assert.equal(info.current.messages, 2, '内存里的记忆要跟着文件走');
+  } finally {
+    await inst.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('恢复接口拒绝 ../ 穿越，只认备份目录里的文件名', async () => {
+  const { startServer } = require('../server');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-mem-trav-'));
+  fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ server: { port: 0, openBrowser: false }, watchConfig: false }));
+  const inst = await startServer({ root, env: {}, port: 0, openBrowser: false });
+  try {
+    const res = await fetch(`${inst.url}/api/memory/restore`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: '../../config.json' }),
+    });
+    const data = await res.json();
+    assert.equal(data.ok, false, '不能让 ../ 读到备份目录外面');
+  } finally {
+    await inst.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('同一秒内两次快照不会互相覆盖（文件名带毫秒）', () => {
+  const root = seed();
+  const a = backup.writeSnapshot(root, 'manual');
+  const b = backup.writeSnapshot(root, 'manual');
+  assert.ok(a && b);
+  assert.notEqual(a, b, '两次快照必须是两个文件');
+  fs.rmSync(root, { recursive: true, force: true });
 });

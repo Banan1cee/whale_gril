@@ -21,6 +21,10 @@ const FILES = [
 ];
 const KEEP = 20;
 
+function stampMs(date = new Date()) {
+  return stamp(date) + '-' + String(date.getMilliseconds()).padStart(3, '0');
+}
+
 function stamp(date = new Date()) {
   const p = (n) => String(n).padStart(2, '0');
   return `${date.getFullYear()}${p(date.getMonth() + 1)}${p(date.getDate())}-${p(date.getHours())}${p(date.getMinutes())}${p(date.getSeconds())}`;
@@ -97,7 +101,7 @@ function writeSnapshot(root, reason = 'manual') {
 
   const dir = backupDir(root);
   fs.mkdirSync(dir, { recursive: true });
-  const file = path.join(dir, `memory-${stamp()}-${reason}.json`);
+  const file = path.join(dir, `memory-${stampMs()}-${reason}.json`);
   fs.writeFileSync(file, JSON.stringify(bundle, null, 2), 'utf8');
 
   // 只留最近 KEEP 份，别把盘塞满
