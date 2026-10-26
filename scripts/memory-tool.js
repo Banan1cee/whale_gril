@@ -11,6 +11,7 @@
  */
 const fs = require('node:fs');
 const path = require('node:path');
+const net = require('node:net');
 const backup = require('../src/memoryBackup');
 
 const root = path.resolve(__dirname, '..');
@@ -23,7 +24,7 @@ function fmtTime(d) {
   return `${t.getFullYear()}-${p(t.getMonth() + 1)}-${p(t.getDate())} ${p(t.getHours())}:${p(t.getMinutes())}`;
 }
 
-function main() {
+async function main() {
   if (cmd === 'list') {
     const items = backup.listBackups(root);
     if (!items.length) {
@@ -75,6 +76,17 @@ function main() {
   }
 
   if (cmd === 'restore') {
+    // 服务在跑，直接改文件的话，内存里的旧记忆会在下次写盘时把文件盖回去
+    const serverUp = await new Promise((resolve) => {
+      const probe = net.connect({ host: '127.0.0.1', port: 8787 });
+      probe.setTimeout(600, () => { probe.destroy(); resolve(false); });
+      probe.once('connect', () => { probe.destroy(); resolve(true); });
+      probe.once('error', () => resolve(false));
+    });
+    if (serverUp) {
+      console.log('提示：服务在跑，直接改文件的话，内存里的旧记忆可能把文件盖回去。');
+      console.log('      建议用网页接口 /api/memory/restore（恢复后自动生效），或恢复完重启一次。');
+    }
     if (!arg) {
       console.error('用法：node scripts/memory-tool.js restore <备份文件>');
       return 1;
@@ -97,9 +109,7 @@ function main() {
   return 1;
 }
 
-try {
-  process.exitCode = main();
-} catch (err) {
+main().then((code) => { process.exitCode = code; }).catch((err) => {
   console.error('出错了：' + (err && err.message ? err.message : err));
   process.exitCode = 1;
-}
+});

@@ -20,6 +20,8 @@ const FILES = [
   { key: 'shareState', name: 'share-state.json' },
 ];
 const KEEP = 20;
+/** 快照总量上限（MB）：记忆特别大时只留最近几份，别把盘塞满 */
+const MAX_TOTAL_MB = 200;
 
 function stampMs(date = new Date()) {
   return stamp(date) + '-' + String(date.getMilliseconds()).padStart(3, '0');
@@ -116,6 +118,27 @@ function writeSnapshot(root, reason = 'manual') {
     } catch {
       /* 删不掉就算了 */
     }
+  }
+
+  // 再按总量收一次：记忆很大（比如几 MB）时，20 份可能就是几百 MB
+  try {
+    let files = fs
+      .readdirSync(dir)
+      .filter((n) => n.startsWith('memory-') && n.endsWith('.json'))
+      .map((n) => ({ n, size: fs.statSync(path.join(dir, n)).size, t: fs.statSync(path.join(dir, n)).mtimeMs }))
+      .sort((a, b) => b.t - a.t);
+    let total = files.reduce((sum, x) => sum + x.size, 0);
+    while (files.length > 3 && total > MAX_TOTAL_MB * 1024 * 1024) {
+      const victim = files.pop();
+      try {
+        fs.unlinkSync(path.join(dir, victim.n));
+        total -= victim.size;
+      } catch {
+        break;
+      }
+    }
+  } catch {
+    /* 清理失败不影响备份本身 */
   }
   return file;
 }
