@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#04121f" />
+<title>鲸鲸 · DeepSeek 鲸鱼娘</title>
+<link rel="icon" href="/assets/avatar.jpg" type="image/jpeg" />
+<link rel="stylesheet" href="/assets/style.css" />
+</head>
+<body>
+  <div class="ocean" aria-hidden="true">
+    <div class="rays"></div>
+    <div class="bubbles" id="bubbles"></div>
+    <div class="vignette"></div>
+  </div>
+
+  <main class="app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="avatar-wrap" id="btnAbout" role="button" tabindex="0" title="看看鲸鲸的名片" aria-label="打开鲸鲸的名片">
+          <img class="avatar" src="/assets/avatar.jpg" alt="鲸鲸" />
+          <span class="halo" aria-hidden="true"></span>
+        </div>
+        <div class="who">
+          <h1>鲸鲸 <small>DeepSeek 鲸鱼娘</small></h1>
+          <p class="status"><span class="dot" id="dot"></span><span id="statusText">正在浮上来…</span><span id="buildVersion" class="muted"></span></p>
+        </div>
+      </div>
+      <nav class="tools">
+        <button class="icon-btn" id="btnMode" type="button" title="切换：私聊 / 群聊模拟">
+          <span class="ico">👥</span><em>群聊</em>
+        </button>
+        <button class="icon-btn" id="btnMemory" type="button" title="看看她记得你什么">
+          <span class="ico">🧠</span><em>记忆</em>
+        </button>
+        <a class="icon-btn" href="/persona" target="_blank" title="人设调教：性格、语态、上下文、开关">
+          <span class="ico">🧠</span><em>调教</em>
+        </a>
+        <a class="icon-btn" href="/debug" target="_blank" title="调试台：看主人、提示词原文、记忆">
+          <span class="ico">🧪</span><em>调试</em>
+        </a>
+        <button class="icon-btn" id="btnSettings" type="button" title="设置 API Key">
+          <span class="ico">⚙️</span><em>设置</em>
+        </button>
+      </nav>
+    </header>
+
+    <div class="group-bar" id="groupBar" hidden>
+      <span class="group-name">🌊 深海鱼塘 <small>4 人在线</small></span>
+      <span class="group-tip">没被 @ 的时候她只看不说</span>
+      <button class="mini-btn" id="btnAutoGroup" type="button">让群友来串门</button>
+    </div>
+
+    <section class="chat" id="chat" aria-live="polite"></section>
+
+    <div class="typing" id="typing" hidden>
+      <span class="dots"><span></span><span></span><span></span></span>
+      <em>咕噜咕噜…</em>
+    </div>
+
+    <footer class="composer">
+      <div class="chips" id="chips"></div>
+      <div class="input-row">
+        <select id="senderSel" class="sender" title="以谁的身份说话" hidden>
+          <option value="阿螈">🐟 阿螈</option>
+          <option value="海胆酱">🦔 海胆酱</option>
+          <option value="小丑鱼">🐠 小丑鱼</option>
+          <option value="你自己">🙋 你自己</option>
+        </select>
+        <button class="at-btn" id="btnAt" type="button" title="点名 @鲸鲸" hidden>@</button>
+        <textarea id="input" rows="1" placeholder="跟鲸鲸说点什么…（Enter 发送 / Shift+Enter 换行）"></textarea>
+        <button class="send" id="send" type="button" title="发送" aria-label="发送">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+            <path d="M3.4 20.4 21 12 3.4 3.6 3.4 10.2 15 12 3.4 13.8 Z" fill="currentColor"/>
+          </svg>
+        </button>
+      </div>
+      <p class="hint" id="hint">演示模式：还没填 API Key，用的是内置台词。点右上角「设置」接入真正的 DeepSeek。</p>
+    </footer>
+  </main>
+
+  <!-- 设置 -->
+  <div class="modal" id="settingsModal" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+      <div class="modal-head">
+        <h2 id="settingsTitle">⚙️ 深海控制台</h2>
+        <button class="close" data-close="settingsModal" type="button" aria-label="关闭">×</button>
+      </div>
+
+      <div class="field">
+        <label for="provider">模型服务</label>
+        <select id="provider"></select>
+        <p class="field-help" id="providerHint">正在读取服务列表…</p>
+      </div>
+
+      <div class="field">
+        <label for="apiKey">API Key <span class="val" id="keyState"></span></label>
+        <input id="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="sk-…" />
+        <p class="field-help" id="keyHelp">只在本地使用，保存在 data/settings.json。</p>
+      </div>
+
+      <div class="grid-2">
+        <div class="field">
+          <label for="baseUrl">接口地址</label>
+          <input id="baseUrl" type="text" spellcheck="false" placeholder="https://…" />
+        </div>
+        <div class="field">
+          <label for="model">模型名</label>
+          <input id="model" type="text" list="modelList" spellcheck="false" placeholder="deepseek-chat" />
+          <datalist id="modelList"></datalist>
+        </div>
+      </div>
+
+      <div class="test-row">
+        <button class="mini-btn" id="btnTest" type="button">测试连接</button>
+        <span class="test-result" id="testResult"></span>
+      </div>
+
+      <div class="field">
+        <label for="visionApiKey">图片识别 · 看图 API Key <span class="val" id="visionState"></span></label>
+        <input id="visionApiKey" type="password" autocomplete="off" spellcheck="false" placeholder="智谱 open.bigmodel.cn 的 Key（GLM-4V-Flash 免费额度够用）" />
+        <p class="field-help" id="visionHelp">收到图片时用来看图。留空 = 沿用主模型里存过的智谱 Key；DeepSeek 的 Key 不能看图。</p>
+      </div>
+
+      <div class="test-row">
+        <button class="mini-btn" id="btnVisionTest" type="button">测试看图</button>
+        <span class="test-result" id="visionResult"></span>
+      </div>
+
+      <div class="field">
+        <label for="userName">怎么称呼你</label>
+        <input id="userName" type="text" maxlength="12" placeholder="例如：小海" />
+      </div>
+
+      <div class="field">
+        <label for="temperature">俏皮程度 <span class="val" id="tempVal">0.95</span></label>
+        <input id="temperature" type="range" min="0.3" max="1.4" step="0.05" value="0.95" />
+        <p class="field-help">越高越活泼跳脱，越低越稳。鲸鲸建议 0.9 ~ 1.05；拉到 1.2 以上容易开始说胡话。</p>
+      </div>
+
+      <div class="switch-row">
+        <label class="switch">
+          <input type="checkbox" id="mockMode" />
+          <span class="slider"></span>
+          <span class="switch-label">演示模式（不调用模型，用内置台词）</span>
+        </label>
+      </div>
+
+      <fieldset class="group-field">
+        <legend>群聊规则</legend>
+        <label class="check"><input type="checkbox" id="requireAt" /> 只有 @ 她 / 叫她名字时才回复</label>
+        <label class="check"><input type="checkbox" id="freeChat" /> 允许偶尔主动接话</label>
+        <div class="field slim">
+          <label for="freeChance">主动接话概率 <span class="val" id="chanceVal">6%</span></label>
+          <input id="freeChance" type="range" min="0" max="40" step="1" value="6" />
+        </div>
+      </fieldset>
+
+      <div class="webhooks">
+        <h3>接入其它平台</h3>
+        <p class="field-help">把下面地址配置到你的微信 / 抖音中转服务里（详见项目里的 docs 目录）。</p>
+        <div class="copy-row"><code id="whWechat">/webhook/wechat</code><button class="mini-btn" data-copy="whWechat" type="button">复制</button></div>
+        <div class="copy-row"><code id="whDouyin">/webhook/douyin</code><button class="mini-btn" data-copy="whDouyin" type="button">复制</button></div>
+        <p class="field-help" id="gatewayState">正在检查网关配置…</p>
+      </div>
+
+      <div class="modal-foot">
+        <button class="ghost" data-close="settingsModal" type="button">取消</button>
+        <button class="primary" id="saveSettings" type="button">保存并唤醒鲸鲸</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 记忆 -->
+  <div class="modal" id="memoryModal" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="memoryTitle">
+      <div class="modal-head">
+        <h2 id="memoryTitle">🧠 鲸鲸的小本本</h2>
+        <button class="close" data-close="memoryModal" type="button" aria-label="关闭">×</button>
+      </div>
+      <p class="field-help">你说「记住：xxx」她就会记在这里；说「忘掉 xxx」就会删掉。</p>
+      <div class="memory-list" id="memoryList"><p class="empty">正在翻小本本…</p></div>
+      <div class="modal-foot">
+        <button class="ghost danger" id="clearMemory" type="button">清空这个聊天的记忆</button>
+        <button class="primary" data-close="memoryModal" type="button">好的</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 名片 -->
+  <div class="modal" id="aboutModal" hidden>
+    <div class="modal-card about-card" role="dialog" aria-modal="true" aria-label="鲸鲸的名片">
+      <button class="close about-close" data-close="aboutModal" type="button" aria-label="关闭">×</button>
+      <img class="about-art" src="/assets/jingjing.jpg" alt="鲸鲸抱着她的小蓝鲸" />
+      <div class="about-body">
+        <h2>鲸鲸 <small>DeepSeek 鲸鱼娘</small></h2>
+        <p>一个喜欢鲸鱼的普通女生，深蓝色长发、鲸尾发夹，怀里那只软乎乎的蓝鲸叫「小蓝鲸」。</p>
+        <p class="about-tip">在「设置」里填上 DeepSeek API Key，就能和她真的聊起来啦。</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" role="status"></div>
+  <script src="/assets/app.js"></script>
+</body>
+</html>
