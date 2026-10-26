@@ -770,7 +770,17 @@ class Bot {
     let webText = '';
     const webCfg = this.config.websearch || {};
     const webOn = webCfg.enabled !== false;
-    const searchPattern = /(查一下|查查|搜一下|搜搜|帮我查|最新|热搜|新闻|发生了什么|怎么回事|多少钱|什么时候|是谁|谁是|行情|报价|天气)/;
+    // 注意：以前只认「查一下/最新/多少钱」这类词。用户问「苹果出到几了」「现在几代」这种
+    // 口语问题时匹配不上，她就拿训练数据里的旧型号回答（实测把 iPhone 18 说成 16）。
+    const searchPattern = new RegExp(
+      [
+        '(查一下|查查|搜一下|搜搜|帮我查|帮我看看|最新|热搜|新闻|发生了什么|怎么回事|多少钱|什么价格|几块钱)',
+        '(什么时候|是谁|谁是|行情|报价|天气)',
+        '(出到|出到哪|第几代|几代|什么型号|哪个型号|哪个版本|什么版本|现在还|现在最新|今年|去年)',
+        '(苹果|iphone|ipad|华为|小米|三星|索尼|任天堂|switch|ps5|显卡|rtx|骁龙|麒麟|芯片|发布会)',
+      ].join('|'),
+      'i'
+    );
     if (webOn && clean.text && searchPattern.test(clean.text)) {
       try {
         const isWeather = /(天气|下雨|下雪|气温|多少度|冷不冷|热不热|台风|雾霾|空气)/.test(clean.text);
