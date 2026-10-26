@@ -43,17 +43,30 @@ function backupDir(root) {
 }
 
 /** 打包记忆（不落盘），返回 bundle 对象 */
-function collect(root) {
+const SECRET_SETTING_KEYS = ['apiKey', 'keys', 'visionApiKey', 'voiceApiKey'];
+
+/** 把 settings 里的 Key / token 抹掉，导出的文件可以放心发给别人 */
+function scrubSecrets(settings) {
+  if (!settings || typeof settings !== 'object') return settings;
+  const copy = JSON.parse(JSON.stringify(settings));
+  for (const k of SECRET_SETTING_KEYS) delete copy[k];
+  return copy;
+}
+
+function collect(root, { withSecrets = false } = {}) {
   const dir = dataDir(root);
   const bundle = {
     kind: 'whale-girl-memory',
     version: BUNDLE_VERSION,
     createdAt: new Date().toISOString(),
+    withSecrets: Boolean(withSecrets),
     files: {},
   };
   for (const item of FILES) {
-    const value = readJson(path.join(dir, item.name));
-    if (value !== null) bundle.files[item.key] = value;
+    let value = readJson(path.join(dir, item.name));
+    if (value === null) continue;
+    if (item.key === 'settings' && !withSecrets) value = scrubSecrets(value);
+    bundle.files[item.key] = value;
   }
   return bundle;
 }
@@ -77,7 +90,7 @@ function summarize(bundle) {
 
 /** 写一份快照到 data\backups\，保留最近 KEEP 份 */
 function writeSnapshot(root, reason = 'manual') {
-  const bundle = collect(root);
+  const bundle = collect(root, { withSecrets: true });
   const { sessions, messages } = summarize(bundle);
   // 空库不占位（第一次启动时 data 是干净的）
   if (!sessions && !messages && reason !== 'manual') return null;
@@ -104,8 +117,8 @@ function writeSnapshot(root, reason = 'manual') {
 }
 
 /** 导出到指定路径（用户自己选位置，比如桌面/U 盘） */
-function exportTo(root, destFile) {
-  const bundle = collect(root);
+function exportTo(root, destFile, { withSecrets = false } = {}) {
+  const bundle = collect(root, { withSecrets });
   bundle.reason = 'export';
   fs.mkdirSync(path.dirname(path.resolve(destFile)), { recursive: true });
   fs.writeFileSync(destFile, JSON.stringify(bundle, null, 2), 'utf8');
@@ -138,6 +151,12 @@ function restoreFrom(root, bundle) {
   const files = bundle.files || {};
   const keys = Object.keys(files);
   if (!keys.length) throw new Error('备份里没有可恢复的内容');
+  if (files.store && (typeof files.store !== 'object' || typeof files.store.sessions !== 'object')) {
+    throw new Error('备份里的 store 结构不对（没有 sessions），为了不毁掉现在的记忆，已取消恢复');
+  }
+  if (files.settings && typeof files.settings !== 'object') {
+    throw new Error('备份里的 settings 不是对象，已取消恢复');
+  }
 
   writeSnapshot(root, 'before-restore');
 
@@ -146,7 +165,18 @@ function restoreFrom(root, bundle) {
   const restored = [];
   for (const item of FILES) {
     if (!(item.key in files)) continue;
-    fs.writeFileSync(path.join(dir, item.name), JSON.stringify(files[item.key], null, 2), 'utf8');
+    let value = files[item.key];
+    // settings 用「合并」而不是覆盖：脱敏导出里没有 Key，
+    // 直接覆盖会把用户本机的 Key 一起抹掉，恢复完就没法说话了。
+    if (item.key === 'settings') {
+      const current = readJson(path.join(dir, item.name)) || {};
+      const merged = { ...current, ...value };
+      for (const k of SECRET_SETTING_KEYS) {
+        if (value[k] === undefined && current[k] !== undefined) merged[k] = current[k];
+      }
+      value = merged;
+    }
+    fs.writeFileSync(path.join(dir, item.name), JSON.stringify(value, null, 2), 'utf8');
     restored.push(item.name);
   }
   return { restored, ...summarize(bundle) };

@@ -127,6 +127,18 @@ function createRuntime({ root = projectRoot(), env = process.env, loggerLevel } 
   } catch (err) {
     logger.warn('记忆快照失败（不影响使用）：' + err.message);
   }
+  // 长时间挂着也要有断点：每 30 分钟留一份（启动那份可能已经是几十小时前了）
+  try {
+    const timer = setInterval(() => {
+      try {
+        const file = memoryBackup.writeSnapshot(root, 'cron');
+        if (file) logger.info('记忆快照（定时）：' + file);
+      } catch (err) {
+        logger.warn('定时记忆快照失败：' + err.message);
+      }
+    }, 30 * 60 * 1000);
+    if (timer.unref) timer.unref();
+  } catch { /* 定时器起不来不影响主流程 */ }
   const llm = new DeepSeekClient({ config, logger });
   const bot = new Bot({ config, store, llm, logger });
   const gateways = createGateways({ config, bot, logger });
@@ -1044,7 +1056,9 @@ function createHandler(runtime) {
       if (pathname === '/api/memory/export' && method === 'GET') {
         // 先把内存里的记忆落盘，再打包下载
         try { runtime.store.flush(); } catch { /* ignore */ }
-        const bundle = memoryBackup.collect(runtime.config.root);
+        // 默认脱敏：导出文件经常被发人 / 传 U 盘，不能把 Key 一起带出去
+        const includeSecrets = /(?:^|[?&])secrets=1(?:&|$)/.test(String(req.url || ''));
+        const bundle = memoryBackup.collect(runtime.config.root, { withSecrets: includeSecrets });
         const name = 'whale-memory-' + new Date().toISOString().slice(0, 10) + '.json';
         res.writeHead(200, {
           'Content-Type': 'application/json; charset=utf-8',
