@@ -175,5 +175,12 @@
     "_说明": "媒体缓存（微信图片/表情包/语音 wav）清理策略：启动时按天数+总量清一次",
     "mediaKeepDays": 7,
     "mediaMaxMB": 500
+  },
+  "features": {
+    "_说明": "功能开关。关掉 = 回到旧行为，也可以直接在调试台「功能开关」卡片里勾。",
+    "groupAddressGuard": true,
+    "fightQuoteCheck": true,
+    "mediaCleanup": true,
+    "memorySnapshot": true
   }
 }
