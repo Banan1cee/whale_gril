@@ -43,7 +43,8 @@ test('describeLink 能抓本地页面并返回标题描述', async () => {
   });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const port = server.address().port;
-  const info = await describeLink(`http://127.0.0.1:${port}/v/123`);
+  // 测试用的就是这个进程里的临时服务器，显式允许私网（线上默认不允许）
+  const info = await describeLink(`http://127.0.0.1:${port}/v/123`, { allowPrivate: true });
   assert.equal(info.ok, true);
   assert.equal(info.title, '抖音视频标题');
   assert.match(info.description, /视频文案/);
@@ -53,7 +54,7 @@ test('describeLink 能抓本地页面并返回标题描述', async () => {
 });
 
 test('链接打不开时返回可读结果，不抛异常', async () => {
-  const info = await describeLink('http://127.0.0.1:1/nope', { timeoutMs: 1500 });
+  const info = await describeLink('http://127.0.0.1:1/nope', { timeoutMs: 1500, allowPrivate: true });
   assert.equal(info.ok, false);
   assert.ok(info.error);
   assert.match(formatForPrompt(info), /打不开/);

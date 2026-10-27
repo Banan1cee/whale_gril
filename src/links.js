@@ -88,7 +88,29 @@ function kindOf(urlString) {
   return 'web';
 }
 
-function fetchUrl(urlString, { timeoutMs = 6000, maxBytes = 700 * 1024, redirects = 4 } = {}) {
+/**
+ * 群友发来的链接是**别人**控制的。默认不读本机/内网地址：
+ * 否则有人发 http://127.0.0.1:8787/… 或 http://192.168.1.1/，她就替人把内网页面读回来。
+ * 想放开：config.links.allowPrivate = true（自己机器上调试用）。
+ */
+function isPrivateHost(hostname) {
+  const host = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
+  if (!host) return true;
+  if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) return true;
+  // IPv6 回环 / 链路本地 / 唯一本地地址
+  if (host === '::1' || host === '::' || host.startsWith('fe80:') || host.startsWith('fc') || host.startsWith('fd')) return true;
+  const m = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (!m) return false; // 普通域名，交给系统解析
+  const [a, b] = [Number(m[1]), Number(m[2])];
+  if (a === 127 || a === 10 || a === 0) return true;             // 回环 / 私有 / 本网络
+  if (a === 192 && b === 168) return true;                        // 家用内网
+  if (a === 172 && b >= 16 && b <= 31) return true;               // 内网
+  if (a === 169 && b === 254) return true;                        // 云元数据 / 链路本地
+  if (a === 100 && b >= 64 && b <= 127) return true;              // CGNAT
+  return false;
+}
+
+function fetchUrl(urlString, { timeoutMs = 6000, maxBytes = 700 * 1024, redirects = 4, allowPrivate = false } = {}) {
   return new Promise((resolve) => {
     let settled = false;
     const done = (v) => { if (!settled) { settled = true; resolve(v); } };
@@ -97,6 +119,10 @@ function fetchUrl(urlString, { timeoutMs = 6000, maxBytes = 700 * 1024, redirect
       parsed = new URL(urlString);
     } catch {
       return done({ ok: false, error: 'bad_url' });
+    }
+    // 链接是别人发的：默认只读公网，别替人抓本机/内网（SSRF）
+    if (!allowPrivate && isPrivateHost(parsed.hostname)) {
+      return done({ ok: false, error: 'private_host' });
     }
     const mod = parsed.protocol === 'http:' ? http : https;
     const req = mod.request(
@@ -118,7 +144,7 @@ function fetchUrl(urlString, { timeoutMs = 6000, maxBytes = 700 * 1024, redirect
         if (status >= 300 && status < 400 && res.headers.location && redirects > 0) {
           res.resume();
           const next = new URL(res.headers.location, parsed).toString();
-          fetchUrl(next, { timeoutMs, maxBytes, redirects: redirects - 1 }).then(done);
+          fetchUrl(next, { timeoutMs, maxBytes, redirects: redirects - 1, allowPrivate }).then(done);
           return;
         }
         const chunks = [];
@@ -194,12 +220,14 @@ const cache = new Map();
 /**
  * 读取一个链接：返回 { ok, url, kind, title, description, article, error }
  */
-async function describeLink(urlString, { timeoutMs = 6000, cacheMinutes = 60 } = {}) {
+async function describeLink(urlString, { timeoutMs = 6000, cacheMinutes = 60, allowPrivate = false } = {}) {
   const key = String(urlString || '').slice(0, 500);
-  const hit = cache.get(key);
+  // 允许/不允许私网的结果要分开缓存，否则「试过一次被挡」会一直挡
+  const cacheKey = key + (allowPrivate ? '|p' : '');
+  const hit = cache.get(cacheKey);
   if (hit && Date.now() - hit.at < cacheMinutes * 60 * 1000) return { ...hit.value, cached: true };
 
-  const res = await fetchUrl(key, { timeoutMs });
+  const res = await fetchUrl(key, { timeoutMs, allowPrivate });
   let value;
   if (!res.ok) {
     value = { ok: false, url: key, kind: kindOf(key), error: res.error };
@@ -216,7 +244,7 @@ async function describeLink(urlString, { timeoutMs = 6000, cacheMinutes = 60 } =
       error: ok ? '' : 'empty',
     };
   }
-  cache.set(key, { at: Date.now(), value });
+  cache.set(cacheKey, { at: Date.now(), value });
   if (cache.size > 100) {
     const oldest = [...cache.entries()].sort((a, b) => a[1].at - b[1].at)[0];
     if (oldest) cache.delete(oldest[0]);
@@ -256,4 +284,5 @@ function formatForPrompt(info) {
   return lines.join('\n');
 }
 
-module.exports = { extractUrls, describeLink, parsePage, formatForPrompt, kindOf, stripTags, decodeEntities, cleanVideoDesc };
+module.exports = {
+  isPrivateHost, extractUrls, describeLink, parsePage, formatForPrompt, kindOf, stripTags, decodeEntities, cleanVideoDesc };
