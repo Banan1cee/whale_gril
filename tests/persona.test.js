@@ -256,10 +256,27 @@ test('吵架大赛预设存在，且能切过去（火力全开但不碰四条�
       })
     ).json();
     assert.match(prompt.system, /吵架大赛/, '提示词要带上比赛模式');
-    assert.match(prompt.system, /脏话完全不设限/, '要明确允许脏话');
-    assert.match(prompt.system, /四条硬底线|不针对性别、地域、民族、宗教、疾病/, '硬底线要保留');
+    assert.match(prompt.system, /脏话随便用|脏话/, '要明确允许脏话');
+    assert.match(prompt.system, /火力全开 MAX|最高火力档/, '要标明最高火力档');
+    assert.match(prompt.system, /四条硬边界|不针对性别、地域、民族、宗教、疾病的歧视性称呼/, '硬边界要保留');
   } finally {
     await inst.close();
     fs2.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('吵架大赛模式用加辣回怼库，普通模式不受影响', () => {
+  const persona = require('../src/persona');
+  const fightCfg = { persona: { sourcePreset: 'persona-v4-fight' } };
+  const normalCfg = { persona: { sourcePreset: 'persona-v3' } };
+  const fightLines = [];
+  const normalLines = [];
+  for (let i = 0; i < 60; i += 1) {
+    fightLines.push(persona.clapbackPick(['重', '爹味', '反问'], () => i / 60, fightCfg));
+    normalLines.push(persona.clapbackPick(['重', '爹味', '反问'], () => i / 60, normalCfg));
+  }
+  // 加辣库里存在默认库没有的狠句
+  assert.ok(fightLines.some((l) => /脑子|废物|小丑|爹|破防/.test(l)), '吵架模式要能取到加辣台词');
+  assert.ok(normalLines.every((l) => !/你妈生你的时候|我他妈|杂碎/.test(l)), '普通模式不能出现加辣库的句子');
+  assert.notDeepEqual(fightLines.slice(0, 5), normalLines.slice(0, 5), '两个模式的台词池应该不同');
 });

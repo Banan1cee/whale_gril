@@ -43,7 +43,7 @@ robocopy @rcArgs | Out-Null
 if ($LASTEXITCODE -ge 8) { Pop-Location; throw "robocopy 失败 $LASTEXITCODE" }
 
 # 本地活动用的东西不进包：吵架大赛预设（避免别人一下载就拿去开骂）
-$localOnly = @('personas\persona-v4-fight.json')
+$localOnly = @('personas\persona-v4-fight.json', 'resources\clapback-fight.txt')
 foreach ($rel in $localOnly) {
   $p = Join-Path $stage $rel
   if (Test-Path $p) {

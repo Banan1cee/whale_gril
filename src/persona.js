@@ -166,6 +166,40 @@ function abbrevBlock(text) {
 }
 
 let _clapCache = null;
+let _clapFightCache = null;
+const FIGHT_PRESET = 'persona-v4-fight';
+
+/** 吵架大赛模式：用 resources/clapback-fight.txt（更脏更狠），其他模式用默认库 */
+function fightModeOn(config) {
+  const src = String((config && config.persona && config.persona.sourcePreset) || '');
+  return src === FIGHT_PRESET;
+}
+
+function readPairs(file) {
+  const fs = require('fs');
+  try {
+    const raw = fs.readFileSync(file, 'utf8');
+    return raw
+      .split(/\r?\n/)
+      .map((s) => s.trim())
+      .filter((s) => s && !s.startsWith('#'))
+      .map((s) => {
+        const [cat, text] = s.split('|');
+        return { cat: (cat || '').trim(), text: (text || '').trim() };
+      })
+      .filter((x) => x.text);
+  } catch {
+    return [];
+  }
+}
+
+function clapbackFightPairs() {
+  if (_clapFightCache) return _clapFightCache;
+  const path = require('path');
+  _clapFightCache = readPairs(path.join(__dirname, '..', 'resources', 'clapback-fight.txt'));
+  return _clapFightCache;
+}
+
 function clapbackPairs() {
   if (_clapCache) return _clapCache;
   const fs = require('fs');
@@ -192,8 +226,10 @@ function clapbackLines() {
   return clapbackPairs().map((x) => x.text);
 }
 
-function clapbackPick(kind, rng = Math.random) {
-  const pairs = clapbackPairs();
+function clapbackPick(kind, rng = Math.random, config = null) {
+  // 吵架大赛模式优先用加辣库；那边没货再退回默认库
+  const fightPairs = fightModeOn(config) ? clapbackFightPairs() : [];
+  const pairs = fightPairs.length ? fightPairs.concat(clapbackPairs()) : clapbackPairs();
   const kinds = Array.isArray(kind) ? kind : [kind];
   // 依次尝试每个类别，取第一个有货的；都没有就退回「一般」
   for (const k of kinds) {
