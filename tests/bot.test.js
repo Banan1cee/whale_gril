@@ -32,7 +32,7 @@ function makeBot({ config = makeConfig(), llm, linkReader = null } = {}) {
     config,
     cleanup() {
       store.close();
-      fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
     },
   };
 }
@@ -241,7 +241,7 @@ test('冷却时间内的主动接话会被跳过，@ 她可以突破冷却', asy
   const addressed = await bot.decide(groupMsg('@鲸鲸 你觉得呢', { atMe: true }));
   assert.equal(addressed.action, 'reply');
   store.close();
-  fs.rmSync(dir, { recursive: true, force: true });
+  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
 });
 
 test('主人在群里不 @ 也会回复（masterAlwaysReply=true），其他人不会', async () => {

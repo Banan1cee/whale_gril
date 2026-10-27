@@ -30,7 +30,7 @@ function makeBot({ config = JSON.parse(JSON.stringify(DEFAULT_CONFIG)), llm } = 
     store,
     cleanup() {
       store.close();
-      fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
     },
   };
 }

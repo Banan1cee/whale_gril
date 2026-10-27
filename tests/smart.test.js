@@ -20,7 +20,7 @@ function makeBot({ config = JSON.parse(JSON.stringify(DEFAULT_CONFIG)) } = {}) {
     config, store, logger: null, mockChunkDelayMs: 0,
     llm: { isMock: true, model: 'mock', reload() {}, describe() { return {}; } },
   });
-  return { bot, config, store, cleanup() { store.close(); fs.rmSync(dir, { recursive: true, force: true }); } };
+  return { bot, config, store, cleanup() { store.close(); fs.rmSync(dir, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 }); } };
 }
 
 const pm = (text, extra = {}) => ({

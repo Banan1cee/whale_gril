@@ -46,7 +46,7 @@ test('导出：带上记忆/称呼/人设，并且统计得出来', () => {
   assert.ok(bundle.files.store, '聊天记忆要带上');
   assert.ok(bundle.files.settings, '称呼/设置要带上');
   assert.ok(bundle.files.persona, '人设要带上');
-  fs.rmSync(root, { recursive: true, force: true });
+  fs.rmSync(root, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
 });
 
 test('恢复到空目录：记忆真的回来了', () => {
@@ -79,7 +79,7 @@ test('恢复前会先把当前记忆另存一份（防手滑）', () => {
     snaps.some((s) => s.name.includes('before-restore')),
     '恢复前必须留一份 before-restore 快照'
   );
-  fs.rmSync(root, { recursive: true, force: true });
+  fs.rmSync(root, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
 });
 
 test('坏文件要明确报错，不要默默清空记忆', () => {
@@ -87,7 +87,7 @@ test('坏文件要明确报错，不要默默清空记忆', () => {
   assert.throws(() => backup.restoreFrom(root, { hello: 1 }), /不是鲸鲸的记忆备份/);
   const store = JSON.parse(fs.readFileSync(path.join(root, 'data', 'store.json'), 'utf8'));
   assert.ok(store.sessions['wechat:p:wxid_a'], '报错之后原记忆不能被破坏');
-  fs.rmSync(root, { recursive: true, force: true });
+  fs.rmSync(root, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
 });
 
 test('快照最多留 20 份，不会把盘塞满', () => {
@@ -95,7 +95,7 @@ test('快照最多留 20 份，不会把盘塞满', () => {
   for (let i = 0; i < 25; i += 1) backup.writeSnapshot(root, 'startup');
   const snaps = backup.listBackups(root);
   assert.ok(snaps.length <= backup.KEEP, `最多留 ${backup.KEEP} 份，实际 ${snaps.length}`);
-  fs.rmSync(root, { recursive: true, force: true });
+  fs.rmSync(root, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
 });
 
 test('导出默认脱敏：文件里不能出现 API Key', () => {
@@ -109,7 +109,7 @@ test('导出默认脱敏：文件里不能出现 API Key', () => {
   const raw = fs.readFileSync(dest, 'utf8');
   assert.ok(!raw.includes('sk-secret-1234567890'), '导出的文件里不能有 Key（要发人/传U盘）');
   assert.ok(raw.includes('爸爸'), '称呼这种有用的信息要留着');
-  fs.rmSync(root, { recursive: true, force: true });
+  fs.rmSync(root, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
 });
 
 test('显式 --secrets 才把 Key 一起导出', () => {
@@ -121,7 +121,7 @@ test('显式 --secrets 才把 Key 一起导出', () => {
   const dest = path.join(root, 'mem-full.json');
   backup.exportTo(root, dest, { withSecrets: true });
   assert.ok(fs.readFileSync(dest, 'utf8').includes('sk-secret-1234567890'));
-  fs.rmSync(root, { recursive: true, force: true });
+  fs.rmSync(root, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
 });
 
 test('用脱敏备份恢复，不会把本机 Key 抹掉（否则恢复完就不说话了）', () => {
@@ -137,7 +137,7 @@ test('用脱敏备份恢复，不会把本机 Key 抹掉（否则恢复完就不
   backup.restoreFromFile(root, dest);
   const after = JSON.parse(fs.readFileSync(path.join(root, 'data', 'settings.json'), 'utf8'));
   assert.equal(after.apiKey, 'sk-keep-me-123456', '恢复记忆不能顺手把 Key 清掉');
-  fs.rmSync(root, { recursive: true, force: true });
+  fs.rmSync(root, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
 });
 
 test('结构不对的备份要被拦下，别覆盖现有记忆', () => {
@@ -145,7 +145,7 @@ test('结构不对的备份要被拦下，别覆盖现有记忆', () => {
   assert.throws(() => backup.restoreFrom(root, { kind: 'whale-girl-memory', files: { store: { nope: 1 } } }), /sessions/);
   const store = JSON.parse(fs.readFileSync(path.join(root, 'data', 'store.json'), 'utf8'));
   assert.ok(store.sessions['wechat:p:wxid_a'], '原记忆必须还在');
-  fs.rmSync(root, { recursive: true, force: true });
+  fs.rmSync(root, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
 });
 
 test('导出接口默认不带 Key（HTTP 层也要验一遍，别只测模块）', async () => {
@@ -167,7 +167,7 @@ test('导出接口默认不带 Key（HTTP 层也要验一遍，别只测模块�
     assert.ok(full.includes('sk-live-secret-999'), '显式 secrets=1 才带 Key');
   } finally {
     await inst.close();
-    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
   }
 });
 
@@ -218,7 +218,7 @@ test('恢复后不用重启：内存里的记忆立刻跟着文件变', async ()
     assert.equal(info.current.messages, 2, '内存里的记忆要跟着文件走');
   } finally {
     await inst.close();
-    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
   }
 });
 
@@ -237,7 +237,7 @@ test('恢复接口拒绝 ../ 穿越，只认备份目录里的文件名', async 
     assert.equal(data.ok, false, '不能让 ../ 读到备份目录外面');
   } finally {
     await inst.close();
-    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
   }
 });
 
@@ -247,5 +247,5 @@ test('同一秒内两次快照不会互相覆盖（文件名带毫秒）', () =>
   const b = backup.writeSnapshot(root, 'manual');
   assert.ok(a && b);
   assert.notEqual(a, b, '两次快照必须是两个文件');
-  fs.rmSync(root, { recursive: true, force: true });
+  fs.rmSync(root, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
 });

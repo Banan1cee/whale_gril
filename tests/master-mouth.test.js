@@ -26,7 +26,7 @@ function makeBot({ reply, roast = false }) {
     async complete() { return reply; },
   };
   const bot = new Bot({ config, store, llm, logger: null, mockChunkDelayMs: 0, rng: () => 0.99 });
-  return { bot, config, cleanup() { store.close(); fs.rmSync(dir, { recursive: true, force: true }); } };
+  return { bot, config, cleanup() { store.close(); fs.rmSync(dir, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 }); } };
 }
 
 const fromMaster = (text) => ({

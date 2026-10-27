@@ -43,7 +43,7 @@ test('跨站请求（Origin 是别人的站）必须 403', async () => {
     assert.notEqual(settings.userName, '后台被人改了', '跨站请求不能真的改到设置');
   } finally {
     await inst.close();
-    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
   }
 });
 
@@ -56,7 +56,7 @@ test('同源页面的正常保存要放行', async () => {
     assert.equal(settings.userName, '后台被人改了');
   } finally {
     await inst.close();
-    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
   }
 });
 
@@ -70,7 +70,7 @@ test('同源但用 text/plain 提交要 415（挡住表单式 CSRF）', async ()
     assert.equal(res.status, 415);
   } finally {
     await inst.close();
-    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
   }
 });
 
@@ -81,7 +81,7 @@ test('不带 Origin 的客户端（微信桥接 / curl）不受影响', async ()
     assert.equal(res.status, 200, '桥接和命令行没有 Origin，不能被误伤');
   } finally {
     await inst.close();
-    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
   }
 });
 
@@ -92,7 +92,7 @@ test('只读接口不受 CSRF 闸影响', async () => {
     assert.equal(res.status, 200, 'GET 不该被拦（浏览器也读不到内容，因为没有 CORS 头）');
   } finally {
     await inst.close();
-    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
   }
 });
 

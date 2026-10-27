@@ -35,7 +35,7 @@ function makeBot(over = {}) {
     bot,
     cleanup() {
       try { store.close(); } catch { /* ignore */ }
-      fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
     },
   };
 }

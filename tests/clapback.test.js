@@ -152,7 +152,7 @@ function makeBot({ rng = () => 0, llm } = {}) {
     config, store, logger: null, mockChunkDelayMs: 0, rng,
     llm: llm || { isMock: true, model: 'mock', reload() {}, describe() { return {}; } },
   });
-  return { bot, config, store, cleanup() { store.close(); fs.rmSync(dir, { recursive: true, force: true }); } };
+  return { bot, config, store, cleanup() { store.close(); fs.rmSync(dir, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 }); } };
 }
 
 const groupMsg = (text, extra = {}) => ({
@@ -199,5 +199,5 @@ test('主人被骂不会被回怼（豁免仍然有效）', async () => {
   const r = await bot.decide(groupMsg('@鲸鲸 傻逼', { atMe: true, senderId: 'wxid_boss', senderName: 'Master' }));
   assert.notEqual(r.reason, 'clapback');
   store.close();
-  fs.rmSync(dir, { recursive: true, force: true });
+  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
 });

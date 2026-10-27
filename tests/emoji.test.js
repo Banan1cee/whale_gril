@@ -61,7 +61,7 @@ function makeBot(level) {
     config, store, logger: null, mockChunkDelayMs: 0,
     llm: { isMock: true, model: 'mock', reload() {}, describe() { return {}; } },
   });
-  return { bot, store, cleanup: () => { store.close(); fs.rmSync(dir, { recursive: true, force: true }); } };
+  return { bot, store, cleanup: () => { store.close(); fs.rmSync(dir, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 }); } };
 }
 
 test('「关」时一条都不加料', () => {

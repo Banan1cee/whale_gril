@@ -40,7 +40,7 @@ test('C2：超过保留天数的媒体文件会被清掉，新的留着', () => 
   assert.equal(fs.existsSync(old), false, '30 天前的应该删掉');
   assert.equal(fs.existsSync(fresh), true, '1 天前的要留着');
   assert.equal(r.removed, 1);
-  fs.rmSync(dir, { recursive: true, force: true });
+  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
 });
 
 test('C2：总量超限时按最旧优先删，不删空的', () => {
@@ -54,7 +54,7 @@ test('C2：总量超限时按最旧优先删，不删空的', () => {
   const r = mediaCache.cleanup(dir, { maxAgeDays: 365, maxTotalMB: 0.5 });
   assert.ok(r.removed >= 1, '超总量必须删');
   assert.equal(fs.existsSync(files[2]), true, '最新的那个要留着');
-  fs.rmSync(dir, { recursive: true, force: true });
+  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
 });
 
 test('C2：目录不存在时安静返回，不抛异常', () => {
@@ -124,5 +124,5 @@ test('C2：不写配置也有默认清理策略（config.storage 必须存在）
   );
   const cfg2 = loadConfig({ root: dir, env: {} });
   assert.equal(cfg2.storage.mediaKeepDays, 30, '用户自己配的要生效');
-  fs.rmSync(dir, { recursive: true, force: true });
+  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
 });
