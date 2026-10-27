@@ -132,7 +132,8 @@ test('主动搭话默认只找主人：不进群、不找别人', async () => {
     JSON.stringify({
       server: { port: 0, openBrowser: false },
       watchConfig: false,
-      care: { enabled: true, onlyMaster: true, allowGroups: false, allowOthers: false },
+      // 时间窗全开：CI 跑在 UTC，默认 09:00-12:00/14:00-23:00 可能正好在窗外
+      care: { enabled: true, onlyMaster: true, allowGroups: false, allowOthers: false, windows: ['00:00-24:00'], everyMinutes: 1 },
       persona: { master: { wxids: ['wxid_master_1'] } },
     })
   );
@@ -162,7 +163,7 @@ test('打开 care.allowGroups 后才允许群聊', async () => {
     JSON.stringify({
       server: { port: 0, openBrowser: false },
       watchConfig: false,
-      care: { enabled: true, onlyMaster: false, allowGroups: true, allowOthers: true },
+      care: { enabled: true, onlyMaster: false, allowGroups: true, allowOthers: true, windows: ['00:00-24:00'], everyMinutes: 1 },
     })
   );
   const inst = await startServer({ root: dir, env: { WHALE_LOG_FILE: '' }, port: 0, openBrowser: false });
