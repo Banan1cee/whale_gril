@@ -188,15 +188,5 @@
     "fightQuoteCheck": true,
     "mediaCleanup": true,
     "memorySnapshot": true
-  },
-  "stickers": {
-    "_说明": "发表情包：把 gif 丢进 data/stickers，她按概率挑一张发。实测微信按「动画表情」发出。发图必须让微信窗口可见（allowForeground=false 时窗口不可见就跳过）。",
-    "enabled": false,
-    "dir": "data/stickers",
-    "chance": 0.1,
-    "fightChance": 0.35,
-    "cooldownMinutes": 10,
-    "onlyGroup": true,
-    "allowForeground": false
   }
 }
