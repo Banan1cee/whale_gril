@@ -126,3 +126,35 @@ test('C2：不写配置也有默认清理策略（config.storage 必须存在）
   assert.equal(cfg2.storage.mediaKeepDays, 30, '用户自己配的要生效');
   fs.rmSync(dir, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
 });
+
+test('发表情包：默认开、按情绪给概率、文件夹空则自动关闭', () => {
+  const { loadConfig } = require('../src/config');
+  const fs2 = require('node:fs');
+  const os2 = require('node:os');
+  const path2 = require('node:path');
+  const features = require('../src/features');
+  const dir = fs2.mkdtempSync(path2.join(os2.tmpdir(), 'whale-sticker-'));
+  fs2.writeFileSync(path2.join(dir, 'config.json'), '{}');
+  const cfg = loadConfig({ root: dir, env: {} });
+  assert.equal(cfg.stickers.enabled, true, '发表情默认开（文件夹空会自动当关闭）');
+  assert.equal(cfg.stickers.dir, 'data/stickers');
+  assert.equal(cfg.stickers.onlyGroup, true);
+  assert.equal(cfg.stickers.allowForeground, false, '默认不抢前台');
+  assert.ok(cfg.stickers.emotions && cfg.stickers.emotions.angry > 0, '要按情绪给概率');
+  assert.equal(features.isOn(cfg, 'stickerSend'), true);
+  assert.equal(features.isOn(cfg, 'stickerForeground'), false);
+  fs2.rmSync(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 80 });
+});
+
+test('发表情包：桥接里有选图/冷却/抢前台门禁', () => {
+  const fs2 = require('node:fs');
+  const path2 = require('node:path');
+  const ROOT2 = path2.resolve(__dirname, '..');
+  const bridge = fs2.readFileSync(path2.join(ROOT2, 'examples', 'wechatauto_bridge.py'), 'utf8');
+  assert.match(bridge, /def send_sticker/, '要有 send_sticker');
+  assert.match(bridge, /def _pick_sticker/, '要有选图逻辑');
+  assert.match(bridge, /stickers-state\.json/, '要记冷却/最近发过哪些');
+  assert.match(bridge, /STICKER_ALLOW_FOREGROUND/, '要有抢前台开关');
+  assert.match(bridge, /ensure_visible\(\)/, '不抢前台时先检查窗口可见');
+  assert.match(bridge, /(发|来|甩|扔).*表情/, '「发个表情」要能触发');
+});

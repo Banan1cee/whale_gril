@@ -75,6 +75,20 @@ const REGISTRY = [
     default: false,
   },
   {
+    key: 'stickerSend',
+    path: 'stickers.enabled',
+    label: '发表情包（data/stickers 里的 gif）',
+    desc: '按情绪挑 data/stickers/<开心|炸毛|撒娇|嫌弃|敷衍>/ 里的 gif。文件夹为空会自动当关闭。',
+    default: true,
+  },
+  {
+    key: 'stickerForeground',
+    path: 'stickers.allowForeground',
+    label: '发表情时允许抢前台',
+    desc: '发图片必须让微信窗口可见；关掉=你锁屏/最小化时她就不发了。',
+    default: false,
+  },
+  {
     key: 'quoteReply',
     path: 'wechat.quoteReply',
     label: '引用回复（慢，默认关）',

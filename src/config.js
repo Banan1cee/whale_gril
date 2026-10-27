@@ -141,6 +141,23 @@ const DEFAULT_CONFIG = {
   // 魔咒：主人私聊/群里输入这段数字后，获得一段时间的「管理员权限」
   admin: { spell: '', minutes: 30, allowAll: false },
   // 图片理解：默认智谱 GLM-4V-Flash（免费）
+  stickers: {
+    // 发表情包：按「当下情绪」挑 data/stickers/<情绪>/ 里的 gif。
+    // 文件夹为空 = 自动当关闭（不发表情），不用手动去关。
+    enabled: true,
+    dir: 'data/stickers',
+    emotions: {
+      happy: 0.12,   // 开心（被夸、逗笑、得意、惊讶）
+      angry: 0.2,    // 炸毛（被骂、被说胖说笨）
+      cute: 0.12,    // 撒娇（主人来、被哄、委屈求安慰）
+      meh: 0.08,     // 嫌弃（无语、翻白眼、被敷衍）
+      bored: 0.06,   // 敷衍（深夜、重复话题、困）
+    },
+    genericChance: 0.08, // 通用文件夹的兜底概率
+    cooldownMinutes: 10,
+    onlyGroup: true,
+    allowForeground: false,
+  },
   features: {
     groupAddressGuard: true,
     fightQuoteCheck: true,
