@@ -1530,6 +1530,14 @@ async function startServer({ root = projectRoot(), env = process.env, port, host
     server.listen(listenPort, listenHost, resolve);
   });
   const actualPort = server.address().port;
+  // 把实际端口写盘：桥接优先读这个文件，避免「手动 --port=8788 后桥接还连 8787」满屏积极拒绝
+  try {
+    fs.mkdirSync(path.join(root, 'data'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'data', 'server-port.txt'), String(actualPort), 'utf8');
+  } catch (err) {
+    logger.warn('写 server-port.txt 失败（不影响服务）：' + err.message);
+  }
+
   const url = `http://${listenHost === '0.0.0.0' ? '127.0.0.1' : listenHost}:${actualPort}`;
 
   let closed = false;

@@ -2,7 +2,7 @@
 鲸鲸 · 恢复出厂（真正的「格式化」）
 
 它会做这些事（顺序很重要）：
-  1. 停掉所有进程（服务 / 桥接 / 守护 / 热键）
+  1. 停掉所有进程（服务 / 桥接 / 守护）
   2. 把 data\ 和 config.json 备份到 backup\reset-时间戳\（万一还想找回 Key / 聊天记录）
   3. 删掉：data\（聊天记忆、API Key、人设调教、PAUSED、媒体缓存）、config.json（主人名单 / 令牌 / 各项设置）、
      wechatauto_db\、wechatauto_logs\、debug.log
