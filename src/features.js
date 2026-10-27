@@ -40,6 +40,13 @@ const REGISTRY = [
     default: true,
   },
   {
+    key: 'wechatAccountGuard',
+    path: 'wechat.accountGuard',
+    label: '微信双开时钉死账号（认不出就不发）',
+    desc: '同时登着大号小号时，只从指定账号的窗口发消息；认不出窗口宁可不发，避免用小号读、从大号发出去。',
+    default: true,
+  },
+  {
     key: 'careOnlyMaster',
     path: 'care.onlyMaster',
     label: '主动搭话只找主人',
