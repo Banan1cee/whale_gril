@@ -36,7 +36,7 @@ async function boot(configPatch = {}) {
   const cfg = { server: { port: 0, openBrowser: false }, ...configPatch };
   cfg.persona = { ...(cfg.persona || {}), master: { names: ['Master'], wxids: ['wxid_test_master'] } };
   fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify(cfg, null, 2));
-  const instance = await startServer({ root, env: {}, port: 0, openBrowser: false });
+  const instance = await startServer({ root, env: { WHALE_LOG_FILE: '' }, port: 0, openBrowser: false });
   instance.runtime.bot.mockChunkDelayMs = 0;
   return instance;
 }
@@ -57,7 +57,7 @@ test('列账号：扫 dbDir 下的账号目录，按最近活跃排序，wxid �
     assert.equal(data.current, '');
   } finally {
     await app.close();
-    fs.rmSync(fake.root, { recursive: true, force: true });
+    fs.rmSync(fake.root, { recursive: true, force: true, maxRetries: 8, retryDelay: 80 });
   }
 });
 
@@ -84,7 +84,7 @@ test('选账号：写进 config.json 的 wechat.account，其它配置不被冲�
     assert.ok(raw.persona && raw.persona.master, 'persona.master 要还在');
   } finally {
     await app.close();
-    fs.rmSync(fake.root, { recursive: true, force: true });
+    fs.rmSync(fake.root, { recursive: true, force: true, maxRetries: 8, retryDelay: 80 });
   }
 });
 
@@ -102,7 +102,7 @@ test('选账号：填一个本机没有的号要 400，并且不改配置', asyn
     assert.equal(raw.wechat.account || '', '');
   } finally {
     await app.close();
-    fs.rmSync(fake.root, { recursive: true, force: true });
+    fs.rmSync(fake.root, { recursive: true, force: true, maxRetries: 8, retryDelay: 80 });
   }
 });
 

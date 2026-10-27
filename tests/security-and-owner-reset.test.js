@@ -27,7 +27,7 @@ async function boot(cfgPatch = {}, settings = null) {
     fs.mkdirSync(path.join(root, 'data'), { recursive: true });
     fs.writeFileSync(path.join(root, 'data', 'settings.json'), JSON.stringify(settings));
   }
-  const inst = await startServer({ root, env: {}, port: 0, openBrowser: false });
+  const inst = await startServer({ root, env: { WHALE_LOG_FILE: '' }, port: 0, openBrowser: false });
   return { ...inst, root, configFile: path.join(root, 'config.json') };
 }
 

@@ -19,9 +19,9 @@ async function boot() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-csrf-'));
   fs.writeFileSync(
     path.join(root, 'config.json'),
-    JSON.stringify({ server: { port: 0, openBrowser: false }, watchConfig: false })
+    JSON.stringify({ server: { port: 0, openBrowser: false }, watchConfig: false, log: { level: 'error' } })
   );
-  const inst = await startServer({ root, env: {}, port: 0, openBrowser: false });
+  const inst = await startServer({ root, env: { WHALE_LOG_FILE: '' }, port: 0, openBrowser: false });
   return { inst, root };
 }
 

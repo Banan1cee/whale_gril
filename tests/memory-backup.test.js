@@ -64,8 +64,8 @@ test('恢复到空目录：记忆真的回来了', () => {
   assert.equal(store.sessions['wechat:p:wxid_a'].profiles.wxid_a.notes[0], '喜欢喝冰美式');
   const settings = JSON.parse(fs.readFileSync(path.join(fresh, 'data', 'settings.json'), 'utf8'));
   assert.equal(settings.userName, '爸爸');
-  fs.rmSync(src, { recursive: true, force: true });
-  fs.rmSync(fresh, { recursive: true, force: true });
+  fs.rmSync(src, { recursive: true, force: true, maxRetries: 8, retryDelay: 80 });
+  fs.rmSync(fresh, { recursive: true, force: true, maxRetries: 8, retryDelay: 80 });
 });
 
 test('恢复前会先把当前记忆另存一份（防手滑）', () => {
@@ -151,14 +151,14 @@ test('结构不对的备份要被拦下，别覆盖现有记忆', () => {
 test('导出接口默认不带 Key（HTTP 层也要验一遍，别只测模块）', async () => {
   const { startServer } = require('../server');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-mem-api-'));
-  fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ server: { port: 0, openBrowser: false }, watchConfig: false }));
+  fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ server: { port: 0, openBrowser: false }, watchConfig: false, log: { level: 'error' } }));
   fs.mkdirSync(path.join(root, 'data'), { recursive: true });
   fs.writeFileSync(
     path.join(root, 'data', 'settings.json'),
     JSON.stringify({ provider: 'qwen', apiKey: 'sk-live-secret-999', keys: { qwen: 'sk-live-secret-999' } })
   );
   fs.writeFileSync(path.join(root, 'data', 'store.json'), JSON.stringify({ sessions: { a: { messages: [], profiles: {} } } }));
-  const inst = await startServer({ root, env: {}, port: 0, openBrowser: false });
+  const inst = await startServer({ root, env: { WHALE_LOG_FILE: '' }, port: 0, openBrowser: false });
   try {
     const plain = await (await fetch(`${inst.url}/api/memory/export`)).text();
     assert.ok(!plain.includes('sk-live-secret-999'), '默认导出不能带 Key');
@@ -174,13 +174,13 @@ test('导出接口默认不带 Key（HTTP 层也要验一遍，别只测模块�
 test('恢复后不用重启：内存里的记忆立刻跟着文件变', async () => {
   const { startServer } = require('../server');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-mem-live-'));
-  fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ server: { port: 0, openBrowser: false }, watchConfig: false }));
+  fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ server: { port: 0, openBrowser: false }, watchConfig: false, log: { level: 'error' } }));
   fs.mkdirSync(path.join(root, 'data'), { recursive: true });
   fs.writeFileSync(
     path.join(root, 'data', 'store.json'),
     JSON.stringify({ sessions: { 'wechat:p:a': { messages: [{ role: 'user', text: '一', ts: 1 }], profiles: {} } } })
   );
-  const inst = await startServer({ root, env: {}, port: 0, openBrowser: false });
+  const inst = await startServer({ root, env: { WHALE_LOG_FILE: '' }, port: 0, openBrowser: false });
   try {
     // 造一份「两条消息」的备份，直接塞进 backups 目录
     const bundle = {
@@ -225,8 +225,8 @@ test('恢复后不用重启：内存里的记忆立刻跟着文件变', async ()
 test('恢复接口拒绝 ../ 穿越，只认备份目录里的文件名', async () => {
   const { startServer } = require('../server');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-mem-trav-'));
-  fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ server: { port: 0, openBrowser: false }, watchConfig: false }));
-  const inst = await startServer({ root, env: {}, port: 0, openBrowser: false });
+  fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ server: { port: 0, openBrowser: false }, watchConfig: false, log: { level: 'error' } }));
+  const inst = await startServer({ root, env: { WHALE_LOG_FILE: '' }, port: 0, openBrowser: false });
   try {
     const res = await fetch(`${inst.url}/api/memory/restore`, {
       method: 'POST',

@@ -58,7 +58,7 @@ function makeCfg(settings, visionCfg = {}) {
   if (settings) fs.writeFileSync(file, JSON.stringify(settings), 'utf8');
   return {
     config: { vision: visionCfg, paths: { settingsFile: file }, env: {} },
-    cleanup: () => fs.rmSync(dir, { recursive: true, force: true }),
+    cleanup: () => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 80 }),
   };
 }
 

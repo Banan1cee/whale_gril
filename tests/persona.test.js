@@ -231,12 +231,12 @@ test('吵架大赛预设存在，且能切过去（火力全开但不碰四条�
   const path2 = require('node:path');
   const { startServer } = require('../server');
   const root = fs2.mkdtempSync(path2.join(require('node:os').tmpdir(), 'whale-fight-'));
-  fs2.writeFileSync(path2.join(root, 'config.json'), JSON.stringify({ server: { port: 0, openBrowser: false }, watchConfig: false }));
+  fs2.writeFileSync(path2.join(root, 'config.json'), JSON.stringify({ server: { port: 0, openBrowser: false }, watchConfig: false, log: { level: 'error' } }));
   fs2.mkdirSync(path2.join(root, 'personas'), { recursive: true });
   const presetSrc = path2.resolve(__dirname, '..', 'personas', 'persona-v4-fight.json');
   fs2.copyFileSync(presetSrc, path2.join(root, 'personas', 'persona-v4-fight.json'));
 
-  const inst = await startServer({ root, env: {}, port: 0, openBrowser: false });
+  const inst = await startServer({ root, env: { WHALE_LOG_FILE: '' }, port: 0, openBrowser: false });
   try {
     const list = await (await fetch(`${inst.url}/api/persona/presets`)).json();
     assert.ok(list.presets.some((p) => p.id === 'persona-v4-fight'), '预设要出现在列表里');
@@ -261,7 +261,7 @@ test('吵架大赛预设存在，且能切过去（火力全开但不碰四条�
     assert.match(prompt.system, /四条硬边界|不针对性别、地域、民族、宗教、疾病的歧视性称呼/, '硬边界要保留');
   } finally {
     await inst.close();
-    fs2.rmSync(root, { recursive: true, force: true });
+    fs2.rmSync(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 80 });
   }
 });
 
@@ -287,10 +287,10 @@ test('吵架预设支持「一句话一条」：maxBubbles 会写进 config.chat
   const os2 = require('node:os');
   const { startServer } = require('../server');
   const root = fs2.mkdtempSync(path2.join(os2.tmpdir(), 'whale-bubble-'));
-  fs2.writeFileSync(path2.join(root, 'config.json'), JSON.stringify({ server: { port: 0, openBrowser: false }, watchConfig: false }));
+  fs2.writeFileSync(path2.join(root, 'config.json'), JSON.stringify({ server: { port: 0, openBrowser: false }, watchConfig: false, log: { level: 'error' } }));
   fs2.mkdirSync(path2.join(root, 'personas'), { recursive: true });
   fs2.copyFileSync(path2.resolve(__dirname, '..', 'personas', 'persona-v4-fight.json'), path2.join(root, 'personas', 'persona-v4-fight.json'));
-  const inst = await startServer({ root, env: {}, port: 0, openBrowser: false });
+  const inst = await startServer({ root, env: { WHALE_LOG_FILE: '' }, port: 0, openBrowser: false });
   try {
     const applied = await (
       await fetch(`${inst.url}/api/persona/preset`, {
@@ -305,6 +305,6 @@ test('吵架预设支持「一句话一条」：maxBubbles 会写进 config.chat
     assert.ok(cfg.config.chat.maxBubbles <= 8, '别超过 8 条，太多像刷屏');
   } finally {
     await inst.close();
-    fs2.rmSync(root, { recursive: true, force: true });
+    fs2.rmSync(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 80 });
   }
 });
