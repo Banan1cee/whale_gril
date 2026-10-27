@@ -79,3 +79,12 @@ test('官方连不上时有镜像兜底，也可以彻底关掉', () => {
   assert.match(ps1, /ghfast\.top/);
   assert.match(ps1, /NoMirror/);
 });
+
+test('安装目录带 Low 完整性标签时，临时目录要能回退到安装目录里', () => {
+  // 现象：E:\ 下解压的目录带 Low 标签，从它启动的 node.exe 也是 Low，
+  // 写 %TEMP%（Medium）会 EPERM，下载/解压全挂。所以必须先探测 node 能不能写。
+  const ps1 = readPs1();
+  assert.match(ps1, /function Test-NodeWritable/);
+  assert.match(ps1, /Test-NodeWritable -NodeExe \$nodeExe -Dir \$cand/);
+  assert.match(ps1, /backup\\\.update/, '要能退回到安装目录下的 backup\\.update');
+});

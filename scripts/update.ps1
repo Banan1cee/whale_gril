@@ -308,6 +308,20 @@ function Find-NodeExe {
     return ''
 }
 
+# 判断某个目录 node 能不能真的写进去。
+# 为什么要这么绕：安装目录带 Low 完整性标签时，从它启动的 node.exe 也是 Low，
+# 写 %TEMP%（Medium）会直接 EPERM——PowerShell 能写不代表 node 能写。
+function Test-NodeWritable {
+    param([string]$NodeExe, [string]$Dir)
+    if (-not $NodeExe) { return $false }
+    try { New-Item -ItemType Directory -Force -Path $Dir -ErrorAction Stop | Out-Null } catch { return $false }
+    $probe = Join-Path $Dir ('.w-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    $code = "const fs=require('fs');try{fs.writeFileSync(process.argv[1],'1');fs.unlinkSync(process.argv[1]);console.log('OK')}catch(e){console.log('ERR')}"
+    $out = @(& $NodeExe -e $code $probe 2>&1)
+    Remove-Item -LiteralPath $probe -Force -ErrorAction SilentlyContinue
+    return ((($out -join ' ') -match 'OK'))
+}
+
 function Get-ReleaseInfo {
     param([string[]]$Urls)
     $out = Join-Path $Work 'release.json'
@@ -383,7 +397,7 @@ function Save-ReleaseAsset {
             if (Test-Path -LiteralPath $Dest) { Remove-Item -LiteralPath $Dest -Force -ErrorAction SilentlyContinue }
         }
     }
-    throw ('所有下载源都失败：' + ($errors -join ' / ') + '。可手动下载 zip 后用 一键升级.bat，或用 -Mirror 指定镜像。')
+    throw ('所有下载源都失败：' + ($errors -join ' / ') + '。可手动下载 zip 拖到 一键更新.bat 上，或用 -Mirror 指定镜像。')
 }
 
 # ---------------------------------------------------------------- 解压 / 体检
@@ -637,10 +651,27 @@ try {
 
     if ($Rollback) { Invoke-RollbackFlow }
 
+    $nodeExe = Find-NodeExe $script:appRoot
+    $workRoots = @(
+        (Join-Path $env:TEMP 'whale-girl-tools'),
+        (Join-Path $script:appRoot 'backup\.update'),
+        (Join-Path $PSScriptRoot '..\backup\.update')
+    )
+    $WorkRoot = ''
+    foreach ($cand in $workRoots) {
+        if ($cand -and (Test-NodeWritable -NodeExe $nodeExe -Dir $cand)) { $WorkRoot = $cand; break }
+    }
+    if (-not $WorkRoot) {
+        throw '找不到 node 能写的临时目录（%TEMP% 和安装目录下的 backup\ 都写不进去）。可以手动下载 zip，拖到 一键更新.bat 上离线更新。'
+    }
+    if ($WorkRoot -ne $StateDir) {
+        $StateDir = $WorkRoot
+        $StateFile = Join-Path $StateDir 'last-root.txt'
+    }
     New-Item -ItemType Directory -Force -Path $StateDir | Out-Null
-    Set-Content -LiteralPath $StateFile -Value $script:appRoot -Encoding UTF8
+    try { Set-Content -LiteralPath $StateFile -Value $script:appRoot -Encoding UTF8 } catch { }
 
-    $Work = Join-Path $env:TEMP ('whale-online-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
+    $Work = Join-Path $WorkRoot ('work-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
     New-Item -ItemType Directory -Force -Path $Work | Out-Null
     $Helper = Join-Path $Work 'whale-http.js'
     Write-HttpHelper -Path $Helper
@@ -676,7 +707,6 @@ try {
         $apiUrls += $ApiUrl
     } else {
         $apiUrls += ('https://api.github.com/repos/' + $Repo + '/releases/' + $apiPath)
-        $apiUrls += ('https://api.kkgithub.com/repos/' + $Repo + '/releases/' + $apiPath)
     }
     Say '  正在查询 GitHub Release…' 'DarkGray'
     $rel = Get-ReleaseInfo -Urls $apiUrls
@@ -705,7 +735,7 @@ try {
         }
         Say ('  ⚠ 拿不到 GitHub API，按 -Tag 直连构造下载地址：' + $Tag) 'Yellow'
     } else {
-        throw '查不到任何版本信息（API 被墙 / 断网 / 限流）。可以：① 挂代理后重跑；② 手动下载 zip 后双击 一键升级.bat；③ 加 -Tag v3.54 走直连模式。'
+        throw '查不到任何版本信息（API 被墙 / 断网 / 限流）。可以：① 挂代理后重跑；② 手动下载 zip 后拖到 一键更新.bat 上；③ 加 -Tag v3.54 走直连模式。'
     }
 
     $remoteVer = ([string]$rel.tag_name) -replace '^[vV]', ''
