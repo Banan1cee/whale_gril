@@ -136,7 +136,7 @@ test('主动搭话默认只找主人：不进群、不找别人', async () => {
       persona: { master: { wxids: ['wxid_master_1'] } },
     })
   );
-  const inst = await startServer({ root: dir, env: {}, port: 0, openBrowser: false });
+  const inst = await startServer({ root: dir, env: { WHALE_LOG_FILE: '' }, port: 0, openBrowser: false });
   try {
     const master = await (await fetch(`${inst.url}/api/care/due?last=0&sentToday=0&chat=wxid_master_1`)).json();
     assert.equal(master.due, true, '主人私聊该发');
@@ -165,7 +165,7 @@ test('打开 care.allowGroups 后才允许群聊', async () => {
       care: { enabled: true, onlyMaster: false, allowGroups: true, allowOthers: true },
     })
   );
-  const inst = await startServer({ root: dir, env: {}, port: 0, openBrowser: false });
+  const inst = await startServer({ root: dir, env: { WHALE_LOG_FILE: '' }, port: 0, openBrowser: false });
   try {
     const group = await (await fetch(`${inst.url}/api/care/due?last=0&sentToday=0&chat=12345%40chatroom`)).json();
     assert.equal(group.due, true, '显式允许后才发群');
