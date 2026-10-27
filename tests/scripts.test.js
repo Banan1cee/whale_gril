@@ -190,3 +190,12 @@ test('发布自检会扫个人信息（密钥 / 真实 wxid / 本机用户名）
   assert.match(rc, /USERPROFILE/, 'USERPROFILE 的目录名也算');
   assert.match(rc, /wxid_\(\.\)\\1\+/, '占位符 wxid_xxxxxxxx 要跳过');
 });
+
+test('引用回复默认关闭（开着的话每条要多走一遍 UI，回复明显变慢）', () => {
+  const bridge = fs.readFileSync(path.join(root, 'examples', 'wechatauto_bridge.py'), 'utf8');
+  assert.match(bridge, /QUOTE_REPLY = bool\(_wechat\.get\("quoteReply", False\)\)/, '启动读配置时默认必须是 False');
+  assert.match(bridge, /QUOTE_REPLY = bool\(w\.get\("quoteReply", False\)\)/, '热重载时默认也必须是 False');
+  assert.doesNotMatch(bridge, /get\("quoteReply", True\)/, '不能有人再写回 True');
+  const example = JSON.parse(fs.readFileSync(path.join(root, 'config.example.json'), 'utf8').replace(/^\uFEFF/, ''));
+  assert.equal(example.wechat.quoteReply, false, 'config.example 里也应该是 false');
+});

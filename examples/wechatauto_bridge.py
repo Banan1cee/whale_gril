@@ -75,7 +75,8 @@ try:
     RETURN_NOTICE = bool(_wechat.get("returnNotice", True))
     QUEUED_MAX_AGE = float(_wechat.get("queuedMaxAgeSec", 300))
     QUEUED_MAX_CHATS = int(_wechat.get("queuedMaxChats", 2))
-    QUOTE_REPLY = bool(_wechat.get("quoteReply", True))
+    # 引用回复要额外走一遍「悬停消息 → 点回复 → 输入」，实测一条能慢好几秒；默认关
+    QUOTE_REPLY = bool(_wechat.get("quoteReply", False))
     # UIA 彻底发不出去时，退到「Ctrl+F 搜索会话 → 粘贴 → 回车」的键盘通道（会抢前台）
     KEYBOARD_FALLBACK = bool(_wechat.get("keyboardFallback", True))
     # 后台发送：不抢前台直接发（实测最小化/被遮挡也能发）。false = 每次先把微信拉到前台
@@ -152,7 +153,7 @@ def reload_config(path=None):
         LOW_BATTERY_PCT = float(w.get("lowBatteryPercent", 5))
     except Exception:
         pass
-    QUOTE_REPLY = bool(w.get("quoteReply", True))
+    QUOTE_REPLY = bool(w.get("quoteReply", False))
     KEYBOARD_FALLBACK = bool(w.get("keyboardFallback", True))
     BACKGROUND_SEND = bool(w.get("backgroundSend", True))
     GOODNIGHT_TEXT = str(w.get("goodnightText") or GOODNIGHT_TEXT)
@@ -668,6 +669,7 @@ def main():
         ((cfg.get("persona") or {}).get("name") or "鲸鲸")
     ]
 
+    log("引用回复：%s（关掉更快，需要时在 config.json 把 wechat.quoteReply 设 true）" % ("开" if QUOTE_REPLY else "关"))
     log("连接微信 4.x 数据库（只读）…")
     # token 一定要读到：读不到就是「她不理人」最隐蔽的原因（服务端会直接 401）
     if token:
