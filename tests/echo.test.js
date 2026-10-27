@@ -29,7 +29,7 @@ function makeBot({ replies }) {
     },
   };
   const bot = new Bot({ config, store, llm, logger: null, mockChunkDelayMs: 0, rng: () => 0.9 });
-  return { bot, calls, cleanup() { store.close(); fs.rmSync(dir, { recursive: true, force: true }); } };
+  return { bot, calls, cleanup() { store.close(); fs.rmSync(dir, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 }); } };
 }
 
 const g = (text, extra = {}) => ({

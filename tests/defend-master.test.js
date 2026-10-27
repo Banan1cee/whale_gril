@@ -20,7 +20,7 @@ function makeBot({ reply = '你算什么东西', rng = () => 0.99 } = {}) {
   const store = new Store({ file: path.join(dir, 'store.json'), limits: config.memory });
   const llm = { isMock: false, model: 'deepseek-chat', reload() {}, async complete() { return reply; } };
   const bot = new Bot({ config, store, llm, logger: null, mockChunkDelayMs: 0, rng });
-  return { bot, config, store, cleanup() { store.close(); fs.rmSync(dir, { recursive: true, force: true }); } };
+  return { bot, config, store, cleanup() { store.close(); fs.rmSync(dir, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 }); } };
 }
 
 const g = (text, extra = {}) => ({

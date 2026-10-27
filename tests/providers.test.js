@@ -62,7 +62,7 @@ test('智谱预设：地址和默认模型正确，没 Key 时是演示模式', 
   assert.equal(rt.model, 'glm-4-flash');
   assert.equal(rt.needsKey, true);
   assert.equal(rt.mock, true);
-  fs.rmSync(root, { recursive: true, force: true });
+  fs.rmSync(root, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
 });
 
 test('Ollama 预设：不需要 Key，也不算演示模式', () => {
@@ -73,7 +73,7 @@ test('Ollama 预设：不需要 Key，也不算演示模式', () => {
   assert.equal(client.model, 'qwen2.5:7b');
   assert.equal(client.needsKey, false);
   assert.equal(client.isMock, false);
-  fs.rmSync(root, { recursive: true, force: true });
+  fs.rmSync(root, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
 });
 
 test('Ollama 请求不带 Authorization，能正常拿到回复', async () => {
@@ -103,7 +103,7 @@ test('Ollama 请求不带 Authorization，能正常拿到回复', async () => {
   assert.equal(seenHeaders.authorization, undefined);
   assert.equal(seenBody.model, 'qwen2.5:7b');
   await fake.close();
-  fs.rmSync(root, { recursive: true, force: true });
+  fs.rmSync(root, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
 });
 
 test('自定义服务指向本机地址时自动免 Key', () => {
@@ -115,7 +115,7 @@ test('自定义服务指向本机地址时自动免 Key', () => {
   assert.equal(rt.needsKey, false);
   assert.equal(rt.mock, false);
   assert.equal(rt.model, 'my-model');
-  fs.rmSync(root, { recursive: true, force: true });
+  fs.rmSync(root, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
 });
 
 test('连接测试：演示模式返回友好提示而不是抛错', async () => {
@@ -125,7 +125,7 @@ test('连接测试：演示模式返回友好提示而不是抛错', async () =>
   assert.equal(probe.ok, false);
   assert.match(probe.message, /钥匙|Key/i);
   assert.equal(probe.provider, 'deepseek');
-  fs.rmSync(root, { recursive: true, force: true });
+  fs.rmSync(root, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
 });
 
 test('连接测试：能连上时返回样例回复和耗时', async () => {
@@ -146,7 +146,7 @@ test('连接测试：能连上时返回样例回复和耗时', async () => {
   assert.equal(probe.sample, '咕噜');
   assert.ok(probe.ms >= 0);
   await fake.close();
-  fs.rmSync(root, { recursive: true, force: true });
+  fs.rmSync(root, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
 });
 test('主服务商 Key 失效时，自动切到存过 Key 的备用服务商', () => {
   const { loadSettings, saveSettings } = require('../src/config');

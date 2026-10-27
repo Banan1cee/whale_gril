@@ -29,7 +29,7 @@ test('personas/ 下每个文件都被识别，按版本号排序', () => {
   const list = presets.list({ paths: { root } });
   assert.deepEqual(list.map((x) => x.id), ['persona-v1', 'persona-v2', 'persona-v10']);
   assert.equal(list[0].name, '第一版');
-  fs.rmSync(root, { recursive: true, force: true });
+  fs.rmSync(root, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
 });
 
 test('坏文件和目录不存在时不会崩', () => {
@@ -37,7 +37,7 @@ test('坏文件和目录不存在时不会崩', () => {
   fs.writeFileSync(path.join(root, 'personas', 'broken.json'), '{ not json', 'utf8');
   assert.deepEqual(presets.list({ paths: { root } }), []);
   assert.deepEqual(presets.list({ paths: { root: path.join(root, 'nope') } }), []);
-  fs.rmSync(root, { recursive: true, force: true });
+  fs.rmSync(root, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
 });
 
 test('导入只取白名单字段，带不进乱七八糟的东西', () => {
@@ -59,7 +59,7 @@ test('导入只取白名单字段，带不进乱七八糟的东西', () => {
   assert.equal(patch.master, undefined);
   assert.equal(patch.apiKey, undefined);
   assert.equal(patch.shell, undefined);
-  fs.rmSync(root, { recursive: true, force: true });
+  fs.rmSync(root, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
 });
 
 test('id 里带路径穿越取不到东西', () => {
@@ -68,7 +68,7 @@ test('id 里带路径穿越取不到东西', () => {
   assert.equal(presets.load({ paths: { root } }, '../config'), null);
   assert.equal(presets.load({ paths: { root } }, '../../etc/passwd'), null);
   assert.equal(presets.load({ paths: { root } }, 'nope'), null);
-  fs.rmSync(root, { recursive: true, force: true });
+  fs.rmSync(root, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
 });
 
 test('仓库自带的 persona-v1 是通用版：不含微信号、群昵称、Key', () => {

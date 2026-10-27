@@ -33,13 +33,13 @@ test('开关默认值都在 DEFAULT_CONFIG 里（不写配置也有）', () => {
   assert.equal(cfg.features.fightQuoteCheck, true, '开火需原话依据默认开');
   assert.equal(cfg.features.mediaCleanup, true);
   assert.equal(cfg.features.memorySnapshot, true);
-  fs.rmSync(root, { recursive: true, force: true });
+  fs.rmSync(root, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
 });
 
 test('开关能被配置关掉，关了就走旧行为', () => {
   const { root, cfg } = boot({ features: { groupAddressGuard: false } });
   assert.equal(features.isOn(cfg, 'groupAddressGuard'), false);
-  fs.rmSync(root, { recursive: true, force: true });
+  fs.rmSync(root, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
 });
 
 test('每个开关都有 label/desc，控制台才显示得出来', () => {
@@ -51,7 +51,7 @@ test('每个开关都有 label/desc，控制台才显示得出来', () => {
     assert.equal(typeof f.value, 'boolean');
   }
   assert.ok(list.some((f) => f.key === 'quoteReply' && f.default === false), '引用回复默认必须是关');
-  fs.rmSync(root, { recursive: true, force: true });
+  fs.rmSync(root, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
 });
 
 test('L1：@ 了别人时不算在说她（用 mentionedNames 判）', () => {
@@ -111,7 +111,7 @@ test('功能开关 API：能读、能写、写错 key 报错', async () => {
     assert.equal(bad.ok, false);
   } finally {
     await inst.close();
-    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
   }
 });
 
@@ -123,7 +123,7 @@ test('主动搭话默认只找主人：不进群、不找别人', async () => {
   assert.equal(cfg.care.allowOthers, false);
   assert.equal(features.isOn(cfg, 'careOnlyMaster'), true);
   assert.equal(features.isOn(cfg, 'careGroups'), false);
-  fs.rmSync(root, { recursive: true, force: true });
+  fs.rmSync(root, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
 
   const { startServer } = require('../server');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-care-'));
@@ -150,7 +150,7 @@ test('主动搭话默认只找主人：不进群、不找别人', async () => {
     assert.equal(other.reason, 'only_master');
   } finally {
     await inst.close();
-    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
   }
 });
 
@@ -171,7 +171,7 @@ test('打开 care.allowGroups 后才允许群聊', async () => {
     assert.equal(group.due, true, '显式允许后才发群');
   } finally {
     await inst.close();
-    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
   }
 });
 
