@@ -87,8 +87,8 @@
     ]
   },
   "care": {
-    "_说明": "主动找话题（她没事时自己来一句「在干啥」）。默认关：群里突然打招呼很社死。开着也只私聊，allowGroups=true 才允许群聊。",
-    "enabled": false,
+    "_说明": "主动找话题（她没事时自己来一句「在干啥」）。默认只找主人，不进群、不找别人： enabled=总开关；onlyMaster=只找主人；allowGroups=允许群聊；allowOthers=允许主动私聊别人。",
+    "enabled": true,
     "windows": [
       "09:00-12:00",
       "14:00-23:00"
@@ -97,7 +97,9 @@
     "jitterMinutes": 25,
     "maxPerDay": 6,
     "quietAfterMinutes": 20,
-    "allowGroups": false
+    "allowGroups": false,
+    "onlyMaster": true,
+    "allowOthers": false
   },
   "wechat": {
     "_说明": "微信桥接（examples/wechatauto_bridge.py）的参数。桥接是独立进程，backgroundSend=不抢前台直接发送（默认 true，实测微信最小化/被遮挡也能发，电脑可照常用；设 false 则每次先把微信拉到前台）。改完这里要重启「启动微信桥接.bat」才生效。staleAfterSec=多久没新消息就当她去忙了；gameWhitelist=检测到这些游戏进程就先不打扰；ignoreSenders=这些会话永不回复；quoteReply=是否引用原消息回复；digestMinutes=离开回来后把错过的消息合并成一条摘要；dbDir=微信文件保存位置（留空会自动找：先看正在运行的微信打开了哪些文件，再扫各个盘根目录；找不到时把微信「设置→文件管理」里的路径填这里）",

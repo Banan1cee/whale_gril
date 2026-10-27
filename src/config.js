@@ -145,9 +145,11 @@ const DEFAULT_CONFIG = {
   share: { enabled: true, everyMinutes: 120, sources: ['bilibili'] },
   // 主动搭话（没事时她自己来问一句「在干啥 / 累不累」）
   care: {
-    // 主动找话题默认关：群里突然来一句「早安」非常社死，用户自己需要再打开
-    enabled: false,
+    // 默认：她自己来找你（只找主人），但绝不进群、也不主动找别人
+    enabled: true,
+    onlyMaster: true,
     allowGroups: false,
+    allowOthers: false,
     windows: ['09:00-12:00', '14:00-23:00'],
     everyMinutes: 90,
     jitterMinutes: 25,

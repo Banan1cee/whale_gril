@@ -40,6 +40,27 @@ const REGISTRY = [
     default: true,
   },
   {
+    key: 'careOnlyMaster',
+    path: 'care.onlyMaster',
+    label: '主动搭话只找主人',
+    desc: '开着就是「只私聊你」；关掉才会主动找别人（配合下面两个开关）。',
+    default: true,
+  },
+  {
+    key: 'careGroups',
+    path: 'care.allowGroups',
+    label: '主动搭话允许进群',
+    desc: '默认关：群里突然来一句「早安」很社死。打开也只是「可以发群」，不会主动挑群。',
+    default: false,
+  },
+  {
+    key: 'careOthers',
+    path: 'care.allowOthers',
+    label: '主动搭话找非主人的私聊',
+    desc: '默认关。打开后她会主动私聊别人（不只是你）。',
+    default: false,
+  },
+  {
     key: 'proactiveCare',
     path: 'care.enabled',
     label: '主动找话题（群聊里绝不主动）',

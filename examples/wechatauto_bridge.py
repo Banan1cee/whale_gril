@@ -91,6 +91,8 @@ try:
     # 主动搭话默认关（群里突然打招呼很社死）；就算开了也只私聊，除非显式 allowGroups
     CARE_ENABLED = bool(_care.get("enabled", False))
     CARE_ALLOW_GROUPS = bool(_care.get("allowGroups", False))
+    CARE_ONLY_MASTER = bool(_care.get("onlyMaster", True))
+    CARE_ALLOW_OTHERS = bool(_care.get("allowOthers", False))
     CARE_QUIET_MIN = float(_care.get("quietAfterMinutes", 20) or 0)
     _digest = _wechat.get("digestMinutes", 30)
     DIGEST_MINUTES = float(_digest) if isinstance(_digest, (int, float)) else 30.0
@@ -175,9 +177,11 @@ def reload_config(path=None):
         SHARE_EVERY = 120.0
 
     ca = cfg.get("care") or {}
-    CARE_ENABLED = bool(ca.get("enabled", False))
-    global CARE_ALLOW_GROUPS
+    global CARE_ENABLED, CARE_ALLOW_GROUPS, CARE_ONLY_MASTER, CARE_ALLOW_OTHERS
+    CARE_ENABLED = bool(ca.get("enabled", True))
     CARE_ALLOW_GROUPS = bool(ca.get("allowGroups", False))
+    CARE_ONLY_MASTER = bool(ca.get("onlyMaster", True))
+    CARE_ALLOW_OTHERS = bool(ca.get("allowOthers", False))
     try:
         CARE_QUIET_MIN = float(ca.get("quietAfterMinutes", 20) or 0)
     except Exception:
@@ -2158,9 +2162,14 @@ def main():
                 for u, name in recent_chats(limit=8, within=7 * 86400):
                     if u in active:
                         continue
-                    # 群聊绝不主动：@chatroom 结尾的一律跳过（除非显式 allowGroups）
-                    if (not CARE_ALLOW_GROUPS) and str(u).endswith("@chatroom"):
+                    is_group = str(u).endswith("@chatroom")
+                    # 群聊默认绝不主动（除非显式 care.allowGroups）
+                    if is_group and not CARE_ALLOW_GROUPS:
                         continue
+                    # 默认只找主人：不是主人的私聊/群一律跳过（除非显式 care.allowOthers）
+                    if CARE_ONLY_MASTER and not CARE_ALLOW_OTHERS:
+                        if str(u) != str(MASTER_WXID):
+                            continue
                     target = (u, name)
                     break
             except Exception:

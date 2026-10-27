@@ -1330,11 +1330,24 @@ function createHandler(runtime) {
           lastSentTs: Number.isFinite(last) && last > 0 ? last : 0,
           sentToday: Number.isFinite(sentToday) ? sentToday : 0,
         });
-        // 群里主动打招呼很社死：除非显式 allowGroups，否则群聊一律不发
-        const allowGroups = features.toBool((runtime.config.care || {}).allowGroups, false);
+        // 主动搭话的收件人规则（默认只找主人）：
+        //   群里一律不发（除非 care.allowGroups）；非主人的私聊也不发（除非 care.allowOthers）
+        const careCfg = runtime.config.care || {};
+        const allowGroups = features.toBool(careCfg.allowGroups, false);
+        const allowOthers = features.toBool(careCfg.allowOthers, false);
+        const onlyMaster = features.toBool(careCfg.onlyMaster, true);
         const chatHint = String(cq.searchParams.get('chat') || '');
-        if (out.due && !allowGroups && /@chatroom$/i.test(chatHint)) {
+        // 只有调用方明确传了 chat（声明要发给谁）才在这里拦；
+        // 现役桥接不传 chat，收件人规则由桥接自己挑目标时保证（默认只挑主人）。
+        if (out.due && chatHint && !allowGroups && /@chatroom$/i.test(chatHint)) {
           return json(res, 200, { ok: true, due: false, reason: 'group_not_allowed' });
+        }
+        if (out.due && chatHint && onlyMaster && !allowOthers) {
+          const masters = ((runtime.config.persona || {}).master || {}).wxids || [];
+          const isMasterChat = masters.some((m) => m && String(m).trim() && String(m).trim() === chatHint);
+          if (!isMasterChat) {
+            return json(res, 200, { ok: true, due: false, reason: 'only_master' });
+          }
         }
         return json(res, 200, { ok: true, ...out });
       }
