@@ -595,7 +595,7 @@ class Bot {
       const three = [];
       // 主人点名吐槽走「轻」档：好笑但不下脏口，毕竟对方是自愿配合的
       for (let i = 0; i < 3; i += 1) {
-        const line = persona.clapbackPick(['轻', '一般'], this.rng, this.config);
+        const line = persona.clapbackPick(['轻', '一般'], this.rng);
         if (line && !three.includes(line)) three.push(line);
       }
       const canned = `@${target} ` + three.join('，');
@@ -644,7 +644,10 @@ class Bot {
         atMe,
         canned: isMaster
           ? '好的主人，我走了'
-          : persona.clapbackPick('叫滚', this.rng, this.config),
+          // 吵架大赛模式不接受「滚」：被赶更要顶回去，不许乖乖消失
+          : (persona.fightModeOn && persona.fightModeOn(this.config)
+            ? persona.clapbackPick(['重', '反问'], this.rng, this.config)
+            : persona.clapbackPick('叫滚', this.rng, this.config)),
         reason: 'dismissed',
       };
     }
@@ -965,9 +968,9 @@ class Bot {
     // 对喷的台词交给模型自己现编；只有没配 Key 的演示模式才用本地库顶着
     if (fight && this.llm.isMock) {
       const kinds = persona.clapbackKinds({ dirty: true });
-      const first = persona.clapbackPick(kinds, this.rng, this.config);
+      const first = persona.clapbackPick(kinds, this.rng);
       if (first) {
-        const combo = this.rng() < 0.6 ? persona.clapbackPick(['反问', '爹味'], this.rng, this.config) : '';
+        const combo = this.rng() < 0.6 ? persona.clapbackPick(['反问', '爹味'], this.rng) : '';
         const text = combo && combo !== first ? first + '，' + combo : first;
         return { action: 'reply', key, msg, atMe, canned: text, reason: 'clapback', system, turns };
       }
@@ -1440,7 +1443,8 @@ class Bot {
 
   /** 偶尔在句尾补一个 emoji 或颜文字（由「颜文字用量」档位决定概率） */
   pickEmoji(text) {
-    const chance = persona.emojiChanceFor(this.config);
+    // 吵架大赛模式不发表情：正在喷人突然来个 🍚 很出戏
+    const chance = (persona.fightModeOn && persona.fightModeOn(this.config)) ? 0 : persona.emojiChanceFor(this.config);
     if (!chance) return text;
     if (/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(text)) return text;
     if (this.rng() > chance) return text;
@@ -1481,7 +1485,7 @@ class Bot {
     // 对喷时不许认输：模型一旦说软话，换成库里的狠话
     if (fighting && persona.SOFT_FIGHT_RE.test(text)) {
       const dirty = Boolean(decision && decision.msg && decision.msg.fightDirty);
-      const line = persona.clapbackPick(dirty ? ['重', '爹味', '反问'] : ['轻', '典', '反问'], this.rng, this.config);
+      const line = persona.clapbackPick(dirty ? ['重', '爹味', '反问'] : ['轻', '典', '反问'], this.rng);
       if (line) text = line;
     }
     if (!decision || !decision.key || !text) return [];
@@ -1493,7 +1497,7 @@ class Bot {
     if (heardList.some((h) => isEcho(text, h)) || ownList.some((h) => isEcho(text, h))) {
       const fightingNow = Boolean(decision && decision.msg && decision.msg.fight);
       const line = fightingNow
-        ? persona.clapbackPick(['重', '爹味', '反问'], this.rng, this.config)
+        ? persona.clapbackPick(['重', '爹味', '反问'], this.rng)
         : (this.rng() < 0.5 ? '你说呢' : '这话我听着都替你尴尬');
       if (line) text = line;
       decision.finalText = text;
@@ -1523,7 +1527,7 @@ class Bot {
     if (msg.fightTarget && msg.fightTarget.name) {
       const name = msg.fightTarget.name;
       if (!String(text).includes(name)) {
-        const attack = persona.clapbackPick(['重', '爹味', '反问'], this.rng, this.config) || '你算什么东西';
+        const attack = persona.clapbackPick(['重', '爹味', '反问'], this.rng) || '你算什么东西';
         text = `${name}，${attack}`;
         decision.finalText = text;
       }

@@ -167,24 +167,18 @@ function abbrevBlock(text) {
 
 let _clapCache = null;
 let _clapFightCache = null;
-const FIGHT_PRESET = 'persona-v4-fight';
 
-/** 吵架大赛模式：用 resources/clapback-fight.txt（更脏更狠），其他模式用默认库 */
-function fightModeOn(config) {
-  const src = String((config && config.persona && config.persona.sourcePreset) || '');
-  return src === FIGHT_PRESET;
-}
-
-function readPairs(file) {
+/** 读一个「类别|台词」格式的库 */
+function readClapPairs(file) {
   const fs = require('fs');
   try {
-    const raw = fs.readFileSync(file, 'utf8');
-    return raw
+    return fs
+      .readFileSync(file, 'utf8')
       .split(/\r?\n/)
-      .map((s) => s.trim())
-      .filter((s) => s && !s.startsWith('#'))
-      .map((s) => {
-        const [cat, text] = s.split('|');
+      .map((x) => x.trim())
+      .filter((x) => x && !x.startsWith('#'))
+      .map((x) => {
+        const [cat, text] = x.split('|');
         return { cat: (cat || '').trim(), text: (text || '').trim() };
       })
       .filter((x) => x.text);
@@ -193,11 +187,18 @@ function readPairs(file) {
   }
 }
 
+/** 吵架大赛专用加辣库（只在 persona-v4-fight 时加载） */
 function clapbackFightPairs() {
   if (_clapFightCache) return _clapFightCache;
   const path = require('path');
-  _clapFightCache = readPairs(path.join(__dirname, '..', 'resources', 'clapback-fight.txt'));
+  _clapFightCache = readClapPairs(path.join(__dirname, '..', 'resources', 'clapback-fight.txt'));
   return _clapFightCache;
+}
+
+/** 吵架大赛模式：预设是 persona-v4-fight 时开 */
+function fightModeOn(config) {
+  const src = String((config && config.persona && config.persona.sourcePreset) || '');
+  return src === 'persona-v4-fight';
 }
 
 function clapbackPairs() {
@@ -227,7 +228,7 @@ function clapbackLines() {
 }
 
 function clapbackPick(kind, rng = Math.random, config = null) {
-  // 吵架大赛模式优先用加辣库；那边没货再退回默认库
+  // 吵架模式：先把加辣库排在前面，取不到再退回默认库
   const fightPairs = fightModeOn(config) ? clapbackFightPairs() : [];
   const pairs = fightPairs.length ? fightPairs.concat(clapbackPairs()) : clapbackPairs();
   const kinds = Array.isArray(kind) ? kind : [kind];
@@ -959,6 +960,7 @@ function kaomojiPick(rng = Math.random) {
 }
 
 module.exports = {
+  fightModeOn,
   abbrevReply,
   clapbackLines,
   clapbackPick,
