@@ -42,6 +42,16 @@ $rcArgs = @($root, $stage, '/E', '/NFL', '/NDL', '/NJH', '/NJS', '/NP', '/XD',
 robocopy @rcArgs | Out-Null
 if ($LASTEXITCODE -ge 8) { Pop-Location; throw "robocopy 失败 $LASTEXITCODE" }
 
+# 本地活动用的东西不进包：吵架大赛预设（避免别人一下载就拿去开骂）
+$localOnly = @('personas\persona-v4-fight.json')
+foreach ($rel in $localOnly) {
+  $p = Join-Path $stage $rel
+  if (Test-Path $p) {
+    Remove-Item $p -Force
+    Write-Host "  已排除（本地活动用）：$rel"
+  }
+}
+
 Step '3/5 发布自检（--release）'
 Push-Location $stage
 & (Join-Path $root 'runtime\node.exe') 'scripts\release-check.js' --release 2>&1 | Select-Object -Last 4 | ForEach-Object { Write-Host "  $_" }
