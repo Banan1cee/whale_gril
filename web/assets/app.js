@@ -24,6 +24,7 @@ const state = {
   streaming: false,
   status: null,
   settings: null,
+  wechat: null,
 };
 
 if (!state.sessionId) {
@@ -595,10 +596,166 @@ async function openSettings() {
       $('visionResult').className = 'test-result';
     }
     updateWebhookCodes();
+    await loadWechatAccounts();
     await refreshStatus();
   } catch {
     toast('读取设置失败，服务还在吗？');
   }
+}
+
+/* ---------------- 微信账号（多开时选小号） ---------------- */
+
+function fmtAccountTime(ms) {
+  const n = Number(ms) || 0;
+  if (!n) return '';
+  const d = new Date(n);
+  const p = (x) => String(x).padStart(2, '0');
+  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+function accountLabel(a) {
+  const parts = [];
+  if (a.nick) parts.push(a.nick);
+  parts.push(a.wxid || a.account);
+  const t = fmtAccountTime(a.lastActive);
+  if (t) parts.push('最近活跃 ' + t);
+  return parts.join(' · ');
+}
+
+function renderWechatAccounts() {
+  const sel = $('wechatAccount');
+  if (!sel) return;
+  const data = state.wechat || {};
+  const accounts = Array.isArray(data.accounts) ? data.accounts : [];
+  sel.textContent = '';
+  const auto = document.createElement('option');
+  auto.value = '';
+  auto.textContent = '自动（按「最近活跃」选，双开时可能选到大号）';
+  sel.appendChild(auto);
+  for (const a of accounts) {
+    const opt = document.createElement('option');
+    opt.value = a.account;
+    opt.textContent = accountLabel(a);
+    sel.appendChild(opt);
+  }
+  // 选中的是「当前配置值」：解析得到就用目录名，解析不到就留空（下面用文字提示）
+  const wanted = String(data.wanted || '');
+  const current = String(data.current || '');
+  sel.value = current || '';
+  if (!wanted) sel.value = '';
+
+  const help = $('wechatAccountHelp');
+  const live = $('wechatAccountLive');
+  if (help) {
+    if (!data.dbDir) {
+      help.textContent = '还没找到微信的数据目录。先双击一次「启动微信桥接.bat」，或点上面的「刷新账户列表」。';
+    } else if (accounts.length === 0) {
+      help.textContent = `在 ${data.dbDir} 下没扫到账号目录（微信要先登录过）。`;
+    } else if (accounts.length === 1) {
+      help.textContent = '本机只有 1 个微信账号，不选也行。';
+    } else if (wanted && !current) {
+      help.textContent = `⚠️ 配置里写的账号「${wanted}」在本机找不到；下面列出的是实际能用的账号，请重新选一个。`;
+    } else {
+      help.textContent = `本机有 ${accounts.length} 个微信账号。双开时一定要选小号，否则她会从大号说话。`;
+    }
+  }
+  if (live) {
+    const b = data.live;
+    if (!b || !b.online) {
+      live.textContent = '桥接没在跑：保存后双击「启动微信桥接.bat」才生效。';
+    } else if (b.ok) {
+      live.textContent = `桥接当前在用：${b.nick || b.account || '?'}（窗口已确认）`;
+    } else {
+      live.textContent = `桥接当前在用：${b.nick || b.account || '?'}（窗口还没认出来，现在不会发送）`;
+    }
+  }
+}
+
+async function loadWechatAccounts(opts = {}) {
+  const sel = $('wechatAccount');
+  if (!sel) return;
+  if (opts.refresh) {
+    const btn = $('btnRefreshAccounts');
+    const help = $('wechatAccountHelp');
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = '正在读昵称…';
+    }
+    if (help) help.textContent = '正在让桥接读各账号的昵称（第一次要十几秒，别关窗口）…';
+    try {
+      const res = await fetch('/api/wechat/accounts/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      });
+      const data = await res.json();
+      state.wechat = data;
+      if (data.error) toast('读昵称失败：' + data.error);
+    } catch (err) {
+      toast('刷新账户失败：' + err.message);
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = '刷新账户列表';
+      }
+    }
+  } else {
+    try {
+      const res = await fetch('/api/wechat/accounts');
+      state.wechat = await res.json();
+    } catch {
+      return;
+    }
+  }
+  renderWechatAccounts();
+}
+
+/** 保存时如果账号变了，写进 config.json；桥接发现值变了会自己重启 */
+async function applyWechatAccount() {
+  const sel = $('wechatAccount');
+  if (!sel) return { changed: false };
+  const want = sel.value || '';
+  const cur = (state.wechat && (state.wechat.current || '')) || '';
+  if (want === cur) return { changed: false };
+  if (want) {
+    // 账号一旦选错，她会用大号说话 —— 保存前让用户再确认一次
+    const a = ((state.wechat && state.wechat.accounts) || []).find((x) => x.account === want);
+    const name = (a && (a.nick || a.wxid)) || want;
+    const ok = window.confirm(
+      '确定让小鲸鱼操作「' + name + '」这个微信号吗？\n\n' +
+      '如果这是你平时聊天、加好友用的号（大号），请改成不常用的小号 —— 选错了她会用你的大号说话。'
+    );
+    if (!ok) {
+      renderWechatAccounts(); // 下拉恢复到已保存的值
+      return { changed: false, cancelled: true };
+    }
+  }
+  const res = await fetch('/api/wechat/account', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ account: want }),
+  });
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || '切换微信账号失败');
+  state.wechat = data;
+  return { changed: true, want, online: Boolean(data.live && data.live.online) };
+}
+
+async function waitBridgeAccount(wantDir, timeoutMs = 25000) {
+  const t0 = Date.now();
+  while (Date.now() - t0 < timeoutMs) {
+    await new Promise((r) => setTimeout(r, 1500));
+    try {
+      const res = await fetch('/api/status');
+      const s = await res.json();
+      const gw = (s.gateways || []).find((g) => g.platform === 'wechat');
+      const b = gw && gw.bridge;
+      if (b && b.online && b.account === wantDir) return b;
+    } catch {
+      /* 服务重启中就再来一次 */
+    }
+  }
+  return null;
 }
 
 function settingsPayload() {
@@ -638,6 +795,11 @@ async function saveSettings() {
     });
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || '保存失败');
+    // 微信账号：只有真的变了才写 config.json（桥接发现值变了会自己重启）
+    const acct = await applyWechatAccount().catch((e) => {
+      toast('账号没切换成功：' + e.message);
+      return { changed: false };
+    });
     state.userName = $('userName').value.trim();
     localStorage.setItem('whale.userName', state.userName);
     $('settingsModal').hidden = true;
@@ -650,6 +812,19 @@ async function saveSettings() {
       toast('已接入 ' + (data.settings.providerLabel || '模型') + '，跟她说句话试试~');
     } else {
       toast('已保存（当前是演示模式）');
+    }
+    // 账号切换是「改 config → 桥接自己重启」，这里等它回来再报结果
+    if (acct && acct.changed) {
+      if (!acct.want) {
+        toast('已恢复「自动选账号」，桥接几秒后自己重启');
+      } else if (!acct.online) {
+        toast('账号已保存（桥接现在没在跑，下次启动就用这个号）');
+      } else {
+        toast('账号已保存，桥接几秒后自己重启…');
+        const b = await waitBridgeAccount(acct.want);
+        if (b) toast('切换完成：现在用「' + (b.accountNick || b.account) + '」说话');
+        else toast('还没等到桥接回来：检查「启动微信桥接.bat」那个窗口是否还开着');
+      }
     }
   } catch (err) {
     toast('保存失败：' + err.message);
@@ -806,6 +981,8 @@ function bindEvents() {
   $('btnSettings').addEventListener('click', openSettings);
   $('btnMemory').addEventListener('click', openMemory);
   $('saveSettings').addEventListener('click', saveSettings);
+const acctRefreshBtn = $('btnRefreshAccounts');
+if (acctRefreshBtn) acctRefreshBtn.addEventListener('click', () => loadWechatAccounts({ refresh: true }));
   $('clearMemory').addEventListener('click', clearMemory);
   $('btnAutoGroup').addEventListener('click', runAutoGroup);
   $('btnTest').addEventListener('click', testConnection);

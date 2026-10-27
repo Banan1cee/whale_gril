@@ -84,6 +84,20 @@ _MAX_DLL_PROBES = 8
 _DLL_CACHE = {}
 _DLL_TTL = 5.0
 
+# 多账号（微信 4.x 一个号一个进程，每个进程各有一个标题都叫「微信」的主窗）：
+# 把引擎钉在指定的 hwnd 上。钉住之后 _find_main 只认这一个窗口，找不到就返回
+# None —— 绝不「退而求其次」去用另一个账号的窗口（那会把消息从别人的号发出去）。
+_PIN = {"hwnd": 0}
+
+
+def pin_window(hwnd) -> None:
+    """把后续 UIA 操作钉在这个微信主窗上（0 = 取消钉住）。"""
+    _PIN["hwnd"] = int(hwnd or 0)
+
+
+def pinned_window() -> int:
+    return int(_PIN["hwnd"] or 0)
+
 
 def _note_once(kind: str, hwnd: int, detail: str) -> None:
     """同一类「意外但已修好」的情况每个窗口只吼一次，别把日志刷爆。"""
@@ -268,6 +282,40 @@ def apply(verbose: bool = True) -> bool:
         return False
 
     def _find_main(self):
+        # ⓪ 钉住窗口优先：多账号时这一条是「发出去的到底是谁」的唯一保证。
+        #    钉住的窗口没了（被关掉/自更新）也不换窗口，返回 None 让上层明确失败。
+        pin = int(getattr(self, "_pinned_hwnd", 0) or _PIN["hwnd"] or 0)
+        if pin:
+            try:
+                import win32gui
+                alive = bool(win32gui.IsWindow(pin))
+            except Exception:                    # noqa: BLE001
+                alive = False
+            if not alive:
+                log.warning("uia_compat: 钉住的微信窗口 hwnd=%s 已经不在了"
+                            "（微信重启/换号了），本次不发；由桥接重新认账号再钉", pin)
+                self._pinned_hwnd = 0
+                _PIN["hwnd"] = 0
+                # 关键：不要顺手按面积挑一个「像微信」的窗口顶上。本机同时登着两个号，
+                # 大号窗口比小号大 → 会挑中大号，然后拿小号的库去大号里发消息。
+                # 返回 None，让上层明确失败，由桥接 pick_account_window(force=True) 重认。
+                return None
+            c = self._anchor(pin)
+            if c is None:
+                return None
+            try:
+                if (c.ClassName or "") in main_classes:
+                    return c
+            except Exception:                    # noqa: BLE001
+                pass
+            try:
+                if self._mmui_present(pin, timeout=0.5):
+                    return c
+            except Exception:                    # noqa: BLE001
+                pass
+            # 窗口在、但树还没物化：让 ensure_window 去热激活，别换成别的号
+            return None
+
         try:
             hwnds = list(self._wechat_hwnds() or ())
         except Exception:                        # noqa: BLE001
@@ -574,10 +622,15 @@ def apply(verbose: bool = True) -> bool:
 
         setattr(cls, name, _make())
 
+    def _session_rows_of(self, win):
+        """只读：某个主窗现在的会话行名（给多账号认窗口用，不点任何东西）。"""
+        return _session_rows(self, win)
+
     cls._wechat_hwnds = _wechat_hwnds
     cls._find_main = _find_main
     cls._has_chat_ui = _has_chat_ui
     cls._session_list = _session_list
+    cls._session_rows_of = _session_rows_of
     # 方便单独测「这句话该点哪一行」，不碰任何窗口
     cls._row_score = staticmethod(_row_score)
     cls._name_tokens = staticmethod(_name_tokens)
