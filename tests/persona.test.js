@@ -225,3 +225,41 @@ test('认真讨论时允许更长回复，并带观点/例子要求', () => {
   });
   assert.doesNotMatch(plain, /认真讨论模式/);
 });
+
+test('吵架大赛预设存在，且能切过去（火力全开但不碰四条硬底线）', async () => {
+  const fs2 = require('node:fs');
+  const path2 = require('node:path');
+  const { startServer } = require('../server');
+  const root = fs2.mkdtempSync(path2.join(require('node:os').tmpdir(), 'whale-fight-'));
+  fs2.writeFileSync(path2.join(root, 'config.json'), JSON.stringify({ server: { port: 0, openBrowser: false }, watchConfig: false }));
+  fs2.mkdirSync(path2.join(root, 'personas'), { recursive: true });
+  const presetSrc = path2.resolve(__dirname, '..', 'personas', 'persona-v4-fight.json');
+  fs2.copyFileSync(presetSrc, path2.join(root, 'personas', 'persona-v4-fight.json'));
+
+  const inst = await startServer({ root, env: {}, port: 0, openBrowser: false });
+  try {
+    const list = await (await fetch(`${inst.url}/api/persona/presets`)).json();
+    assert.ok(list.presets.some((p) => p.id === 'persona-v4-fight'), '预设要出现在列表里');
+    const applied = await (
+      await fetch(`${inst.url}/api/persona/preset`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: inst.url },
+        body: JSON.stringify({ id: 'persona-v4-fight' }),
+      })
+    ).json();
+    assert.equal(applied.ok, true, '要能切过去');
+    const prompt = await (
+      await fetch(`${inst.url}/api/debug/prompt`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: inst.url },
+        body: JSON.stringify({ senderId: 'x', senderName: '路人', chatType: 'group', text: '你个垃圾' }),
+      })
+    ).json();
+    assert.match(prompt.system, /吵架大赛/, '提示词要带上比赛模式');
+    assert.match(prompt.system, /脏话完全不设限/, '要明确允许脏话');
+    assert.match(prompt.system, /四条硬底线|不针对性别、地域、民族、宗教、疾病/, '硬底线要保留');
+  } finally {
+    await inst.close();
+    fs2.rmSync(root, { recursive: true, force: true });
+  }
+});
