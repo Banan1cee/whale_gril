@@ -28,7 +28,14 @@
     "appearance": "深蓝色长卷发，头发上别着一枚鲸尾发夹，常穿深蓝色水手领裙子，怀里或包里总有一只软乎乎的蓝鲸玩偶（你叫它小蓝鲸）。",
     "personality": "温柔但有点小倔，嘴硬心软，慢热；熟了话很多，会害羞、会怼人、会犯懒、偶尔 emo。",
     "background": "因为头像和玩偶全是鲸鱼，朋友开玩笑叫你「鲸鱼娘」，你也就认了。",
-    "aliases": ["鲸鲸", "小鲸娘", "鲸娘", "深鲸娘", "鲸鱼娘", "小鲸"],
+    "aliases": [
+      "鲸鲸",
+      "小鲸娘",
+      "鲸娘",
+      "深鲸娘",
+      "鲸鱼娘",
+      "小鲸"
+    ],
     "ownerName": "主人",
     "master": {
       "_说明": "主人名单：names 填微信昵称，wxids 填 wxid_xxx —— 微信内部 id，不是你设置的微信号。微信里只认 wxid；wxids 全空时才退回按昵称认。谁填谁就是主人，留空则没有主人。不知道自己的 wxid 就开调试台 /debug 看「最近说过话的人」",
@@ -75,12 +82,17 @@
     "_说明": "主动分享：每隔 everyMinutes 分钟从 sources 里挑一条视频发过来（目前支持 bilibili）",
     "enabled": true,
     "everyMinutes": 120,
-    "sources": ["bilibili"]
+    "sources": [
+      "bilibili"
+    ]
   },
   "care": {
     "_说明": "主动搭话：没事的时候她自己来找你说句话（问在干啥 / 累不累），跟主动分享同一套机制。windows=允许搭话的时间段（一行一个，24 小时制，跨零点也认）；everyMinutes=平均多久一次；jitterMinutes=前后随机浮动，避免太规律；maxPerDay=每天上限；quietAfterMinutes=这个会话刚聊过就跳过。改完要重启「启动微信桥接.bat」才生效",
     "enabled": true,
-    "windows": ["09:00-12:00", "14:00-23:00"],
+    "windows": [
+      "09:00-12:00",
+      "14:00-23:00"
+    ],
     "everyMinutes": 90,
     "jitterMinutes": 25,
     "maxPerDay": 6,
@@ -90,7 +102,9 @@
     "_说明": "微信桥接（examples/wechatauto_bridge.py）的参数。桥接是独立进程，backgroundSend=不抢前台直接发送（默认 true，实测微信最小化/被遮挡也能发，电脑可照常用；设 false 则每次先把微信拉到前台）。改完这里要重启「启动微信桥接.bat」才生效。staleAfterSec=多久没新消息就当她去忙了；gameWhitelist=检测到这些游戏进程就先不打扰；ignoreSenders=这些会话永不回复；quoteReply=是否引用原消息回复；digestMinutes=离开回来后把错过的消息合并成一条摘要；dbDir=微信文件保存位置（留空会自动找：先看正在运行的微信打开了哪些文件，再扫各个盘根目录；找不到时把微信「设置→文件管理」里的路径填这里）",
     "dbDir": "",
     "staleAfterSec": 120,
-    "gameWhitelist": ["valorant"],
+    "gameWhitelist": [
+      "valorant"
+    ],
     "awayNotice": false,
     "returnNotice": false,
     "queuedMaxAgeSec": 300,
@@ -100,7 +114,14 @@
     "keyboardFallback": true,
     "backgroundSend": true,
     "lowBatteryPercent": 5,
-    "ignoreSenders": ["微信团队", "微信支付", "服务通知", "订阅号消息", "文件传输助手", "微信运动"],
+    "ignoreSenders": [
+      "微信团队",
+      "微信支付",
+      "服务通知",
+      "订阅号消息",
+      "文件传输助手",
+      "微信运动"
+    ],
     "goodnightText": "晚安，电量快没了，我先睡啦，明天见～"
   },
   "gateway": {
@@ -149,5 +170,10 @@
     "model": "qwen3-asr-flash",
     "timeoutMs": 90000,
     "maxSeconds": 120
+  },
+  "storage": {
+    "_说明": "媒体缓存（微信图片/表情包/语音 wav）清理策略：启动时按天数+总量清一次",
+    "mediaKeepDays": 7,
+    "mediaMaxMB": 500
   }
 }

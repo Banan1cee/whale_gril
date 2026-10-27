@@ -819,7 +819,10 @@ class Bot {
             else if (!/天气/.test(q)) q = q + ' 天气';
           }
         }
-        if (q && !isWeather && !/\d{4}/.test(q)) q += ' ' + now.getFullYear();
+        // 实测：「苹果现在出到几了」加 2026 后，新文章(4/4)反而被官方首页挤掉(2/4)；
+        // 时效性问题交给 dropStaleResults 按日期过滤，别机械加年份。
+        const timeSensitive = /(最新|现在|今年|目前|当前|出到几|第几代|什么型号|哪个版本|刚出|新出)/.test(clean.text || q);
+        if (q && !isWeather && !/\d{4}/.test(q) && !timeSensitive) q += ' ' + now.getFullYear();
         if (/(新闻|热点|热搜|发生了什么|大事件|头条)/.test(clean.text)) {
           webText = await websearch.hotNewsText(8);
         }
