@@ -1330,6 +1330,12 @@ function createHandler(runtime) {
           lastSentTs: Number.isFinite(last) && last > 0 ? last : 0,
           sentToday: Number.isFinite(sentToday) ? sentToday : 0,
         });
+        // 群里主动打招呼很社死：除非显式 allowGroups，否则群聊一律不发
+        const allowGroups = features.toBool((runtime.config.care || {}).allowGroups, false);
+        const chatHint = String(cq.searchParams.get('chat') || '');
+        if (out.due && !allowGroups && /@chatroom$/i.test(chatHint)) {
+          return json(res, 200, { ok: true, due: false, reason: 'group_not_allowed' });
+        }
         return json(res, 200, { ok: true, ...out });
       }
 

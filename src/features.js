@@ -40,6 +40,13 @@ const REGISTRY = [
     default: true,
   },
   {
+    key: 'proactiveCare',
+    path: 'care.enabled',
+    label: '主动找话题（群聊里绝不主动）',
+    desc: '没聊的时候她自己来一句「在干啥」。默认关：群里突然说早安很容易社死。开着也只私聊，不会进群。',
+    default: false,
+  },
+  {
     key: 'quoteReply',
     path: 'wechat.quoteReply',
     label: '引用回复（慢，默认关）',
@@ -60,11 +67,20 @@ function getByPath(obj, dotted) {
 }
 
 /** 开关是否打开（读配置；没配就用默认值） */
+function toBool(value, fallback = false) {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  const s = String(value).trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on', '开'].includes(s)) return true;
+  if (['0', 'false', 'no', 'off', '关', ''].includes(s)) return false;
+  return fallback;
+}
+
 function isOn(config, key) {
   const f = BY_KEY.get(key);
   if (!f) return false;
-  const v = getByPath(config, f.path);
-  return v === undefined || v === null ? f.default : Boolean(v);
+  return toBool(getByPath(config, f.path), f.default);
 }
 
 /** 给控制台看的：所有开关 + 当前值 */
@@ -89,4 +105,4 @@ function defaults() {
   return out.features;
 }
 
-module.exports = { REGISTRY, isOn, list, defaults, getByPath };
+module.exports = { REGISTRY, isOn, list, defaults, getByPath, toBool };

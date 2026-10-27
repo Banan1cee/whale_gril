@@ -114,3 +114,36 @@ test('功能开关 API：能读、能写、写错 key 报错', async () => {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('主动搭话默认关，而且群里绝不主动', async () => {
+  const { root, cfg } = boot();
+  assert.equal(cfg.care.enabled, false, '主动找话题默认必须关（群里说早安很社死）');
+  assert.equal(features.isOn(cfg, 'proactiveCare'), false);
+  fs.rmSync(root, { recursive: true, force: true });
+
+  const { startServer } = require('../server');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-care-'));
+  fs.writeFileSync(
+    path.join(dir, 'config.json'),
+    JSON.stringify({ server: { port: 0, openBrowser: false }, watchConfig: false, care: { enabled: true, allowGroups: false } })
+  );
+  const inst = await startServer({ root: dir, env: {}, port: 0, openBrowser: false });
+  try {
+    const priv = await (await fetch(`${inst.url}/api/care/due?last=0&sentToday=0&chat=wxid_friend`)).json();
+    assert.equal(priv.due, true, '私聊该发就发');
+    const grp = await (await fetch(`${inst.url}/api/care/due?last=0&sentToday=0&chat=12345%40chatroom`)).json();
+    assert.equal(grp.due, false, '群聊不许主动开口');
+    assert.equal(grp.reason, 'group_not_allowed');
+  } finally {
+    await inst.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('配置里写成字符串 "false" 也要当成关（老版本写进去的就是字符串）', () => {
+  assert.equal(features.toBool('false'), false);
+  assert.equal(features.toBool('false', true), false);
+  assert.equal(features.toBool('true', false), true);
+  assert.equal(features.toBool(undefined, true), true);
+  assert.equal(features.toBool('0', true), false);
+});
