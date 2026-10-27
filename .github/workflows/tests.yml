@@ -14,4 +14,6 @@ jobs:
         with:
           node-version: 20
       - name: 单元测试（不需要装任何依赖）
-        run: node --test "tests/*.test.js"
+        # 注意：pwsh 不会展开引号里的通配符，之前写 "tests/*.test.js" 会让 CI 直接 "Could not find"，
+        # 所有 PR 都挂个红叉。改用目录形式（Node 20+ 支持），让 node 自己找 *.test.js。
+        run: node --test

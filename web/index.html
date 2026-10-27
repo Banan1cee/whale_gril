@@ -157,6 +157,21 @@
         </div>
       </fieldset>
 
+      <fieldset class="group-field">
+        <legend>微信账号（双开时必选）</legend>
+        <div class="field slim">
+          <label for="wechatAccount">让小鲸鱼操作哪个微信号</label>
+          <select id="wechatAccount">
+            <option value="">自动（按「最近活跃」选）</option>
+          </select>
+          <p class="field-help" id="wechatAccountHelp">正在读取本机微信账号…</p>
+        </div>
+        <div class="test-row">
+          <button class="mini-btn" id="btnRefreshAccounts" type="button">刷新账户列表</button>
+          <span class="test-result" id="wechatAccountLive"></span>
+        </div>
+      </fieldset>
+
       <div class="webhooks">
         <h3>接入其它平台</h3>
         <p class="field-help">把下面地址配置到你的微信 / 抖音中转服务里（详见项目里的 docs 目录）。</p>
