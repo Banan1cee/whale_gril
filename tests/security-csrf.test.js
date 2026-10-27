@@ -95,3 +95,20 @@ test('只读接口不受 CSRF 闸影响', async () => {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+const links = require('../src/links');
+
+test('群友发的本机/内网链接不读（SSRF）', () => {
+  for (const host of ['127.0.0.1', 'localhost', '192.168.1.1', '10.1.2.3', '172.20.0.9', '169.254.169.254', '::1']) {
+    assert.equal(links.isPrivateHost(host), true, host + ' 应该被挡住');
+  }
+  for (const host of ['example.com', 'www.bilibili.com', '8.8.8.8']) {
+    assert.equal(links.isPrivateHost(host), false, host + ' 是公网，应该放行');
+  }
+});
+
+test('读本机控制台链接会被拒绝（不是抓回来喂给模型）', async () => {
+  const r = await links.describeLink('http://127.0.0.1:8787/api/memory/export');
+  assert.equal(r.ok, false);
+  assert.equal(r.error, 'private_host');
+});
