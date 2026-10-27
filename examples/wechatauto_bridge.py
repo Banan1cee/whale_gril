@@ -24,6 +24,7 @@
 
 import json
 import random
+import re
 import urllib.parse
 import os
 # 关掉 wechatauto 的「拟人节流」（默认 natural：120 秒内 6 次写就冷却 30~75 秒）
@@ -81,6 +82,14 @@ try:
     KEYBOARD_FALLBACK = bool(_wechat.get("keyboardFallback", True))
     # 后台发送：不抢前台直接发（实测最小化/被遮挡也能发）。false = 每次先把微信拉到前台
     BACKGROUND_SEND = bool(_wechat.get("backgroundSend", True))
+    # 多账号（同时登着大号 + 小号）：启动时钉死在 wechat.account 指定的那个号上，
+    # 发送前再确认「要发消息的那个窗口就是这个号」；认不出来宁可不发，也不从别的号发。
+    # accountGuard=false 只用于「本机确实只登一个号、但窗口读取时好时坏」的兜底。
+    ACCOUNT_GUARD = bool(_wechat.get("accountGuard", True))
+    # 手动钉窗口（调试用）：填微信主窗的 hwnd，直接用它，跳过自动识别
+    WINDOW_HWND = int(_wechat.get("windowHwnd") or 0)
+    # 网页「设置」里选的账号（目录名 / wxid / 昵称都行）；留空 = 自动选「最近活跃」
+    ACCOUNT_WANTED = str(_wechat.get("account") or "").strip()
     LOW_BATTERY_PCT = float(_wechat.get("lowBatteryPercent", 5))
     GOODNIGHT_TEXT = str(_wechat.get("goodnightText", "晚安，电量快没了，我先睡啦，明天见～"))
     _share = _cfg.get("share") or {}
@@ -141,6 +150,7 @@ def reload_config(path=None):
     """
     global GAME_TOKENS, AWAY_NOTICE, RETURN_NOTICE, QUEUED_MAX_AGE, QUEUED_MAX_CHATS
     global QUOTE_REPLY, KEYBOARD_FALLBACK, BACKGROUND_SEND, LOW_BATTERY_PCT, GOODNIGHT_TEXT
+    global ACCOUNT_GUARD, WINDOW_HWND
     global SHARE_ENABLED, SHARE_EVERY, CARE_ENABLED, CARE_QUIET_MIN, DIGEST_MINUTES
     global STALE_AFTER, SYSTEM_SENDER_NAMES, BASE_SYSTEM_SENDERS, MASTER_WXID
     global VOICE_ENABLED, VOICE_BASE_URL, VOICE_MODEL, VOICE_API_KEY, VOICE_TIMEOUT, VOICE_MAX_SECONDS
@@ -169,6 +179,19 @@ def reload_config(path=None):
     QUOTE_REPLY = bool(w.get("quoteReply", False))
     KEYBOARD_FALLBACK = bool(w.get("keyboardFallback", True))
     BACKGROUND_SEND = bool(w.get("backgroundSend", True))
+    ACCOUNT_GUARD = bool(w.get("accountGuard", True))
+    try:
+        WINDOW_HWND = int(w.get("windowHwnd") or 0)
+    except Exception:
+        WINDOW_HWND = 0
+    # 账号是在建库时钉死的，改不了；这里只负责「发现网页改了账号 → 让桥接自己重启」。
+    wanted_now = str(w.get("account") or "").strip()
+    if wanted_now != ACCOUNT_WANTED:
+        log("账号设置变了（%r → %r），3 秒后自动重启桥接…" % (ACCOUNT_WANTED, wanted_now))
+        time.sleep(3)
+        # bridge_loop.bat 把 exit code 7 当成「桥接自己要求重启」，3 秒后会用新配置拉起来。
+        # 直接 os._exit 而不是 sys.exit：这里是后台线程，sys.exit 退不掉整个进程。
+        os._exit(7)
     GOODNIGHT_TEXT = str(w.get("goodnightText") or GOODNIGHT_TEXT)
     try:
         DIGEST_MINUTES = float(w.get("digestMinutes", 30))
@@ -336,6 +359,125 @@ def resolve_db_dir(config_path=None, drives="CDEFGHIJK"):
             if looks_like_db_root(cand):
                 return cand
     return ""
+
+
+# ---------------------------------------------------------------------------
+# 多账号：账号目录枚举 / 账号写法解析 / 给网页列账号
+# ---------------------------------------------------------------------------
+
+def find_account_dirs(db_dir):
+    """列出 <db_dir> 下所有含 db_storage 的账号目录名。
+
+    不能按 wxid_ 前缀判断：设了自定义微信号的账号目录名不一定以 wxid_ 开头。
+    """
+    out = []
+    try:
+        for name in os.listdir(db_dir):
+            if os.path.isdir(os.path.join(db_dir, name, "db_storage")):
+                out.append(name)
+    except OSError:
+        return []
+    return sorted(out)
+
+
+def account_wxid(account):
+    """账号目录名去掉末尾 4 位哈希 = wxid（和 wechatauto 的 WeChatDB.wxid 同一套规则）。"""
+    return re.sub(r"_\w{4}$", "", str(account or ""))
+
+
+def resolve_account_dir(db_dir, wanted):
+    """把配置/网页里的账号写法解析成真实账号目录名。
+
+    依次尝试：完整目录名（wxid_xxx_cedb）→ 去掉 4 位哈希的 wxid（wxid_xxx）
+    → 唯一前缀 → 昵称（要开库读 contact.db，慢，所以放最后）。
+    返回目录名；匹配不到返回 ""。
+    """
+    wanted = str(wanted or "").strip()
+    if not wanted or not db_dir:
+        return ""
+    names = find_account_dirs(db_dir)
+    if not names:
+        return ""
+    if wanted in names:
+        return wanted
+    for n in names:
+        if account_wxid(n) == wanted:
+            return n
+    hit = [n for n in names if n.lower().startswith(wanted.lower())]
+    if len(hit) == 1:
+        return hit[0]
+    # 昵称匹配：只有前面都没命中才做（每个账号要开一次库，约 1 秒）
+    try:
+        from wechatauto import WeChatDB
+    except Exception:
+        return ""
+    for n in names:
+        try:
+            probe = WeChatDB(db_dir=db_dir, account=n)
+            if probe.account != n:
+                continue                     # 库自己换号了，别用它的昵称
+            info = probe.get_self_info() or {}
+            nick = str(info.get("nick_name") or info.get("remark") or "").strip()
+        except Exception:
+            continue
+        if nick and nick == wanted:
+            return n
+    return ""
+
+
+def list_accounts_cli():
+    """--list-accounts：扫描本机所有微信账号，写 data/accounts.json 给网页下拉用。
+
+    昵称要开库读 contact.db（必须微信在登录、能取到密钥），所以是「尽力而为」：
+    单个账号失败就留空，整件事最多花 20 秒，绝不因为读不到昵称就报错。
+    """
+    db_dir = resolve_db_dir()
+    rows = []
+    names = find_account_dirs(db_dir) if db_dir else []
+    deadline = time.time() + 20
+    try:
+        from wechatauto import WeChatDB
+    except Exception as e:                        # noqa: BLE001
+        log("列账号：wechatauto 不可用，只列目录名：", repr(e))
+        WeChatDB = None
+    for n in names:
+        item = {"account": n, "wxid": account_wxid(n), "nick": "", "lastActive": 0}
+        base = os.path.join(db_dir, n, "db_storage")
+        try:
+            newest = 0.0
+            for root, _dirs, files in os.walk(base):
+                for f in files:
+                    if f.endswith(".db") and not f.endswith(("-wal", "-shm")):
+                        newest = max(newest, os.path.getmtime(os.path.join(root, f)))
+            item["lastActive"] = int(newest * 1000)
+        except Exception:
+            pass
+        if WeChatDB is not None and time.time() < deadline:
+            try:
+                probe = WeChatDB(db_dir=db_dir, account=n)
+                if probe.account == n:
+                    info = probe.get_self_info() or {}
+                    item["nick"] = str(info.get("nick_name") or info.get("remark") or "").strip()
+            except Exception:
+                pass
+        rows.append(item)
+    rows.sort(key=lambda x: -x["lastActive"])
+    payload = {
+        "dbDir": db_dir or "",
+        "generatedAt": int(time.time() * 1000),
+        "accounts": rows,
+    }
+    path = os.path.join(ROOT, "data", "accounts.json")
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        log("列账号完成：%d 个（%s）" % (len(rows), "、".join(r["account"] for r in rows) or "无"))
+    except Exception as e:                        # noqa: BLE001
+        log("列账号：写 %s 失败：%r" % (path, e))
+    print(json.dumps(payload, ensure_ascii=False))
+    return 0
+
 
 # 系统 / 公众号通知：只用来记录，不接话（否则会跟「微信团队」吵起来）
 SYSTEM_SENDER_NAMES = {
@@ -626,6 +768,10 @@ def ensure_ffmpeg_env():
 
 def main():
     boot("进入 main()")
+    # 给网页「设置 → 微信账号」下拉用：只扫账号、不连消息，跑完就退出。
+    # 必须放在单实例锁之前 —— 否则桥接正跑着的时候，这条命令会以为自己"重复启动"直接退出。
+    if "--list-accounts" in sys.argv:
+        return list_accounts_cli()
     ensure_ffmpeg_env()
     # 微信的 Qt accessibility 只在「纯英文路径」下能热激活成功；路径里带中文时，
     # UIA 认不出主窗（ensure_window 超时 37s），之后每次发送都退到 OCR 并报
@@ -754,6 +900,29 @@ def main():
     db_dir = resolve_db_dir()
     if db_dir:
         log("数据库目录：", db_dir)
+    # 多账号/双开：一定要把账号钉死。默认的「最近活跃库」启发式会选到另一个号
+    # （大号天天在用 → 库最新 → 拿小号的配置去大号里发消息）。
+    acct_dirs = find_account_dirs(db_dir) if db_dir else []
+    acct = ACCOUNT_WANTED
+    if acct:
+        hit = resolve_account_dir(db_dir, acct) if db_dir else ""
+        if not hit:
+            log("")
+            log("✗ 找不到微信账号 %r。" % acct)
+            log("  这台机器上现有账号：%s" % ("、".join(acct_dirs) or "（一个都没有）"))
+            log("  去网页「设置 → 微信账号」里重新选一个，或把 config.json 的")
+            log("  wechat.account 改成上面某个名字（目录名 / wxid / 昵称都行，留空=自动选）。")
+            log("  这里直接停下，不会偷偷换成别的号。")
+            return 2
+        if hit != acct:
+            log("配置账号 %r → 账号目录 %s" % (acct, hit))
+        acct = hit
+        log("指定账号：", acct, "（网页设置 / config.json → wechat.account）")
+    elif len(acct_dirs) > 1:
+        log("⚠️ 这台机器有 %d 个微信账号：%s" % (len(acct_dirs), "、".join(acct_dirs)))
+        log("   没指定账号 → 按「最近活跃」自动选，可能选到大号。")
+        log("   去网页「设置 → 微信账号」里选一个（推荐：只选小号）。")
+
     # 打开微信数据库偶尔会「卡住不返回」（wechatauto-replica 内部去找微信进程/取密钥时挂住），
     # 表现就是「重启了但一直不监听」。这里给它 90 秒上限，超时明确报错退出。
     def _open_db_with_timeout(timeout=90):
@@ -761,7 +930,12 @@ def main():
 
         def _work():
             try:
-                box["db"] = WeChatDB(db_dir=db_dir) if db_dir else WeChatDB()
+                # 账号在这里一并钉死：不传 account 的话库会按「最近活跃」自己挑一个
+                box["db"] = (
+                    WeChatDB(db_dir=db_dir, account=acct or None)
+                    if db_dir
+                    else WeChatDB(account=acct or None)
+                )
             except BaseException as exc:      # noqa: BLE001
                 box["err"] = exc
 
@@ -797,6 +971,17 @@ def main():
         log("  3) 保存后重新运行「启动微信桥接.bat」")
         log("  原始错误：%s" % e)
         return 2
+
+    # 建库后硬断言：指定了账号就必须真的是那个账号。
+    # wechatauto 在「密钥解不开当前号」时会把 account 换成另一个号（_try_other_accounts），
+    # 不拦的话就会变成「读小号、写大号」。宁可停下，也不带着错号跑。
+    if acct and db.account != acct:
+        log("")
+        log("✗ 账号被库自己换掉了：要的是 %s，实际打开的是 %s。" % (acct, db.account))
+        log("  多半是微信当前登录的是另一个号，取到的密钥解不开 %s 的库。" % acct)
+        log("  请确认微信现在登录的就是小号，再重启「启动微信桥接.bat」。")
+        log("  （这里直接停下，绝不会用 %s 继续跑。）" % db.account)
+        return 2
     _media_box = {"downloader": None}
 
     def _get_media():
@@ -823,11 +1008,16 @@ def main():
         return _media_box["downloader"]
 
     me = db.wxid
+    _self_nick = ""
     try:
         info = db.get_self_info() or {}
-        log("当前登录账号：", info.get("nick_name") or info.get("remark") or me)
+        _self_nick = str(info.get("nick_name") or info.get("remark") or "").strip()
+        log("当前登录账号：", _self_nick or me)
     except Exception:
         log("当前登录账号 wxid：", me)
+    log("账号目录：", db.account, "（网页/config 指定）" if acct else "（自动选：最近活跃）")
+    if len(acct_dirs) > 1:
+        log("（这台机器有 %d 个账号目录：%s）" % (len(acct_dirs), "、".join(acct_dirs)))
     log("数据库目录：", db.db_dir)
 
     sessions = {}
@@ -917,6 +1107,271 @@ def main():
     pending_lock = threading.Lock()
     AWAY = {"on": False}
     NOTIFIED = []
+
+    # ---------- 多账号：把「读」和「发」钉在同一个号上 ----------
+    # 微信 4.x 一个号一个进程，每个进程的主窗标题都叫「微信」。老逻辑按窗口面积挑，
+    # 双开时挑中的往往是窗口更大的大号：
+    #   读的是小号的库 → 收到「主人：你好」
+    #   发的是大号的窗口 → 搜索结果里点到同名会话，回复从大号发了出去
+    # 这里用「库里最近会话」反查窗口：哪个窗口的会话列表对得上这个账号，就钉哪个；
+    # 一个都对不上就不发（宁可哑着，也不能从别人的号把私聊发出去）。
+    ACCOUNT = {"hwnd": 0, "verified": False, "why": "", "label": ""}
+
+    def _compat_mod():
+        return sys.modules.get("uia_compat")
+
+    def _account_recent_names(limit=12):
+        """这个账号最近的会话名（用来和窗口里看得见的会话行做比对）。"""
+        want = []
+        try:
+            rows = db.get_sessions(limit=limit) or []
+        except Exception as e:                    # noqa: BLE001
+            log("账号窗口：读会话列表失败：", repr(e))
+            return want
+        for s in rows:
+            u = s.get("username") or ""
+            try:
+                nm = display_name(u)
+            except Exception:                     # noqa: BLE001
+                nm = ""
+            if nm and nm != u:
+                want.append(nm)
+        return want
+
+    def _probe_wechat_windows():
+        """[(hwnd, 控件, 可见会话行名...)]：纯只读，不点任何东西。
+
+        先对每个主窗热激活 mmui 树（只写 accessibility gate 字节，不置前、不点击），
+        否则刚启动时子控件还是空的，读不到会话行。
+        """
+        import win32gui
+        from wechatauto.uia_driver import WeChatUIA
+        probe = WeChatUIA()
+        out = []
+        try:
+            hwnds = list(probe._wechat_hwnds() or ())
+        except Exception:                         # noqa: BLE001
+            hwnds = []
+        for h in hwnds:
+            h = int(h)
+            try:
+                cls = win32gui.GetClassName(h) or ""
+            except Exception:                     # noqa: BLE001
+                cls = ""
+            # 托盘消息窗/工具窗也带 Qt 类名，只有真主窗是 QWindowIcon 或 mmui::MainWindow
+            if not ("QWindowIcon" in cls or "mmui::" in cls):
+                continue
+            try:
+                probe._hot_activate_accessibility(h)
+            except Exception:                     # noqa: BLE001
+                pass
+            c = None
+            rows = []
+            for _try in range(2):
+                try:
+                    c = probe._anchor(h)
+                except Exception:                 # noqa: BLE001
+                    c = None
+                rows = []
+                if c is not None and hasattr(probe, "_session_rows_of"):
+                    try:
+                        rows = [nm for nm, _ctl in probe._session_rows_of(c)]
+                    except Exception:             # noqa: BLE001
+                        rows = []
+                if rows:
+                    break
+                time.sleep(0.4)
+            out.append((h, c, rows))
+        return probe, out
+
+    def bind_gui_window(g):
+        """把 WeChatGUI 的坐标/OCR 目标也对齐到锁定的账号窗口。"""
+        if g is None:
+            return g
+        if ACCOUNT.get("hwnd"):
+            try:
+                g.use_window(ACCOUNT["hwnd"])
+            except Exception:                     # noqa: BLE001
+                pass
+        return g
+
+    def rebind_uia(hwnd, engine=None):
+        """把 UIA 引擎 + uia_compat 的钉窗 + GUI 目标全部对齐到 hwnd。"""
+        hwnd = int(hwnd or 0)
+        if not hwnd:
+            return False
+        m = _compat_mod()
+        if m is not None:
+            try:
+                m.pin_window(hwnd)
+            except Exception:                     # noqa: BLE001
+                pass
+        targets = []
+        if engine is not None:
+            targets.append(engine)
+        try:
+            if UIA_CACHE.get("u") is not None:
+                targets.append(UIA_CACHE["u"])
+        except Exception:                         # noqa: BLE001
+            pass
+        for u in targets:
+            try:
+                u._pinned_hwnd = hwnd
+                u._win = u._anchor(hwnd) or u._win
+            except Exception:                     # noqa: BLE001
+                pass
+        try:
+            if gui is not None:
+                gui.use_window(hwnd)
+        except Exception:                         # noqa: BLE001
+            pass
+        return True
+
+    def pick_account_window(force=False, quiet=False):
+        """确认哪个微信窗口是 config/网页指定的账号，并钉死它。"""
+        if ACCOUNT["verified"] and not force:
+            return True
+        # 手动钉窗优先（config.json → wechat.windowHwnd）
+        if WINDOW_HWND:
+            try:
+                import win32gui
+                if win32gui.IsWindow(WINDOW_HWND):
+                    ACCOUNT.update(hwnd=WINDOW_HWND, verified=True,
+                                   label="hwnd=%s（配置）" % WINDOW_HWND,
+                                   why="config.wechat.windowHwnd")
+                    m = _compat_mod()
+                    if m is not None:
+                        try:
+                            m.pin_window(WINDOW_HWND)
+                        except Exception:         # noqa: BLE001
+                            pass
+                    if not quiet:
+                        log("账号窗口：按 config 的 wechat.windowHwnd=%s 直接锁定" % WINDOW_HWND)
+                    return True
+            except Exception:                     # noqa: BLE001
+                pass
+        probe, cands = _probe_wechat_windows()
+        if not cands:
+            ACCOUNT.update(verified=False, hwnd=0, why="没扫到微信主窗")
+            return False
+        if len(cands) == 1:
+            h, _c, _rows = cands[0]
+            ACCOUNT.update(hwnd=h, verified=True, label="hwnd=%s" % h,
+                           why="本机只登了一个号")
+            m = _compat_mod()
+            if m is not None:
+                try:
+                    m.pin_window(h)
+                except Exception:                 # noqa: BLE001
+                    pass
+            if not quiet:
+                log("账号窗口：只有一个微信主窗（hwnd=%s），直接用它" % h)
+            return True
+
+        want = _account_recent_names()
+        log("账号窗口：本机有 %d 个微信主窗，按账号 %s 的最近会话认窗口：%s"
+            % (len(cands), db.account, " / ".join(want[:6]) or "（空）"))
+        for h, _c, rows in cands:
+            log("   hwnd=%s 可见 %d 行：%s"
+                % (h, len(rows), " | ".join(rows[:6]) or "（读不到会话列表）"))
+
+        score_fn = getattr(probe, "_row_score", None)
+        scored = []
+        for h, c, rows in cands:
+            if not rows:
+                continue
+            hits = []
+            for i, nm in enumerate(want):
+                for r in rows:
+                    if score_fn is not None:
+                        try:
+                            if score_fn(r, [nm]) == 0:
+                                hits.append(i)
+                                break
+                        except Exception:         # noqa: BLE001
+                            continue
+                    elif r.strip() == str(nm).strip():
+                        hits.append(i)
+                        break
+            scored.append((bool(hits and hits[0] == 0), len(hits), h, c, rows))
+        if not scored:
+            ACCOUNT.update(verified=False, hwnd=0,
+                           why="每个微信窗口都读不到会话列表")
+            return False
+        scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
+        newest_ok, nhit, h, _c, rows = scored[0]
+        if not newest_ok:
+            best_hits = scored[0][1]
+            tied = [x for x in scored if x[1] == best_hits]
+            if best_hits < 2 or len(tied) > 1:
+                ACCOUNT.update(verified=False, hwnd=0,
+                               why="没有一个窗口对得上账号 %s 的最近会话" % db.account)
+                return False
+
+        ACCOUNT.update(hwnd=h, verified=True, label="hwnd=%s" % h,
+                       why="命中最近会话 %d 条" % nhit)
+        m = _compat_mod()
+        if m is not None:
+            try:
+                m.pin_window(h)
+            except Exception as e:                # noqa: BLE001
+                log("账号窗口：pin_window 失败：", repr(e))
+        log("账号窗口：锁定 hwnd=%s（%d 个窗口里对上 %d 条最近会话%s）"
+            % (h, len(scored), nhit, "，最新一条也在" if newest_ok else ""))
+        return True
+
+    def ensure_account_window(engine=None):
+        """发送前确认「锁定的微信窗口」还活着；微信重启/换号后自动重认。
+
+        不这么做的话：微信重开一次，hwnd 变了，而 ACCOUNT["verified"] 还是 True，
+        于是每次发送都被「引擎窗口和锁定窗口不一致」拦下、连失败两次后会话被标死。
+        """
+        hw = int(ACCOUNT.get("hwnd") or 0)
+        alive = False
+        if hw:
+            try:
+                import win32gui
+                alive = bool(win32gui.IsWindow(hw))
+            except Exception:                     # noqa: BLE001
+                alive = False
+        if ACCOUNT.get("verified") and alive:
+            # uia_compat 那边发现旧 hwnd 死了会把钉窗清掉，这里补回去，
+            # 否则下一次找主窗又会按面积挑，可能挑到别的号。
+            m = _compat_mod()
+            if m is not None:
+                try:
+                    if int(m.pinned_window() or 0) != hw:
+                        rebind_uia(hw, engine)
+                        log("账号窗口：UIA 钉窗和锁定窗口不一致，已钉回 hwnd=%s" % hw)
+                except Exception:                 # noqa: BLE001
+                    pass
+            return True
+        if hw and not alive:
+            log("⚠️ 锁定的微信窗口 hwnd=%s 已经不在了（微信重启/换号），重新认账号…" % hw)
+            ACCOUNT.update(verified=False, why="锁定窗口已失效")
+        try:
+            ok = pick_account_window(force=True, quiet=True)
+        except Exception as e:                    # noqa: BLE001
+            log("重新认账号失败：", repr(e))
+            return False
+        if not ok:
+            return False
+        rebind_uia(ACCOUNT.get("hwnd"), engine)
+        log("账号窗口已重新锁定 hwnd=%s（%s）"
+            % (ACCOUNT.get("hwnd"), ACCOUNT.get("why") or ""))
+        return True
+
+    def account_send_allowed(where, engine=None):
+        """统一的发送闸：认不出目标账号窗口就不发。"""
+        if ensure_account_window(engine):
+            return True
+        if ACCOUNT_GUARD:
+            ACCOUNT["blockedAt"] = time.time()
+            log("⚠️ 不发送（%s）：没能确认哪个微信窗口是账号 %s（%s）；"
+                "现在可能同时登着别的号，乱发会从别人的号发出去。"
+                % (where, db.account, ACCOUNT["why"] or "未知"))
+            return False
+        return True
 
     def away_active():
         """主人在微信里发了「我去玩了」→ 写 data/away.json，这里据此静默排队。"""
@@ -1088,7 +1543,8 @@ def main():
         """
         try:
             import win32gui
-            h = find_weixin_hwnd()
+            # 多账号：钉住之后只认钉住的那个窗口，别拿「另一个号的主窗」当活着的证据
+            h = int(ACCOUNT.get("hwnd") or 0) or find_weixin_hwnd()
             return bool(h and win32gui.IsWindow(h))
         except Exception:
             return False
@@ -1118,7 +1574,7 @@ def main():
         甚至前台是全屏程序时，UIA 都能正常发送（见 docs/接入微信.md 的实测数据）。
         所以它只作为「后台发送失败后」的第二次尝试。
         """
-        hwnd = find_weixin_hwnd()
+        hwnd = int(ACCOUNT.get("hwnd") or 0) or find_weixin_hwnd()
         was_topmost = False
         touched = False
         try:
@@ -1252,7 +1708,7 @@ def main():
         try:
             import win32api
             import win32con
-            hwnd = find_weixin_hwnd()
+            hwnd = int(ACCOUNT.get("hwnd") or 0) or find_weixin_hwnd()
             if hwnd:
                 force_foreground(hwnd)
             time.sleep(0.10)
@@ -1276,7 +1732,7 @@ def main():
         snap = {"hwnd": 0, "iconic": False, "fg": 0}
         try:
             import win32gui
-            snap["hwnd"] = find_weixin_hwnd() or 0
+            snap["hwnd"] = int(ACCOUNT.get("hwnd") or 0) or find_weixin_hwnd() or 0
             if snap["hwnd"]:
                 snap["iconic"] = bool(win32gui.IsIconic(snap["hwnd"]))
             snap["fg"] = win32gui.GetForegroundWindow() or 0
@@ -1363,6 +1819,9 @@ def main():
 
     def uia_send(text, who, username=""):
         """优先用 UIA 发送：不依赖 OCR 找发送按钮，成功后返回 True。"""
+        # 账号闸：先确认「要打字的这个窗口」就是配置指定的那个号，窗口换了就重认
+        if not account_send_allowed("UIA"):
+            return False
         if not wechat_window_alive():
             # 主窗没了，缓存引擎里的句柄已失效，碰了会 0xC0000005；直接走键盘/OCR 兜底
             with gui_lock:
@@ -1466,6 +1925,10 @@ def main():
         走的是微信自己的搜索框，不碰 accessibility。
         代价：会抢前台、慢一些，所以只在 UIA 真的发不出去时用。
         """
+        # 账号闸：键盘通道是在「当前前台窗口」里按 Ctrl+F 搜会话的，
+        # 不先钉住目标号的话，搜索会落在另一个账号的微信窗口里。
+        if not account_send_allowed("键盘通道"):
+            return False
         try:
             import ctypes
             import win32api          # noqa: F401
@@ -1477,7 +1940,7 @@ def main():
             log("键盘通道不可用（缺少 win32 模块）：", repr(e))
             return False
 
-        hwnd = find_weixin_hwnd()
+        hwnd = int(ACCOUNT.get("hwnd") or 0) or find_weixin_hwnd()
         if not hwnd:
             log("键盘通道：找不到微信主窗")
             return False
@@ -1606,6 +2069,9 @@ def main():
                 pending_replies[chat_username or chat_display_name] = (text, chat_display_name, chat_username, time.time())
             log("你在游戏/全屏程序里，回复先排队，等你退出再发：", chat_display_name)
             return True
+        # 账号闸：认不出「哪个窗口是小号」就不发（放在排队判断之后，免得游戏里直接丢消息）
+        if not account_send_allowed("发送"):
+            return False
         with send_lock:
             if not force and (AWAY["on"] or away_active() or game_running() or foreground_is_fullscreen()):
                 with pending_lock:
@@ -1616,6 +2082,8 @@ def main():
                 if gui is None:
                     log("初始化微信窗口驱动…（会抢一下焦点，约 5~10 秒）")
                     gui = WeChatGUI()
+            # 多账号：GUI 的坐标/OCR 目标也要对齐到钉住的账号窗口
+            bind_gui_window(gui)
             # ⓪ 引用回复（引用对方那条消息）——比普通发送慢，失败自动回退
             if quote_text and QUOTE_REPLY:
                 try:
@@ -1674,6 +2142,7 @@ def main():
                             gui = WeChatGUI()
                         except Exception as e:
                             log("重建窗口驱动失败：", repr(e))
+                    bind_gui_window(gui)
                     _box = {}
 
                     def _ocr_send():
@@ -1700,6 +2169,11 @@ def main():
                 except Exception as e:
                     log("兜底发送异常：%r" % e)
             if chat_username:
+                # 账号窗口认不出来导致的失败，不算「这个会话失效」——
+                # 否则双开时认不出号会把这个群/好友永久标死，之后就再也不回了。
+                if (time.time() - float(ACCOUNT.get("blockedAt") or 0)) < 30:
+                    log("账号窗口没确认，这条不算会话失效，先不发：", chat_display_name)
+                    return False
                 fail_streak[chat_username] = fail_streak.get(chat_username, 0) + 1
                 if fail_streak[chat_username] >= 2:
                     dead_chats.add(chat_username)
@@ -1719,11 +2193,15 @@ def main():
                 pending_replies[chat_username or chat_display_name] = (text, chat_display_name, chat_username, time.time())
             log("你在游戏/全屏程序里，@ 回复先排队：", chat_display_name)
             return True
+        # 账号闸：@ 人要点开成员列表，窗口不对就会在别的号里 @ 别人
+        if not account_send_allowed("@ 成员"):
+            return False
         with send_lock:
             with gui_lock:
                 if gui is None:
                     log("初始化微信窗口驱动…（会抢一下焦点，约 5~10 秒）")
                     gui = WeChatGUI()
+            bind_gui_window(gui)
             try:
                 ok = bool(with_window_on_top(lambda: gui.at_member(member, text, who=chat_display_name, verify=False)))
                 if ok:
@@ -2406,7 +2884,7 @@ def main():
         except Exception as e:
             log("UIA 诊断不可用：", repr(e))
             return
-        hwnd = find_weixin_hwnd()
+        hwnd = int(ACCOUNT.get("hwnd") or 0) or find_weixin_hwnd()
         if not hwnd:
             log("UIA 诊断：找不到标题为「微信」的主窗（微信缩在托盘？先点开它）")
             return
@@ -2466,6 +2944,19 @@ def main():
                 except Exception:                # noqa: BLE001
                     wcls, wname = None, None
                 log("发送通道预热完成（UIA 可用，主窗类名=%r 名称=%r）" % (wcls, wname))
+                # 认账号窗口要放在 UIA 起来之后：ensure_window 会热激活 gate 字节，
+                # 窗口树物化了才读得到会话行，才分得清哪个窗口是哪个号。
+                try:
+                    if pick_account_window(quiet=True):
+                        if ACCOUNT.get("hwnd"):
+                            rebind_uia(ACCOUNT["hwnd"], u)
+                        log("账号窗口已确认：hwnd=%s（%s）"
+                            % (ACCOUNT.get("hwnd"), ACCOUNT.get("why") or ""))
+                    else:
+                        log("⚠️ 账号窗口没确认（%s）：发送会先被拦下来，直到能认出来"
+                            % (ACCOUNT.get("why") or "未知"))
+                except Exception as e:            # noqa: BLE001
+                    log("账号窗口识别失败：", repr(e))
         except Exception as e:
             log("发送通道预热失败：", repr(e))
 
@@ -2594,6 +3085,13 @@ def main():
                     # 收消息线程还活着吗：死了就是「能心跳、但一条消息都不进来」
                     "listener": listener_alive(),
                     "ffmpeg": bool(_shutil.which("ffmpeg")),
+                    # 多账号：网页要显示「桥接现在到底在用哪个号、窗口确认了没有」
+                    "account": db.account,
+                    "account_wxid": db.wxid,
+                    "account_nick": _self_nick,
+                    "account_ok": bool(ACCOUNT.get("verified")),
+                    "account_why": str(ACCOUNT.get("why") or ""),
+                    "account_guard": bool(ACCOUNT_GUARD),
                 }
                 headers = {"x-whale-bridge": "1"}
                 if token:

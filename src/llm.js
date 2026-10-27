@@ -6,6 +6,7 @@
  */
 const http = require('node:http');
 const https = require('node:https');
+const crypto = require('node:crypto');
 const { URL } = require('node:url');
 const { resolveRuntime, maskKey } = require('./config');
 
@@ -104,6 +105,9 @@ class DeepSeekClient {
   constructor({ config, logger }) {
     this.config = config;
     this.logger = logger;
+    // OpenCode Go 要求客户端自报身份 + 一个稳定的会话号（用于路由和 prompt 缓存）。
+    // 同一进程内保持不变，等于「这一个对话」的 session。
+    this.sessionId = 'whale-girl-' + crypto.randomBytes(12).toString('hex');
     this.reload();
   }
 
@@ -228,6 +232,13 @@ class DeepSeekClient {
     };
     // 本地模型（Ollama / LM Studio 等）通常不需要 Key，别带空的 Authorization
     if (this.apiKey) headers.Authorization = `Bearer ${this.apiKey}`;
+    // OpenCode Go（opencode.ai）拒收不带会话头的请求：
+    //   HTTP 400 "Request is missing x-opencode-session and cannot be routed efficiently"
+    // 文档也要求客户端用自家 User-Agent 而不是通用 SDK 名。
+    if (/(^|\.)opencode\.ai$/i.test(url.hostname)) {
+      headers['x-opencode-session'] = this.sessionId;
+      headers['User-Agent'] = 'whale-girl/3.54';
+    }
     return new Promise((resolve, reject) => {
       const req = mod.request(
         {
