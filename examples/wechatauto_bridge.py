@@ -98,6 +98,23 @@ except Exception:
 START_TS = time.time()
 
 
+# 同一类错误 10 分钟只记一行：没配看图 Key 时，每张图刷一条日志会淹掉真正的问题
+_THROTTLE_LOG = {}
+
+
+def log_throttled(key, *args, ttl=600):
+    now = time.time()
+    last = _THROTTLE_LOG.get(key) or 0
+    if now - last < ttl:
+        _THROTTLE_LOG["__skip_" + key] = _THROTTLE_LOG.get("__skip_" + key, 0) + 1
+        return
+    skipped = _THROTTLE_LOG.pop("__skip_" + key, 0)
+    if skipped:
+        log(f"（上面这类日志还有 {skipped} 条被折叠了）")
+    _THROTTLE_LOG[key] = now
+    log(*args)
+
+
 def reload_config(path=None):
     """把 config.json 重新读一遍，覆盖上面这些「启动时定型」的开关。
 
@@ -1711,14 +1728,14 @@ def main():
                 if piece:
                     texts.append(piece)
                 if not data.get("ok", True):
-                    log("第 %d 段识别失败：%s" % (idx + 1, data.get("error")))
+                    log_throttled("img-fail:" + str(data.get("error"))[:40], "第 %d 段识别失败：%s" % (idx + 1, data.get("error")))
             text = "\n".join(texts).strip()
             if len(text) > 1200:
                 text = text[:1200] + "…"
             log("图片识别：", text[:80])
             return text
         except Exception as e:
-            log("图片识别失败：", repr(e))
+            log_throttled("img-exc:" + type(e).__name__, "图片识别失败：", repr(e))
             return ""
 
     def transcribe_voice(msg):
@@ -1766,7 +1783,7 @@ def main():
             log("语音识别（%.1fs）：%s" % (seconds, text[:60] or "（空）"))
             return text
         except Exception as e:
-            log("语音识别失败：", repr(e))
+            log_throttled("voice-fail:" + type(e).__name__, "语音识别失败：", repr(e))
             return ""
 
 
