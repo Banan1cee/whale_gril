@@ -64,17 +64,6 @@ if not os.path.exists(_cfg_path):
             log_call = True
         except Exception:
             pass
-def _as_bool(value, default=False):
-    """配置里的布尔：兼容写成字符串 "false" 的老配置（bool("false") 是 True）。"""
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return value != 0
-    return str(value).strip().lower() in ("1", "true", "yes", "on", "开")
-
-
 try:
     with open(_cfg_path, "r", encoding="utf-8-sig") as _f:
         _cfg = json.load(_f)
@@ -101,20 +90,6 @@ try:
     WINDOW_HWND = int(_wechat.get("windowHwnd") or 0)
     # 网页「设置」里选的账号（目录名 / wxid / 昵称都行）；留空 = 自动选「最近活跃」
     ACCOUNT_WANTED = str(_wechat.get("account") or "").strip()
-    # 表情包：data/stickers 里的 gif/png，需要时挑一张发出去（图片消息，gif 会动）
-    _st = _cfg.get("stickers") or {}
-    STICKER_ENABLED = _as_bool(_st.get("enabled", True), True)
-    STICKER_DIR = str(_st.get("dir") or "data/stickers")
-    STICKER_EMOTION_CHANCES = {"happy": 0.12, "angry": 0.2, "cute": 0.12, "meh": 0.08, "bored": 0.06}
-    try:
-        for _k, _v in ((_st.get("emotions") or {}).items()):
-            STICKER_EMOTION_CHANCES[str(_k)] = float(_v)
-    except Exception:
-        pass
-    STICKER_GENERIC_CHANCE = float(_st.get("genericChance", 0.08) or 0)
-    STICKER_COOLDOWN_MIN = float(_st.get("cooldownMinutes", 10) or 0)
-    STICKER_ONLY_GROUP = _as_bool(_st.get("onlyGroup", True), True)
-    STICKER_ALLOW_FOREGROUND = _as_bool(_st.get("allowForeground", False), False)
     LOW_BATTERY_PCT = float(_wechat.get("lowBatteryPercent", 5))
     GOODNIGHT_TEXT = str(_wechat.get("goodnightText", "晚安，电量快没了，我先睡啦，明天见～"))
     _share = _cfg.get("share") or {}
@@ -133,6 +108,20 @@ try:
     MASTER_WXID = (((_cfg.get("persona") or {}).get("master") or {}).get("wxids") or [''])[0]
 except Exception:
     pass
+
+def _as_bool(value, default=False):
+    """配置里的布尔：兼容写成字符串 "false" 的老配置。
+
+    以前 bool("false") 是 True —— 于是 care.allowGroups 明明写着 "false"，
+    桥接却当成「允许进群」。
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value).strip().lower() in ("1", "true", "yes", "on", "开")
 
 START_TS = time.time()
 
@@ -177,8 +166,6 @@ def reload_config(path=None):
     global GAME_TOKENS, AWAY_NOTICE, RETURN_NOTICE, QUEUED_MAX_AGE, QUEUED_MAX_CHATS
     global QUOTE_REPLY, KEYBOARD_FALLBACK, BACKGROUND_SEND, LOW_BATTERY_PCT, GOODNIGHT_TEXT
     global ACCOUNT_GUARD, WINDOW_HWND
-    global STICKER_ENABLED, STICKER_DIR, STICKER_EMOTION_CHANCES
-    global STICKER_GENERIC_CHANCE, STICKER_COOLDOWN_MIN, STICKER_ONLY_GROUP, STICKER_ALLOW_FOREGROUND
     global SHARE_ENABLED, SHARE_EVERY, CARE_ENABLED, CARE_QUIET_MIN, DIGEST_MINUTES
     global STALE_AFTER, SYSTEM_SENDER_NAMES, BASE_SYSTEM_SENDERS, MASTER_WXID
     global VOICE_ENABLED, VOICE_BASE_URL, VOICE_MODEL, VOICE_API_KEY, VOICE_TIMEOUT, VOICE_MAX_SECONDS
@@ -207,18 +194,6 @@ def reload_config(path=None):
     QUOTE_REPLY = bool(w.get("quoteReply", False))
     KEYBOARD_FALLBACK = bool(w.get("keyboardFallback", True))
     BACKGROUND_SEND = bool(w.get("backgroundSend", True))
-    _stc = cfg.get("stickers") or {}
-    STICKER_ENABLED = _as_bool(_stc.get("enabled", True), True)
-    STICKER_DIR = str(_stc.get("dir") or STICKER_DIR)
-    try:
-        for _k, _v in ((_stc.get("emotions") or {}).items()):
-            STICKER_EMOTION_CHANCES[str(_k)] = float(_v)
-        STICKER_GENERIC_CHANCE = float(_stc.get("genericChance", STICKER_GENERIC_CHANCE))
-        STICKER_COOLDOWN_MIN = float(_stc.get("cooldownMinutes", STICKER_COOLDOWN_MIN))
-    except Exception:
-        pass
-    STICKER_ONLY_GROUP = _as_bool(_stc.get("onlyGroup", True), True)
-    STICKER_ALLOW_FOREGROUND = _as_bool(_stc.get("allowForeground", False), False)
     ACCOUNT_GUARD = bool(w.get("accountGuard", True))
     try:
         WINDOW_HWND = int(w.get("windowHwnd") or 0)
@@ -2221,176 +2196,6 @@ def main():
             log("发送最终失败，请把微信窗口保持在桌面、别最小化；内容：", text[:30])
             return False
 
-    STICKER_STATE_FILE = os.path.join(ROOT, "data", "stickers-state.json")
-    STICKER_EXT = (".gif", ".png", ".jpg", ".jpeg", ".webp")
-    STICKER_EMOTION_ALIASES = {
-        "开心": "happy", "高兴": "happy", "得意": "happy", "惊讶": "happy",
-        "炸毛": "angry", "生气": "angry", "愤怒": "angry",
-        "撒娇": "cute", "委屈": "cute", "害羞": "cute",
-        "嫌弃": "meh", "无语": "meh", "白眼": "meh",
-        "敷衍": "bored", "困": "bored", "无聊": "bored",
-    }
-
-
-    def _norm_emotion(name):
-        k = str(name or "").strip()
-        if k in STICKER_EMOTION_CHANCES:
-            return k
-        return STICKER_EMOTION_ALIASES.get(k, "")
-
-
-    def _ensure_sticker_dirs():
-        """启动时把 5 个情绪文件夹建好，用户丢 gif 时不用自己新建目录。"""
-        try:
-            root = _sticker_dir_root()
-            for name in list(STICKER_KEY2CN.values()) + ["通用"]:
-                os.makedirs(os.path.join(root, name), exist_ok=True)
-        except Exception:
-            pass
-
-    def _sticker_dir_root():
-        return STICKER_DIR if os.path.isabs(STICKER_DIR) else os.path.join(ROOT, STICKER_DIR)
-
-
-    def _sticker_state():
-        try:
-            with open(STICKER_STATE_FILE, "r", encoding="utf-8") as f:
-                return json.load(f) or {}
-        except Exception:
-            return {}
-
-    def _save_sticker_state(st):
-        try:
-            os.makedirs(os.path.dirname(STICKER_STATE_FILE), exist_ok=True)
-            with open(STICKER_STATE_FILE, "w", encoding="utf-8") as f:
-                json.dump(st, f, ensure_ascii=False)
-        except Exception:
-            pass
-
-    STICKER_KEY2CN = {"happy": "开心", "angry": "炸毛", "cute": "撒娇", "meh": "嫌弃", "bored": "敷衍"}
-
-    def _sticker_files(emotion=""):
-        """列出某情绪文件夹里的图；没图就退到「通用」。
-
-        文件夹可以用中文（开心/炸毛…）也可以用英文键（happy/angry…），两个都认。
-        """
-        root = _sticker_dir_root()
-        out = []
-        dirs = []
-        if emotion:
-            dirs.append(os.path.join(root, emotion))
-            cn = STICKER_KEY2CN.get(emotion)
-            if cn:
-                dirs.append(os.path.join(root, cn))
-        dirs.append(os.path.join(root, "通用"))
-        for d in dirs:
-            try:
-                for name in os.listdir(d):
-                    if name.lower().endswith(STICKER_EXT):
-                        p = os.path.join(d, name)
-                        if os.path.isfile(p):
-                            out.append(p)
-            except OSError:
-                continue
-            if out:
-                break
-        return sorted(out)
-
-
-    def _sticker_any():
-        """任意位置有没有图（实现「文件夹空 = 自动关闭」）。"""
-        root = _sticker_dir_root()
-        for _base, _dirs, files in os.walk(root):
-            for name in files:
-                if name.lower().endswith(STICKER_EXT):
-                    return True
-        return False
-
-
-    def _detect_emotion(text, hour=None):
-        """当下情绪（5 类），纯规则：快、可预期。
-
-        happy 开心 / angry 炸毛 / cute 撒娇（含委屈） / meh 嫌弃 / bored 敷衍
-        """
-        t = str(text or "")
-        h = time.localtime().tm_hour if hour is None else hour
-        if not t:
-            return "happy"
-        if re.search(r"(傻逼|蠢货|废物|垃圾|滚|你妈|妈的|弱智|脑残|智障|去死|闭嘴|别烦|走开)", t):
-            return "angry"
-        if re.search(r"(胖|肥|笨|丑|菜鸡|菜鸟)", t):
-            return "angry"
-        if re.search(r"(乖|宝贝|抱抱|摸摸|喜欢你|想你|对不起|抱歉|好啦|别气)", t):
-            return "cute"
-        if re.search(r"(可爱|厉害|好棒|牛逼|牛啊|爱了|绝了)", t):
-            return "happy"
-        if re.search(r"(？{2,}|什么鬼|离谱|无语|服了|呵呵|行吧|就这)", t):
-            return "meh"
-        if h >= 23 or h < 6:
-            return "bored"
-        return "happy"
-
-
-    def _sticker_chance(emotion):
-        return float(STICKER_EMOTION_CHANCES.get(emotion or "", STICKER_GENERIC_CHANCE) or 0)
-
-
-    def _pick_sticker(emotion=""):
-        """按情绪挑一张：优先最近没发过的。"""
-        files = _sticker_files(emotion)
-        if not files:
-            return ""
-        st = _sticker_state()
-        recent = [str(x) for x in (st.get("recent") or [])][-10:]
-        fresh = [p for p in files if os.path.basename(p) not in recent]
-        pool = fresh or files
-        return pool[random.randrange(len(pool))]
-
-
-    def send_sticker(chat_display_name, chat_username="", force=False, emotion="", note=""):
-        """发一张表情包（实测微信按「动画表情」发出）。
-
-        规则：开关 → 文件夹空了自动跳过 → 冷却 → 挑图 → 窗口可见性 → 发。
-        """
-        if not force:
-            if not STICKER_ENABLED:
-                return False
-            if not _sticker_any():
-                log_throttled("sticker-empty", "[表情] data/stickers 还是空的，自动当关闭（放几个 gif 进去就生效）")
-                return False
-            st = _sticker_state()
-            last = float(st.get("lastTs") or 0)
-            if STICKER_COOLDOWN_MIN > 0 and (time.time() - last) < STICKER_COOLDOWN_MIN * 60:
-                return False
-        path = _pick_sticker(emotion)
-        if not path:
-            log_throttled("sticker-miss-" + str(emotion or "x"), "[表情] 这类情绪还没有 gif：%s" % (emotion or "通用"))
-            return False
-        # 发图走「剪贴板粘贴」，必须微信真的在前台，否则会粘到别的窗口里
-        # （实测出现过「焦点窗口不是微信 → 误投递」，消息根本没进微信）
-        try:
-            if STICKER_ALLOW_FOREGROUND:
-                if not gui.bring_to_front(keep_topmost=False):
-                    log_throttled("sticker-nofocus", "[表情] 抢不到前台，这次不发图")
-                    return False
-            else:
-                if not gui.ensure_visible() or not getattr(gui, "_last_visible_ok", True):
-                    log_throttled("sticker-hidden", "[表情] 微信不在前台/不可见，这次不发图")
-                    return False
-        except Exception:
-            return False
-        try:
-            r = gui.send_image(path, chat_display_name)
-            ok = bool(getattr(r, "ok", True))
-            log("发表情包 →", chat_display_name, "[" + (emotion or "通用") + "]", os.path.basename(path), note)
-            st = _sticker_state()
-            recent = [str(x) for x in (st.get("recent") or [])]
-            recent.append(os.path.basename(path))
-            _save_sticker_state({"lastTs": time.time(), "recent": recent[-10:]})
-            return ok
-        except Exception as e:
-            log("发表情包异常：", repr(e))
-        return False
     def send_at(member, text, chat_display_name, chat_username=""):
         """在群里真 @ 某个成员（UI 选人），失败返回 False 让调用方退回普通发送。"""
         nonlocal gui
@@ -2755,13 +2560,6 @@ def main():
             if CONN_STATE.get("ok") is not True:
                 CONN_STATE["ok"] = True
                 log("已连上鲸鲸服务：", bot_url.rsplit("/webhook", 1)[0])
-            # 主人/群友说「发个表情」→ 直接发一张，不必再生成文字
-            if STICKER_ENABLED and re.search(r"(发|来|甩|扔)(个|一个|张)?\s*(表情|表情包|动图)", str(content or "")):
-                if (not STICKER_ONLY_GROUP) or is_group:
-                    emo = _detect_emotion(content)
-                    if send_sticker(target, username, force=True, emotion=emo, note="（被点名要表情）"):
-                        return
-
             if data.get("action") != "reply" or not data.get("reply"):
                 if is_group and addressed:
                     log("鲸鲸没接话：", nickname, "→", content[:20], "|", data.get("reason"))
@@ -2782,16 +2580,6 @@ def main():
                 log("这一分钟回太多了，先停一下：", target)
                 return
             log("回复", ("群" if is_group else "私聊"), target, "→", nickname, "：", (bubbles[0] or "")[:40])
-            # STICKER_SEND_HOOK：回完文字后，按概率补一张表情包（互怼时更容易发）
-            sticker_wanted = False
-            sticker_emotion = ""
-            if STICKER_ENABLED and (is_group or not STICKER_ONLY_GROUP):
-                try:
-                    sticker_emotion = _detect_emotion(content)
-                    p = _sticker_chance(sticker_emotion)
-                    sticker_wanted = random.random() < max(0.0, min(1.0, p))
-                except Exception:
-                    sticker_wanted = False
 
             first = True
             for line in bubbles:
@@ -2814,16 +2602,9 @@ def main():
                 send_text(line, target, username, quote_text=(content if first and QUOTE_REPLY else None))
                 first = False
                 time.sleep(0.6)
-            # 文字发完再补表情：失败不影响已经发出去的文字
-            if sticker_wanted:
-                try:
-                    send_sticker(target, username, emotion=sticker_emotion)
-                except Exception as _se:
-                    log("发表情包跳过：", repr(_se))
         except Exception as e:
             log("处理消息异常：", repr(e))
 
-    _ensure_sticker_dirs()
     wait_for_server(bot_url, timeout=30)
     log("开始监听新消息…（Ctrl+C 退出）")
     executor = ThreadPoolExecutor(max_workers=1)
