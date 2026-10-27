@@ -199,3 +199,37 @@ test('引用回复默认关闭（开着的话每条要多走一遍 UI，回复�
   const example = JSON.parse(fs.readFileSync(path.join(root, 'config.example.json'), 'utf8').replace(/^\uFEFF/, ''));
   assert.equal(example.wechat.quoteReply, false, 'config.example 里也应该是 false');
 });
+
+test('桥接启动失败要区分「缺 VC++ 运行库」和「缺 pip 包」', () => {
+  const bridge = fs.readFileSync(path.join(root, 'examples', 'wechatauto_bridge.py'), 'utf8');
+  assert.match(bridge, /_dll_issue/, '要有 DLL 判定');
+  assert.match(bridge, /vc_redist/, '缺 DLL 时要引导装 VC++ 运行库');
+  assert.match(bridge, /Windows Server 默认不装 MFC/, '要点明 Server 的情况');
+});
+
+test('打开微信数据库要有超时，不能一直卡着不监听', () => {
+  const bridge = fs.readFileSync(path.join(root, 'examples', 'wechatauto_bridge.py'), 'utf8');
+  assert.match(bridge, /_open_db_with_timeout/, 'DB 初始化要包超时');
+  assert.match(bridge, /卡住超过 90 秒/, '超时要明确告诉用户');
+});
+
+test('桥接起来后写就绪文件（用来判断「起来了但没监听」）', () => {
+  const bridge = fs.readFileSync(path.join(root, 'examples', 'wechatauto_bridge.py'), 'utf8');
+  assert.match(bridge, /bridge-ready\.json/);
+});
+
+test('守护循环有重启上限，不会无限 3 秒重启刷屏', () => {
+  const loop = fs.readFileSync(path.join(root, 'scripts', 'bridge_loop.bat'), 'utf8');
+  assert.match(loop, /FAILS/);
+  assert.match(loop, /GEQ 4/, '连续 4 次失败就停下来');
+  assert.match(loop, /bridge-ready\.json/, '每次启动前清掉就绪标记');
+});
+
+test('发行包自带 ffmpeg（微信 4.x 图片是 wxHEVC，没它看不了图）', () => {
+  const probe = path.join(root, 'runtime', 'ffmpeg', 'bin', 'ffmpeg.exe');
+  if (!fs.existsSync(probe)) {
+    // 源码树没有 runtime，跳过（发行包才带）
+    return;
+  }
+  assert.ok(fs.statSync(probe).size > 10 * 1024 * 1024, 'ffmpeg.exe 应该是完整二进制');
+});

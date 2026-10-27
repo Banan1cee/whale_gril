@@ -569,7 +569,8 @@ def ensure_ffmpeg_env():
         exe = os.path.join(d, "ffmpeg.exe")
         if os.path.isfile(exe):
             os.environ["PATH"] = d + os.pathsep + os.environ.get("PATH", "")
-            log("找到 ffmpeg：", exe, "（微信图片是 wxgf/HEVC，靠它转 jpg）")
+            _bundled = os.path.join(ROOT, "runtime", "ffmpeg", "bin")
+            log("找到 ffmpeg：", exe, "（包里自带，微信图片是 wxgf/HEVC，靠它转 jpg）" if exe.lower().startswith(_bundled.lower()) else "（微信图片是 wxgf/HEVC，靠它转 jpg）")
             return True
     log("[!] 没找到 ffmpeg：微信 4.x 的图片多是 wxgf/HEVC，没有它就看不了图。")
     log("    装一个（解压到 C:\\ffmpeg 即可）或把 ffmpeg.exe 放进 runtime\\ffmpeg\\bin")
@@ -666,7 +667,26 @@ def main():
     except Exception as e:
         boot("导入失败: %r" % (e,))
         log("缺少依赖或导入失败：", e)
-        log("请先运行：\"%LOCALAPPDATA%\\Programs\\Python\\Python312\\python.exe\" -m pip install wechatauto-replica requests")
+        _msg = "%s %s" % (type(e).__name__, e)
+        _dll_issue = (
+            isinstance(e, OSError)
+            or ("DLL load failed" in _msg)
+            or ("WinError 126" in _msg)
+            or ("WinError 127" in _msg)
+            or ("找不到指定的模块" in _msg)
+            or ("mfc" in _msg.lower())
+            or ("vcruntime" in _msg.lower())
+        )
+        if _dll_issue:
+            # Windows Server 默认不带 MFC/VC++ 运行库，wechatauto-replica 的原生模块就加载不了。
+            # 以前这里一律让人 pip install，等于把用户带到沟里。
+            log("")
+            log("[!] 这不是缺 Python 包，是本机缺 VC++ 运行库（wechatauto-replica 的原生模块要用）。")
+            log("    装这个（选 x64）：https://aka.ms/vs/17/release/vc_redist.x64.exe")
+            log("    装完重启电脑，再双击「启动微信桥接.bat」。")
+            log("    提示：Windows Server 默认不装 MFC，家庭版/专业版一般已有。")
+        else:
+            log("请先运行：\"%LOCALAPPDATA%\\Programs\\Python\\Python312\\python.exe\" -m pip install wechatauto-replica requests")
         return 1
 
     cfg = read_config()
@@ -687,8 +707,38 @@ def main():
     db_dir = resolve_db_dir()
     if db_dir:
         log("数据库目录：", db_dir)
+    # 打开微信数据库偶尔会「卡住不返回」（wechatauto-replica 内部去找微信进程/取密钥时挂住），
+    # 表现就是「重启了但一直不监听」。这里给它 90 秒上限，超时明确报错退出。
+    def _open_db_with_timeout(timeout=90):
+        box = {}
+
+        def _work():
+            try:
+                box["db"] = WeChatDB(db_dir=db_dir) if db_dir else WeChatDB()
+            except BaseException as exc:      # noqa: BLE001
+                box["err"] = exc
+
+        th = threading.Thread(target=_work, name="open-db", daemon=True)
+        th.start()
+        th.join(timeout)
+        if th.is_alive():
+            box["timeout"] = True
+        return box
+
+    log("打开微信数据库（这一步偶尔会卡，最多等 90 秒）…")
+    _db_box = _open_db_with_timeout(90)
+    if _db_box.get("timeout"):
+        log("")
+        log("✗ 打开微信数据库卡住超过 90 秒，已放弃这次启动（不是崩溃，是卡死）。")
+        log("  常见原因：微信没完全登录 / 数据库被占用 / 微信正在更新。")
+        log("  处理：确认微信已登录 → 重启微信 → 再双击「启动微信桥接.bat」。")
+        log("  如果反复卡住，把 data\\bridge-hang.log 和这段日志发给作者。")
+        return 2
+    db = _db_box.get("db")
+    _db_err = _db_box.get("err")
     try:
-        db = WeChatDB(db_dir=db_dir) if db_dir else WeChatDB()
+        if _db_err is not None:
+            raise _db_err
     except RuntimeError as e:
         # 不甩 traceback：告诉用户接下来该点哪里
         log("")
@@ -2529,6 +2579,20 @@ def main():
     threading.Thread(target=bridge_heartbeat, daemon=True).start()
     threading.Thread(target=listener_watch, daemon=True).start()
     log("已启动。鲸鲸地址：", bot_url)
+
+    # 就绪标记：外部（守护脚本 / 自检）据此判断「进程在，但可能卡在初始化」
+    try:
+        import json as _json, datetime as _dt
+        import shutil as _shutil2
+        with open(os.path.join(ROOT, "data", "bridge-ready.json"), "w", encoding="utf-8") as _rf:
+            _json.dump({
+                "readyAt": _dt.datetime.now().isoformat(timespec="seconds"),
+                "pid": os.getpid(),
+                "botUrl": bot_url,
+                "ffmpeg": bool(_shutil2.which("ffmpeg")),
+            }, _rf, ensure_ascii=False)
+    except Exception:
+        pass
 
     try:
         while True:
