@@ -119,6 +119,11 @@ const DEFAULT_CONFIG = {
   // 魔咒：主人私聊/群里输入这段数字后，获得一段时间的「管理员权限」
   admin: { spell: '', minutes: 30, allowAll: false },
   // 图片理解：默认智谱 GLM-4V-Flash（免费）
+  storage: {
+    mediaKeepDays: 7,
+    mediaMaxMB: 500,
+  },
+
   vision: { apiKey: '', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4v-flash', timeoutMs: 30000 },
   // 语音识别：默认阿里云百炼 qwen3-asr-flash，apiKey 留空则用 settings.json / deepseek.apiKey
   voice: {

@@ -110,3 +110,19 @@ test('C2：config.example 里能调媒体缓存策略', () => {
   assert.equal(cfg.storage.mediaKeepDays, 7);
   assert.equal(cfg.storage.mediaMaxMB, 500);
 });
+
+test('C2：不写配置也有默认清理策略（config.storage 必须存在）', () => {
+  const { loadConfig } = require('../src/config');
+  const dir = tmpDir();
+  fs.writeFileSync(path.join(dir, 'config.json'), '{}');
+  const cfg = loadConfig({ root: dir, env: {} });
+  assert.equal(cfg.storage.mediaKeepDays, 7);
+  assert.equal(cfg.storage.mediaMaxMB, 500);
+  fs.writeFileSync(
+    path.join(dir, 'config.json'),
+    JSON.stringify({ storage: { mediaKeepDays: 30, mediaMaxMB: 1024 } })
+  );
+  const cfg2 = loadConfig({ root: dir, env: {} });
+  assert.equal(cfg2.storage.mediaKeepDays, 30, '用户自己配的要生效');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
