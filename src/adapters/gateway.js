@@ -116,7 +116,11 @@ class Gateway {
     this.logger = logger;
     this.stats = { received: 0, replied: 0, sent: 0, failed: 0, lastMessageAt: 0, lastError: '' };
     // 本地桥接的存活信息：桥接每 20 秒来一次心跳，网页据此显示「桥接在线 / 离线」
-    this.bridge = { lastSeen: 0, uia: null, rest: false, listener: null, ffmpeg: null, account: '' };
+    this.bridge = {
+      lastSeen: 0, uia: null, rest: false, listener: null, ffmpeg: null,
+      // 多账号：桥接当前用的是哪个号、窗口认没认出来
+      account: '', accountNick: '', accountOk: null, accountWhy: '', accountGuard: true,
+    };
   }
 
   /** 桥接心跳：带 UIA / ffmpeg 状态，方便在网页上一眼看出「能不能发出去」 */
@@ -129,6 +133,10 @@ class Gateway {
       listener: typeof info.listener === 'boolean' ? info.listener : this.bridge.listener,
       ffmpeg: typeof info.ffmpeg === 'boolean' ? info.ffmpeg : this.bridge.ffmpeg,
       account: String(info.account || this.bridge.account || ''),
+      accountNick: String(info.account_nick || this.bridge.accountNick || ''),
+      accountOk: typeof info.account_ok === 'boolean' ? info.account_ok : this.bridge.accountOk,
+      accountWhy: String(info.account_why || this.bridge.accountWhy || ''),
+      accountGuard: typeof info.account_guard === 'boolean' ? info.account_guard : this.bridge.accountGuard,
     };
     return { ok: true, online: true, serverTime: now };
   }
@@ -254,7 +262,7 @@ class Gateway {
       enabled: Boolean(this.options.enabled),
       outboundConfigured: Boolean(this.options.outboundUrl),
       inboundPath: `/webhook/${this.platform}`,
-      // 网页据此显示「桥接在线 · UIA 正常 / 桥接离线」
+      // 网页据此显示「桥接在线 · UIA 正常 / 桥接离线」，以及「当前用的是哪个号」
       bridge: {
         online,
         lastSeenSec: ageSec,
@@ -263,6 +271,10 @@ class Gateway {
         listener: online ? this.bridge.listener : null,
         ffmpeg: online ? this.bridge.ffmpeg : null,
         account: this.bridge.account,
+        accountNick: this.bridge.accountNick,
+        accountOk: this.bridge.accountOk,
+        accountWhy: this.bridge.accountWhy,
+        accountGuard: this.bridge.accountGuard,
       },
       ...this.stats,
     };

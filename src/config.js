@@ -73,6 +73,28 @@ const PROVIDERS = {
     hint: '填接口地址和模型名；本地/内网地址可以不填 Key',
     models: [],
   },
+  // OpenCode Go：一个订阅通吃多家模型（DeepSeek / GLM / Kimi / Qwen …），
+  // 走它官方的 OpenAI 兼容端点。注意别填成 opencode.ai/zen/go/v1 ——
+  // 那个是给 OpenCode 自家客户端用的，会回 400 "missing x-opencode-session"。
+  opencode: {
+    label: 'OpenCode Go（一个订阅通吃多家模型）',
+    baseUrl: 'https://opencode.ai/inference/go/openai/v1',
+    model: 'deepseek-v4.1-flash',
+    needsKey: true,
+    hint: '在 opencode.ai/console 订阅 Go 后拿 Key（oc_sk_ 开头）。国内账号需在 Settings › Privacy 把 Regions 选 Global，否则 DeepSeek 模型不可用',
+    models: [
+      'deepseek-v4.1-flash',
+      'deepseek-v4-pro',
+      'glm-5.3-flash',
+      'glm-5.2',
+      'kimi-k3',
+      'qwen3.8-flash',
+      'minimax-m3.1-flash',
+      'longcat-2.0',
+      'mimo-v2.6-flash',
+      'hy3',
+    ],
+  },
 };
 
 const DEFAULT_CONFIG = {
@@ -168,6 +190,9 @@ const DEFAULT_CONFIG = {
     muteDefaultMinutes: 30,
   },
   memory: { maxSessions: 200, maxMessages: 400, maxNotesPerUser: 6 },
+  // 微信桥接：account = 固定用哪个微信号（微信双开时必填）。网页「设置 → 微信账号」会直接写这里，
+  // 一般不用手改；留空 = 按「最近活跃」自动选（双开时可能选到大号）。
+  wechat: { dbDir: '', account: '', accountGuard: true, windowHwnd: 0 },
   gateway: {
     wechat: { enabled: false, inboundToken: 'change-me-wechat', outboundUrl: '', outboundHeaders: {} },
     douyin: { enabled: false, inboundToken: 'change-me-douyin', outboundUrl: '', outboundHeaders: {} },

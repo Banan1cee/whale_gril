@@ -197,6 +197,8 @@ const META = {
   'group.maxRepliesPerHour': ['每小时最多回几条', '防刷屏'],
   'group.muteDefaultMinutes': ['免打扰默认时长（分钟）', ''],
   'wechat.dbDir': ['微信文件保存位置', '留空 = 自动找（看正在运行的微信打开了哪些文件，再扫各盘根目录）。实在找不到就填微信「设置 → 文件管理」里的路径，填到 xwechat_files 这一层；改完要重启「启动微信桥接.bat」'],
+  'wechat.account': ['固定用哪个微信号（双开必填）', '填账号目录名 / wxid / 微信昵称都行；留空 = 按「最近活跃」自动选，双开时可能选到大号。改完桥接会自动重启。一般直接在主页「设置 → 微信账号」里点选，不用手填'],
+  'wechat.accountGuard': ['认不出是哪个号就不发', '默认开。微信双开时，认不出「哪个窗口是所选的号」就拦下不发，避免从大号说话；本机只登一个号时它不起作用'],
   'wechat.staleAfterSec': ['多久没消息算「去忙了」（秒）', ''],
   'wechat.gameWhitelist': ['在打这些游戏时先不打扰', '一行一个进程名，比如 valorant'],
   'wechat.awayNotice': ['离开时说一声', ''],

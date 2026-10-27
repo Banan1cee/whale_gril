@@ -1,6 +1,6 @@
 {
     "name": "whale-girl-bot",
-    "version": "3.54",
+    "version": "3.55",
     "private": false,
     "description": "鲸鲸 —— 可接微信群 / B 站分享的 DeepSeek 鲸鱼娘聊天机器人",
     "main": "server.js",
@@ -8,7 +8,7 @@
     "scripts": {
         "start": "node server.js",
         "doctor": "node server.js --doctor",
-        "test": "node --test \"tests/*.test.js\"",
+        "test": "node --test",
         "release-check": "node scripts/release-check.js --release",
         "deploy": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/deploy.ps1",
         "release": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-release.ps1",
