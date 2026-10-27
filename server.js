@@ -26,6 +26,7 @@ const { matchMaster, masterWarnings } = require('./src/master');
 const personaStore = require('./src/personaStore');
 const memoryBackup = require('./src/memoryBackup');
 const mediaCache = require('./src/mediaCache');
+const features = require('./src/features');
 const presets = require('./src/presets');
 const links = require('./src/links');
 const bilibili = require('./src/bilibili');
@@ -123,19 +124,21 @@ function createRuntime({ root = projectRoot(), env = process.env, loggerLevel } 
   const store = new Store({ file: config.paths.storeFile, limits: config.memory, logger });
   // 每次启动留一份记忆快照：换目录/重装/误点重置都能捞回来
   try {
-    const snap = memoryBackup.writeSnapshot(root, 'startup');
+    const snap = features.isOn(config, 'memorySnapshot') ? memoryBackup.writeSnapshot(root, 'startup') : null;
     if (snap) logger.info('记忆快照：' + snap);
   } catch (err) {
     logger.warn('记忆快照失败（不影响使用）：' + err.message);
   }
   // 媒体缓存（图片/表情包/语音 wav）永不清理会越堆越大，启动时清一次
   try {
+    if (features.isOn(config, 'mediaCleanup')) {
     const mediaDir = path.join(root, 'data', 'media-cache');
     const mc = mediaCache.cleanup(mediaDir, {
       maxAgeDays: Number((config.storage || {}).mediaKeepDays) || 7,
       maxTotalMB: Number((config.storage || {}).mediaMaxMB) || 500,
     });
     if (mc.removed) logger.info(`媒体缓存清理：删 ${mc.removed} 个文件，释放 ${mc.freedMB} MB`);
+    }
   } catch (err) {
     logger.warn('媒体缓存清理失败（不影响使用）：' + err.message);
   }
@@ -144,6 +147,7 @@ function createRuntime({ root = projectRoot(), env = process.env, loggerLevel } 
   try {
     const timer = setInterval(() => {
       try {
+        if (!features.isOn(runtime.config, 'memorySnapshot')) return;
         const file = memoryBackup.writeSnapshot(root, 'cron');
         if (file) logger.info('记忆快照（定时）：' + file);
       } catch (err) {
@@ -1074,6 +1078,25 @@ function createHandler(runtime) {
         });
       }
       if (pathname === '/healthz') return json(res, 200, { ok: true, up: true });
+
+      // ---- 功能开关（控制台可开关；关掉就回到旧行为）----
+      if (pathname === '/api/features' && method === 'GET') {
+        return json(res, 200, { ok: true, features: features.list(runtime.config) });
+      }
+      if (pathname === '/api/features' && method === 'POST') {
+        const body = await readBody(req);
+        const key = String((body && body.key) || '').trim();
+        const entry = features.REGISTRY.find((f) => f.key === key);
+        if (!entry) return json(res, 400, { ok: false, error: '没有这个开关：' + key });
+        const on = Boolean(body.value);
+        try {
+          applyConfigPatch(runtime, { [entry.path]: on });
+          logger.info(`功能开关 ${entry.label} → ${on ? '开' : '关'}`);
+          return json(res, 200, { ok: true, key, value: on, features: features.list(runtime.config) });
+        } catch (err) {
+          return json(res, 400, { ok: false, error: err.message });
+        }
+      }
 
       // ---- 记忆备份 / 恢复 ----
       if (pathname === '/api/memory/info' && method === 'GET') {

@@ -18,6 +18,7 @@
  * }
  */
 const persona = require('./persona');
+const features = require('./features');
 const { matchMaster } = require('./master');
 const links = require('./links');
 const websearch = require('./websearch');
@@ -84,6 +85,17 @@ function stripMasterDispute(history) {
 /** 明确的骂人词：出现就算开战 */
 const INSULT_RE = /傻逼|傻比|煞笔|脑残|智障|弱智|废物|垃圾|狗东西|贱人|婊子|你妈|他妈|操你|草你|去死|滚蛋|滚开|滚|孤儿|低能|神经病|有病|恶心|丑逼|蠢|菜狗|臭机器人|破机器人|人工智障|没素质|素质低|下头|欠揍|挑衅|算什么东西|不要脸/;
 /** 弱一点的贬义：配合「你/机器人」也算骂她 */
+/**
+ * 这条消息有没有在叫她。
+ * 「机器人」不再裸算：必须带指代（这个/那个/你/破/臭/傻/烂/死），
+ * 否则群里聊「这破机器人又卡了」会被误判成骂她。
+ */
+function namedHerIn(text) {
+  const s = String(text || '');
+  if (/(鲸鲸|小鲸|肥鱼)/.test(s)) return true;
+  return /(这个|那个|你|破|臭|傻|烂|死)\s*机器人/.test(s);
+}
+
 const INSULT_LOOSE_RE = /臭|破|烂|没用|闭嘴|烦人|装什么|什么玩意儿/;
 
 function formatChatTime(ts) {
@@ -689,17 +701,35 @@ class Bot {
     if (!trigger.wake && isGroup && !atMe) {
       const said = String(clean.text || '');
       const insulted = INSULT_RE.test(said) || INSULT_LOOSE_RE.test(said);
-      // 同样不能只凭「你」就认定在骂她（「张三你个傻逼」的「你」指的是张三）
-      const namedHer = /(鲸鲸|小鲸|肥鱼|机器人|人机|bot)/i.test(said);
+      const guard = features.isOn(this.config, 'groupAddressGuard');
+      // 只说「机器人」不再等于叫她：得带指代（这个/你/破/臭/傻/烂…），
+      // 否则群里讨论「这破机器人又卡了」都会被当成骂她。
+      const bareRobot = /(鲸鲸|小鲸|肥鱼)/i.test(said);
+      const pointedRobot = guard
+        ? /(这个|那个|你|破|臭|傻|烂|死)?\s*机器人/.test(said) && /(这个|那个|你|破|臭|傻|烂|死)/.test(said)
+        : /机器人|人机|bot/i.test(said);
+      const namedHer = guard ? bareRobot || pointedRobot : /(鲸鲸|小鲸|肥鱼|机器人|人机|bot)/i.test(said);
       const talkingToHer =
         Boolean(msg.replyToBot) ||
         (String(state.engagedBy || '') === String(msg.senderId || '') && Number(state.engagedUntil) > nowMs);
-      const aimedAtHer = namedHer || talkingToHer;
+      // L1：这条明明在跟别人说话（@了别人 / 出现其他成员名字 / 第三人称指代）→ 不算骂她
+      let talkingToOthers = false;
+      if (guard) {
+        const others = Array.isArray(msg.mentionedNames) ? msg.mentionedNames.filter(Boolean) : [];
+        const otherMentioned = others.length > 0;
+        const thirdPerson = /(他|她|楼上|楼下|那谁|某人|刚才那个)/.test(said) && !/(你|你们)/.test(said);
+        const otherNames = (msg.otherMemberNames || []).some((n) => n && n !== msg.senderName && said.includes(n));
+        talkingToOthers = otherMentioned || thirdPerson || otherNames;
+      }
+      const aimedAtHer = (namedHer || talkingToHer) && !talkingToOthers;
       const silent = Number(state.silentUntil) > nowMs;
       // 静默期内（被赶走了）不反击：除非 @ 她（上面 addressed 已解除静默）
       if (insulted && aimedAtHer && !silent) {
         trigger.wake = true;
         trigger.reason = 'insulted';
+      }
+      if (guard && talkingToOthers && this.logger) {
+        this.logger.info(`[group] 判定在跟别人说话，不接：${said.slice(0, 24)}`);
       }
     }
     if (!trigger.wake) {
@@ -918,6 +948,7 @@ class Bot {
     }
     // buildTurns 也要知道在不在对喷：对喷时不洗掉脏话，否则模型看不见对面骂了啥
     msg.fight = fight;
+    msg.fightReason = trigger.reason || '';
     msg.fightDirty = fightDirty;
     msg.fightTarget = fightTarget;
     msg.fightOnMaster = fightOnMaster;
@@ -993,7 +1024,15 @@ class Bot {
       // 别人也在接这个话题：她刚说过话、对方又用「你」冲她说，就不算旁人闲聊
       const justSpoke = Number(state.lastReplyAt) && nowMs - Number(state.lastReplyAt) < 90 * 1000;
       const toHer = /你|你们|咱|鲸鲸|小鲸|肥鱼/.test(txt);
-      if (justSpoke && toHer && txt.length <= 60) return { wake: true, reason: 'engaged_group' };
+      // L1：以前「她 90 秒内说过话 + 有人发『你…』」就唤醒，别人聊自己的事也会被插嘴。
+      // 现在只有开了 groupAddressGuard 才保留，且本条不能在跟别人说话。
+      const guardOn = features.isOn(this.config, 'groupAddressGuard');
+      const others = Array.isArray(msg.mentionedNames) ? msg.mentionedNames.filter(Boolean) : [];
+      const talkingToOthers = others.length > 0 || (/(他|她|楼上|那谁|某人)/.test(txt) && !/你|你们/.test(txt));
+      if (!guardOn && justSpoke && toHer && txt.length <= 60) return { wake: true, reason: 'engaged_group' };
+      if (guardOn && justSpoke && namedHerIn(txt) && !talkingToOthers && txt.length <= 60) {
+        return { wake: true, reason: 'engaged_group' };
+      }
       return { wake: false, reason: 'engaged_side_chatter' };
     }
     // 她刚在群里说过话（3 分钟内），紧接着有人用「你」冲她说话 → 也算在跟她说
@@ -1460,6 +1499,26 @@ class Bot {
       decision.finalText = text;
     }
     const msg = decision.msg || {};
+    // L3：开火了却说不清对方骂了啥（没引用原话片段）→ 大概率是自作多情，降级成一句「？」
+    // 只对「没被叫到、只在群里听到脏话就开火」的情况做原话校验；
+    // @她/点名的对喷不需要证明，别再把她嘴堵上。
+    const autoFight = Boolean(msg.fight) && !msg.isMaster && String(msg.fightReason || '') === 'insulted';
+    // 只在「连她名字都没提」的自动开火时校验；点名了就是在说她，别把人嘴堵上
+    if (autoFight && !namedHerIn(msg.cleanText || msg.text || '') && features.isOn(this.config, 'fightQuoteCheck')) {
+      const rawHeard = String(msg.cleanText || msg.text || '');
+      const norm = (x) => String(x || '').replace(/[\s\p{P}\p{S}]/gu, '');
+      const heardCore = norm(rawHeard);
+      const replyCore = norm(text);
+      let hit = false;
+      for (let i = 0; i + 3 <= heardCore.length; i += 1) {
+        if (replyCore.includes(heardCore.slice(i, i + 3))) { hit = true; break; }
+      }
+      if (!hit) {
+        this.logger && this.logger.warn('开怼缺少原话依据，降级为「？」：' + String(text).slice(0, 30));
+        text = '？';
+        decision.finalText = text;
+      }
+    }
     // 主人告状说有人骂他：她在替主人出头，骂的是别人，不适用「对主人不许带脏字」
     if (msg.fightTarget && msg.fightTarget.name) {
       const name = msg.fightTarget.name;
