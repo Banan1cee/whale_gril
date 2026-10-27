@@ -1032,6 +1032,25 @@ function createHandler(runtime) {
     const method = req.method || 'GET';
 
     try {
+      // CSRF 闸：浏览器发起的跨站写请求一律拒绝。
+      // 以前没这道：任何网页都能 POST 到 127.0.0.1:8787 改设置（实测 text/plain 也能过，不需要预检）。
+      const reqOrigin = String(req.headers.origin || '');
+      if (reqOrigin) {
+        const sameOrigin = /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/i.test(reqOrigin);
+        const isWrite = method !== 'GET' && method !== 'HEAD';
+        if (!sameOrigin && isWrite) {
+          logger.warn(`拒绝跨站请求：${method} ${pathname} Origin=${reqOrigin}`);
+          return json(res, 403, { ok: false, error: '拒绝跨站请求：只允许在本机页面里操作' });
+        }
+        // 同源写操作也必须是 JSON：挡住「html 表单提交」这类不需要预检的请求
+        if (isWrite && pathname.startsWith('/api/')) {
+          const ctype = String(req.headers['content-type'] || '').toLowerCase();
+          if (!ctype.includes('application/json')) {
+            return json(res, 415, { ok: false, error: '写操作必须是 application/json' });
+          }
+        }
+      }
+
       // 安全闸：这些接口能改配置、注入聊天、上传图片。默认只许本机；
       // 真要放到局域网（server.allowRemote=true）也必须带对的 x-bot-token，否则一律 403。
       if (pathname.startsWith('/api/') && method !== 'GET' && !isLoopbackRequest(req) && !remoteAuthorized(req, runtime)) {
