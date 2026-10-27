@@ -104,6 +104,12 @@
     <div class="card"><h2>网关 / 记忆</h2><table id="tGate"></table></div>
   </div>
 
+  <div class="card" id="featCard">
+    <h2>功能开关（新功能都在这里，可开可关）</h2>
+    <p class="muted">关掉 = 回到旧行为。改动会写进 config.json，重启也还在。群聊相关的两个开关要重启桥接/服务才完全生效。</p>
+    <table id="tFeatures"><tr><td class="muted">加载中…</td></tr></table>
+  </div>
+
   <div class="card">
     <h2>提示词预览（她真正发给模型的东西）</h2>
     <p class="muted">输入一个发送者和一句话，就能看到这次会拼出来的系统提示词；用它确认「主人段」「链接段」「群聊规则」有没有生效。</p>
@@ -413,6 +419,56 @@ function wireForm() {
   });
 }
 
+async function loadFeatures() {
+  const host = document.getElementById('tFeatures');
+  try {
+    const d = await (await fetch('/api/features')).json();
+    if (!d.ok) throw new Error(d.error || '读取失败');
+    host.innerHTML = '';
+    for (const f of d.features) {
+      const tr = document.createElement('tr');
+      const td1 = document.createElement('td');
+      const label = document.createElement('strong');
+      label.textContent = f.label;
+      td1.appendChild(label);
+      const desc = document.createElement('div');
+      desc.className = 'muted';
+      desc.textContent = f.desc;
+      td1.appendChild(desc);
+      const td2 = document.createElement('td');
+      td2.style.whiteSpace = 'nowrap';
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.checked = Boolean(f.value);
+      box.dataset.key = f.key;
+      box.addEventListener('change', async () => {
+        box.disabled = true;
+        try {
+          const r = await fetch('/api/features', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key: f.key, value: box.checked }),
+          });
+          const out = await r.json();
+          if (!out.ok) throw new Error(out.error || '保存失败');
+          desc.dataset.saved = '1';
+        } catch (e) {
+          box.checked = !box.checked;
+          alert('保存失败：' + (e && e.message ? e.message : e));
+        } finally {
+          box.disabled = false;
+        }
+      });
+      td2.appendChild(box);
+      tr.appendChild(td1);
+      tr.appendChild(td2);
+      host.appendChild(tr);
+    }
+  } catch (e) {
+    host.innerHTML = '<tr><td class="bad">读取失败：' + esc(String(e && e.message || e)) + '</td></tr>';
+  }
+}
+
 async function loadConfig() {
   let d;
   try {
@@ -589,7 +645,8 @@ async function makePrompt() {
       : '');
 }
 
-$('btnReload').addEventListener('click', () => { loadConfig(); loadState(); loadSessions(); });
+$('btnReload').addEventListener('click', () => { loadConfig();
+  loadFeatures(); loadState(); loadSessions(); });
 $('btnFetch').addEventListener('click', async () => {
   if (refreshDirty().length && !confirm('有没保存的改动，重新读取会丢掉它们，继续？')) return;
   await loadConfig();
@@ -616,6 +673,7 @@ window.addEventListener('beforeunload', (e) => {
     PROVIDERS = s.providers || {};
   } catch { PROVIDERS = {}; }
   await loadConfig();
+  loadFeatures();
   loadState();
   loadSessions();
 })();

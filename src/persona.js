@@ -540,6 +540,11 @@ function buildSystem({ config, msg, profile, notes = [], now = new Date() }) {
 
   if (isGroup) {
     lines.push(`【场景】你在微信群「${chatTitle}」里，刚看到「${userName}」说话。`);
+    // L3：群里最容易犯的错是「别人聊天她自作多情」，先让她判断对谁说
+    lines.push('- **先说清楚在跟谁说话**：看这条消息是 @ 谁、有没有点名、上一条是谁说的。判断不出在跟你说，就当他在跟别人说，不接话、不怼人。');
+    if (msg.mentionedNames && msg.mentionedNames.length) {
+      lines.push(`- 这条消息 @ 了：${msg.mentionedNames.join('、')}——如果里面没有你，那就是在跟别人说话。`);
+    }
     lines.push(`- 一般 1~2 句，最多约 ${maxChars} 字；先接住对方说的点，再回应，别只回「嗯」「哈哈」。`);
     lines.push('- 用前面聊过的内容接着聊：谁说过什么你记得，别重复问刚说过的事。');
     lines.push('- 不确定对方在说什么就问一句，别自己脑补；群里是闲聊不是答疑，但问到你就认真答。');

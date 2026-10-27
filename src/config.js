@@ -119,6 +119,13 @@ const DEFAULT_CONFIG = {
   // 魔咒：主人私聊/群里输入这段数字后，获得一段时间的「管理员权限」
   admin: { spell: '', minutes: 30, allowAll: false },
   // 图片理解：默认智谱 GLM-4V-Flash（免费）
+  features: {
+    groupAddressGuard: true,
+    fightQuoteCheck: true,
+    mediaCleanup: true,
+    memorySnapshot: true,
+  },
+
   storage: {
     mediaKeepDays: 7,
     mediaMaxMB: 500,
