@@ -76,13 +76,13 @@ test('桥接启动脚本在缺 Python 时给提示，而不是一闪而过', () 
   assert.match(bat, /python\.org/);
 });
 
-test('stop-all.ps1 会写暂停标记，并覆盖服务/桥接/守护/热键', () => {
+test('stop-all.ps1 会写暂停标记，并覆盖服务/桥接/守护', () => {
   const ps1 = fs.readFileSync(path.join(root, 'scripts', 'stop-all.ps1'), 'utf8');
   assert.match(ps1, /PAUSED/, '必须写 data\\PAUSED，否则 bridge_loop 会重新拉起桥接');
   assert.match(ps1, /wechatauto_bridge\.py/);
   assert.match(ps1, /server\.js/);
   assert.match(ps1, /bridge_loop\.bat/);
-  assert.match(ps1, /hotkey_daemon\.py/);
+  assert.doesNotMatch(ps1, /hotkey_daemon/, '热键功能已下线，不该再出现');
   assert.match(ps1, /8787/, '要有按端口兜底');
 });
 
@@ -232,4 +232,38 @@ test('发行包自带 ffmpeg（微信 4.x 图片是 wxHEVC，没它看不了图�
     return;
   }
   assert.ok(fs.statSync(probe).size > 10 * 1024 * 1024, 'ffmpeg.exe 应该是完整二进制');
+});
+
+test('热键文件已删除，README 不再提热键', () => {
+  assert.equal(fs.existsSync(path.join(root, '启动热键.bat')), false, '启动热键.bat 应删除');
+  assert.equal(fs.existsSync(path.join(root, 'tools', 'hotkey_daemon.py')), false, 'hotkey_daemon.py 应删除');
+  const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
+  assert.doesNotMatch(readme, /启动热键\.bat|hotkey_daemon/, 'README 不该再提热键');
+});
+
+test('新增「先点启动鲸鱼娘再点启动桥接」文件夹，两个启动器按顺序编号', () => {
+  const dir = path.join(root, '先点启动鲸鱼娘再点启动桥接');
+  assert.ok(fs.existsSync(dir), '文件夹要存在');
+  const files = fs.readdirSync(dir).filter((n) => n.endsWith('.bat')).sort();
+  assert.equal(files.length, 2, '里面只放两个启动器');
+  assert.match(files[0], /^1 /, '第一个是第 1 步');
+  assert.match(files[1], /^2 /, '第二个是第 2 步');
+  assert.match(fs.readFileSync(path.join(dir, files[0]), 'utf8'), /启动鲸鱼娘\.bat/);
+  assert.match(fs.readFileSync(path.join(dir, files[1]), 'utf8'), /启动微信桥接\.bat/);
+});
+
+test('服务把实际端口写盘，桥接优先读（换端口不至于满屏积极拒绝）', () => {
+  const server = fs.readFileSync(path.join(root, 'server.js'), 'utf8');
+  assert.match(server, /server-port\.txt/, '服务要写实际端口');
+  const bridge = fs.readFileSync(path.join(root, 'examples', 'wechatauto_bridge.py'), 'utf8');
+  assert.match(bridge, /server-port\.txt/, '桥接要优先读它');
+});
+
+test('桥接启动前等服务就绪，连接中断要节流并给明确提示', () => {
+  const bridge = fs.readFileSync(path.join(root, 'examples', 'wechatauto_bridge.py'), 'utf8');
+  assert.match(bridge, /def wait_for_server/, '要有等待服务就绪');
+  assert.match(bridge, /wait_for_server\(bot_url/, '监听前要调用');
+  assert.match(bridge, /conn-refused/, '积极拒绝要走节流');
+  assert.match(bridge, /先双击「启动鲸鱼娘\.bat」/, '要告诉用户先点服务');
+  assert.match(bridge, /已连上鲸鲸服务/, '恢复连接时打一条');
 });

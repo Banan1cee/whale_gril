@@ -104,7 +104,16 @@ START_TS = time.time()
 
 
 # 同一类错误 10 分钟只记一行：没配看图 Key 时，每张图刷一条日志会淹掉真正的问题
+# 本机请求专用：不读系统代理。用户装了 Clash 之类的代理但没开时，
+# HTTP_PROXY 会让连 127.0.0.1 的请求也走代理 → 报「由于目标计算机积极拒绝」。
+import requests as _requests  # 延迟到这里再 import，避免顶部依赖顺序问题
+
+LOCAL_HTTP = _requests.Session()
+LOCAL_HTTP.trust_env = False
+os.environ["NO_PROXY"] = ",".join(filter(None, [os.environ.get("NO_PROXY", ""), "127.0.0.1,localhost,::1"]))
 _THROTTLE_LOG = {}
+# 和服务端的连接状态：用来只在「断开→恢复」时各打一次日志
+CONN_STATE = {"ok": None}
 
 
 def log_throttled(key, *args, ttl=600):
@@ -543,8 +552,46 @@ def read_config():
 
 
 def build_bot_url(cfg):
+    # 端口优先级：环境变量 > 服务写下的实际端口 > config.server.port
+    # （服务用 --port= 启动时 config 里还是老端口，读文件才不会连错）
     port = (cfg.get("server") or {}).get("port", 8787)
+    try:
+        with open(os.path.join(ROOT, "data", "server-port.txt"), "r", encoding="utf-8") as _pf:
+            _p = int((_pf.read() or "").strip())
+            if 0 < _p < 65536:
+                port = _p
+    except Exception:
+        pass
     return os.environ.get("WHALE_BOT_URL", "http://127.0.0.1:%s/webhook/wechat" % port)
+
+
+def wait_for_server(url, timeout=30):
+    """等本地服务真的在监听。
+
+    用户最常见的坑：先点桥接、后点服务，或者两者同时启动。
+    服务从进程起来到 listen() 完成要 1~3 秒，这段时间桥接每来一条消息就报
+    「由于目标计算机积极拒绝，无法连接」。这里先等它起来，再开始监听。
+    """
+    import time as _t
+    health = url.rsplit("/webhook", 1)[0] + "/healthz"
+    deadline = _t.time() + max(5, timeout)
+    waited = 0
+    while _t.time() < deadline:
+        try:
+            r = LOCAL_HTTP.get(health, timeout=3)
+            if r.status_code < 500:
+                if waited > 0:
+                    log("服务已就绪（等了 %d 秒）" % waited)
+                return True
+        except Exception:
+            pass
+        if waited == 0:
+            log("等服务起来（最多 %d 秒）…" % timeout)
+        _t.sleep(1)
+        waited += 1
+    log("[!] 等了 %d 秒服务还没起来。先双击「启动鲸鱼娘.bat」，再跑桥接。" % timeout)
+    log("    提示：直接双击「先点启动鲸鱼娘再点启动桥接」文件夹里的两个 bat 就不会顺序错。")
+    return False
 
 
 def ensure_ffmpeg_env():
@@ -1778,7 +1825,7 @@ def main():
                 prompt = ""
                 if len(parts) > 1:
                     prompt = "这是一张长截图从上往下的第 %d/%d 段。逐条转写这一段里的文字（分清左边对方/右边本人），不要省略。" % (idx + 1, len(parts))
-                r = requests.post(
+                r = LOCAL_HTTP.post(
                     base + "/api/vision",
                     json={"image": base64.b64encode(part).decode(), "mime": mime, "prompt": prompt},
                     timeout=120,
@@ -1997,7 +2044,7 @@ def main():
                 headers = {"x-whale-bridge": "1"}
                 if token:
                     headers["x-bot-token"] = token
-                r = requests.post(
+                r = LOCAL_HTTP.post(
                     bot_url,
                     json=payload,
                     headers=headers,
@@ -2005,9 +2052,21 @@ def main():
                 )
                 data = r.json()
             except Exception as e:
-                log("请求鲸鲸失败：", repr(e))
+                _msg = repr(e)
+                if "10061" in _msg or "refused" in _msg.lower() or "积极拒绝" in _msg:
+                    log_throttled(
+                        "conn-refused",
+                        "连不上本地服务（积极拒绝 = 127.0.0.1 上没有程序在监听）。先双击「启动鲸鱼娘.bat」，等窗口出现「服务已启动」再来。",
+                    )
+                    if CONN_STATE.get("ok") is not False:
+                        CONN_STATE["ok"] = False
+                else:
+                    log_throttled("webhook-fail:" + _msg[:40], "请求鲸鲸失败：", _msg)
                 return
 
+            if CONN_STATE.get("ok") is not True:
+                CONN_STATE["ok"] = True
+                log("已连上鲸鲸服务：", bot_url.rsplit("/webhook", 1)[0])
             if data.get("action") != "reply" or not data.get("reply"):
                 if is_group and addressed:
                     log("鲸鲸没接话：", nickname, "→", content[:20], "|", data.get("reason"))
@@ -2053,6 +2112,7 @@ def main():
         except Exception as e:
             log("处理消息异常：", repr(e))
 
+    wait_for_server(bot_url, timeout=30)
     log("开始监听新消息…（Ctrl+C 退出）")
     executor = ThreadPoolExecutor(max_workers=1)
 
@@ -2124,7 +2184,7 @@ def main():
             u, name = target[0]
             try:
                 base = bot_url.rsplit("/webhook", 1)[0]
-                r = requests.get(base + "/api/share?chat=" + urllib.parse.quote(u), timeout=40)
+                r = LOCAL_HTTP.get(base + "/api/share?chat=" + urllib.parse.quote(u), timeout=40)
                 data = r.json()
             except Exception as e:
                 log("拉取视频失败：", repr(e))
@@ -2229,7 +2289,7 @@ def main():
                 continue
             u, name = target
             try:
-                r2 = requests.get(base + "/api/care", params={"chat": u}, timeout=40)
+                r2 = LOCAL_HTTP.get(base + "/api/care", params={"chat": u}, timeout=40)
                 text = str((r2.json() or {}).get("text") or "").strip()
             except Exception as e:
                 log("生成搭话失败：", repr(e))
@@ -2319,7 +2379,7 @@ def main():
                 continue
             try:
                 base = bot_url.rsplit("/webhook", 1)[0]
-                r = requests.get(base + "/api/digest", params={"since": int(last * 1000)}, timeout=30)
+                r = LOCAL_HTTP.get(base + "/api/digest", params={"since": int(last * 1000)}, timeout=30)
                 data = r.json()
             except Exception as e:
                 log("拉取消息汇总失败：", repr(e))
@@ -2538,7 +2598,7 @@ def main():
                 headers = {"x-whale-bridge": "1"}
                 if token:
                     headers["x-bot-token"] = token
-                requests.post(base + "/api/bridge/heartbeat", json=payload, headers=headers, timeout=8)
+                LOCAL_HTTP.post(base + "/api/bridge/heartbeat", json=payload, headers=headers, timeout=8)
             except Exception:
                 pass  # 服务没起来/重启中，下一轮再报
             time.sleep(20)
