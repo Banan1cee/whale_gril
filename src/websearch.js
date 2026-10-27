@@ -101,6 +101,10 @@ function parseSnippetAgeDays(snippet) {
   return null;
 }
 
+function isTimeSensitive(query) {
+  return TIME_SENSITIVE_RE.test(String(query || ''));
+}
+
 function dropStaleResults(query, results, { maxAgeDays = 550 } = {}) {
   if (!TIME_SENSITIVE_RE.test(String(query || ''))) return results;
   const fresh = [];
@@ -267,6 +271,7 @@ async function weatherText(city, opts = {}) {
 
 module.exports = {
   dropStaleResults,
+  isTimeSensitive,
   parseSnippetAgeDays,
   search,
   searchText,

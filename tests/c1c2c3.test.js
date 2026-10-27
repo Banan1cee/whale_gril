@@ -98,3 +98,15 @@ test('C1：桥接里识别失败日志走节流函数', () => {
   assert.match(src, /log_throttled\("voice-fail:/, '语音失败要走节流');
   assert.doesNotMatch(src, /\n\s+log\("第 %d 段识别失败/, '不能再无条件刷日志');
 });
+
+test('C3：时效性问题不再机械加年份（实测加了反而更差）', () => {
+  assert.equal(websearch.isTimeSensitive('苹果现在出到几了'), true);
+  assert.equal(websearch.isTimeSensitive('DeepSeek 最新版本'), true);
+  assert.equal(websearch.isTimeSensitive('显卡推荐'), false);
+});
+
+test('C2：config.example 里能调媒体缓存策略', () => {
+  const cfg = JSON.parse(fs.readFileSync(path.join(ROOT, 'config.example.json'), 'utf8').replace(/^\uFEFF/, ''));
+  assert.equal(cfg.storage.mediaKeepDays, 7);
+  assert.equal(cfg.storage.mediaMaxMB, 500);
+});
