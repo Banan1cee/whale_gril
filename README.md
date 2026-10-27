@@ -1,6 +1,6 @@
 # 🐋 鲸鲸 · DeepSeek 鲸鱼娘聊天机器人
 
-> **想直接跑？点右边的 [Releases](https://github.com/Banan1cee/whale_gril/releases/latest)，下 `whale-girl-3.53.zip`（86 MB）。**
+> **想直接跑？点右边的 [Releases](https://github.com/Banan1cee/whale_gril/releases/latest)，下 `whale-girl-3.54.zip`（86 MB）。**
 > 里面已经带好 Node 22 和 Python 3.12，解压双击就能用，**不用装任何环境**。
 >
 > ## 更新怎么不丢记忆（记住这一句就够）
@@ -24,6 +24,17 @@
 ![鲸鲸](web/assets/jingjing.jpg)
 
 ---
+
+## 3.54 更新
+
+**装不上 / 看不了 / 连不上，这一版全修了。**
+
+- **Windows Server**：以前一律提示「pip install wechatauto-replica」，其实是缺 VC++ 运行库 → 现在直接给 vc_redist 下载链接
+- **看图自带 ffmpeg**：微信 4.x 图片是 wxgf/HEVC，包内已带 `runtime\ffmpeg\bin\ffmpeg.exe`（包体积约 117MB）
+- **「重启了但不监听」**：打开微信数据库加 90 秒超时 + 就绪文件 `data\bridge-ready.json` + 重启上限 4 次
+- **「积极拒绝」**：等服务就绪再监听、本机请求不走代理、服务端口写 `data\server-port.txt`
+- **新增启动文件夹**：`先点启动鲸鱼娘再点启动桥接\`，里面 1、2 两个编号启动器
+- **移除**：全局热键（PageUp 终止 / PageDown 恢复那套已下线）
 
 ## 3.53 更新
 
