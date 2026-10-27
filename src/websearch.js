@@ -77,13 +77,50 @@ function parseBing(html) {
   return out;
 }
 
+/**
+ * 时效过滤：问「最新 / 现在出到几 / 今年」这类问题时，把明显过期的结果剔掉。
+ * 实测「苹果现在出到几了」会同时返回 2026 的预测文和「2007-2025 iPhone 全线回顾」，
+ * 模型看到旧文就答旧型号（把 iPhone 18 说成 16）。
+ * 注意：**不要**简单给查询加年份——实测加了反而把「1 天前」的新结果挤掉。
+ */
+const TIME_SENSITIVE_RE = /(最新|现在|今年|目前|当前|出到几|第几代|什么型号|哪个版本|多少钱|什么价|行情|发布会|刚出|新出)/;
+
+function parseSnippetAgeDays(snippet) {
+  const s = String(snippet || '');
+  const rel = s.match(/(\d+)\s*(分钟|小时|天|周)之前/);
+  if (rel) {
+    const n = Number(rel[1]);
+    const unit = { 分钟: 1 / 1440, 小时: 1 / 24, 天: 1, 周: 7 }[rel[2]] || 1;
+    return n * unit;
+  }
+  const abs = s.match(/(20\d{2})年(\d{1,2})月(\d{1,2})日/);
+  if (abs) {
+    const t = new Date(Number(abs[1]), Number(abs[2]) - 1, Number(abs[3])).getTime();
+    if (!Number.isNaN(t)) return (Date.now() - t) / 86400000;
+  }
+  return null;
+}
+
+function dropStaleResults(query, results, { maxAgeDays = 550 } = {}) {
+  if (!TIME_SENSITIVE_RE.test(String(query || ''))) return results;
+  const fresh = [];
+  for (const r of results) {
+    const age = parseSnippetAgeDays(r.snippet || r.title || '');
+    if (age !== null && age > maxAgeDays) continue; // 明显过期，丢掉
+    fresh.push(r);
+  }
+  // 全被判过期（说明判断依据不可靠）就保留原始结果，别把她弄成「搜不到」
+  return fresh.length ? fresh : results;
+}
+
 async function search(query, { limit = 5, timeoutMs = 8000 } = {}) {
   const q = String(query || '').trim().slice(0, 100);
   if (!q) return [];
   const url = 'https://cn.bing.com/search?q=' + encodeURIComponent(q) + '&setlang=zh-CN&count=10';
   try {
     const html = await getText(url, timeoutMs);
-    return parseBing(html).slice(0, limit);
+    const parsed = parseBing(html);
+    return dropStaleResults(q, parsed).slice(0, limit);
   } catch {
     return [];
   }
@@ -229,6 +266,8 @@ async function weatherText(city, opts = {}) {
 }
 
 module.exports = {
+  dropStaleResults,
+  parseSnippetAgeDays,
   search,
   searchText,
   parseBing,

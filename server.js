@@ -25,6 +25,7 @@ const care = require('./src/care');
 const { matchMaster, masterWarnings } = require('./src/master');
 const personaStore = require('./src/personaStore');
 const memoryBackup = require('./src/memoryBackup');
+const mediaCache = require('./src/mediaCache');
 const presets = require('./src/presets');
 const links = require('./src/links');
 const bilibili = require('./src/bilibili');
@@ -127,6 +128,18 @@ function createRuntime({ root = projectRoot(), env = process.env, loggerLevel } 
   } catch (err) {
     logger.warn('记忆快照失败（不影响使用）：' + err.message);
   }
+  // 媒体缓存（图片/表情包/语音 wav）永不清理会越堆越大，启动时清一次
+  try {
+    const mediaDir = path.join(root, 'data', 'media-cache');
+    const mc = mediaCache.cleanup(mediaDir, {
+      maxAgeDays: Number((config.storage || {}).mediaKeepDays) || 7,
+      maxTotalMB: Number((config.storage || {}).mediaMaxMB) || 500,
+    });
+    if (mc.removed) logger.info(`媒体缓存清理：删 ${mc.removed} 个文件，释放 ${mc.freedMB} MB`);
+  } catch (err) {
+    logger.warn('媒体缓存清理失败（不影响使用）：' + err.message);
+  }
+
   // 长时间挂着也要有断点：每 30 分钟留一份（启动那份可能已经是几十小时前了）
   try {
     const timer = setInterval(() => {
