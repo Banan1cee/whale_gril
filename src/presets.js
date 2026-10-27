@@ -80,6 +80,7 @@ function toPatch(preset) {
   if (preset.groupMaxChars) patch.groupMaxChars = Math.max(20, Math.min(300, Number(preset.groupMaxChars)));
   if (preset.historyTurns) patch.historyTurns = Math.max(4, Math.min(120, Number(preset.historyTurns)));
   if (preset.groupHistoryTurns) patch.groupHistoryTurns = Math.max(2, Math.min(100, Number(preset.groupHistoryTurns)));
+  if (preset.maxBubbles) patch.maxBubbles = Math.max(1, Math.min(8, Number(preset.maxBubbles)));
   return Object.keys(patch).length ? patch : null;
 }
 

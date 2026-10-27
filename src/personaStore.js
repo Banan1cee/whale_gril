@@ -36,6 +36,7 @@ function save(config, patch) {
     emoji: config.persona && config.persona.emojiLevel,
     privateMaxChars: config.chat && config.chat.privateMaxChars,
     groupMaxChars: config.chat && config.chat.groupMaxChars,
+    maxBubbles: config.chat && config.chat.maxBubbles,
     links: config.links ? config.links.enabled !== false : undefined,
     freeChat: config.group ? Boolean(config.group.freeChat) : undefined,
     mutedGroups: config.group && Array.isArray(config.group.mutedGroups) ? config.group.mutedGroups : undefined,
@@ -130,6 +131,9 @@ function apply(config, data) {
   if (!config.chat) config.chat = {};
   config.chat.privateMaxChars = Number(data.privateMaxChars) || 140;
   config.chat.groupMaxChars = Number(data.groupMaxChars) || 70;
+  // 一次能发几条气泡：吵架预设要「一句话一条」，就把它调大
+  const mb = Number(data.maxBubbles);
+  config.chat.maxBubbles = mb > 0 ? Math.max(1, Math.min(8, mb)) : 2;
 
   if (!config.links) config.links = {};
   config.links.enabled = data.links === undefined ? true : Boolean(data.links);
@@ -166,6 +170,7 @@ function summary(config) {
     emoji: config.persona.emojiLevel || '正常',
     privateMaxChars: config.chat.privateMaxChars,
     groupMaxChars: config.chat.groupMaxChars,
+    maxBubbles: config.chat.maxBubbles,
     links: config.links.enabled !== false,
     freeChat: Boolean(config.group.freeChat),
     mutedGroups: Array.isArray(config.group.mutedGroups) ? config.group.mutedGroups.slice() : [],

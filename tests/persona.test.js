@@ -280,3 +280,31 @@ test('吵架大赛模式用加辣回怼库，普通模式不受影响', () => {
   assert.ok(normalLines.every((l) => !/你妈生你的时候|我他妈|杂碎/.test(l)), '普通模式不能出现加辣库的句子');
   assert.notDeepEqual(fightLines.slice(0, 5), normalLines.slice(0, 5), '两个模式的台词池应该不同');
 });
+
+test('吵架预设支持「一句话一条」：maxBubbles 会写进 config.chat', async () => {
+  const fs2 = require('node:fs');
+  const path2 = require('node:path');
+  const os2 = require('node:os');
+  const { startServer } = require('../server');
+  const root = fs2.mkdtempSync(path2.join(os2.tmpdir(), 'whale-bubble-'));
+  fs2.writeFileSync(path2.join(root, 'config.json'), JSON.stringify({ server: { port: 0, openBrowser: false }, watchConfig: false }));
+  fs2.mkdirSync(path2.join(root, 'personas'), { recursive: true });
+  fs2.copyFileSync(path2.resolve(__dirname, '..', 'personas', 'persona-v4-fight.json'), path2.join(root, 'personas', 'persona-v4-fight.json'));
+  const inst = await startServer({ root, env: {}, port: 0, openBrowser: false });
+  try {
+    const applied = await (
+      await fetch(`${inst.url}/api/persona/preset`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: inst.url },
+        body: JSON.stringify({ id: 'persona-v4-fight' }),
+      })
+    ).json();
+    assert.equal(applied.ok, true);
+    const cfg = await (await fetch(`${inst.url}/api/config`)).json();
+    assert.ok(cfg.config.chat.maxBubbles >= 4, '吵架模式要允许多发几条（一句话一条），实际 ' + cfg.config.chat.maxBubbles);
+    assert.ok(cfg.config.chat.maxBubbles <= 8, '别超过 8 条，太多像刷屏');
+  } finally {
+    await inst.close();
+    fs2.rmSync(root, { recursive: true, force: true });
+  }
+});
