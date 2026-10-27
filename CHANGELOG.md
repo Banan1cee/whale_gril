@@ -2,6 +2,26 @@
 
 ## 未发布（3.54）
 
+**三个来自用户的真实反馈，都是硬伤。**
+
+### 1) Windows Server 报「需要 pip 装包」，其实是缺 VC++ 运行库
+任何导入异常都会被附上「pip install wechatauto-replica」这句话。Windows Server 默认不带 MFC/vcruntime，原生模块加载失败却让人去 pip，等于把用户带沟里。现在按 `OSError / DLL load failed / WinError 126` 判定，改成引导装 [vc_redist.x64](https://aka.ms/vs/17/release/vc_redist.x64.exe)，并说明 Server 的情况。
+
+### 2) 看图要 ffmpeg —— 现在包里自带
+微信 4.x 的图片是 wxgf/HEVC 容器，必须 ffmpeg 才能转成 jpg。以前只在找不到时打一行警告。现在 `runtime\ffmpeg\bin\ffmpeg.exe` 随包分发（ffmpeg 7.1 essentials，含 HEVC 解码），启动日志会写「找到 ffmpeg：（包里自带…）」，`data\bridge-ready.json` 里也有 `ffmpeg: true/false`。
+
+⚠️ 代价：发行包从 86.7MB 涨到约 117MB。
+
+### 3) 「重启了但不监听」——打开数据库卡死
+发送卡住 40 秒 → 看门狗自杀 → 守护 3 秒重启 → 新进程卡在 `WeChatDB()`（内部找微信进程/取密钥偶发不返回）→ 永远走不到监听。现在：
+
+- 打开数据库加 **90 秒超时**，超时明确说「卡住不是崩溃」，`code=2` 优雅退出（不触发无限重启）
+- 起来后写 `data\bridge-ready.json`（pid / 时间 / ffmpeg 状态），启动脚本每次启动前先删掉它，据此判断「起来了但没监听」
+- 守护循环加**重启上限**：连续 4 次起来就退出就停下来并提示看日志，不再每 3 秒刷屏
+
+
+## 未发布（3.54）
+
 **主动找话题默认关闭，而且永远不进群。**
 
 原因很直接：有人在群里收到她突然来一句「今天累不累啊」，非常社死。日志里实测有 158 条「主动搭话」，其中就有群聊（比如「某个会员群」）。
