@@ -17,7 +17,7 @@ function makeConfig() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-status-'));
   fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({}));
   const config = loadConfig({ root, env: {} });
-  return { config, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
+  return { config, cleanup: () => fs.rmSync(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 80 }) };
 }
 
 const msg = (extra = {}) => ({

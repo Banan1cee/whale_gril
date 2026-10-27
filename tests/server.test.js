@@ -17,7 +17,7 @@ async function boot(configPatch = {}) {
   cfg.persona = { ...(cfg.persona || {}), master: (cfg.persona && cfg.persona.master) || { names: ['Master'], wxids: ['wxid_test_master'] } };
   cfg.admin = { minutes: 30, ...(cfg.admin || {}), spell: (cfg.admin && cfg.admin.spell) || 'test-spell' };
   fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify(cfg));
-  const instance = await startServer({ root, env: {}, port: 0, openBrowser: false });
+  const instance = await startServer({ root, env: { WHALE_LOG_FILE: '' }, port: 0, openBrowser: false });
   instance.runtime.bot.mockChunkDelayMs = 0;
   return instance;
 }

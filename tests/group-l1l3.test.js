@@ -80,8 +80,8 @@ test('L3：群聊提示词要求先判断在跟谁说话', () => {
 test('功能开关 API：能读、能写、写错 key 报错', async () => {
   const { startServer } = require('../server');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-feat-'));
-  fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ server: { port: 0, openBrowser: false }, watchConfig: false }));
-  const inst = await startServer({ root, env: {}, port: 0, openBrowser: false });
+  fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ server: { port: 0, openBrowser: false }, watchConfig: false, log: { level: 'error' } }));
+  const inst = await startServer({ root, env: { WHALE_LOG_FILE: '' }, port: 0, openBrowser: false });
   try {
     const list = await (await fetch(`${inst.url}/api/features`)).json();
     assert.equal(list.ok, true);

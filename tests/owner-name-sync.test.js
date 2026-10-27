@@ -25,7 +25,7 @@ async function boot(configPatch = {}) {
     },
   };
   fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify(cfg));
-  const instance = await startServer({ root, env: {}, port: 0, openBrowser: false });
+  const instance = await startServer({ root, env: { WHALE_LOG_FILE: '' }, port: 0, openBrowser: false });
   return { ...instance, root, configFile: path.join(root, 'config.json') };
 }
 
@@ -68,7 +68,7 @@ test('老数据迁移：只有 settings.userName 时，启动后写进 config.js
   );
   fs.mkdirSync(path.join(root, 'data'), { recursive: true });
   fs.writeFileSync(path.join(root, 'data', 'settings.json'), JSON.stringify({ userName: '爸爸' }));
-  const inst = await startServer({ root, env: {}, port: 0, openBrowser: false });
+  const inst = await startServer({ root, env: { WHALE_LOG_FILE: '' }, port: 0, openBrowser: false });
   assert.equal(inst.runtime.config.persona.ownerName, '爸爸', '启动时要把老设置搬过来');
   const saved = readJson(path.join(root, 'config.json'));
   assert.equal(saved.persona.ownerName, '爸爸', '并且落盘，调试台一眼能看到');

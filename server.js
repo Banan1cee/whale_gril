@@ -120,7 +120,10 @@ function createRuntime({ root = projectRoot(), env = process.env, loggerLevel } 
   migrateOwnerName(config);
   // 加载主人在微信里调过的语态 / 能力（data/persona.json）
   personaStore.apply(config, personaStore.load(config));
-  const logger = createLogger({ level: loggerLevel || config.log.level, file: config.paths.logFile });
+  // 测试/自检可以传 WHALE_LOG_FILE='' 关掉文件日志：Windows 上'日志流没关'会把 data 目录占住，删不掉
+  const logFileFromEnv = Object.prototype.hasOwnProperty.call(env || {}, 'WHALE_LOG_FILE') ? String(env.WHALE_LOG_FILE) : null;
+  const logFile = logFileFromEnv === null ? config.paths.logFile : (logFileFromEnv || null);
+  const logger = createLogger({ level: loggerLevel || config.log.level, file: logFile });
   const store = new Store({ file: config.paths.storeFile, limits: config.memory, logger });
   // 每次启动留一份记忆快照：换目录/重装/误点重置都能捞回来
   try {

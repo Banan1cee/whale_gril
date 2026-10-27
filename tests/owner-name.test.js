@@ -17,7 +17,7 @@ function configWith(patch = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-owner-'));
   fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify(patch));
   const config = loadConfig({ root, env: {} });
-  return { config, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
+  return { config, cleanup: () => fs.rmSync(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 80 }) };
 }
 
 const fromMaster = (text = '在吗') => ({
