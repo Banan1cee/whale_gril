@@ -2,6 +2,13 @@
 chcp 65001 >nul 2>nul
 cd /d "%~dp0"
 
+rem 自愈：如果这个目录被打了「低完整性(Low)」标签，解压出来的 python.exe 会继承它，
+rem 于是桥接以低权限运行 —— 看不到微信进程、改不了微信窗口，UIA 直接不可用
+rem （日志表现：「未找到 Weixin.dll」「SetWindowPos 拒绝访问」「读不到会话列表」）。
+rem 本 bat 由资源管理器双击启动，是 Medium 权限，有能力把标签修回 Medium。
+rem 修不了也不影响下面照常启动（脚本里所有失败都静默）。
+if exist "%~dp0scripts\fix-python-il.bat" call "%~dp0scripts\fix-python-il.bat" /quiet
+
 rem 优先用包里自带的 Python（解压即用，不需要用户装）
 set "PY=%~dp0runtime\python\python.exe"
 if not exist "%PY%" set "PY=%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
