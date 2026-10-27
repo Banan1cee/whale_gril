@@ -88,7 +88,9 @@ try:
     SHARE_EVERY = float(_share.get("everyMinutes", 120))
     # 主动搭话（问「在干啥 / 累不累」）。时间窗和频率由服务端 /api/care/due 算，这里只留一个开关和静默期
     _care = _cfg.get("care") or {}
-    CARE_ENABLED = bool(_care.get("enabled", True))
+    # 主动搭话默认关（群里突然打招呼很社死）；就算开了也只私聊，除非显式 allowGroups
+    CARE_ENABLED = bool(_care.get("enabled", False))
+    CARE_ALLOW_GROUPS = bool(_care.get("allowGroups", False))
     CARE_QUIET_MIN = float(_care.get("quietAfterMinutes", 20) or 0)
     _digest = _wechat.get("digestMinutes", 30)
     DIGEST_MINUTES = float(_digest) if isinstance(_digest, (int, float)) else 30.0
@@ -173,7 +175,9 @@ def reload_config(path=None):
         SHARE_EVERY = 120.0
 
     ca = cfg.get("care") or {}
-    CARE_ENABLED = bool(ca.get("enabled", True))
+    CARE_ENABLED = bool(ca.get("enabled", False))
+    global CARE_ALLOW_GROUPS
+    CARE_ALLOW_GROUPS = bool(ca.get("allowGroups", False))
     try:
         CARE_QUIET_MIN = float(ca.get("quietAfterMinutes", 20) or 0)
     except Exception:
@@ -2152,9 +2156,13 @@ def main():
             target = None
             try:
                 for u, name in recent_chats(limit=8, within=7 * 86400):
-                    if u not in active:
-                        target = (u, name)
-                        break
+                    if u in active:
+                        continue
+                    # 群聊绝不主动：@chatroom 结尾的一律跳过（除非显式 allowGroups）
+                    if (not CARE_ALLOW_GROUPS) and str(u).endswith("@chatroom"):
+                        continue
+                    target = (u, name)
+                    break
             except Exception:
                 target = None
             if not target:
@@ -2171,8 +2179,9 @@ def main():
                 continue
             log("主动搭话 →", name, text[:30])
             ok = send_text(text, name, u)
-            if ok is not False:
-                save_state({"lastTs": time.time(), "day": today, "count": sent + 1})
+            # 发失败也要记一次时间：以前失败不写状态，于是每 60 秒重试一次，
+            # 日志里就出现「每分钟都在主动搭话」的刷屏（实测 158 条）。
+            save_state({"lastTs": time.time(), "day": today, "count": sent + (0 if ok is False else 1)})
 
 
     BATTERY_SENT = {"done": False}

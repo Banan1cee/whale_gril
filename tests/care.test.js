@@ -189,7 +189,8 @@ test('调试台保存 care 设置后，闸门立刻按新设置算', async () =>
     const save = await fetch(app.url + '/api/config', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ patch: { 'care.windows': ['00:00-24:00'], 'care.everyMinutes': 1, 'care.maxPerDay': 5 } }),
+      // 主动搭话现在默认关，这里显式打开再测「改了设置立刻生效」
+      body: JSON.stringify({ patch: { 'care.enabled': true, 'care.windows': ['00:00-24:00'], 'care.everyMinutes': 1, 'care.maxPerDay': 5 } }),
     });
     const saved = await save.json();
     assert.equal(saved.ok, true, '保存失败：' + JSON.stringify(saved));
