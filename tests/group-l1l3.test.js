@@ -115,25 +115,60 @@ test('功能开关 API：能读、能写、写错 key 报错', async () => {
   }
 });
 
-test('主动搭话默认关，而且群里绝不主动', async () => {
+test('主动搭话默认只找主人：不进群、不找别人', async () => {
   const { root, cfg } = boot();
-  assert.equal(cfg.care.enabled, false, '主动找话题默认必须关（群里说早安很社死）');
-  assert.equal(features.isOn(cfg, 'proactiveCare'), false);
+  assert.equal(cfg.care.enabled, true, '默认开着，但只找主人');
+  assert.equal(cfg.care.onlyMaster, true);
+  assert.equal(cfg.care.allowGroups, false);
+  assert.equal(cfg.care.allowOthers, false);
+  assert.equal(features.isOn(cfg, 'careOnlyMaster'), true);
+  assert.equal(features.isOn(cfg, 'careGroups'), false);
   fs.rmSync(root, { recursive: true, force: true });
 
   const { startServer } = require('../server');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-care-'));
   fs.writeFileSync(
     path.join(dir, 'config.json'),
-    JSON.stringify({ server: { port: 0, openBrowser: false }, watchConfig: false, care: { enabled: true, allowGroups: false } })
+    JSON.stringify({
+      server: { port: 0, openBrowser: false },
+      watchConfig: false,
+      care: { enabled: true, onlyMaster: true, allowGroups: false, allowOthers: false },
+      persona: { master: { wxids: ['wxid_master_1'] } },
+    })
   );
   const inst = await startServer({ root: dir, env: {}, port: 0, openBrowser: false });
   try {
-    const priv = await (await fetch(`${inst.url}/api/care/due?last=0&sentToday=0&chat=wxid_friend`)).json();
-    assert.equal(priv.due, true, '私聊该发就发');
-    const grp = await (await fetch(`${inst.url}/api/care/due?last=0&sentToday=0&chat=12345%40chatroom`)).json();
-    assert.equal(grp.due, false, '群聊不许主动开口');
-    assert.equal(grp.reason, 'group_not_allowed');
+    const master = await (await fetch(`${inst.url}/api/care/due?last=0&sentToday=0&chat=wxid_master_1`)).json();
+    assert.equal(master.due, true, '主人私聊该发');
+
+    const group = await (await fetch(`${inst.url}/api/care/due?last=0&sentToday=0&chat=12345%40chatroom`)).json();
+    assert.equal(group.due, false, '群聊不许主动开口');
+    assert.equal(group.reason, 'group_not_allowed');
+
+    const other = await (await fetch(`${inst.url}/api/care/due?last=0&sentToday=0&chat=wxid_someone_else`)).json();
+    assert.equal(other.due, false, '非主人的私聊也不许主动');
+    assert.equal(other.reason, 'only_master');
+  } finally {
+    await inst.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('打开 care.allowGroups 后才允许群聊', async () => {
+  const { startServer } = require('../server');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-care-g-'));
+  fs.writeFileSync(
+    path.join(dir, 'config.json'),
+    JSON.stringify({
+      server: { port: 0, openBrowser: false },
+      watchConfig: false,
+      care: { enabled: true, onlyMaster: false, allowGroups: true, allowOthers: true },
+    })
+  );
+  const inst = await startServer({ root: dir, env: {}, port: 0, openBrowser: false });
+  try {
+    const group = await (await fetch(`${inst.url}/api/care/due?last=0&sentToday=0&chat=12345%40chatroom`)).json();
+    assert.equal(group.due, true, '显式允许后才发群');
   } finally {
     await inst.close();
     fs.rmSync(dir, { recursive: true, force: true });
