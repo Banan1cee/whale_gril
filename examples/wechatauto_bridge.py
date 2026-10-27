@@ -52,6 +52,34 @@ DIGEST_MINUTES = 30
 MASTER_WXID = ''
 # 超过这么多秒的旧消息直接不回，避免“回上一条”
 STALE_AFTER = float(os.environ.get("WHALE_STALE_AFTER", "4"))
+
+# 主动搭话（care）的开关：先给默认值，下面读 config 时再覆盖。
+# 以前这几个只在那段 try 里赋值，而 try 里第一次用到 _as_bool 时它还没 def
+# （定义原本在 try 后面），NameError 被 `except Exception: pass` 吞掉 →
+# 整块跳过，CARE_* 一个都没定义，care_watch 线程跑到 CARE_QUIET_MIN 就
+# NameError 退出（日志里那条 "CARE_QUIET_MIN is not defined" 就是它）。
+CARE_ENABLED = False
+CARE_ALLOW_GROUPS = False
+CARE_ONLY_MASTER = True
+CARE_ALLOW_OTHERS = False
+CARE_QUIET_MIN = 20.0
+
+
+def _as_bool(value, default=False):
+    """配置里的布尔：兼容写成字符串 "false" 的老配置。
+
+    以前 bool("false") 是 True —— 于是 care.allowGroups 明明写着 "false"，
+    桥接却当成「允许进群」。
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value).strip().lower() in ("1", "true", "yes", "on", "开")
+
+
 _cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "config.json")
 # 新版发行包不再自带 config.json（免得覆盖安装时把用户的主人名单/token 冲掉）。
 # 如果用户先双击了桥接、服务还没起过，这里用 example 生成一份，避免「token 空 → 401 → 她不回话」。
@@ -106,22 +134,12 @@ try:
     _digest = _wechat.get("digestMinutes", 30)
     DIGEST_MINUTES = float(_digest) if isinstance(_digest, (int, float)) else 30.0
     MASTER_WXID = (((_cfg.get("persona") or {}).get("master") or {}).get("wxids") or [''])[0]
-except Exception:
-    pass
+except Exception as _cfg_err:                  # noqa: BLE001
+    # 别再静默吞掉：整块跳过 = 上面这些开关全部保持默认值，表现成「配置改了没用」。
+    print("[wechatauto_bridge] 读取 config.json 出错，相关开关沿用默认值：%r"
+          % (_cfg_err,), file=sys.stderr)
 
-def _as_bool(value, default=False):
-    """配置里的布尔：兼容写成字符串 "false" 的老配置。
-
-    以前 bool("false") 是 True —— 于是 care.allowGroups 明明写着 "false"，
-    桥接却当成「允许进群」。
-    """
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return value != 0
-    return str(value).strip().lower() in ("1", "true", "yes", "on", "开")
+# _as_bool 已移到文件前部（读配置之前），不要在这里重复定义
 
 START_TS = time.time()
 
