@@ -735,6 +735,8 @@ function applyPersonaPatch(runtime, body) {
     if (body[k] !== undefined) patch[k] = Boolean(body[k]);
   }
   if (Array.isArray(body.mutedGroups)) patch.mutedGroups = body.mutedGroups.map((x) => String(x).trim()).filter(Boolean).slice(0, 30);
+  // 记住「这一版是从哪个预设载入的」，页面上能直接显示当前生效的是哪一版
+  if (body.sourcePreset !== undefined) patch.sourcePreset = str(body.sourcePreset, 80);
   personaStore.save(runtime.config, patch);
   if (body.model) {
     try {
@@ -1483,6 +1485,20 @@ function createHandler(runtime) {
       // 人设预设：personas/ 下每个版本一个文件
       if (pathname === '/api/persona/presets' && method === 'GET') {
         return json(res, 200, { ok: true, presets: presets.list(runtime.config) });
+      }
+      if (pathname === '/api/persona/preset' && method === 'GET') {
+        // 预览：只回内容，不写入 —— 页面选到哪版就先把那版填进下面的输入框，
+        // 用户看一眼再点保存，不用先点「导入」。
+        const q = new URL(req.url, 'http://localhost');
+        const preset = presets.load(runtime.config, q.searchParams.get('id'));
+        if (!preset) return json(res, 404, { ok: false, error: '没有这个人设预设' });
+        const patch = presets.toPatch(preset);
+        if (!patch) return json(res, 400, { ok: false, error: '这个人设预设是空的' });
+        return json(res, 200, {
+          ok: true,
+          preset: { id: preset.id, version: preset.version || '', name: preset.name || '', description: preset.description || '' },
+          patch,
+        });
       }
       if (pathname === '/api/persona/preset' && method === 'POST') {
         const body = await readBody(req);

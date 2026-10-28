@@ -73,6 +73,22 @@ test('导入预设会记下来源，页面能显示「当前生效是哪版」',
   assert.match(page, /当前生效/, '要有「当前生效」这行字');
 });
 
+test('人设页：选到哪版就直接填进下面输入框，不需要先点「导入」，保存才生效', () => {
+  assert.match(page, /async function previewPreset/, '要有预览函数');
+  assert.match(page, /\$\('presetPick'\)\.addEventListener\('change'/, '换预设要立刻预览');
+  assert.match(page, /loadPresetsAndPreview\(\)/, '打开页面就要自动载入一版');
+  assert.match(page, /sourcePreset:\s*PREVIEW_PRESET/, '保存时要记下这一版来自哪个预设');
+  assert.doesNotMatch(page, /id="presetApply"/, '「导入」按钮要删掉');
+  assert.doesNotMatch(page, /导入这个预设会覆盖/, '不再有导入确认弹窗');
+});
+
+test('人设页预览接口：GET 只读不写，返回内容给输入框', () => {
+  const server = fs.readFileSync(path.join(root, 'server.js'), 'utf8');
+  assert.match(server, /pathname === '\/api\/persona\/preset' && method === 'GET'/, '要有预览 GET');
+  assert.match(server, /presets\.toPatch\(preset\)/, '预览要返回可填表的内容');
+  assert.match(server, /body\.sourcePreset !== undefined/, '保存时接受来源预设');
+});
+
 test('三个人设预设的差异确实在 customPrompt 上（都写了内容且互不相同）', () => {
   const dir = path.join(root, 'personas');
   const seen = new Map();
