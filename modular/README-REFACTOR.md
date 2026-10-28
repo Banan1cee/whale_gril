@@ -6,7 +6,8 @@
 - 技术栈不变：Node.js + CommonJS，**零 npm 依赖**
 - 对外契约不变：REST 路径、`/webhook/{platform}`、`/api/bridge/heartbeat`、`server.js` 入口、`--doctor`、
   根目录 `.bat` 启动器、`config.json` / `data/` 布局
-- 测试：`node --test`（413 个用例，410 通过，3 个因本机缺少 Python 运行时跳过）
+- 测试：`node --test`（480 个用例；缺便携 Python 时 4 条跳过。`execFileSync` 管道、`explorer` 打开文件夹、
+  Windows 目录联接这 3 条依赖真实桌面环境，受限沙箱里会失败，不是代码回归）
 
 ## 一、目录结构
 
