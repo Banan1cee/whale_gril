@@ -9,6 +9,7 @@
  */
 const fs = require('node:fs');
 const path = require('node:path');
+const { readStoreFile } = require('./store');
 
 const BUNDLE_VERSION = 1;
 /** 要带走的都在 data\ 下：store=聊天记忆，persona=调教台覆盖，settings=Key/称呼/群设置 */
@@ -69,7 +70,15 @@ function collect(root, { withSecrets = false } = {}) {
     files: {},
   };
   for (const item of FILES) {
-    let value = readJson(path.join(dir, item.name));
+    let value;
+    if (item.key === 'store') {
+      // store.json 只是快照，最新数据可能在 store.json.journal 里；
+      // 直接读文件会备份到「上一次压快照时」的旧记忆。
+      value = readStoreFile(path.join(dir, item.name));
+      if (!value.sessions || !Object.keys(value.sessions).length) value = null;
+    } else {
+      value = readJson(path.join(dir, item.name));
+    }
     if (value === null) continue;
     if (item.key === 'settings' && !withSecrets) value = scrubSecrets(value);
     bundle.files[item.key] = value;

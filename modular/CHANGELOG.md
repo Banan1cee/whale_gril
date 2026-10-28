@@ -1,5 +1,150 @@
 # 更新记录
 
+## 3.57.0
+
+**这一版是「把地基补上」：分层有检查、配置有校验、记忆不再每次全量重写、发送通道能自动提权。**
+
+### 1) 分层检查（`scripts/check-layers.js`）
+
+把「谁可以 require 谁」写成规则，`node --test` 里也会跑：
+
+```
+core      ✗ adapters / services / http / pipeline / memory / llm / persona
+adapters  ✗ pipeline / services / http
+memory    ✗ pipeline / services / http / adapters
+llm       ✗ pipeline / services / http / adapters
+persona   ✗ pipeline / services / http
+pipeline  ✗ http
+services  ✗ http 服务器实现（协议工具 http/protocol 允许）
+```
+
+顺手修掉两处真的反向依赖：
+
+- `core/mentions.js` 不再 require persona，别名由调用方传（core 又纯了一点）
+- `services/chat.js` 改 require `http/protocol`，把「HTTP 协议工具」和「HTTP 服务器」分开
+
+### 2) 配置校验（`src/infra/configSchema.js`）
+
+40+ 个常用字段有了类型/范围表。以前把「历史轮数」填成 `abc`，界面上显示保存成功，
+实际还是旧值。现在：
+
+- 启动时日志里报一次（不阻断）
+- 调试台保存时整批拒绝，报错带字段路径，**一个字节都不写**（不会改一半）
+
+### 3) 记忆落盘：快照 + 增量日志
+
+以前每次落盘都把所有会话重新序列化一遍，会话越多写一次越慢。现在：
+
+- `data/store.json` 还是快照（格式没变，老文件直接能读）
+- 动过的会话追加一行到 `data/store.json.journal`
+- 日志超过 512KB / 程序退出 / prune 时压回快照
+- 读的时候自动合并；备份、导出、`reloadFromDisk` 都走同一个 `readStoreFile()`
+
+### 4) `decide()` 开始拆分
+
+第一批把「不需要模型、一条正则就能决定」的分支搬到 `src/pipeline/stages/canned.js`：
+群成员名录 / 查微信号 / 同意被损 / 主人点名吐槽 / 退场 / 休息模式。
+
+判断顺序和正则原样保留，现有 429 个测试全绿。剩下的（触发判定、引用、拼 prompt）
+还在 `decide()` 里，后续按同样方式一批一批搬。
+
+### 5) 安全小修
+
+- 静态文件防穿越：`startsWith` 改成 `path.relative`（`web-evil/` 这种前缀逃逸挡掉了）
+- token 比较改成恒定时间（`crypto.timingSafeEqual`）
+- 所有响应加 `X-Content-Type-Options` / `X-Frame-Options` / `Referrer-Policy` / CSP
+
+### 6) 桥接自动提权
+
+微信以管理员运行时，普通权限的桥接读不到控件树（UIPI），零焦点发送会全部退回旧通道。
+`启动微信桥接.bat` 现在会先检查令牌完整性级别，不是管理员就自己用 UAC 重新拉起
+（工作目录不变）。不想每次弹 UAC：设 `WHALE_NO_ELEVATE=1`。
+
+### 7) 桥接消息调度：同一会话串行、跨会话并发
+
+以前是 `ThreadPoolExecutor(max_workers=1)` —— 所有消息挤一条队。群里连发 3 张长截图时，
+第一张的 OCR 要几分钟，后面全堵着（收消息、识别、等模型、发送全在一条线上）。
+
+现在拆成三段（新文件 `bridge/msg_pipeline.py`）：
+
+```
+Listener（DB 轮询 0.4s） → MessagePipeline（按会话串行，跨会话并发） → send_text（send_lock 串行）
+```
+
+- 同一会话严格保序（不会出现「回复顺序乱」「两条回复抢同一个上下文」）
+- 不同会话并行，一个慢群不会拖住私聊
+- 单会话积压超过 4 条丢最早的（服务端的 `STALE_AFTER` 还有一层兜底）
+- 配置：`wechat.pipelineWorkers` / `wechat.pipelineQueueLimit`；
+  `WHALE_PIPELINE_WORKERS=1` 可立刻退回旧行为
+- 并发安全：`requests.Session` 换成每线程一个（`_ThreadLocalHTTP`），
+  媒体下载器创建加锁（不会同时 new 两个往同一目录落文件）
+- 自检：`python scripts/bridge-pipeline-selftest.py`（10 项，不需要微信）
+
+## 3.56.0
+
+**这一版把「发消息」改成真正不抢前台。**
+
+### 1) 新增零焦点发送通道（`bridge/bg_sender.py`）
+
+按 `docs/微信消息后台发送.md` 实现，三条腿全部走窗口消息：
+
+- **物化** `SPI_SETSCREENREADER`（微信 4.2 上单独不够，自动退到 wechatauto 的 gate 热激活）
+- **读控件** UIA `FindAll(Descendants)`，认 `AutomationId=chat_input_field` 和 `Name=发送`
+- **写** `WM_SETFOCUS` 伪焦点 + GBK 字节逐个 `WM_CHAR` + `PostMessage` 点发送按钮
+
+全程不调用 `SetForegroundWindow` / `SetWindowPos` / `SetFocus` / `SendInput` / `keybd_event`，
+所以是**结构上不碰前台**，不是「碰完再还原」。发消息时你可以继续用电脑。
+
+发送顺序变成：**零焦点 → UIA → 键盘 → OCR**，前一条失败才试下一条。
+副作用：首次发送不再需要构造 `WeChatGUI`（那一步本身会抢 5~10 秒焦点），
+所以开机后第一条回复也不会打断你。
+
+### 2) 新配置 `wechat.bgSend`
+
+| 键 | 默认 | 说明 |
+| --- | --- | --- |
+| `enabled` | `true` | 总开关 |
+| `charGapMs` | `40` | 每个 GBK 字节的间隔；太小会丢字，20~80 之间 |
+| `verify` | `true` | 发完回读输入框是否清空；关掉省约 0.5 秒 |
+| `fallbackToForeground` | `true` | 失败时退回旧通道；`false` = 绝不抢前台，失败就不发 |
+| `stripUnencodable` | `true` | emoji 等 GBK 编不了的字符跳过；`false` = 整条退回旧通道 |
+
+### 3) 命令行自检（不需要动主流程）
+
+```bat
+python -m bridge --bg-probe
+python -m bridge --bg-send "测试" --to 文件传输助手
+python examples\wechat_bg.py --probe
+python scripts\bg-selftest.py        :: 纯逻辑，不需要微信在线
+```
+
+`--bg-probe` 会打印节点数、当前会话、发送按钮坐标，以及**前后前台窗口号**，
+用来确认到底有没有抢前台。
+
+### 4) 实测（微信 4.2.0.9 / Windows 11 / 150% 缩放 / 提权）
+
+| 项 | 结果 |
+| --- | --- |
+| 发送一条 10 字中文 | 2.0 秒 |
+| 发送前后前台窗口 | 200612 → 200612（**没抢**） |
+| 发送后输入框 | 清空（回读确认） |
+| 物化节点数 | 150（聊天页）/ 81（未打开会话） |
+
+复现：`python -m bridge --bg-probe` / `python -m bridge --bg-send "测试"`
+
+本机踩到并已修掉的四个坑，详见 `docs/微信消息后台发送.md` §12：
+DPI 不感知导致点偏 1.5 倍、gate 字节必须 0→1、窗口隐藏时树会萎缩、
+点会话后控件树会重建。
+
+### 5) 已知限制
+
+- **必须提权**：非管理员进程读 4.2 的控件树是 0 个节点（UIPI）
+- 微信缩在托盘时会用「显示但不激活」拉出来（不抢前台）；不想要这个行为可以把
+  `bgSend.unhideWindow` 设成 `false`，那样隐藏状态直接退回旧通道
+- emoji 等 GBK 覆盖不到的字符：默认跳过并记日志
+- 群聊真 @（`send_at`）和引用回复仍走旧通道（要用 UIA 选人 / 点引用）
+- 系统代码页必须是 936（中文）。英文/日文系统需要另做编码适配
+
 ## 3.55.1
 
 **这一版去掉表情包，加了一键更新。**

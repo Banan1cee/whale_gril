@@ -11,6 +11,7 @@ const { createLogger } = require('./infra/logger');
 const { migrateOwnerName } = require('./infra/ownerName');
 const { watchConfigFile } = require('./infra/configPatch');
 const features = require('./infra/features');
+const configSchema = require('./infra/configSchema');
 const { Store } = require('./memory/store');
 const memoryBackup = require('./memory/backup');
 const mediaCache = require('./adapters/mediaCache');
@@ -33,6 +34,17 @@ function createRuntime({ root = path.resolve(__dirname, '..'), env = process.env
   const logFileFromEnv = Object.prototype.hasOwnProperty.call(env || {}, 'WHALE_LOG_FILE') ? String(env.WHALE_LOG_FILE) : null;
   const logFile = logFileFromEnv === null ? config.paths.logFile : (logFileFromEnv || null);
   const logger = createLogger({ level: loggerLevel || config.log.level, file: logFile });
+  // 配置体检：非法值以前会被各处的 `Number(x) || 默认` 静默吃掉，
+  // 用户在调试台填错了也看不出来。这里启动时报一次，不阻断运行。
+  try {
+    const configErrors = configSchema.validate(config);
+    if (configErrors.length) {
+      logger.warn(
+        'config.json 有 ' + configErrors.length + ' 项不合法（会按原值继续跑，建议修掉）：' +
+          configSchema.formatErrors(configErrors)
+      );
+    }
+  } catch { /* 校验失败不影响启动 */ }
   const store = new Store({ file: config.paths.storeFile, limits: config.memory, logger });
   // 每次启动留一份记忆快照：换目录/重装/误点重置都能捞回来
   try {

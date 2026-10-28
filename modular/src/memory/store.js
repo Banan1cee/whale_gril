@@ -17,6 +17,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const SAVE_DEBOUNCE_MS = 800;
+/** 日志文件超过这么大就压回快照（避免无限增长） */
+const JOURNAL_COMPACT_BYTES = 512 * 1024;
 
 function clampInt(v, min, max, fallback) {
   const n = Number(v);
@@ -27,6 +29,69 @@ function clampInt(v, min, max, fallback) {
 function trimText(text, max = 2000) {
   const s = String(text ?? '').replace(/\u0000/g, '').trim();
   return s.length > max ? s.slice(0, max) : s;
+}
+
+/* ------------------------------------------------------------------ */
+/* 存储格式：store.json 快照 + store.json.journal 增量日志              */
+/*                                                                     */
+/* 以前每次落盘都把「所有会话」重新序列化一遍，会话一多、写一次就是      */
+/* O(全部数据)。现在只把「这次动过的会话」追加一行 JSONL，日志变大       */
+/* （或程序退出）时再压回快照。对外仍然是同一个 store.json，备份/工具     */
+/* 读到的也是合并后的结果，不用改任何调用方。                           */
+/* ------------------------------------------------------------------ */
+
+function readJsonQuiet(file) {
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
+  } catch {
+    return null;
+  }
+}
+
+/** 读增量日志；崩溃时最后一行可能是半截，跳过即可。 */
+function readJournal(file) {
+  let text = '';
+  try {
+    text = fs.readFileSync(file + '.journal', 'utf8');
+  } catch {
+    return [];
+  }
+  const out = [];
+  for (const line of text.split('\n')) {
+    const s = line.trim();
+    if (!s) continue;
+    try {
+      out.push(JSON.parse(s));
+    } catch { /* 半截行：跳过 */ }
+  }
+  return out;
+}
+
+/**
+ * 读「快照 + 增量」，返回和旧 store.json 完全一样的结构。
+ * 备份 / CLI 工具 / Store.load 都走这里，保证读到的都是最新数据。
+ */
+function readStoreFile(file) {
+  const snap = readJsonQuiet(file) || {};
+  const base = {
+    version: snap.version || 1,
+    savedAt: snap.savedAt || null,
+    stats: Object.assign({ messages: 0, replies: 0 }, snap.stats || {}),
+    digest: Array.isArray(snap.digest) ? snap.digest.slice(-800) : [],
+    sessions: snap.sessions && typeof snap.sessions === 'object' ? snap.sessions : {},
+  };
+  for (const e of readJournal(file)) {
+    if (!e || typeof e !== 'object') continue;
+    if (e.full) {
+      base.sessions = e.sessions && typeof e.sessions === 'object' ? { ...e.sessions } : {};
+    } else if (e.sessions && typeof e.sessions === 'object') {
+      for (const [k, v] of Object.entries(e.sessions)) base.sessions[k] = v;
+    }
+    if (Array.isArray(e.removed)) for (const k of e.removed) delete base.sessions[k];
+    if (e.stats) base.stats = Object.assign(base.stats, e.stats);
+    if (Array.isArray(e.digest)) base.digest = e.digest.slice(-800);
+  }
+  return base;
 }
 
 class Store {
@@ -41,6 +106,10 @@ class Store {
     this.sessions = new Map();
     this.dirty = false;
     this.saveTimer = null;
+    this.journalFile = file + '.journal';
+    this.dirtyKeys = new Set();
+    this.digestDirty = false;
+    this.fullDirty = false;
     this.stats = { messages: 0, replies: 0 };
     this.digest = [];
     this.load();
@@ -48,9 +117,17 @@ class Store {
 
   /** 记忆文件被外部改过（比如恢复备份）之后，重新读一遍，不用重启服务 */
   reloadFromDisk() {
+    // 恢复备份时 store.json 已经被整个替换了；增量日志里此刻都是「恢复前」的旧数据，
+    // 留着会在重放时把刚恢复的内容盖回去，所以先清掉。
+    try {
+      fs.writeFileSync(this.journalFile, '', 'utf8');
+    } catch { /* 文件不存在或写不了都无所谓 */ }
     this.sessions.clear();
     this.digest = [];
     this.stats = { messages: 0, replies: 0 };
+    this.dirtyKeys.clear();
+    this.digestDirty = false;
+    this.fullDirty = false;
     this.load();
     this.dirty = false;
     return this.sessions.size;
@@ -58,14 +135,14 @@ class Store {
 
   load() {
     try {
-      const raw = JSON.parse(fs.readFileSync(this.file, 'utf8').replace(/^\uFEFF/, ''));
+      const raw = readStoreFile(this.file);
       for (const [key, sess] of Object.entries(raw.sessions || {})) {
         this.sessions.set(key, this.normalizeSession(key, sess));
       }
       if (raw.stats) this.stats = { ...this.stats, ...raw.stats };
       if (Array.isArray(raw.digest)) this.digest = raw.digest.slice(-800);
     } catch (err) {
-      if (err.code !== 'ENOENT') this.logger && this.logger.warn('记忆文件读取失败，将使用空记忆：' + err.message);
+      this.logger && this.logger.warn('记忆文件读取失败，将使用空记忆：' + err.message);
     }
   }
 
@@ -122,7 +199,7 @@ class Store {
     for (let i = 0; i < overflow && i < list.length; i++) {
       this.sessions.delete(list[i].key);
     }
-    this.markDirty();
+    this.markDirty();            // 整张表变了 → 压快照
   }
 
   getState(key) {
@@ -142,7 +219,7 @@ class Store {
     if (!sess.seenIds.includes(id)) {
       sess.seenIds.push(id);
       if (sess.seenIds.length > 200) sess.seenIds = sess.seenIds.slice(-200);
-      this.markDirty();
+      this.markDirty(key);
     }
   }
 
@@ -152,7 +229,7 @@ class Store {
     const last = sess.messages[sess.messages.length - 1];
     if (!last) return false;
     last.text = String(replacement).slice(0, 200);
-    this.markDirty();
+    this.markDirty(key);
     return true;
   }
 
@@ -160,7 +237,7 @@ class Store {
   addDigest(entry) {
     this.digest.push(entry);
     if (this.digest.length > 800) this.digest.splice(0, this.digest.length - 800);
-    this.markDirty();
+    this.markDirty(null, { digest: true });
   }
 
   listDigest(since = 0) {
@@ -199,7 +276,7 @@ class Store {
       if (sess.state.replyTimes.length > 200) sess.state.replyTimes = sess.state.replyTimes.slice(-200);
       this.stats.replies += 1;
     }
-    this.markDirty();
+    this.markDirty(key);
     return entry;
   }
 
@@ -221,7 +298,7 @@ class Store {
     if (name) p.name = trimText(name, 60);
     p.lastSeenAt = now;
     p.count += 1;
-    this.markDirty();
+    this.markDirty(key);
     return p;
   }
 
@@ -229,7 +306,7 @@ class Store {
   setNickname(key, uid, nickname) {
     const p = this.profile(key, uid);
     p.nickname = trimText(nickname, 60);
-    this.markDirty();
+    this.markDirty(key);
     return p;
   }
 
@@ -251,7 +328,7 @@ class Store {
         p.notes.splice(0, p.notes.length - this.limits.maxNotesPerUser);
       }
     }
-    this.markDirty();
+    this.markDirty(key);
     return p.notes;
   }
 
@@ -264,7 +341,7 @@ class Store {
     } else {
       p.notes = p.notes.filter((n) => !n.includes(raw) && !raw.includes(n));
     }
-    this.markDirty();
+    this.markDirty(key);
     return { removed: before - p.notes.length, notes: p.notes };
   }
 
@@ -278,7 +355,7 @@ class Store {
   setMuted(key, ms) {
     const st = this.getState(key);
     st.mutedUntil = Date.now() + Math.max(0, ms);
-    this.markDirty();
+    this.markDirty(key);
     return st.mutedUntil;
   }
 
@@ -287,7 +364,7 @@ class Store {
     sess.messages = [];
     sess.seenIds = [];
     sess.state = { mutedUntil: 0, lastReplyAt: 0, consecutiveReplies: 0, replyTimes: [], adminUntil: 0, discussUntil: 0, engagedUntil: 0, engagedBy: '', silentUntil: 0 };
-    this.markDirty();
+    this.markDirty(key);
   }
 
   resetAll() {
@@ -307,8 +384,11 @@ class Store {
     return { sessions: this.sessions.size, messages, notes, totalMessages: this.stats.messages, totalReplies: this.stats.replies };
   }
 
-  markDirty() {
+  markDirty(key, { digest = false } = {}) {
     this.dirty = true;
+    if (digest) this.digestDirty = true;
+    if (key) this.dirtyKeys.add(String(key));
+    else if (!digest) this.fullDirty = true;
     if (this.saveTimer) return;
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null;
@@ -317,18 +397,58 @@ class Store {
     if (this.saveTimer.unref) this.saveTimer.unref();
   }
 
-  flush() {
-    if (!this.dirty) return;
+  /** 全量落盘：写快照 + 清空增量日志（原子写，tmp + rename） */
+  compact() {
     const payload = { version: 1, savedAt: new Date().toISOString(), stats: this.stats, digest: this.digest, sessions: {} };
     for (const [key, sess] of this.sessions) payload.sessions[key] = sess;
+    fs.mkdirSync(path.dirname(this.file), { recursive: true });
+    const tmp = this.file + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(payload), 'utf8');
+    fs.renameSync(tmp, this.file);
+    try {
+      fs.writeFileSync(this.journalFile, '', 'utf8');
+    } catch { /* 日志清不掉不影响快照 */ }
+    this.dirtyKeys.clear();
+    this.digestDirty = false;
+    this.fullDirty = false;
+    this.dirty = false;
+  }
+
+  /** 增量落盘：只追加这一轮动过的会话。返回写入的条目数。 */
+  flush() {
+    if (!this.dirty) return 0;
     try {
       fs.mkdirSync(path.dirname(this.file), { recursive: true });
-      const tmp = this.file + '.tmp';
-      fs.writeFileSync(tmp, JSON.stringify(payload), 'utf8');
-      fs.renameSync(tmp, this.file);
+      // prune / resetAll 这种「整张表变了」的操作直接压快照，别写日志
+      if (this.fullDirty) {
+        this.compact();
+        return 1;
+      }
+      const entry = { t: Date.now() };
+      const sessions = {};
+      for (const key of this.dirtyKeys) {
+        const sess = this.sessions.get(key);
+        if (sess) sessions[key] = sess;
+      }
+      if (Object.keys(sessions).length) entry.sessions = sessions;
+      if (this.digestDirty) entry.digest = this.digest;
+      entry.stats = this.stats;
+      if (!entry.sessions && !entry.digest) {
+        this.dirty = false;
+        return 0;
+      }
+      fs.appendFileSync(this.journalFile, JSON.stringify(entry) + '\n', 'utf8');
+      this.dirtyKeys.clear();
+      this.digestDirty = false;
       this.dirty = false;
+      // 日志太长了就压回快照，避免启动时要重放几千行
+      try {
+        if (fs.statSync(this.journalFile).size > JOURNAL_COMPACT_BYTES) this.compact();
+      } catch { /* stat 失败就算了 */ }
+      return 1;
     } catch (err) {
       this.logger && this.logger.error('保存记忆失败：' + err.message);
+      return 0;
     }
   }
 
@@ -337,8 +457,12 @@ class Store {
       clearTimeout(this.saveTimer);
       this.saveTimer = null;
     }
+    // 退出时压一次快照：下次启动不用重放日志，store.json 也是最新的，
+    // 用户直接拷 data\store.json 走人也不会丢东西。
+    this.dirty = true;
+    this.fullDirty = true;
     this.flush();
   }
 }
 
-module.exports = { Store };
+module.exports = { Store, readStoreFile };

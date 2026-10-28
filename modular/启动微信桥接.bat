@@ -2,6 +2,29 @@
 chcp 65001 >nul 2>nul
 cd /d "%~dp0"
 
+rem ============================================================
+rem  自提权（微信 4.2 必需）
+rem  微信的 UIA 控件树和 PostMessage 都受 UIPI 约束：微信以管理员
+rem  身份运行时，普通权限的桥接读到的节点数是 0，零焦点发送会一条
+rem  都发不出去（只能退回会抢前台的旧通道）。
+rem  这里检查当前令牌是不是 High（管理员），不是就用 UAC 重新拉起自己，
+rem  工作目录保持不变，新窗口跑完会停住（和原来双击的效果一样）。
+rem
+rem  不想每次弹 UAC：被提权的父进程里设 WHALE_NO_ELEVATE=1 再调用本脚本。
+rem ============================================================
+whoami /groups 2>nul | findstr /c:"S-1-16-12288" >nul 2>&1
+if errorlevel 1 if not defined WHALE_NO_ELEVATE (
+  echo.
+  echo   [i] 需要管理员权限：微信是管理员运行时，读它的控件树也必须是同级权限。
+  echo       正在请求提权，UAC 弹窗请点「是」...
+  echo.
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -WorkingDirectory '%~dp0' -Verb RunAs"
+  exit /b 0
+)
+if errorlevel 1 (
+  echo   [!] 当前不是管理员：零焦点发送会退回会抢前台的旧通道。
+)
+
 rem 自愈：如果这个目录被打了「低完整性(Low)」标签，解压出来的 python.exe 会继承它，
 rem 于是桥接以低权限运行 —— 看不到微信进程、改不了微信窗口，UIA 直接不可用
 rem （日志表现：「未找到 Weixin.dll」「SetWindowPos 拒绝访问」「读不到会话列表」）。

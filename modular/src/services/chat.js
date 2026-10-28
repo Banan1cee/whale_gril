@@ -1,6 +1,6 @@
 'use strict';
 
-const { json, readBody, sseInit, sseSend, sanitizeId } = require('../http/util');
+const { json, readBody, sseInit, sseSend, sanitizeId } = require('../http/protocol');
 const { LlmError } = require('../llm/client');
 
 /* ---------------- 网页聊天（SSE 流式） ---------------- */

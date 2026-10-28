@@ -192,7 +192,25 @@ const DEFAULT_CONFIG = {
   memory: { maxSessions: 200, maxMessages: 400, maxNotesPerUser: 6 },
   // 微信桥接：account = 固定用哪个微信号（微信双开时必填）。网页「设置 → 微信账号」会直接写这里，
   // 一般不用手改；留空 = 按「最近活跃」自动选（双开时可能选到大号）。
-  wechat: { dbDir: '', account: '', accountGuard: true, windowHwnd: 0 },
+  wechat: {
+    dbDir: '',
+    account: '',
+    accountGuard: true,
+    windowHwnd: 0,
+    // 零焦点发送通道（bridge/bg_sender.py）。桥接自己也会解析这一块，
+    // 这里放默认值是为了：调试台能看到、configSchema 能校验、/api/status 能展示。
+    bgSend: {
+      enabled: true,
+      charGapMs: 40,
+      verify: true,
+      fallbackToForeground: true,
+      stripUnencodable: true,
+      unhideWindow: true,
+    },
+    // 消息调度：同一会话串行、跨会话并发。workers=1 等于旧的全串行行为。
+    pipelineWorkers: 4,
+    pipelineQueueLimit: 4,
+  },
   gateway: {
     wechat: { enabled: false, inboundToken: 'change-me-wechat', outboundUrl: '', outboundHeaders: {} },
     douyin: { enabled: false, inboundToken: 'change-me-douyin', outboundUrl: '', outboundHeaders: {} },

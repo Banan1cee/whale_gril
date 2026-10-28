@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { loadConfig } = require('./config');
+const configSchema = require('./configSchema');
 
 /* ------------------------------------------------------------------ */
 /* 调试台：直接读写 config.json（改完立刻生效，不用重启）              */
@@ -157,15 +158,31 @@ function applyConfigPatch(runtime, patch) {
     raw = {};
   }
   const changed = [];
+  const pending = [];
+  const errors = [];
   for (const [dotted, value] of Object.entries(patch)) {
     const p = String(dotted || '').trim();
     if (!p) continue;
     // 密钥留空 = 不改（网页上看不到已存的 Key，不能一保存就把它清了）
     if (SECRET_PATHS.has(p) && (value === '' || value === null || value === undefined)) continue;
-    setByPath(raw, p, coerceValue(runtime.config, p, value));
+    const next = coerceValue(runtime.config, p, value);
+    const spec = configSchema.FIELDS[p];
+    if (spec) {
+      const message = configSchema.checkValue(next, spec);
+      if (message) {
+        errors.push(p + '：' + message);
+        continue;
+      }
+    }
+    pending.push([p, next]);
     changed.push(p);
   }
+  // 校验先于落盘：填错了就整批拒绝，别出现「改了一半」的状态
+  if (errors.length) {
+    throw Object.assign(new Error('配置没保存：' + errors.join('；')), { statusCode: 400 });
+  }
   if (!changed.length) return { changed, cleared: [] };
+  for (const [p, next] of pending) setByPath(raw, p, next);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify(raw, null, 2) + '\n', 'utf8');
   const cleared = clearSettingsShadow(runtime, changed);

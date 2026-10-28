@@ -1,7 +1,7 @@
 'use strict';
 
 const { json } = require('./util');
-const { checkRequest } = require('./security');
+const { checkRequest, applySecurityHeaders } = require('./security');
 const { serveStatic } = require('./static');
 
 /**
@@ -53,6 +53,7 @@ class Router {
     const { runtime } = this;
 
     try {
+      applySecurityHeaders(res);
       const denied = checkRequest(runtime, req, info);
       if (denied) return json(res, denied.status, { ok: false, error: denied.error });
 
