@@ -94,10 +94,21 @@ function choose(pool, rng = Math.random, recent = []) {
 }
 // 没有冷却、也不按会话类型限制：总开关开着就按概率（或对方明确要）发。
 // 同一个会话同时只会存在一个待发任务，避免连发刷屏。
+const WANT_RE = /(发|来|甩|扔|给|丢|整|弄|上)(一?个|一?张|一?只|点)?\s*(表情包?|表情|动图|贴纸|梗图|meme)/i;
+// 单独说「表情包」也算（带上语气词：表情包呗 / 表情包啊）
+const WANT_BARE_RE = /(^|[\s，,。.！!？?])(表情包|表情)(呗|吧|啊|呀|嘛|啦)?($|[\s，,。.！!？?~～])/;
+
+/** 对方是不是在明确要一个表情包（这种情况不看概率，直接发） */
+function isStickerRequest(value) {
+  const text = String(value == null ? '' : value);
+  if (!text.trim()) return false;
+  return WANT_RE.test(text) || WANT_BARE_RE.test(text);
+}
+
 function pick({ config, root, key = '', text = '', request = '', recent = [], rng = Math.random } = {}) {
   if (!isOn(config)) return null;
   const emotion = detectEmotion(String(text || request));
-  const want = /(发|来|甩|扔|给|丢)(个|一个|张)?\s*(表情包?|动图|贴纸)/.test(String(request || ''));
+  const want = isStickerRequest(request) || isStickerRequest(text);
   if (!want && !(rng() < chanceFor(config, emotion))) return null;
   const dir = stickerDir(config, root);
   let file = choose(imagesFor(dir, emotion), rng, recent);
@@ -163,4 +174,4 @@ function upload(config, root, emotion, files) {
 }
 module.exports = { EMOTIONS, EMOTION_LABELS, GENERIC, EXTS, MAX_FILE_BYTES, MAX_UPLOAD_FILES,
   hasEmotion, stickerDir, regularFile, listImages, categoryImages, imagesFor, anyImages, isOn,
-  detectEmotion, chanceFor, choose, pick, imageType, upload };
+  detectEmotion, chanceFor, choose, pick, isStickerRequest, imageType, upload };
