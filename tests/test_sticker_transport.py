@@ -112,6 +112,36 @@ class TransportTest(unittest.TestCase):
         self.gui = SimpleNamespace(main_hwnd=100, _input=SimpleNamespace(key=key),
                                    copy_files_to_clipboard=Mock(return_value=True))
 
+    def test_sole_window_accepted_when_configured_account_matches_database(self):
+        # 现场故障：机器上有 3 个历史账号目录，现在只登一个号，网页里已经选好了小号，
+        # 文字能发，表情包却一直 "target account window could not be verified"。
+        allowed = transport.account_evidence_allowed(
+            configured_account='wxid_test_account_0001',
+            db_account='wxid_test_account_0001',
+            reason='本机只登了一个号',
+            explicit_pin=False,
+            account_dirs=['a', 'b', 'c'],
+        )
+        self.assertTrue(allowed, '明确指定了账号且数据库就是这个号，应当放行')
+
+    def test_sole_window_refused_when_account_is_ambiguous(self):
+        cases = [
+            dict(configured_account='', db_account='wxid_a', reason='本机只登了一个号'),
+            dict(configured_account='wxid_a', db_account='', reason='本机只登了一个号'),
+            dict(configured_account='wxid_a', db_account='wxid_b', reason='本机只登了一个号'),
+        ]
+        for case in cases:
+            self.assertFalse(transport.account_evidence_allowed(
+                explicit_pin=False, account_dirs=['a', 'b'], **case), case)
+            self.assertTrue(transport.account_evidence_allowed(
+                explicit_pin=True, account_dirs=['a', 'b'], **case), '手动钉窗口时总会放行')
+
+    def test_account_evidence_accepts_other_reasons_and_single_account(self):
+        for reason, dirs in (('命中最近会话 3 条', ['a', 'b']), ('本机只登了一个号', ['a'])):
+            self.assertTrue(transport.account_evidence_allowed(
+                configured_account='', db_account='wxid_a', reason=reason,
+                explicit_pin=False, account_dirs=dirs), reason)
+
     def send(self, **overrides):
         arguments = dict(gui=self.gui, uia=self.uia, hwnd=100, aliases={'Peer'}, path=self.path,
                          root=self.directory, db=self.db, username='peer', gate=lambda: self.allow,
@@ -382,12 +412,17 @@ class BridgeContractTest(unittest.TestCase):
                         account_send_allowed=Mock(return_value=True), ACCOUNT={'verified': True, 'hwnd': 100},
                         wechat_window_alive=Mock(return_value=True),
                         WindowsDesktop=Mock(return_value=FakeDesktop()),
-                        gui=SimpleNamespace(main_hwnd=100, use_window=Mock(return_value=True), _uia=object()),
+                        gui=SimpleNamespace(main_hwnd=100, use_window=Mock(return_value=True),
+                                            _uia=SimpleNamespace(current_chat=lambda: 'Peer',
+                                                                 open_chat=Mock(return_value=True))),
                         resolve_sticker_target=Mock(return_value=('peer', {'Peer'})),
+                        force_foreground=Mock(return_value=True),
+                        snapshot_win_state=Mock(return_value={'hwnd': 100, 'iconic': False, 'fg': 0}),
+                        restore_win_state=Mock(), log_throttled=Mock(),
                         guarded_sticker_send=Mock(return_value=transport.result('confirmed')),
                         _compat_mod=lambda: SimpleNamespace(pinned_window=lambda: 100),
                         ROOT=str(ROOT), os=os, db=FakeDB(), SEND_STATE={'active': False, 'start': 0},
-                        time=SimpleNamespace(time=lambda: 1))
+                        time=SimpleNamespace(time=lambda: 1, sleep=lambda delay: None))
         bridge_functions({'send_sticker'}, self.env)
         return self.env
 
@@ -396,6 +431,46 @@ class BridgeContractTest(unittest.TestCase):
         env['account_send_allowed'].return_value = False
         self.assertEqual(env['send_sticker']('fake.png', 'Peer', 'peer', 'g1', 'one-shot')['status'], 'failed')
         env['gui'].use_window.assert_not_called()
+        env['guarded_sticker_send'].assert_not_called()
+
+    def test_bridge_brings_wechat_forward_instead_of_refusing(self):
+        # 现场回归：用户点发送时微信不在前台，以前直接 "open the target account window
+        # in the foreground first" 失败。现在应当短暂抬到前台、发送、再还原窗口。
+        env = self.send_environment()
+        desktop = FakeDesktop()
+        desktop.in_foreground = False
+        env['WindowsDesktop'] = Mock(return_value=desktop)
+        env['force_foreground'].side_effect = lambda hwnd: setattr(desktop, 'in_foreground', True) or True
+        outcome = env['send_sticker']('fake.png', 'Peer', 'peer', 'g1', 'one-shot')
+        self.assertEqual(outcome['status'], 'confirmed')
+        env['force_foreground'].assert_called_once_with(100)
+        env['snapshot_win_state'].assert_called_once()
+        env['restore_win_state'].assert_called_once()
+        env['guarded_sticker_send'].assert_called_once()
+
+    def test_bridge_fails_when_window_cannot_be_brought_forward(self):
+        env = self.send_environment()
+        desktop = FakeDesktop()
+        desktop.in_foreground = False
+        env['WindowsDesktop'] = Mock(return_value=desktop)
+        env['force_foreground'].return_value = False
+        self.assertEqual(env['send_sticker']('fake.png', 'Peer', 'peer', 'g1', 'one-shot')['status'], 'failed')
+        env['guarded_sticker_send'].assert_not_called()
+
+    def test_bridge_opens_exact_target_then_verifies_title(self):
+        env = self.send_environment()
+        chats = {'current': 'Some other chat'}
+        env['gui']._uia = SimpleNamespace(
+            current_chat=lambda: chats['current'],
+            open_chat=Mock(side_effect=lambda keys: chats.update(current='Peer') or True))
+        self.assertEqual(env['send_sticker']('fake.png', 'Peer', 'peer', 'g1', 'one-shot')['status'], 'confirmed')
+        env['gui']._uia.open_chat.assert_called_once()
+
+    def test_bridge_never_sends_when_open_chat_lands_on_wrong_title(self):
+        env = self.send_environment()
+        env['gui']._uia = SimpleNamespace(
+            current_chat=lambda: 'Wrong chat', open_chat=Mock(return_value=True))
+        self.assertEqual(env['send_sticker']('fake.png', 'Peer', 'peer', 'g1', 'one-shot')['status'], 'failed')
         env['guarded_sticker_send'].assert_not_called()
 
     def test_bridge_bind_failure_never_transports(self):
@@ -437,7 +512,8 @@ class BridgeContractTest(unittest.TestCase):
         env.update(quarantined_input_value=transport.quarantined_input_value, log_throttled=Mock(),
                    sticker_draft_quarantine={'peer': {'hwnd': 100, 'aliases': {'Peer'},
                                                       'draft_observed': observed}},
-                   acct_dirs=['test-account'], WINDOW_HWND=0, dead_chats=set(),
+                   acct_dirs=['test-account'], acct='test-account', WINDOW_HWND=0, dead_chats=set(),
+                   sticker_account_evidence_ok=transport.account_evidence_allowed,
                    group_is_alive=lambda username: True, AWAY={'on': False}, away_active=lambda: False,
                    game_running=lambda: False, foreground_is_fullscreen=lambda: False)
         bridge_functions({'sticker_quarantine_allows', 'sticker_account_evidence_allowed', 'send_text', 'send_at'}, env)
@@ -489,14 +565,20 @@ class BridgeContractTest(unittest.TestCase):
         self.assertTrue(env['sticker_quarantine_allows']('other-peer', 'Other peer'))
         self.assertIn('peer', env['sticker_draft_quarantine'])
 
-    def test_sole_visible_window_not_account_proof_with_multiple_databases(self):
+    def test_sole_visible_window_needs_the_configured_account(self):
+        # 现场回归：多开过的机器只登一个号时，以前一律拒绝，表情包永远发不出去。
+        # 现在只要求「明确指定了账号 + 数据库就是这个号」，与文字发送的证据一致。
         env, _, _ = self.quarantine_environment()
         env['ACCOUNT']['why'] = '本机只登了一个号'
         env['acct_dirs'] = ['test-account', 'another-account']
-        self.assertFalse(env['sticker_account_evidence_allowed']())
-        env['WINDOW_HWND'] = 101  # stale/mismatched pin is not account proof
-        self.assertFalse(env['sticker_account_evidence_allowed']())
-        env['WINDOW_HWND'] = 100  # explicit operator-verified pin
+        env['acct'] = ''
+        self.assertFalse(env['sticker_account_evidence_allowed'](), '没指定账号时不猜')
+        env['acct'] = 'test-account'  # 与 db.account 一致
+        self.assertTrue(env['sticker_account_evidence_allowed'](), '指定了正确账号应放行')
+        env['acct'] = 'another-account'
+        self.assertFalse(env['sticker_account_evidence_allowed'](), '指定账号与数据库不一致要拒绝')
+        env['acct'] = 'test-account'
+        env['WINDOW_HWND'] = 100  # 手动钉窗口：直接放行
         self.assertTrue(env['sticker_account_evidence_allowed']())
 
     def test_entire_bridge_syntax_compiles_without_executing_it(self):

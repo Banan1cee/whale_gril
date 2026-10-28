@@ -145,6 +145,24 @@ def resolve_target(db, shown, username=''):
     return canonical, frozenset(safe)
 
 
+def account_evidence_allowed(*, configured_account, db_account, reason, explicit_pin, account_dirs):
+    """May a sole visible WeChat window be trusted for this account?
+
+    Text messages have always accepted "only one window is visible". Stickers
+    used to demand more (an explicit window pin), which made them fail on every
+    machine that has more than one historical account directory while only one
+    account is logged in now. Accept the same evidence as text sends, but only
+    when the operator explicitly configured the account and the database was
+    opened with exactly that account; otherwise the choice is ambiguous.
+    """
+    if explicit_pin:
+        return True
+    if str(reason or '') != '本机只登了一个号' or len(account_dirs or []) <= 1:
+        return True
+    wanted, current = str(configured_account or '').strip(), str(db_account or '').strip()
+    return bool(wanted and current and wanted == current)
+
+
 def db_identity(db):
     identity = (str(getattr(db, 'account', '') or ''), str(getattr(db, 'wxid', '') or ''))
     if not all(identity):

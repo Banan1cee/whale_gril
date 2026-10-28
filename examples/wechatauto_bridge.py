@@ -45,7 +45,8 @@ if _EXAMPLES_DIR not in sys.path:
     sys.path.insert(0, _EXAMPLES_DIR)
 from sticker_transport import (guarded_send as guarded_sticker_send, read_enabled_config,
                                resolve_target as resolve_sticker_target, result as sticker_result,
-                               WindowsDesktop, quarantined_input_value)
+                               WindowsDesktop, quarantined_input_value,
+                               account_evidence_allowed as sticker_account_evidence_ok)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_PATH = os.path.join(ROOT, "config.json")
@@ -2144,12 +2145,28 @@ def main():
         return allowed
 
     def sticker_account_evidence_allowed():
-        # A sole visible window is not account proof when several historical
-        # account DBs exist. Refuse for this experimental transport unless the
-        # operator explicitly pinned the verified account's window.
+        # 只有一个可见微信窗口时，文字消息一直是认的；表情包以前额外要求
+        # 「手动钉窗口」，结果多开过的机器全都发不出去（日志里就是
+        # 「failed target account window could not be verified」）。
+        # 现在和文字用同一套证据：只要明确指定了账号、且数据库就是用这个号
+        # 打开的，就放行；没指定账号、多个账号目录又分不清时才拒绝。
         explicit_pin = bool(WINDOW_HWND and int(WINDOW_HWND) == int(ACCOUNT.get("hwnd") or 0))
-        return not (ACCOUNT.get("why") == "本机只登了一个号"
-                    and len(acct_dirs) > 1 and not explicit_pin)
+        allowed = sticker_account_evidence_ok(
+            configured_account=acct,
+            db_account=getattr(db, "account", ""),
+            reason=ACCOUNT.get("why"),
+            explicit_pin=explicit_pin,
+            account_dirs=acct_dirs,
+        )
+        if not allowed:
+            log_throttled(
+                "sticker-account-ambiguous",
+                "表情包跳过：这台机器有多个微信账号目录，但没指定用哪一个。"
+                "去网页「设置 → 微信账号」选一个再发（文字消息已经在用「最近活跃」那个，"
+                "表情包不猜，免得从别的号发出去）。",
+                ttl=300,
+            )
+        return allowed
 
     sticker_headers = {"x-bot-token": token, "x-whale-bridge": "1"}
     sticker_base = bot_url.rsplit("/webhook", 1)[0]
@@ -2211,13 +2228,21 @@ def main():
                     or not wechat_window_alive() or not sticker_account_evidence_allowed()):
                 return sticker_result("failed", "target account window could not be verified")
             hwnd = int(ACCOUNT.get("hwnd") or 0)
+            snap = None
             try:
                 desktop = WindowsDesktop()
                 if not desktop.foreground(hwnd):
-                    return sticker_result("failed", "open the target account window in the foreground first")
+                    # 以前这里是「微信不在前台就不发」，结果用户点完发送还得自己去切窗口，
+                    # 实际表现就是「表情包发不出去」。文字发送本来就是先抬一下微信、发完还原；
+                    # 这里做同样的事：短暂抬到前台，粘贴前仍会重新校验会话标题/焦点/空输入框。
+                    snap = snapshot_win_state()
+                    if not force_foreground(hwnd) or not desktop.foreground(hwnd):
+                        return sticker_result("failed", "could not bring the WeChat window to the foreground")
+                    log_throttled("sticker-foreground", "表情包：微信不在前台，先切过去（发完会把窗口还原）", ttl=120)
             except Exception:
                 return sticker_result("failed", "foreground safety checks are unavailable")
-            with gui_lock:
+            try:
+              with gui_lock:
                 # Do not initialize/activate any window just to send a sticker.
                 current_gui = gui
                 if current_gui is None:
@@ -2238,6 +2263,17 @@ def main():
                     uia = getattr(current_gui, "_uia", None)
                     if uia is None:
                         return sticker_result("failed", "UIA target proof is unavailable; no OCR fallback")
+                    # 目标会话没打开就自己切过去（和文字发送一样用 UIA 打开），
+                    # 打开之后必须核对标题确实是目标，否则宁可不发。
+                    try:
+                        if str(uia.current_chat() or "") not in aliases:
+                            if not uia.open_chat(list(aliases) or [chat_display_name]):
+                                return sticker_result("failed", "exact target is not open in the pinned window")
+                            time.sleep(0.4)
+                    except Exception:
+                        return sticker_result("failed", "exact target is not open in the pinned window")
+                    if str(uia.current_chat() or "") not in aliases:
+                        return sticker_result("failed", "exact target is not open in the pinned window")
                     current = sticker_config_now()
                     if current is None:
                         return sticker_result("cancelled", "stickers are disabled")
@@ -2288,6 +2324,12 @@ def main():
                     return outcome
                 except Exception:
                     return sticker_result("failed", "sticker safety checks are unavailable")
+            finally:
+                if snap:
+                    try:
+                        restore_win_state(snap)
+                    except Exception:
+                        pass
 
     def claim_and_send_sticker(item, expected_chat="", expected_username=""):
         """Atomic claim precedes every send, including normal webhook stickers.
