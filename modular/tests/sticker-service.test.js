@@ -126,9 +126,31 @@ test('任务过期不重试，满队列明确报错而非静默丢任务', (t) =
   const first = service.enqueue('happy', '文件传输助手'); service.claim(first.id);
   for (let i = 1; i < 20; i++) service.enqueue('happy', '文件传输助手');
   assert.throws(() => service.enqueue('happy', '文件传输助手'), { statusCode: 429 });
-  now += 5 * 60000 + 1;
+  now += 90 * 1000 + 1;
   assert.deepEqual(service.pending(), []);
   assert.equal(service.jobs.get(first.id).status, 'unconfirmed');
+});
+
+test('卡住 45 秒不再堵会话，90 秒才真正释放', (t) => {
+  const { root, cfg } = fixture(t);
+  upload(cfg, root);
+  let now = 1;
+  const service = new StickerService(cfg, { now: () => now, rng: () => 0 });
+  const msg = { platform: 'wechat', chatId: 'wxid-stuck', chatType: 'private' };
+  const stuck = service.plan(msg, '哈哈');
+  assert.equal(stuck.status, 'reserved');
+  service.claim(stuck.id); // 进入 sending 后再也没有 ack，模拟卡死
+
+  now += 30 * 1000;
+  assert.equal(service.plan(msg, '哈哈'), null, '30 秒内还算正在发，不该重复排');
+  now += 16 * 1000; // 46 秒
+  const fresh = service.plan(msg, '哈哈');
+  assert.ok(fresh, '超过 45 秒说明卡住了，新表情不该被它挡住');
+  assert.equal(service.jobs.get(stuck.id).status, 'sending', '45 秒只放行不释放，旧任务仍留给 90 秒回收');
+  now += 45 * 1000; // 91 秒
+  service.reconcile();
+  assert.equal(service.jobs.get(stuck.id).status, 'unconfirmed', '已经按过 Enter，只能算未确认');
+  assert.equal(service.jobs.get(stuck.id).error, '任务超时，未自动重试');
 });
 
 async function live(t) {

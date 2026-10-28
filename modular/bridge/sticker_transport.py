@@ -430,8 +430,15 @@ def guarded_send(gui, uia, hwnd, aliases, path, root, db, username, gate,
                           draft_may_remain=True, draft_observed=draft_observed)
         # Recheck immediately at the irreversible action boundary, including backend generation.
         control = guard()
-        if control is None or not _is_attachment(desktop.value(control)):
-            return result('unconfirmed', 'send gates changed after paste; Enter not pressed; clear draft manually; do not retry',
+        if control is None:
+            return result('unconfirmed', 'send gates changed after paste (focus/target lost); Enter not pressed; clear draft manually; do not retry',
+                          draft_may_remain=True, draft_observed=draft_observed)
+        _post = desktop.value(control)
+        if not _is_attachment(_post):
+            # 带上实际读到的值，才能判断是「微信把附件又转成文字」还是「读不到」
+            return result('unconfirmed',
+                          'send gates changed after paste (input reads %r); Enter not pressed; clear draft manually; do not retry'
+                          % (str(_post)[:40],),
                           draft_may_remain=True, draft_observed=draft_observed)
         attempted_enter = True
         gui._input.key(0x0D)  # exactly one Enter, never Ctrl+Enter or retry

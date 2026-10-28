@@ -266,6 +266,40 @@ class TransportTest(unittest.TestCase):
         self.assertEqual(self.send()['status'], 'unconfirmed')
         self.assertEqual(self.keys, [0x56])
 
+    def test_final_recheck_losing_the_target_says_so(self):
+        # 3.63：粘贴后最后一次检查如果窗口/焦点跑了，要说「焦点/目标丢了」，
+        # 而不是笼统的「send gates changed」，否则根本没法判断该不该重试。
+        seen = []
+
+        def current_chat():
+            seen.append(1)
+            return 'Peer' if len(seen) < 5 else 'Wrong chat'
+
+        self.uia.current_chat = current_chat
+        outcome = self.send()
+        self.assertEqual(outcome['status'], 'unconfirmed')
+        self.assertEqual(self.keys, [0x56], '目标丢了绝不能按 Enter')
+        self.assertIn('focus/target lost', outcome['error'])
+        self.assertTrue(outcome['draft_may_remain'])
+
+    def test_final_recheck_reports_what_the_input_actually_reads(self):
+        # 另一种现场：输入框里读到的不是附件（微信把它转成文字/读不到），
+        # 3.63 把实际读到的内容带进错误里，好区分「转成文字」和「读不到」。
+        reads = []
+
+        def value(control):
+            if 0x56 not in self.keys:
+                return '\n'
+            reads.append(1)
+            return '\ufffc\n' if len(reads) == 1 else '微信把附件转成文字了\n'
+
+        self.desktop.value = value
+        outcome = self.send()
+        self.assertEqual(outcome['status'], 'unconfirmed')
+        self.assertEqual(self.keys, [0x56])
+        self.assertIn('input reads', outcome['error'])
+        self.assertIn('转成文字', outcome['error'])
+
     def test_unsupported_draft_never_presses_enter(self):
         self.on_paste = lambda: setattr(self.desktop, 'input_value', '')
         self.assertEqual(self.send()['status'], 'unconfirmed')
