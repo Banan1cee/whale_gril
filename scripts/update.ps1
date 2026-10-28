@@ -597,6 +597,28 @@ function Get-ReleaseInfo {
     return $null
 }
 
+# 所有 API 镜像都挂了时，退一步：让镜像把 releases/latest 页面抓回来，从里面抠 tag
+function Get-LatestTagFromMirror {
+    param([string]$Helper, [string]$Work)
+    $node = Find-NodeExe $script:appRoot
+    if (-not $node -or -not $Helper) { return '' }
+    $urls = @(
+        ('https://ghfast.top/https://github.com/' + $Repo + '/releases/latest'),
+        ('https://gh-proxy.org/https://github.com/' + $Repo + '/releases/latest')
+    )
+    foreach ($u in $urls) {
+        $out = Join-Path $Work 'latest.html'
+        Remove-Item -LiteralPath $out -Force -ErrorAction SilentlyContinue
+        try {
+            $null = @(& $node $Helper 'json' $u $out 2>&1)
+            if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $out)) { continue }
+            $html = Get-Content -LiteralPath $out -Raw -Encoding UTF8
+            if ($html -match 'releases/tag/(v?[0-9][0-9A-Za-z\.\-]*)') { return $Matches[1] }
+        } catch { }
+    }
+    return ''
+}
+
 function Save-ReleaseAsset {
     param(
         [string[]]$Urls,
@@ -1008,6 +1030,7 @@ try {
         if (-not $NoMirror) {
             # 官方 API 被墙时走代理；镜像只转发，sha256 仍按官方给的值校验
             $apiUrls += ('https://gh-proxy.com/https://api.github.com/repos/' + $Repo + '/releases/' + $apiPath)
+            $apiUrls += ('https://gh-proxy.org/https://api.github.com/repos/' + $Repo + '/releases/' + $apiPath)
         }
     }
     Say '  正在查询 GitHub Release…' 'DarkGray'
@@ -1036,6 +1059,20 @@ try {
             })
         }
         Say ('  ⚠ 拿不到 GitHub API，按 -Tag 直连构造下载地址：' + $Tag) 'Yellow'
+    } elseif (-not $NoMirror -and ($htmlTag = Get-LatestTagFromMirror -Helper $Helper -Work $Work)) {
+        $v = $htmlTag -replace '^[vV]', ''
+        $rel = [pscustomobject]@{
+            tag_name = $htmlTag
+            name = '（镜像页面解析）'
+            body = ''
+            assets = @([pscustomobject]@{
+                name = ('whale-girl-' + $v + '.zip')
+                size = 0
+                digest = ''
+                browser_download_url = ('https://github.com/' + $Repo + '/releases/download/' + $htmlTag + '/whale-girl-' + $v + '.zip')
+            })
+        }
+        Say ('  ⚠ API 全挂，从镜像页面拿到最新版：' + $htmlTag + '（这一路没有 sha256，只校验大小）') 'Yellow'
     } else {
         throw '查不到任何版本信息（API 被墙 / 断网 / 限流）。可以：① 挂代理后重跑；② 手动下载 zip 后拖到 一键更新.bat 上；③ 加 -Tag v3.54 走直连模式。'
     }
@@ -1133,7 +1170,7 @@ try {
         if ($Mirror) { $urls += ($Mirror.TrimEnd('/') + '/' + $official) }
         $urls += $official
         if (-not $NoMirror) {
-            foreach ($m in @('https://ghfast.top/', 'https://gh-proxy.com/', 'https://ghproxy.net/')) {
+            foreach ($m in @('https://ghfast.top/', 'https://gh-proxy.com/', 'https://gh-proxy.org/', 'https://ghproxy.net/')) {
                 $urls += ($m + $official)
             }
         }
