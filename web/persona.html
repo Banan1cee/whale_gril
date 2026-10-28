@@ -98,8 +98,10 @@
     <p class="hint">包里自带几版通用人设，一个版本一个文件（personas/persona-v1.json…）。导入只改人设，不动模型、Key 和记忆。</p>
     <div class="row">
       <select id="presetPick" style="flex:1;padding:8px;border-radius:8px;border:1px solid #cfd8e3"></select>
-      <button type="button" class="btn" id="presetApply">导入</button>
+      <button type="button" class="btn" id="presetReload">重新载入这一版</button>
     </div>
+    <p class="hint">选到哪一版，下面的名字 / 性格 / 语气等会立刻换成那一版；确认后点最下面的「保存」就会生效。</p>
+    <p class="hint" id="presetAutoHint"></p>
     <p class="hint" id="presetMsg"></p>
   </div>
 
@@ -259,6 +261,7 @@ async function save() {
     freeChat: $('freeChat').checked,
     mutedGroups: $('mutedGroups').value.split(/[、,，\s]+/).map((x) => x.trim()).filter(Boolean),
     model: $('model').value.trim(),
+    sourcePreset: PREVIEW_PRESET || '',
   };
   $('saveHint').textContent = '保存中…';
   const r = await fetch('/api/persona', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -267,6 +270,7 @@ async function save() {
     fill(d.persona, d.llm);
     showSourcePreset(d.persona);
     $('saveHint').textContent = '已保存 · ' + new Date().toLocaleTimeString('zh-CN', { hour12: false });
+    $('presetAutoHint').textContent = PREVIEW_PRESET ? `已保存，当前生效：${PREVIEW_PRESET}` : '';
     toast('已保存，立即生效');
   } else {
     $('saveHint').textContent = '保存失败：' + (d.error || '未知错误');
@@ -312,24 +316,55 @@ async function loadPresets() {
   }
 }
 
-$('presetApply').addEventListener('click', async () => {
-  const id = $('presetPick').value;
-  if (!id) return;
-  if (!confirm('导入这个预设会覆盖当前人设和上下文设置，继续？')) return;
-  $('presetMsg').textContent = '导入中…';
-  const r = await fetch('/api/persona/preset', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) });
-  const d = await r.json();
-  if (d.ok) {
-    fill(d.persona, d.llm);
-    showSourcePreset(d.persona);
-    $('presetMsg').textContent = `已导入 ${d.applied.id}${d.applied.version ? ' v' + d.applied.version : ''}`;
-    toast('人设已导入');
-  } else {
-    $('presetMsg').textContent = '导入失败：' + (d.error || '未知错误');
-  }
-});
+/** 当前输入框里显示的是哪一版预设（还没保存） */
+let PREVIEW_PRESET = '';
 
-loadPresets();
+function applyPresetToForm(patch, info) {
+  fill({ ...patch }, null);
+  PREVIEW_PRESET = info.id;
+  const ver = info.version ? ' v' + info.version : '';
+  $('presetAutoHint').textContent = `已载入 ${info.id}${ver}${info.name ? ' · ' + info.name : ''}：下面显示的就是这一版，点最下面「保存」才会生效。`;
+  $('presetMsg').textContent = '';
+  toast('已载入这一版，记得点保存');
+}
+
+async function previewPreset(id, { quiet = false } = {}) {
+  if (!id) return false;
+  if (!quiet) $('presetAutoHint').textContent = '载入中…';
+  try {
+    const r = await fetch('/api/persona/preset?id=' + encodeURIComponent(id));
+    const d = await r.json();
+    if (!r.ok || !d.ok) throw new Error(d.error || '读不到这一版');
+    applyPresetToForm(d.patch, d.preset);
+    return true;
+  } catch (e) {
+    $('presetAutoHint').textContent = '载入失败：' + (e && e.message ? e.message : e);
+    return false;
+  }
+}
+
+$('presetPick').addEventListener('change', () => previewPreset($('presetPick').value));
+$('presetReload').addEventListener('click', () => previewPreset($('presetPick').value));
+
+async function loadPresetsAndPreview() {
+  await loadPresets();
+  const r = await fetch('/api/persona');
+  const d = await r.json();
+  const current = (d && d.persona && d.persona.sourcePreset) || '';
+  const options = [...$('presetPick').options].map((o) => o.value).filter(Boolean);
+  if (!options.length) return;
+  if (options.includes(current)) {
+    // 现在生效的就是某一版预设：直接把那一版填进来，看到的就是正在用的内容
+    $('presetPick').value = current;
+    await previewPreset(current, { quiet: true });
+    return;
+  }
+  // 现在的人设是自定义的（不是从预设来的）：不覆盖输入框，避免误点保存把自定义人设冲掉
+  $('presetPick').value = options[0];
+  $('presetAutoHint').textContent = '下面是当前正在用的人设。想换成某一版预设，在上面选一下就会立刻填进来，再点保存生效。';
+}
+
+loadPresetsAndPreview();
 $('btnReset').addEventListener('click', async () => {
   if (!confirm('恢复默认？所有自定义（性格、语态、上下文、开关）都会清空。')) return;
   const r = await fetch('/api/persona', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reset: true }) });
