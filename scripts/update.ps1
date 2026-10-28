@@ -55,20 +55,57 @@ $OverlayStarted = $false
 $script:lastBackup = ''
 $script:Stage = 'net'
 
+# 慢就换源：开始下载后 SlowWindowMs 毫秒内还没下到 SlowMinBytes，就判这个源不行，直接换下一个。
+# 为什么要这条：国内直连 GitHub 常见「连得上但只有几 KB/s」，等它下完 100MB 要半小时，
+# 而换到镜像往往是几 MB/s。用户双击之后不该靠盯进度条决定要不要 Ctrl+C。
+$script:SlowWindowMs = 10000
+$script:SlowMinBytes = 200 * 1024
+# 换源之前先测速：所有源并发下 ProbeBudgetMs，谁实测快谁先上（最多读 ProbeCapBytes 就掐，不落盘）
+$script:ProbeBudgetMs = 5000
+$script:ProbeCapBytes = 6 * 1048576
+# 重装同一版（修复模式）：runtime 整块重铺、结尾文案改成「重装完成」
+$script:Reinstall = $false
+# 同版本那步已经问过「r 重装」了，别再弹一次「现在更新到 X」的确认
+$script:skipConfirm = $false
+
 function Say {
     param([string]$Text = '', [string]$Color = 'Gray')
     Write-Host $Text -ForegroundColor $Color
 }
 
-# 5.1 在输出被重定向时读写 console buffer 会抛 Win32 0x5，进度条一律加开关
+# 5.1 在输出被重定向时读写 console buffer 会抛 Win32 0x5，进度条一律加开关。
+# 拿不到窗口（重定向 / 管道 / 记录日志）时降级成文本：百分比每 10% 一行，
+# 总大小未知时每 5 秒一行，这样双击运行和日志两种场景都能看出「还在动」。
+$script:ProgressTextPct = @{}
+$script:ProgressTextAt = @{}
+
 function Update-Progress {
     param([string]$Activity, [string]$Status = '', [int]$Percent = -1, [switch]$Done)
-    if (-not $script:UseProgress) { return }
-    if ($Done) { Write-Progress -Activity $Activity -Completed; return }
+    if ($script:UseProgress) {
+        if ($Done) { Write-Progress -Activity $Activity -Completed; return }
+        if ($Percent -ge 0) {
+            Write-Progress -Activity $Activity -Status $Status -PercentComplete $Percent
+        } else {
+            Write-Progress -Activity $Activity -Status $Status
+        }
+        return
+    }
+    if ($Done) { $script:ProgressTextPct[$Activity] = -1; return }
     if ($Percent -ge 0) {
-        Write-Progress -Activity $Activity -Status $Status -PercentComplete $Percent
+        $last = -1
+        if ($script:ProgressTextPct.ContainsKey($Activity)) { $last = [int]$script:ProgressTextPct[$Activity] }
+        if ($Percent -lt 10 -or $Percent -ge $last + 10 -or $Percent -eq 100) {
+            $script:ProgressTextPct[$Activity] = $Percent
+            Say ('    ' + $Activity + '：' + $Percent + '%  ' + $Status) 'DarkGray'
+        }
     } else {
-        Write-Progress -Activity $Activity -Status $Status
+        $now = Get-Date
+        $prev = [datetime]::MinValue
+        if ($script:ProgressTextAt.ContainsKey($Activity)) { $prev = [datetime]$script:ProgressTextAt[$Activity] }
+        if (($now - $prev).TotalSeconds -ge 5) {
+            $script:ProgressTextAt[$Activity] = $now
+            Say ('    ' + $Activity + '：' + $Status) 'DarkGray'
+        }
     }
 }
 
@@ -80,6 +117,38 @@ function Format-Size {
     if ($Bytes -ge 1048576) { return ('{0:N1} MB' -f ($Bytes / 1048576)) }
     if ($Bytes -ge 1024) { return ('{0:N0} KB' -f ($Bytes / 1024)) }
     return "$Bytes B"
+}
+
+# 秒数 → 人话（45 秒 / 2 分 03 秒 / 1 时 12 分）
+function Format-Duration {
+    param([int]$Seconds)
+    if ($Seconds -lt 0) { $Seconds = 0 }
+    if ($Seconds -lt 60) { return ($Seconds.ToString() + ' 秒') }
+    if ($Seconds -lt 3600) {
+        return (([int][math]::Floor($Seconds / 60)).ToString() + ' 分 ' + ($Seconds % 60).ToString('00') + ' 秒')
+    }
+    return (([int][math]::Floor($Seconds / 3600)).ToString() + ' 时 ' + ([int][math]::Floor(($Seconds % 3600) / 60)).ToString() + ' 分')
+}
+
+# 速度（B/ms，数值上正好等于 KB/s）→ 人话
+function Format-Speed {
+    param([double]$KbPerSec)
+    if ($KbPerSec -ge 1024) { return ('{0:N1} MB/s' -f ($KbPerSec / 1024)) }
+    if ($KbPerSec -ge 1) { return ('{0:N0} KB/s' -f $KbPerSec) }
+    return '—'
+}
+
+function Get-UrlHost {
+    param([string]$Url)
+    try { return ([Uri]$Url).Host } catch { return $Url }
+}
+
+# 预计剩余时间；-1 表示还算不出来（刚开始 / 速度还在爬）
+function Format-Eta {
+    param([int]$Seconds)
+    if ($Seconds -lt 0) { return '' }
+    if ($Seconds -le 1) { return '就要好了' }
+    return ('剩 ' + (Format-Duration $Seconds))
 }
 
 function Invoke-Robocopy {
@@ -268,8 +337,56 @@ function request(url, depth) {
   });
 }
 
+// 测速：连上下载几秒就掐，只看这段时间到了多少字节。不落盘。
+function probeOne(url, budgetMs, capBytes) {
+  return new Promise((resolve) => {
+    const t0 = Date.now();
+    let bytes = 0;
+    let done = false;
+    let timer = null;
+    let conn = null;
+    const finish = (err) => {
+      if (done) return;
+      done = true;
+      if (timer) { clearTimeout(timer); timer = null; }
+      if (conn) { try { conn.destroy(); } catch (e) { } }
+      resolve({ bytes: bytes, ms: Math.max(1, Date.now() - t0), err: err || '' });
+    };
+    timer = setTimeout(() => finish('超时'), budgetMs);
+    request(url, 0).then((res) => {
+      conn = res;
+      if (done) { try { res.destroy(); } catch (e) { } return; }
+      res.on('data', (c) => {
+        bytes += c.length;
+        if (bytes >= capBytes) finish('');
+      });
+      res.on('end', () => finish(''));
+      res.on('error', (e) => finish(e.message));
+    }).catch((e) => finish(e.message));
+  });
+}
+
 (async () => {
   const mode = process.argv[2];
+  // probe <预算毫秒> <上限字节> <url1> <url2> …：并发测速，谁快谁最前
+  if (mode === 'probe') {
+    const budgetMs = Number(process.argv[3] || 5000);
+    const capBytes = Number(process.argv[4] || 6 * 1048576);
+    const urls = process.argv.slice(5);
+    const results = await Promise.all(urls.map((u) => probeOne(u, budgetMs, capBytes)));
+    let best = -1;
+    let bestSpeed = 0;
+    for (let i = 0; i < results.length; i++) {
+      const r = results[i];
+      console.log('PROBE ' + i + ' ' + r.bytes + ' ' + r.ms + ' ' + (r.err ? 'ERR' : 'OK'));
+      const speed = r.bytes / Math.max(1, r.ms);
+      if (r.bytes > 0 && speed > bestSpeed) { bestSpeed = speed; best = i; }
+    }
+    // 连接可能挂在半路不放（node 就不退出了），写完最后一行再强制收摊
+    process.stdout.write('BEST ' + best + ' ' + Math.round(bestSpeed * 1000) + '\n', () => process.exit(0));
+    setTimeout(() => process.exit(0), 2000);
+    return;
+  }
   const url = process.argv[3];
   const out = process.argv[4];
   const res = await request(url, 0);
@@ -282,20 +399,63 @@ function request(url, depth) {
   }
   const total = Number(res.headers['content-length'] || 0);
   const ws = fs.createWriteStream(out);
+  // S = 开始（带上总大小，0 表示镜像没回 content-length）
+  console.log('S ' + (total > 0 ? total : 0));
+  // 慢就放弃：slowMs 毫秒内还没下到 slowMin 字节 → 打一行 SLOW 然后退出码 3，上层换下一个源
+  const slowMs = Number(process.argv[5] || 0);
+  const slowMin = Number(process.argv[6] || 0);
+  const startedAt = Date.now();
+  let slowChecked = slowMs <= 0;
+  const mb = (n) => (n / 1048576).toFixed(1);
+  // 慢速源用 MB/s 会显示成 0.0，反而像卡死；按量级换单位
+  const speedText = (s) => {
+    if (s >= 1048576) return (s / 1048576).toFixed(1) + 'MB/s';
+    if (s >= 1024) return Math.round(s / 1024) + 'KB/s';
+    if (s >= 1) return Math.round(s) + 'B/s';
+    return '—';
+  };
   let got = 0;
+  let lastAt = Date.now();
+  let lastGot = 0;
+  let speed = 0;
   let lastPct = -1;
+  const tick = () => {
+    const now = Date.now();
+    const dt = (now - lastAt) / 1000;
+    if (dt <= 0) return;
+    const inst = (got - lastGot) / dt;
+    // 指数平滑，数字不至于乱跳
+    speed = speed > 0 ? speed * 0.7 + inst * 0.3 : inst;
+    lastAt = now;
+    lastGot = got;
+    if (total > 0) {
+      const pct = Math.min(100, Math.floor(got * 100 / total));
+      const eta = speed > 1024 ? Math.round((total - got) / speed) : -1;
+      if (pct !== lastPct) {
+        lastPct = pct;
+        console.log('P ' + pct + ' ' + mb(got) + ' ' + mb(total) + ' ' + speedText(speed) + ' ' + eta);
+      }
+    } else {
+      // 不知道总大小：只报已下载和速度，让用户知道没卡死
+      console.log('B ' + mb(got) + ' ' + speedText(speed));
+    }
+  };
   for await (const c of res) {
     got += c.length;
     if (!ws.write(c)) await new Promise((r) => ws.once('drain', r));
-    if (total > 0) {
-      const pct = Math.floor(got * 100 / total);
-      if (pct >= lastPct + 5) {
-        lastPct = pct;
-        console.log('P ' + pct + ' ' + (got / 1048576).toFixed(1) + '/' + (total / 1048576).toFixed(1));
+    if (!slowChecked && Date.now() - startedAt >= slowMs) {
+      slowChecked = true;
+      if (got < slowMin) {
+        console.log('SLOW ' + got + ' ' + Math.round((Date.now() - startedAt) / 1000));
+        try { ws.destroy(); } catch (e) { /* 反正上层会删掉半个文件 */ }
+        try { res.destroy(); } catch (e) { }
+        process.exit(3);
       }
     }
+    if (Date.now() - lastAt >= 400) tick();
   }
   await new Promise((r) => ws.end(r));
+  if (total > 0 && lastPct < 100) console.log('P 100 ' + mb(got) + ' ' + mb(total) + ' ' + speedText(speed) + ' 0');
   console.log('OK ' + got);
 })().catch((e) => { console.error('ERR ' + e.message); process.exit(1); });
 '@
@@ -619,18 +779,73 @@ function Get-LatestTagFromMirror {
     return ''
 }
 
+# 开下之前先测速：所有源并发跑 BudgetMs，按实测速度排序，最快的排第一。
+# 测速下的那些字节直接丢掉（不落盘），只为了知道谁快——真正的下载还是完整下一遍。
+function Get-BestDownloadOrder {
+    param([string[]]$Urls, [int]$BudgetMs = 0)
+    $list = @($Urls | Where-Object { $_ } | Select-Object -Unique)
+    if ($list.Count -lt 2) { return $list }
+    $node = Find-NodeExe $script:appRoot
+    if (-not $node -or -not $Helper) { return $list }
+    if ($BudgetMs -le 0) { $BudgetMs = $script:ProbeBudgetMs }
+
+    $callArgs = @($Helper, 'probe', [string]$BudgetMs, [string]$script:ProbeCapBytes) + $list
+    $lines = @(& $node @callArgs 2>&1)
+    $stats = @{}
+    foreach ($line in $lines) {
+        $s = [string]$line
+        if ($s -match '^PROBE (\d+) (\d+) (\d+) (OK|ERR)$') {
+            $i = [int]$matches[1]
+            $bytes = [long]$matches[2]
+            $ms = [int]$matches[3]
+            $stats[$i] = [pscustomobject]@{
+                Bytes = $bytes
+                Ms    = $ms
+                Speed = $(if ($bytes -gt 0) { ([double]$bytes / [math]::Max(1, $ms)) } else { -1 })
+            }
+        }
+    }
+    if ($stats.Count -eq 0) { return $list }
+
+    $rows = @()
+    for ($i = 0; $i -lt $list.Count; $i++) {
+        $st = if ($stats.ContainsKey($i)) { $stats[$i] } else { $null }
+        $rows += [pscustomobject]@{
+            Index = $i
+            Url   = $list[$i]
+            Speed = $(if ($st -and $st.Bytes -gt 0) { $st.Speed } else { -1 })
+        }
+    }
+    # 速度高的在前；速度一样（或都没测到）就保持原来的兜底顺序
+    $rows = @($rows | Sort-Object -Property @{ Expression = { $_.Speed }; Descending = $true }, @{ Expression = { $_.Index }; Descending = $false })
+
+    $shown = @()
+    foreach ($r in @($rows | Select-Object -First 3)) {
+        $name = Get-UrlHost $r.Url
+        if ($r.Speed -gt 0) { $shown += ($name + ' ' + (Format-Speed $r.Speed)) } else { $shown += ($name + ' 连不上') }
+    }
+    Say ('  测速：' + ($shown -join ' · ')) 'DarkGray'
+    if ($rows[0].Speed -gt 0) {
+        Say ('  用最快的：' + (Get-UrlHost $rows[0].Url) + '（' + (Format-Speed $rows[0].Speed) + '）') 'Gray'
+    } else {
+        Say '  测速没测出个所以然，按原顺序试。' 'DarkGray'
+    }
+    return @($rows | ForEach-Object { $_.Url })
+}
+
 function Save-ReleaseAsset {
     param(
         [string[]]$Urls,
         [string]$Dest,
         [string]$Label,
         [long]$ExpectedSize = 0,
-        [string]$ExpectedSha = ''
+        [string]$ExpectedSha = '',
+        [switch]$NoSlowGuard
     )
 
-    $ProgressPreference = 'SilentlyContinue'
     $node = Find-NodeExe $script:appRoot
     $errors = @()
+    $slowBest = $null
     foreach ($u in @($Urls | Where-Object { $_ } | Select-Object -Unique)) {
         $hostName = $u
         try { $hostName = ([Uri]$u).Host } catch { }
@@ -638,19 +853,64 @@ function Save-ReleaseAsset {
         try {
             if ($node) {
                 $err = ''
-                & $node $Helper 'download' $u $Dest 2>&1 | ForEach-Object {
+                $isSlow = $false
+                $slowGot = 0
+                $slowSecs = 0
+                $activity = '下载 ' + $Label
+                $startedAt = Get-Date
+                $guardArgs = @()
+                if (-not $NoSlowGuard) { $guardArgs = @([string]$script:SlowWindowMs, [string]$script:SlowMinBytes) }
+                & $node $Helper 'download' $u $Dest @guardArgs 2>&1 | ForEach-Object {
                     $line = [string]$_
-                    if ($line -match '^P (\d+) (.+)$') {
-                        Update-Progress -Activity ('下载 ' + $Label) -Status ($hostName + '  ' + $matches[2] + ' MB') -Percent ([int]$matches[1])
+                    if ($line -match '^S (\d+)$') {
+                        $bytes = [long]$matches[1]
+                        $activity = '下载 ' + $Label
+                        if ($bytes -gt 0) {
+                            Update-Progress -Activity $activity -Status ($hostName + '  共 ' + (Format-Size $bytes)) -Percent 0
+                        } else {
+                            # 总大小未知（镜像没回 content-length）：只说在连接，别报百分比
+                            Update-Progress -Activity $activity -Status ($hostName + '  正在连接…')
+                        }
+                    } elseif ($line -match '^P (\d+) ([\d\.]+) ([\d\.]+) (\S+) (-?\d+)$') {
+                        # 百分比交给进度条本身，Status 只放细节，免得重复显示
+                        $status = $hostName + '  ' + $matches[2] + '/' + $matches[3] + ' MB  ' + $matches[4]
+                        $eta = Format-Eta ([int]$matches[5])
+                        if ($eta) { $status = $status + '  ' + $eta }
+                        Update-Progress -Activity $activity -Status $status -Percent ([int]$matches[1])
+                    } elseif ($line -match '^B ([\d\.]+) (\S+)$') {
+                        # 镜像没回 content-length：总大小未知，只报已下载和速度（无百分比进度条）
+                        Update-Progress -Activity $activity -Status ($hostName + '  已下载 ' + $matches[1] + ' MB  ' + $matches[2])
+                    } elseif ($line -match '^SLOW (\d+) (\d+)$') {
+                        $isSlow = $true
+                        $slowGot = [long]$matches[1]
+                        $slowSecs = [int]$matches[2]
                     } elseif ($line -match '^ERR (.+)$') {
                         $err = $matches[1]
                     }
                 }
                 Update-Progress -Activity ('下载 ' + $Label) -Done
-                if ($LASTEXITCODE -ne 0) { throw ('下载失败：' + $err) }
+                if ($LASTEXITCODE -ne 0) {
+                    if ($isSlow) {
+                        if (-not $slowBest -or $slowGot -gt $slowBest.Got) {
+                            $slowBest = [pscustomobject]@{ Url = $u; Got = $slowGot }
+                        }
+                        throw ('太慢：' + $slowSecs + ' 秒只下了 ' + (Format-Size $slowGot) + '，不到 ' + (Format-Size $script:SlowMinBytes))
+                    }
+                    throw ('下载失败：' + $err)
+                }
+                $elapsed = [int]((Get-Date) - $startedAt).TotalSeconds
+                Say ('  ✓ 下载完成：' + (Format-Size ((Get-Item -LiteralPath $Dest).Length)) + '，用时 ' + (Format-Duration $elapsed)) 'DarkGray'
             } else {
                 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-                Invoke-WebRequest -Uri $u -OutFile $Dest -UseBasicParsing -Headers @{ 'User-Agent' = 'whale-girl-updater' }
+                # 只关掉 Invoke-WebRequest 自己的进度条（5.1 下它会让下载变慢），
+                # 千万别在函数开头关 —— 那会连上面自己的下载进度条一起静音。
+                $savedProgress = $ProgressPreference
+                $ProgressPreference = 'SilentlyContinue'
+                try {
+                    Invoke-WebRequest -Uri $u -OutFile $Dest -UseBasicParsing -Headers @{ 'User-Agent' = 'whale-girl-updater' }
+                } finally {
+                    $ProgressPreference = $savedProgress
+                }
             }
             if (-not (Test-Path -LiteralPath $Dest)) { throw '下载后文件不存在' }
             $len = (Get-Item -LiteralPath $Dest).Length
@@ -665,6 +925,13 @@ function Save-ReleaseAsset {
             Say ('  ⚠ ' + $hostName + ' 没成功（' + $_.Exception.Message + '），换下一个源…') 'Yellow'
             if (Test-Path -LiteralPath $Dest) { Remove-Item -LiteralPath $Dest -Force -ErrorAction SilentlyContinue }
         }
+    }
+    # 所有源都被判太慢：别让用户白等，挑下得最多的那个放开限速再试一次
+    if (-not $NoSlowGuard -and $slowBest -and $slowBest.Got -gt 0) {
+        Say ''
+        Say ('  所有源都太慢。改试下得最多的那个（不再限速）：' + $slowBest.Url) 'Yellow'
+        Say '  这次会一直下到完，网实在慢就先去干别的（也可以 Ctrl+C，再挂代理重跑）。' 'DarkGray'
+        return (Save-ReleaseAsset -Urls @($slowBest.Url) -Dest $Dest -Label $Label -ExpectedSize $ExpectedSize -ExpectedSha $ExpectedSha -NoSlowGuard)
     }
     throw ('所有下载源都失败：' + ($errors -join ' / ') + '。可手动下载 zip 拖到 一键更新.bat 上，或用 -Mirror 指定镜像。')
 }
@@ -703,6 +970,27 @@ function Expand-ReleaseZip {
         Update-Progress -Activity '解压新版' -Done
     }
     return $n
+}
+
+# 这一版包里有的文件，本地缺了哪些（只比「有没有」，不比内容——手改过的文件不该算坏）
+function Get-MissingFromPackage {
+    param([string]$SrcRoot, [string]$AppRoot, [string[]]$ExcludeDirs = @())
+    $missing = New-Object System.Collections.Generic.List[string]
+    $stack = New-Object System.Collections.Generic.Stack[string]
+    $stack.Push($SrcRoot)
+    while ($stack.Count -gt 0) {
+        $dir = $stack.Pop()
+        foreach ($f in @(Get-ChildItem -LiteralPath $dir -File -ErrorAction SilentlyContinue)) {
+            if ($f.Name -eq 'config.json' -or $f.Extension -eq '.log') { continue }
+            $rel = $f.FullName.Substring($SrcRoot.Length).TrimStart('\')
+            if (-not (Test-Path -LiteralPath (Join-Path $AppRoot $rel))) { [void]$missing.Add($rel) }
+        }
+        foreach ($d in @(Get-ChildItem -LiteralPath $dir -Directory -ErrorAction SilentlyContinue)) {
+            if ($ExcludeDirs -contains $d.Name) { continue }
+            $stack.Push($d.FullName)
+        }
+    }
+    return $missing
 }
 
 function Find-PackageRoot {
@@ -1097,11 +1385,21 @@ try {
     # 规则很简单：版本号和 latest 一样才跳过，不一样就覆盖成 latest。
     # 不做大小比较——作者把 3.55.x 直接跳到 3.6.0，纯数字比较会误判成"本地更新"。
     $cmp = Compare-Ver $remoteVer $localVer
-    if ($cmp -eq 0 -and -not $Force) {
+    $script:Reinstall = ($cmp -eq 0)
+    if ($cmp -eq 0 -and -not $Force -and -not $Check -and -not $DryRun) {
+        # 同版本：默认什么都不做；但文件被删/改坏时还想靠这个按钮自救，所以问一句。
         Say ''
-        Say '  ✅ 已经是最新版本，不用更新。' 'Green'
-        Say ('     （想强制重装同版本请加 -Force）') 'DarkGray'
-        exit 0
+        Say ('  ✅ 已经是最新版本（' + $localVer + '），不用更新。') 'Green'
+        if (-not $CanPrompt) {
+            Say '     （想强制重装同一版请加 -Force）' 'DarkGray'
+            exit 0
+        }
+        Say '     要是你删坏了文件、想让它把这一版重新铺一遍：' 'Gray'
+        Say '       [回车] 退出，什么都不动        [r] 重装这一版（缺的文件补回来）' 'Cyan'
+        $pick = Read-Host '  选择'
+        if ($pick -notmatch '^\s*[rR]') { Say '  好，没动任何文件。' 'Gray'; exit 0 }
+        Say '  好，按同一版重装一遍（data\ 和 config.json 还是不动）。' 'Yellow'
+        $script:skipConfirm = $true
     }
     if ($Tag -and $cmp -lt 0 -and -not $Force) {
         # 明确指定了一个更旧的版本：仍然要求 -Force，避免手滑降级
@@ -1116,6 +1414,11 @@ try {
 
     if ($Check) {
         Say ''
+        if ($cmp -eq 0) {
+            Say ('  已经是最新版本：' + $localVer + '（没有要更新的）') 'Green'
+            Say '  文件被删坏了想重铺：双击 一键更新.bat，问的时候按 r。' 'Gray'
+            exit 0
+        }
         if ($cmp -lt 0) {
             Say ('  版本不同：' + $localVer + ' → ' + $remoteVer + '（按 latest 覆盖）') 'Yellow'
         } else {
@@ -1125,7 +1428,7 @@ try {
         exit 0
     }
 
-    if (-not $Yes -and $CanPrompt) {
+    if (-not $Yes -and -not $script:skipConfirm -and $CanPrompt) {
         Say ''
         Say ('  [回车] 现在更新到 ' + $remoteVer + '     [r] 回滚上次更新     [q] 退出') 'Cyan'
         $pick = Read-Host '  选择'
@@ -1185,8 +1488,16 @@ try {
                 $urls += ($m + $official)
             }
         }
+        if ($urls.Count -gt 1) {
+            Say ''
+            Say ('  先给 ' + $urls.Count + ' 个源测速（并发 ' + [int]($script:ProbeBudgetMs / 1000) + ' 秒，谁快用谁）…') 'DarkGray'
+            $urls = @(Get-BestDownloadOrder -Urls $urls)
+        }
         Say ''
-        Say ('  下载中：' + $zipName) 'Cyan'
+        $sizeHint = ''
+        if ([long]$asset.size -gt 0) { $sizeHint = '（' + (Format-Size ([long]$asset.size)) + '）' }
+        Say ('  下载中：' + $zipName + $sizeHint) 'Cyan'
+        Say '  下面的进度条会显示已下载大小、速度和剩余时间；卡着不动就 Ctrl+C，换 -Mirror 或换个网络再试。' 'DarkGray'
         [void](Save-ReleaseAsset -Urls $urls -Dest $zipPath -Label $zipName -ExpectedSize ([long]$asset.size) -ExpectedSha $digest)
     }
 
@@ -1213,6 +1524,17 @@ try {
         throw ('包里版本号（' + $srcVer + '）和 release tag（' + $remoteVer + '）对不上。')
     }
     Say ('  已解压 ' + $count + ' 个文件，包内版本 ' + $srcVer) 'DarkGray'
+
+    if ($script:Reinstall) {
+        $missFiles = @(Get-MissingFromPackage -SrcRoot $srcRoot -AppRoot $script:appRoot -ExcludeDirs $exclDirs)
+        if ($missFiles.Count -gt 0) {
+            $sample = @($missFiles | Select-Object -First 5) -join '、'
+            if ($missFiles.Count -gt 5) { $sample = $sample + ' 等' }
+            Say ('  检查：本地缺 ' + $missFiles.Count + ' 个文件（' + $sample + '），重装会补回来') 'Yellow'
+        } else {
+            Say '  检查：文件都在，重装会把代码刷成这一版的官方版本。' 'DarkGray'
+        }
+    }
 
     if ($fromZip) {
         $remoteVer = $srcVer
@@ -1283,7 +1605,7 @@ try {
         $needRuntime = $true
         $localNode = Join-Path $script:appRoot 'runtime\node.exe'
         $pkgNode = Join-Path $newRt 'node.exe'
-        if ((Test-Path -LiteralPath $localNode) -and (Test-Path -LiteralPath $pkgNode)) {
+        if ((Test-Path -LiteralPath $localNode) -and (Test-Path -LiteralPath $pkgNode) -and -not $script:Reinstall) {
             if ((Get-Sha256 $localNode) -eq (Get-Sha256 $pkgNode)) {
                 $pkgFfmpeg = Test-Path -LiteralPath (Join-Path $newRt 'ffmpeg')
                 $localFfmpeg = Test-Path -LiteralPath (Join-Path $script:appRoot 'runtime\ffmpeg')
@@ -1326,7 +1648,24 @@ try {
     }
 
     # ---- 收尾 ----
-    if (-not $KeepZip) { Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue }
+    # 安装包去留：只在这「真下载过 zip」的时候问一句（复用缓存里的包就不问、也不动）
+    #   回车 = 删掉（干净）；r = 留着（下次重装 / 修坏文件不用再下）
+    $keepThisZip = $KeepZip
+    if (-not $keepThisZip -and $needDownload -and $CanPrompt -and -not $Yes) {
+        $zipSize = 0
+        if (Test-Path -LiteralPath $zipPath) { $zipSize = (Get-Item -LiteralPath $zipPath).Length }
+        Say ''
+        Say ('  安装包要留着吗？（' + (Format-Size $zipSize) + '）') 'Cyan'
+        Say '     [回车] 删掉            [r] 留着（下次重装 / 修不用再下）' 'Gray'
+        $keepAns = Read-Host '  选择'
+        if ($keepAns -match '^\s*[rR]') { $keepThisZip = $true }
+    }
+    if ($keepThisZip) {
+        Say ('  安装包留着：' + $zipPath) 'DarkGray'
+        Say '     下次重装（r）时还能直接用；不想要了直接删。' 'DarkGray'
+    } elseif ($needDownload) {
+        Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue
+    }
     Remove-Item -LiteralPath $Work -Recurse -Force -ErrorAction SilentlyContinue
 
     $memLine = if ($after.Exists) {
@@ -1334,7 +1673,12 @@ try {
     } else {
         '这个目录没有 data\，没有记忆需要保护'
     }
-    Show-Result -Kind 'ok' -Message ('更新完成：' + $localVer + ' → ' + $newVer) -Detail @(
+    $headline = if ($script:Reinstall) {
+        '重装完成：' + $newVer
+    } else {
+        '更新完成：' + $localVer + ' → ' + $newVer
+    }
+    Show-Result -Kind 'ok' -Message $headline -Detail @(
         $memLine,
         ('config.json：' + $(if ($cfgHashBefore) { '原样保留' } else { '本来就没有，未创建' })),
         ('备份：' + $bak),
