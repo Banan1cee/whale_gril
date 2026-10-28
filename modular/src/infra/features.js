@@ -128,6 +128,7 @@ function list(config) {
     desc: f.desc,
     value: isOn(config, f.key),
     default: f.default,
+    experimental: Boolean(f.experimental),
   }));
 }
 

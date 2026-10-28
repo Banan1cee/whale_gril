@@ -31,6 +31,21 @@
 - `readBody` 超过上限不再 `destroy` 连接（调用方能收到 413 而不是连接被重置）
 - 版本号支持两段式（`3.60`），`bump-version` 两段/三段都能用
 
+### 5) 一键更新 / 迁移（补齐上游同批改造）
+
+- `一键更新.bat` 现在也管迁移：新目录首次运行会先找旧安装，问一句就把 `data\` + `config.json` 搬过来
+  （搬前备份、搬后校验条数）；也可以直接 `一键更新.bat -Migrate -FromDir "D:\whale-girl-3.50"`
+- `升级到新版本.bat` 并入 `一键更新.bat`（本目录已删除该文件）；`scripts/migrate-data.ps1` 只留参数转发，
+  老快捷方式不会断
+- 旧安装候选改成按 `data\store.json` 最后保存时间排序（回车默认选最近在用的那个），列表显示保存时间
+- 反代多备几个：查版本 `api.github.com` → `gh-proxy.com` → `gh-proxy.org`；
+  下载官方 → `ghfast.top` / `gh-proxy.com` / `gh-proxy.org` / `ghproxy.net`
+- 这些全挂时，再从镜像页面 `releases/latest` 抠版本号继续下载（这条没有 sha256，只校验大小）
+- 更新前先自愈 Low 完整性标签：把 `runtime\node.exe` / `python.exe` 标回 Medium，
+  修不动再退回安装目录内的临时目录
+- 补回上游 9 条 `update-script` 静态断言（迁移入口、镜像兜底、Low 标签自愈、保存时间排序），
+  并移植上游 `tests/stickers.test.js`（7 条挑图规则），README 同步上游的更新说明
+
 ## 3.57.0
 
 **这一版是「把地基补上」：分层有检查、配置有校验、记忆不再每次全量重写、发送通道能自动提权。**
