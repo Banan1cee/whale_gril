@@ -4,6 +4,9 @@
 
 - `一键更新.bat` 现在也管迁移：新目录首次运行会先找旧安装，问一句就把 `data\` + `config.json` 搬过来（搬前备份、搬后校验条数）
 - `升级到新版本.bat` 并入 `一键更新.bat`；`scripts/migrate-data.ps1` 只留参数转发，老快捷方式不会断
+- 旧安装候选改成按 `data\store.json` 最后保存时间排序（回车默认选最近在用的那个），列表显示保存时间
+- 反代多备几个：查版本 `api.github.com` → `gh-proxy.com` → `gh-proxy.org`；下载官方 → `ghfast.top` / `gh-proxy.com` / `gh-proxy.org` / `ghproxy.net`
+- 这些全挂时，再从镜像页面 `releases/latest` 抠版本号继续下载（这条没有 sha256，只校验大小）
 - 更新前先自愈 Low 完整性标签：把 `runtime\node.exe` / `python.exe` 标回 Medium，修不动再退回安装目录内的临时目录
 
 ## 3.55.1

@@ -165,10 +165,10 @@ untime\ffmpeg\bin 等）；**没有 ffmpeg 就看不了图**，日志里会写�
 
 - **校验**：按官方 API 给的 `sha256` 比对，对不上直接中止，不会装半个包。
 - **失败自动回滚**：覆盖后自检版本号 / 记忆条数 / `config.json` 哈希，任一项不过就用备份还原。
-- **官方连不上**：自动换镜像（`ghfast.top` / `gh-proxy.com` / `ghproxy.net`，只搬运、不参与校验）；
+- **官方连不上**：自动换镜像（`ghfast.top` / `gh-proxy.com` / `gh-proxy.org` / `ghproxy.net`，只搬运、不参与校验）；查版本接口被墙时先走 `gh-proxy.com`、`gh-proxy.org` 的 API 转发，全都挂了再从镜像页面抠版本号。
   也可以自己下 zip，拖到 `一键更新.bat` 上离线装。
 - **只看版本**：`一键更新.bat -Check`；**手动回滚**：`一键更新.bat -Rollback`。
-- **第一次用（换过文件夹）**：目录里没有 `data\` 时会先问一句「发现旧版本 xxx，要搬过来吗」，回车即搬、`s` 跳过；
+- **第一次用（换过文件夹）**：目录里没有 `data\` 时会先找旧安装，按「最后保存时间」从新到旧列出（带会话数/条数），回车即搬、输序号换一个、`s` 跳过；
   也可以直接指定：`一键更新.bat -Migrate -FromDir "D:\whale-girl-3.50"`。
 - **Low 完整性标签**：安装目录带 Low 标签时 node 写不了 `%TEMP%`（报 `EPERM`），更新前会自动把
   `runtime\node.exe` / `python.exe` 标回 Medium；修不动就改用安装目录里的临时目录，更新照样能跑。
