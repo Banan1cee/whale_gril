@@ -13,10 +13,20 @@ const root = path.resolve(__dirname, '..');
 
 function listBat(dir) {
   const out = [];
-  for (const name of fs.readdirSync(dir, { withFileTypes: true })) {
+  let entries = [];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    // 有些目录（比如别的工具留下的临时目录）会带奇怪的 ACL，读不进去就跳过，
+    // 脚本规范检查不该因为一个读不了的路人目录整体失败。
+    return out;
+  }
+  for (const name of entries) {
     const full = path.join(dir, name.name);
     if (name.isDirectory()) {
-      if (['node_modules', 'release', 'data', 'vendor'].includes(name.name)) continue;
+      // runtime 是「一键装运行环境」下载的运行时（node/python），不归我们管：
+      // 里面的目录可能带各种 ACL，扫进去只会报 EPERM。
+      if (['node_modules', 'release', 'data', 'vendor', 'runtime'].includes(name.name)) continue;
       out.push(...listBat(full));
       continue;
     }

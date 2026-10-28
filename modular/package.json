@@ -1,6 +1,6 @@
 {
     "name": "whale-girl-bot-modular",
-    "version": "3.60",
+    "version": "3.62",
     "private": false,
     "description": "鲸鲸 —— 模块化重构版（CommonJS，零 npm 依赖）",
     "main": "server.js",
@@ -34,3 +34,4 @@
         "url": ""
     }
 }
+

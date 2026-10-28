@@ -109,3 +109,17 @@ test('表情包：目录里没有图时安静返回 null（不崩、不刷日志
   assert.deepEqual(stickers.listImages(path.join(root, 'data', 'stickers')), []);
   fs.rmSync(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 80 });
 });
+
+test('表情包：认得出「在要表情包」的各种说法', () => {
+  const yes = ['发个表情包', '来张表情', '整个梗图', '甩个动图', '表情包', '表情包呗', '给我发个表情包啊', '来点meme'];
+  for (const text of yes) assert.equal(stickers.isStickerRequest(text), true, text);
+  // 只是提到表情包、不是要她发，不能因为「必发」规则乱发
+  const no = ['我昨天发了个表情包', '这个表情包挺好笑的', '', '在吗', '表情管理好难'];
+  for (const text of no) assert.equal(stickers.isStickerRequest(text), false, text);
+  // 明确要就必须发：概率被设成 0 也照发
+  const root = makeRoot(['炸毛/a.gif']);
+  const cfg = cfgOn(root, { chances: { angry: 0 } });
+  const forced = stickers.pick({ config: cfg, root, key: 'g:1', text: '表情包', rng: () => 0.99 });
+  assert.ok(forced && forced.path, '「表情包」应该必发');
+  fs.rmSync(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 80 });
+});
