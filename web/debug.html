@@ -114,6 +114,11 @@
     <div id="stkControls" hidden>
       <h3 style="font-size:14px">把表情包拖进对应的情绪框</h3>
       <p class="muted">拖到哪一类，就自动保存到哪一类；也可以点击分类框选择图片。每次最多 5 张，每张不超过 4 兆，支持动图和常见图片。上传不会发送微信消息。</p>
+      <div class="row" id="stkFolderRow" style="margin-bottom:8px">
+        <button type="button" id="stkOpenFolder">打开表情包文件夹</button>
+        <span class="muted">打开后可以直接把 gif 拖进 <code>开心</code> / <code>炸毛</code> / <code>撒娇</code> / <code>嫌弃</code> / <code>敷衍</code> 这些子文件夹，也可以在里面删文件；放好后这里 3 秒内会自动出现。</span>
+        <span id="stkFolderMsg" class="muted" role="status"></span>
+      </div>
       <div id="stkUploads" class="sticker-categories"></div>
       <div id="stkUploadResult" class="muted" role="status"></div>
       <div class="row" style="margin-top:12px">
@@ -131,10 +136,6 @@
       <div id="stkTestResult" class="muted" role="status"></div>
       <div id="stkStatus" class="muted" role="status"></div>
       <div id="stkJobs" class="muted" aria-live="polite"></div>
-      <div class="row" style="margin-top:6px">
-        <button type="button" id="stkOpenFolder">打开表情包文件夹</button>
-        <span id="stkFolderMsg" class="muted" role="status"></span>
-      </div>
       <details class="muted"><summary>查看图片保存位置</summary><div id="stkLocation"></div></details>
     </div>
   </div>
