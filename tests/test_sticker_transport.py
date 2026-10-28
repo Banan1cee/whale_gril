@@ -324,7 +324,8 @@ class BridgeContractTest(unittest.TestCase):
                         read_enabled_config=lambda path: self.cfg,
                         LOCAL_HTTP=self.http, sticker_base='http://fake.invalid',
                         sticker_headers={'x-bot-token': 'test-only'}, sticker_result=transport.result,
-                        log=self.log)
+                        log=self.log, log_throttled=self.log,
+                        time=SimpleNamespace(time=lambda: 1, sleep=lambda delay: None))
         bridge_functions({'sticker_config_now', 'sticker_gate', 'claim_and_send_sticker'}, self.env)
         self.item = {'id': 'one-shot', 'generation': 'g1', 'path': 'test.png', 'chat': 'Peer',
                      'chatUsername': 'peer', 'status': 'sending'}
@@ -388,6 +389,39 @@ class BridgeContractTest(unittest.TestCase):
         self.assertEqual(posts[1].kwargs['json'], {
             'id': 'one-shot', 'status': 'unconfirmed', 'error': 'no database evidence'})
         self.assertEqual(posts[0].kwargs['headers']['x-bot-token'], 'test-only')
+
+    def test_ack_is_retried_so_console_does_not_stick_on_sending(self):
+        # 现场问题：服务端正在生成长回复时 ack 超时，旧代码 except: pass 吞掉，
+        # 控制台就永远停在「尝试发送中」。现在要重试，且不能影响已发出的结果。
+        attempts = {'n': 0}
+        real_post = self.http.post
+
+        def flaky(url, *args, **kwargs):
+            if url.endswith('/ack'):
+                attempts['n'] += 1
+                if attempts['n'] == 1:
+                    raise TimeoutError('server busy')
+            return real_post(url, *args, **kwargs)
+
+        self.http.post = Mock(side_effect=flaky)
+        outcome = self.env['claim_and_send_sticker'](self.item)
+        self.assertEqual(outcome['status'], 'unconfirmed')
+        self.assertEqual(attempts['n'], 2, '第一次失败后要再试一次')
+        self.assertEqual(self.send.call_count, 1, '绝不重发图片')
+
+    def test_ack_409_means_already_handled_and_is_not_retried(self):
+        attempts = {'n': 0}
+        real_post = self.http.post
+
+        def conflict(url, *args, **kwargs):
+            if url.endswith('/ack'):
+                attempts['n'] += 1
+                return SimpleNamespace(status_code=409, json=lambda: {'ok': False})
+            return real_post(url, *args, **kwargs)
+
+        self.http.post = Mock(side_effect=conflict)
+        self.env['claim_and_send_sticker'](self.item)
+        self.assertEqual(attempts['n'], 1)
 
     def test_auto_claim_checks_canonical_not_different_display_title(self):
         self.item['chat'] = 'peer'

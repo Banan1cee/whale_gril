@@ -1703,27 +1703,65 @@ def main():
             SEND_STATE["active"] = False
 
     def force_foreground(hwnd):
-        """把微信强制拉到前台（SetForegroundWindow 单用会被系统拒绝）。"""
+        """把微信强制拉到前台，并且**确认真的到位**。
+
+        原来的实现「调用完就 return True」，但 SetForegroundWindow 会被 Windows
+        的前台锁拒绝（你正在浏览器里打字时尤其明显），于是表情包发送时判断
+        「微信不在前台」→ 直接失败。现在每轮都读一次 GetForegroundWindow 复核，
+        并补上两种业界常用的解锁手段：
+          ① 轻点一下 ALT 解除前台锁，再 SwitchToThisWindow；
+          ② AttachThreadInput + BringWindowToTop + SetForegroundWindow。
+        连续几轮都不成功才返回 False，交给调用方明确报错。
+        """
         try:
             import ctypes
-            user32 = ctypes.windll.user32
-            if user32.GetForegroundWindow() == hwnd:
+            import win32api
+            import win32con
+            import win32gui
+        except Exception:
+            return False
+        hwnd = int(hwnd or 0)
+        if not hwnd:
+            return False
+        user32 = ctypes.windll.user32
+        try:
+            if win32gui.GetForegroundWindow() == hwnd:
                 return True
-            fg = user32.GetForegroundWindow()
-            tid_fg = user32.GetWindowThreadProcessId(fg, None)
-            tid = user32.GetWindowThreadProcessId(hwnd, None)
+        except Exception:
+            return False
+        for _attempt in range(4):
             try:
-                user32.AttachThreadInput(tid_fg, tid, True)
-                user32.ShowWindow(hwnd, 9)  # SW_RESTORE
-                user32.SetForegroundWindow(hwnd)
-                user32.BringWindowToTop(hwnd)
-            finally:
+                fg = win32gui.GetForegroundWindow()
+                tid_fg = user32.GetWindowThreadProcessId(fg, None)
+                tid = user32.GetWindowThreadProcessId(hwnd, None)
                 try:
-                    user32.AttachThreadInput(tid_fg, tid, False)
+                    user32.AttachThreadInput(tid_fg, tid, True)
+                    win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+                    user32.BringWindowToTop(hwnd)
+                    win32gui.SetForegroundWindow(hwnd)
+                finally:
+                    try:
+                        user32.AttachThreadInput(tid_fg, tid, False)
+                    except Exception:
+                        pass
+                if win32gui.GetForegroundWindow() == hwnd:
+                    return True
+                # 前台锁最常见：先按一下 ALT，把「前台占用」释放掉
+                win32api.keybd_event(win32con.VK_MENU, 0, 0, 0)
+                win32api.keybd_event(win32con.VK_MENU, 0, win32con.KEYEVENTF_KEYUP, 0)
+                time.sleep(0.05)
+                try:
+                    user32.SwitchToThisWindow(hwnd, True)
                 except Exception:
                     pass
+                time.sleep(0.15)
+                if win32gui.GetForegroundWindow() == hwnd:
+                    return True
+            except Exception:
+                pass
             time.sleep(0.15)
-            return True
+        try:
+            return win32gui.GetForegroundWindow() == hwnd
         except Exception:
             return False
 
@@ -2362,12 +2400,22 @@ def main():
         # Off means no sticker requests/logs, including acknowledgements. The
         # server cancels/ages its claimed jobs; loss of ack NEVER causes a resend.
         if sticker_gate(item.get("generation")):
-            try:
-                LOCAL_HTTP.post(sticker_base + "/api/stickers/ack",
-                                json={"id": job_id, "status": outcome["status"], "error": outcome["error"]},
-                                headers=sticker_headers, timeout=3)
-            except Exception:
-                pass
+            # 结果必须写回服务端，否则控制台会一直显示「尝试发送中」。
+            # 服务端是单线程 Node：正好在生成长回复时，3 秒超时会有概率失败，
+            # 以前这里 except: pass 把它吞了，于是界面永远停在 sending。
+            payload = {"id": job_id, "status": outcome["status"], "error": outcome["error"]}
+            for attempt in range(3):
+                try:
+                    resp = LOCAL_HTTP.post(sticker_base + "/api/stickers/ack", json=payload,
+                                           headers=sticker_headers, timeout=8)
+                    if getattr(resp, "status_code", 0) in (200, 404, 409):
+                        break
+                except Exception as exc:
+                    if attempt == 2:
+                        log_throttled("sticker-ack-fail",
+                                      "表情包结果没能写回服务端（不影响已经发出的消息）：" + repr(exc),
+                                      ttl=300)
+                time.sleep(0.4)
             if sticker_config_now() is not None:
                 log("表情包结果：", outcome["status"], outcome["error"])
         return outcome
