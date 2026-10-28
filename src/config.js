@@ -148,8 +148,6 @@ const DEFAULT_CONFIG = {
     // 5 类情绪，键名对应 data/stickers 下的文件夹（中文名也认）
     chances: { happy: 0.1, angry: 0.2, cute: 0.12, meh: 0.08, bored: 0.06 },
     genericChance: 0.1,     // 「通用」文件夹的兜底概率
-    cooldownMinutes: 10,    // 同一个会话最少隔这么久才再发
-    onlyGroup: false,
     testChat: '文件传输助手', // 控制台「发送测试表情包」默认发到哪
   },
   features: {

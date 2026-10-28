@@ -201,8 +201,6 @@
       "bored": 0.06
     },
     "genericChance": 0.1,
-    "cooldownMinutes": 10,
-    "onlyGroup": false,
     "testChat": "文件传输助手"
   }
 }

@@ -16,7 +16,6 @@ class StickerService {
     this.enabled = false;
     this.generation = '';
     this.jobs = new Map();
-    this.cooldowns = new Map();
     this.recent = new Map();
     this.reconcile();
   }
@@ -41,7 +40,7 @@ class StickerService {
     // Preserve active jobs, but bound terminal history and session caches.
     const completed = [...this.jobs.values()].filter((j) => !ACTIVE.has(j.status));
     for (const job of completed.slice(0, Math.max(0, completed.length - 50))) this.jobs.delete(job.id);
-    for (const cache of [this.cooldowns, this.recent]) while (cache.size > 2000) cache.delete(cache.keys().next().value);
+    while (this.recent.size > 2000) this.recent.delete(this.recent.keys().next().value);
     return enabled;
   }
   requireEnabled() { if (!this.reconcile()) throw fail('表情包功能未开启', 404); }
@@ -53,11 +52,11 @@ class StickerService {
   }
   plan(msg, text, request = '') {
     if (!this.reconcile() || msg?.platform !== 'wechat' || !msg.chatId) return null;
-    if (this.config.sticker?.onlyGroup && msg.chatType !== 'group') return null;
     const key = `wechat:${msg.chatId}`;
+    // 同一个会话只排一个任务，避免连发刷屏；不做时间间隔限制。
     if ([...this.jobs.values()].some((j) => j.key === key && ACTIVE.has(j.status))) return null;
     const hit = stickers.pick({ config: this.config, root: this.config.root, key, text, request,
-      state: this.cooldowns, recent: this.recent.get(key) || [], now: this.now(), rng: this.rng });
+      recent: this.recent.get(key) || [], rng: this.rng });
     if (!hit) return null;
     return this.add(hit, msg.chatTitle || msg.chatId, msg.chatId, key, 'reserved');
   }
@@ -94,7 +93,6 @@ class StickerService {
     job.status = status;
     job.error = String(error || '').slice(0, 500);
     if (job.key && ['confirmed', 'unconfirmed'].includes(status)) {
-      this.cooldowns.set(job.key, this.now());
       this.recent.set(job.key, [...(this.recent.get(job.key) || []), job.path].slice(-10));
     }
     return { ...job };
