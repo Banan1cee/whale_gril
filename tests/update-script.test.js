@@ -113,3 +113,14 @@ test('Low 标签会先自愈，再决定用哪个临时目录', () => {
   assert.match(ps1, /setintegritylevel Medium/);
   assert.match(ps1, /Repair-ExeIntegrity/);
 });
+test('旧安装按最近保存时间排序，而不是消息条数', () => {
+  const ps1 = readPs1();
+  assert.match(ps1, /SavedAtTime/);
+  assert.match(ps1, /Sort-Object -Property SavedAtTime -Descending/);
+  assert.ok(!/Sort-Object -Property Messages/.test(ps1), '别再用消息条数当排序依据');
+});
+
+test('查版本接口被墙时走 gh-proxy 的 API 转发', () => {
+  const ps1 = readPs1();
+  assert.match(ps1, /gh-proxy\.com\/https:\/\/api\.github\.com/);
+});
