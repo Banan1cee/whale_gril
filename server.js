@@ -43,6 +43,8 @@ const MIME = {
   '.css': 'text/css; charset=utf-8',
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
+  '.gif': 'image/gif',
+  '.jpeg': 'image/jpeg',
   '.jpg': 'image/jpeg',
   '.webp': 'image/webp',
   '.ico': 'image/x-icon',
@@ -1267,6 +1269,20 @@ function createHandler(runtime) {
           return json(res, 403, { ok: false, error: '桥接 token 不正确' });
         }
         if (pathname === '/api/stickers/status' && method === 'GET') return json(res, 200, service.status());
+        if (pathname === '/api/stickers/image' && method === 'GET') {
+          // 控制台缩略图：只回传表情包目录里的真图，不能读任意文件
+          const q = new URL(req.url, 'http://localhost');
+          const emotion = String(q.searchParams.get('emotion') || '');
+          const name = path.basename(String(q.searchParams.get('name') || ''));
+          const dir = stickers.stickerDir(config, config.root);
+          const file = path.join(dir, stickers.EMOTIONS[emotion] || '', name);
+          if (!name || !stickers.EMOTIONS[emotion] || !stickers.regularFile(file, dir)) {
+            return json(res, 404, { ok: false, error: '找不到这张表情包' });
+          }
+          const type = MIME[path.extname(file).toLowerCase()] || 'application/octet-stream';
+          res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-store' });
+          return fs.createReadStream(file).pipe(res);
+        }
         if (pathname === '/api/stickers/upload' && method === 'POST') {
           const body = await readBody(req, 29 * 1024 * 1024);
           service.requireEnabled(); // Toggle may have changed while a large upload was in flight.

@@ -84,6 +84,8 @@
   #stkLocation { overflow-wrap:anywhere; }
   .sticker-rate { display:flex; gap:6px; align-items:center; justify-content:center; color:var(--dim); font-size:12px; cursor:default; }
   .sticker-rate input { width:70px; padding:6px; text-align:center; }
+  .stk-thumbs { display:flex; gap:4px; flex-wrap:wrap; justify-content:center; min-height:0; }
+  .stk-thumb { width:42px; height:42px; object-fit:cover; border-radius:8px; border:1px solid var(--line); background:rgba(2,14,26,.6); }
 
 
 </style>
@@ -754,6 +756,10 @@ function bindStickerUi() {
     note.className = 'muted sticker-note';
     note.setAttribute('role', 'status');
     zone.appendChild(note);
+    const thumbs = document.createElement('div');
+    thumbs.id = 'stkThumbs-' + key;
+    thumbs.className = 'stk-thumbs';
+    zone.appendChild(thumbs);
     const names = document.createElement('div');
     names.id = 'stkFiles-' + key;
     names.className = 'sticker-files';
@@ -834,6 +840,19 @@ async function loadStickers() {
       const count = found ? (Number.isFinite(found.count) ? found.count : (found.files || []).length) : 0;
       $('stkOption-' + key).textContent = label + '（' + count + ' 张）';
       $('stkCount-' + key).textContent = '已保存 ' + count + ' 张';
+      const thumbBox = $('stkThumbs-' + key);
+      if (thumbBox) {
+        thumbBox.replaceChildren();
+        for (const file of (found && found.files ? found.files.slice(-4) : [])) {
+          const img = document.createElement('img');
+          img.className = 'stk-thumb';
+          img.loading = 'lazy';
+          img.alt = file;
+          img.title = file;
+          img.src = '/api/stickers/image?emotion=' + encodeURIComponent(key) + '&name=' + encodeURIComponent(file);
+          thumbBox.appendChild(img);
+        }
+      }
       $('stkFiles-' + key).textContent = found && found.files && found.files.length ? '最近保存：' + found.files.slice(-3).join('、') : (count ? '图片已保存到这一类。' : '还没有图片，拖进来即可添加。');
       lines.push(label + '：' + count + ' 张');
     }

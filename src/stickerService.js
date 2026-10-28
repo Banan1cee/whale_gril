@@ -66,7 +66,7 @@ class StickerService {
     chat = String(chat || '').trim();
     if (!chat || chat.length > 160 || /[\r\n\x00-\x1f]/.test(chat)) throw fail('请输入明确的目标会话名称');
     const file = stickers.choose(stickers.imagesFor(stickers.stickerDir(this.config, this.config.root), emotion), this.rng);
-    if (!file) throw fail('该情绪和通用目录还没有图片，请先上传');
+    if (!file) throw fail('这一类还没有图片（也没有「通用」图），先往这个分类里拖几张');
     return this.add({ emotion, path: file }, chat);
   }
   pending() {
