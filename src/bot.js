@@ -234,8 +234,6 @@ class Bot {
     this.mockChunkDelayMs = mockChunkDelayMs;
     this.linkReader = linkReader || ((url) => links.describeLink(url, { timeoutMs: (config.links && config.links.timeoutMs) || 6000 }));
     this.startedAt = Date.now();
-    // 表情包冷却：会话 key → 上次发图时间
-    this._stickerState = new Map();
   }
 
   sessionKey(msg) {
@@ -1464,22 +1462,10 @@ class Bot {
    * @returns {{emotion: string, path: string}|null}
    */
   stickerFor(decision, text, request = '') {
-    if (!stickers.isOn(this.config)) return null;
+    if (!stickers.isOn(this.config) || !this.stickerService) return null;
     const msg = (decision && decision.msg) || {};
-    const cfg = this.config.sticker || {};
-    if (cfg.onlyGroup && msg.chatType !== 'group') return null;
-    const key = msg.chatId ? this.sessionKey(msg) : 'default';
     try {
-      return stickers.pick({
-        config: this.config,
-        root: this.config.root || process.cwd(),
-        key,
-        text,
-        request,
-        state: this._stickerState,
-        now: Date.now(),
-        rng: this.rng,
-      });
+      return this.stickerService.plan(msg, text, request);
     } catch (err) {
       if (this.logger) this.logger.warn('挑表情包失败：' + (err && err.message ? err.message : err));
       return null;

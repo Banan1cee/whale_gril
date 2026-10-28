@@ -144,17 +144,14 @@ const DEFAULT_CONFIG = {
   // 表情包（实验性）：总闸在 features.stickers，这里只管「怎么挑、发多勤」。
   // 关闭时整个功能不生效：不挑图、不回包带字段、桥接不轮询、测试接口 404。
   sticker: {
-    enabled: true,          // 总闸关了这里就不看
     dir: 'data/stickers',
     // 5 类情绪，键名对应 data/stickers 下的文件夹（中文名也认）
-    chances: { happy: 0.1, angry: 0.2, cute: 0.12, meh: 0.08, bored: 0.06 },
-    genericChance: 0.1,     // 「通用」文件夹的兜底概率
-    cooldownMinutes: 10,    // 同一个会话最少隔这么久才再发
-    onlyGroup: false,
-    maxSide: 960,           // 缩放上限（太大微信会慢）
+    chances: { happy: 0.25, angry: 0.25, cute: 0.25, meh: 0.25, bored: 0.25 },
+    genericChance: 0.25,    // 五类都没单独配时的兜底概率
     testChat: '文件传输助手', // 控制台「发送测试表情包」默认发到哪
   },
   features: {
+    stickers: false,
     groupAddressGuard: true,
     fightQuoteCheck: true,
     mediaCleanup: true,
@@ -217,8 +214,21 @@ function isPlainObject(v) {
   return v !== null && typeof v === 'object' && !Array.isArray(v);
 }
 
+// 深拷贝：老实现只做 `{ ...base }` 浅拷贝，persona 这类嵌套对象会和
+// DEFAULT_CONFIG 共享同一个引用 —— 一次「导入预设」就把模块级默认值改了，
+// 同进程里之后新建的配置、以及测试之间都会互相污染。
+function cloneDeep(value) {
+  if (Array.isArray(value)) return value.map(cloneDeep);
+  if (isPlainObject(value)) {
+    const out = {};
+    for (const key of Object.keys(value)) out[key] = cloneDeep(value[key]);
+    return out;
+  }
+  return value;
+}
+
 function deepMerge(base, extra) {
-  const out = Array.isArray(base) ? base.slice() : { ...base };
+  const out = cloneDeep(base);
   if (!isPlainObject(extra)) return out;
   for (const [k, v] of Object.entries(extra)) {
     if (k.startsWith('_')) continue; // 以 _ 开头的是说明字段，忽略
