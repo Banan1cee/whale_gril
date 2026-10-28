@@ -79,3 +79,8 @@ test('官方连不上时有镜像兜底，也可以彻底关掉', () => {
   assert.match(ps1, /ghfast\.top/);
   assert.match(ps1, /NoMirror/);
 });
+test('版本号只要和 latest 不同就更新，不比较大小', () => {
+  const ps1 = readPs1();
+  assert.match(ps1, /if \(\$cmp -eq 0 -and -not \$Force\)/);
+  assert.ok(!/if \(\$cmp -le 0/.test(ps1), '不要再按大小跳过');
+});

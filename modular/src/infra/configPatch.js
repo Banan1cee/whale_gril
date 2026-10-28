@@ -187,6 +187,7 @@ function applyConfigPatch(runtime, patch) {
   fs.writeFileSync(file, JSON.stringify(raw, null, 2) + '\n', 'utf8');
   const cleared = clearSettingsShadow(runtime, changed);
   mergeConfigInPlace(runtime.config, loadConfig({ root: runtime.config.root, env: runtime.config.env }));
+  runtime.stickerService?.reconcile();
   if (runtime.llm && typeof runtime.llm.reload === 'function') runtime.llm.reload();
   runtime.logger.info(`调试台保存了设置：${changed.join('、')}${cleared.length ? `（同时清了 ${cleared.join('、')}，让改动真的生效）` : ''}`);
   return { changed, cleared };
@@ -207,6 +208,7 @@ function watchConfigFile(runtime) {
           const raw = fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '');
           JSON.parse(raw); // 先确认是合法 JSON，写坏了就别覆盖内存里的好配置
           mergeConfigInPlace(runtime.config, loadConfig({ root: runtime.config.root, env: runtime.config.env }));
+          runtime.stickerService?.reconcile();
           if (runtime.llm && typeof runtime.llm.reload === 'function') runtime.llm.reload();
           runtime.logger.info('config.json 已重新加载（改动已生效，不用重启）');
         } catch (err) {
@@ -215,6 +217,13 @@ function watchConfigFile(runtime) {
       }, 250);
     });
     watcher.unref?.();
+    // 目录被删/改名时 fs.watch 会 emit('error')，不接住就会把整个进程带崩
+    // （沙箱/临时目录里实测：EPERM 直接 throw）。监听失效不该影响服务本身。
+    watcher.on?.('error', (err) => {
+      runtime.logger.warn(`停止监听 config.json（${err && err.message}）；手动改完请重启服务`);
+      try { watcher.close(); } catch { /* ignore */ }
+      runtime.configWatcher = null;
+    });
     runtime.configWatcher = watcher;
   } catch (err) {
     runtime.logger.warn(`监听 config.json 失败（手动改完记得重启服务）：${err && err.message}`);

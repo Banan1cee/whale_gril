@@ -10,6 +10,8 @@ const MIME = {
   '.css': 'text/css; charset=utf-8',
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
+  '.gif': 'image/gif',
+  '.jpeg': 'image/jpeg',
   '.jpg': 'image/jpeg',
   '.webp': 'image/webp',
   '.ico': 'image/x-icon',
@@ -31,16 +33,20 @@ function readBody(req, limit = MAX_BODY) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let size = 0;
+    let tooLarge = false;
     req.on('data', (c) => {
+      if (tooLarge) return;
       size += c.length;
       if (size > limit) {
+        tooLarge = true;
+        chunks.length = 0;
         reject(Object.assign(new Error('请求体太大'), { statusCode: 413 }));
-        req.destroy();
-        return;
+        return; // 继续把请求体读完但丢弃：直接 destroy 会让调用方收不到 413
       }
       chunks.push(c);
     });
     req.on('end', () => {
+      if (tooLarge) return;
       const raw = Buffer.concat(chunks).toString('utf8');
       if (!raw.trim()) return resolve({});
       try {

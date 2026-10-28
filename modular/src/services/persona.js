@@ -31,6 +31,8 @@ function applyPersonaPatch(runtime, body) {
     if (body[k] !== undefined) patch[k] = Boolean(body[k]);
   }
   if (Array.isArray(body.mutedGroups)) patch.mutedGroups = body.mutedGroups.map((x) => String(x).trim()).filter(Boolean).slice(0, 30);
+  // 记住「这一版是从哪个预设载入的」，页面上能直接显示当前生效的是哪一版
+  if (body.sourcePreset !== undefined) patch.sourcePreset = str(body.sourcePreset, 80);
   personaStore.save(runtime.config, patch);
   if (body.model) {
     try {

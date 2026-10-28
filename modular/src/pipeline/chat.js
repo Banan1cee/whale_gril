@@ -34,6 +34,7 @@ const { extractSelfFacts } = require('../core/facts');
 const { extractMentionNames } = require('../core/mentions');
 const { COMMAND_HELP, extractCommand } = require('../core/commands');
 const { cannedReply } = require('./stages/canned');
+const stickers = require('../adapters/stickers');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -997,6 +998,22 @@ class Bot {
   }
 
   /** 写入鲸鲸自己的回复，返回气泡数组 */
+  /**
+   * 这条回复要不要补一张表情包（实验性）。
+   * 总闸关着直接返回 null，调用方不用判断。
+   * @returns {{emotion: string, path: string}|null}
+   */
+  stickerFor(decision, text, request = '') {
+    if (!stickers.isOn(this.config) || !this.stickerService) return null;
+    const msg = (decision && decision.msg) || {};
+    try {
+      return this.stickerService.plan(msg, text, request);
+    } catch (err) {
+      if (this.logger) this.logger.warn('挑表情包失败：' + (err && err.message ? err.message : err));
+      return null;
+    }
+  }
+
   finalize(decision, text, { error = false } = {}) {
     text = String(text == null ? '' : text).trim();
     // 正文里的 emoji 剥出来，单独发一条

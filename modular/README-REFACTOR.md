@@ -58,6 +58,8 @@ modular/
 | `src/bilibili.js` | `src/adapters/bilibili.js` | B 站视频 |
 | `src/vision.js` | `src/adapters/vision.js` | 看图 |
 | `src/mediaCache.js` | `src/adapters/mediaCache.js` | 媒体缓存清理 |
+| `src/stickers.js` | `src/adapters/stickers.js` | 表情包图库 + 上传校验（3.60 重写版） |
+| `src/stickerService.js` | `src/services/stickerService.js` | 表情包一次性任务队列（3.60 新增） |
 | `src/adapters/gateway.js` | `src/adapters/gateway.js` | 未改名 |
 
 ### 从 `bot.js` 抽出的纯逻辑（`src/core/`）
@@ -102,6 +104,10 @@ python examples\wechatauto_bridge.py
 `examples/wechatauto_bridge.py` 现在是薄壳，只负责补齐 `sys.path` 后转交 `engine.main()`。
 `bridge/engine.py` 内部的 `main()` 仍是大型闭包，后续拆分计划写在 `bridge/README.md`。
 所有运维脚本、`.bat`、文档里的旧命令都仍然有效。
+
+3.60 起桥接多了一个纯 Python 模块 `bridge/sticker_transport.py`（上游同名文件），
+负责表情包的一次性、fail-closed 发送；它有 57 项 mock 测试
+（`tests/test_sticker_transport.py`，不需要微信）。
 
 ### 发送通道（3.56 起）
 

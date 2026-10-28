@@ -19,6 +19,7 @@ const { DeepSeekClient } = require('./llm/client');
 const { Bot } = require('./pipeline/chat');
 const { createGateways } = require('./adapters/gateway');
 const personaStore = require('./persona/store');
+const { StickerService } = require('./services/stickerService');
 
 const VERSION = require('../package.json').version;
 
@@ -85,6 +86,9 @@ function createRuntime({ root = path.resolve(__dirname, '..'), env = process.env
 
   runtime.llm = new DeepSeekClient({ config, logger });
   runtime.bot = new Bot({ config, store, llm: runtime.llm, logger });
+  // 表情包任务队列：内存态，重启不重放（避免把上一条没发出去的表情再补发一次）
+  runtime.stickerService = new StickerService(config);
+  runtime.bot.stickerService = runtime.stickerService;
   runtime.gateways = createGateways({ config, bot: runtime.bot, logger });
   watchConfigFile(runtime);
   return runtime;

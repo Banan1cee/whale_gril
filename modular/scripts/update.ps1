@@ -9,12 +9,15 @@
     scripts\update.ps1 -Tag v3.54 -Force  # 指定版本 / 降级
     scripts\update.ps1 -DryRun            # 只出计划，不下载不落盘
     scripts\update.ps1 -NoMirror          # 只用官方源
+    scripts\update.ps1 -Migrate           # 只搬记忆：从旧安装复制 data\ + config.json
+    scripts\update.ps1 -Migrate -FromDir "D:\whale-girl-3.50"   # 指定旧目录（已有记忆要覆盖再加 -Force）
 
   说明：
     - release 是打包好的 zip（含 runtime），不是 git 仓库；这里只做「下载 → 校验 → 覆盖」，不编辑任何源码
     - 覆盖时跳过 data\、config.json、backup\、日志；runtime 只增改不删除（包里带的 ffmpeg 会补进来）
     - 下载按官方 API 给的 sha256 校验；官方不通时自动换镜像（镜像只搬运，不参与校验）
     - 覆盖后自检版本号 / 记忆条数 / config 哈希，任一项不过就自动回滚
+    - 新目录首次运行时，如果没有 data\，会先找旧安装问一句「要不要把记忆搬过来」
 #>
 [CmdletBinding()]
 param(
@@ -31,6 +34,9 @@ param(
     [switch]$KeepZip,
     [switch]$Yes,
     [switch]$Rollback,
+    [switch]$Migrate,
+    [string]$FromDir,
+    [switch]$Move,
     [Parameter(Position = 0)][string]$Zip
 )
 
@@ -308,6 +314,261 @@ function Find-NodeExe {
     return ''
 }
 
+# 判断某个目录 node 能不能真的写进去。
+# 为什么要这么绕：安装目录带 Low 完整性标签时，从它启动的 node.exe 也是 Low，
+# 写 %TEMP%（Medium）会直接 EPERM——PowerShell 能写不代表 node 能写。
+function Test-NodeWritable {
+    param([string]$NodeExe, [string]$Dir)
+    if (-not $NodeExe) { return $false }
+    try { New-Item -ItemType Directory -Force -Path $Dir -ErrorAction Stop | Out-Null } catch { return $false }
+    $probe = Join-Path $Dir ('.w-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    $code = "const fs=require('fs');try{fs.writeFileSync(process.argv[1],'1');fs.unlinkSync(process.argv[1]);console.log('OK')}catch(e){console.log('ERR')}"
+    $out = @(& $NodeExe -e $code $probe 2>&1)
+    Remove-Item -LiteralPath $probe -Force -ErrorAction SilentlyContinue
+    return ((($out -join ' ') -match 'OK'))
+}
+
+# ---------------------------------------------------------------- 迁移记忆
+
+# 某个目录是不是鲸鲸的安装目录（认 server.js）
+function Find-AppDir {
+    param([string]$Path)
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return '' }
+    $p = (Resolve-Path -LiteralPath $Path).Path
+    if (Test-Path -LiteralPath (Join-Path $p 'server.js')) { return $p }
+    $subs = @(Get-ChildItem -LiteralPath $p -Directory -ErrorAction SilentlyContinue |
+        Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'server.js') })
+    if ($subs.Count -eq 1) { return $subs[0].FullName }
+    return ''
+}
+
+# 记一下见过的安装目录，下次找旧版本时先看这些
+function Save-KnownRoot {
+    param([string]$Path)
+    if (-not $Path) { return }
+    try {
+        $f = Join-Path $StateDir 'last-roots.json'
+        $list = @()
+        if (Test-Path -LiteralPath $f) {
+            try { $list = @(Get-Content -LiteralPath $f -Raw -Encoding UTF8 | ConvertFrom-Json) } catch { $list = @() }
+        }
+        $list = @($list | Where-Object { $_ } | ForEach-Object { [string]$_ } | Select-Object -Unique)
+        if ($list -notcontains $Path) { $list += $Path }
+        if ($list.Count -gt 10) { $list = $list[($list.Count - 10)..($list.Count - 1)] }
+        Set-Content -LiteralPath $f -Value (ConvertTo-Json -InputObject @($list) -Compress) -Encoding UTF8
+    } catch { }
+}
+
+# 找「带记忆的旧安装」：同级 / 上级 / 桌面 / 下载 / 文档 / 各盘根目录 / 以前用过的路径
+function Find-OldInstalls {
+    param([string]$CurrentRoot, [int]$MaxDepth = 4, [int]$MaxDirs = 8000)
+    $skipNames = @('node_modules', '.git', '.cache', '__pycache__', 'Windows', 'Program Files', 'Program Files (x86)',
+        'ProgramData', 'AppData', '$Recycle.Bin', 'System Volume Information', 'WindowsApps', 'Microsoft', 'Packages')
+    $scopes = New-Object System.Collections.Generic.List[string]
+    $parent = Split-Path -Parent $CurrentRoot
+    if ($parent) {
+        $scopes.Add($parent)
+        $gp = Split-Path -Parent $parent
+        if ($gp) { $scopes.Add($gp) }
+    }
+    foreach ($special in @([Environment]::GetFolderPath('Desktop'), (Join-Path $env:USERPROFILE 'Downloads'), [Environment]::GetFolderPath('MyDocuments'))) {
+        if ($special -and (Test-Path -LiteralPath $special)) { $scopes.Add($special) }
+    }
+    try {
+        foreach ($drv in @([IO.DriveInfo]::GetDrives())) {
+            if ($drv.IsReady -and $drv.DriveType -ne 'CDRom' -and $drv.DriveType -ne 'Network') {
+                $scopes.Add($drv.RootDirectory.FullName)
+            }
+        }
+    } catch { }
+    $rootsFile = Join-Path $StateDir 'last-roots.json'
+    if (Test-Path -LiteralPath $rootsFile) {
+        try {
+            foreach ($x in @(Get-Content -LiteralPath $rootsFile -Raw -Encoding UTF8 | ConvertFrom-Json)) {
+                $s = [string]$x
+                if ($s -and (Test-Path -LiteralPath $s)) { $scopes.Add((Split-Path -Parent $s)) }
+            }
+        } catch { }
+    }
+
+    $found = New-Object System.Collections.Generic.List[object]
+    $appSeen = @{}
+    $dirSeen = @{}
+    $scanned = 0
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    foreach ($scope in ($scopes | Select-Object -Unique)) {
+        if (-not $scope) { continue }
+        $scopeCount = 0
+        $queue = New-Object System.Collections.Generic.Queue[object]
+        $queue.Enqueue([pscustomobject]@{ Path = $scope; Depth = 0 })
+        while ($queue.Count -gt 0 -and $scopeCount -lt $MaxDirs -and $found.Count -lt 30) {
+            $item = $queue.Dequeue()
+            $scopeCount++
+            $scanned++
+            if (($scanned % 500) -eq 0) {
+                Say ('  正在找旧版本… 已看 ' + $scanned + ' 个目录（' + [int]$sw.Elapsed.TotalSeconds + ' 秒）') 'DarkGray'
+            }
+            $dirs = @()
+            try { $dirs = @(Get-ChildItem -LiteralPath $item.Path -Directory -ErrorAction Stop) } catch { continue }
+            foreach ($d in $dirs) {
+                if ($skipNames -contains $d.Name) { continue }
+                if (($d.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { continue }
+                $full = $d.FullName
+                if ($dirSeen.ContainsKey($full)) { continue }
+                $dirSeen[$full] = $true
+                if ($full -eq $CurrentRoot) { continue }
+                if ($full.StartsWith($CurrentRoot + '\', [StringComparison]::OrdinalIgnoreCase)) { continue }
+                if (Test-Path -LiteralPath (Join-Path $full 'server.js')) {
+                    if (-not $appSeen.ContainsKey($full)) {
+                        $st = Get-StoreStats -Root $full
+                        if ($st.Exists -and [int]$st.Sessions -gt 0) {
+                            $appSeen[$full] = $true
+                            $saved = $null
+                            try { $saved = (Get-Item -LiteralPath $st.Path -Force).LastWriteTime } catch { $saved = $null }
+                            if (-not $saved) { $saved = [datetime]::MinValue }
+                            $found.Add([pscustomobject]@{
+                                Path        = $full
+                                Sessions    = [int]$st.Sessions
+                                Messages    = [int]$st.Messages
+                                Size        = [long]$st.Size
+                                SavedAtTime = $saved
+                            })
+                        }
+                    }
+                }
+                if (($item.Depth + 1) -lt $MaxDepth) {
+                    $queue.Enqueue([pscustomobject]@{ Path = $full; Depth = ($item.Depth + 1) })
+                }
+            }
+        }
+    }
+    Say ('  找完了：扫了 ' + $scanned + ' 个目录，用时 ' + [int]$sw.Elapsed.TotalSeconds + ' 秒') 'DarkGray'
+    return @($found | Sort-Object -Property SavedAtTime -Descending)
+}
+
+# 选一个旧目录（-FromDir 优先；非交互时返回空）
+function Select-MigrationSource {
+    param([string]$Root)
+    if ($FromDir) { return $FromDir }
+    if (-not $CanPrompt) { return '' }
+
+    Say '  正在找旧版本安装目录…' 'DarkGray'
+    $cands = @(Find-OldInstalls -CurrentRoot $Root)
+    if ($cands.Count -eq 0) {
+        Say '  没自动找到带记忆的旧安装。' 'Yellow'
+        Say '  把旧版本文件夹拖进这个窗口回车；直接回车跳过。' 'Gray'
+        $manual = Read-Host '  旧目录'
+        if ($manual) { return $manual.Trim('"').Trim() }
+        return ''
+    }
+    Say ''
+    Say '  发现这些旧安装（带记忆）—— 回车 = 搬 [1]，输序号换一个：'
+    for ($i = 0; $i -lt $cands.Count; $i++) {
+        $c = $cands[$i]
+        $when = ''
+        try {
+            if ($c.SavedAtTime -and $c.SavedAtTime -ne [datetime]::MinValue) {
+                $when = ' / 最后保存 ' + $c.SavedAtTime.ToString('yyyy-MM-dd HH:mm')
+            }
+        } catch { }
+        Say ('    [' + ($i + 1) + '] ' + $c.Path) 'White'
+        Say ('        ' + $c.Sessions + ' 个会话 / ' + $c.Messages + ' 条消息' + $when) 'DarkGray'
+    }
+    Say ''
+    while ($true) {
+        $ans = Read-Host '  回车载入 [1]；输序号换一个；s=跳过；q=退出'
+        $ans = "$ans".Trim()
+        if ($ans -eq '') { return $cands[0].Path }
+        if ($ans -match '^[sS]$') { return '' }
+        if ($ans -match '^[qQ]$') { return 'QUIT' }
+        if ($ans -match '^\d+$') {
+            $n = [int]$ans
+            if ($n -ge 1 -and $n -le $cands.Count) { return $cands[$n - 1].Path }
+        }
+        Say '  没看懂，再输一次。' 'Yellow'
+    }
+}
+
+# 真正搬数据：备份当前 → 复制 data\ + config.json → 校验条数
+function Invoke-DataMigration {
+    param([string]$Root, [string]$Source)
+    if (-not $Source) { throw '没有指定旧目录。' }
+    if (-not (Test-Path -LiteralPath $Source)) { throw ('找不到这个目录：' + $Source) }
+    $src = Find-AppDir $Source
+    if (-not $src) { throw ('这不是鲸鲸的安装目录（找不到 server.js）：' + $Source) }
+
+    $srcFull = ([IO.Path]::GetFullPath($src)).TrimEnd('\')
+    $dstFull = ([IO.Path]::GetFullPath($Root)).TrimEnd('\')
+    if ($srcFull -eq $dstFull) { throw '你选的就是当前目录，不用迁移。' }
+    if ($srcFull.StartsWith($dstFull + '\', [StringComparison]::OrdinalIgnoreCase)) { throw '旧目录在当前目录里面，不敢动。' }
+    if ($dstFull.StartsWith($srcFull + '\', [StringComparison]::OrdinalIgnoreCase)) { throw '当前目录在旧目录里面，不敢动。' }
+
+    $stSrc = Get-StoreStats -Root $srcFull
+    if (-not $stSrc.Exists -or [int]$stSrc.Sessions -le 0) { throw ('这个目录里没有聊天记忆：' + $srcFull) }
+
+    $stNow = Get-StoreStats -Root $dstFull
+    if ($stNow.Exists -and [int]$stNow.Sessions -gt 0 -and -not $Force) {
+        throw ('当前目录已经有 ' + $stNow.Sessions + ' 个会话的记忆了；要覆盖请加 -Force（会先备份）。')
+    }
+
+    $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+    $bak = Join-Path $dstFull ('backup\before-migrate-' + $stamp)
+    $dstData = Join-Path $dstFull 'data'
+    if (Test-Path -LiteralPath $dstData) {
+        New-Item -ItemType Directory -Force -Path (Join-Path $bak 'data') | Out-Null
+        & robocopy $dstData (Join-Path $bak 'data') /E /NFL /NDL /NJH /NJS /R:1 /W:1 | Out-Null
+        $cfgCur = Join-Path $dstFull 'config.json'
+        if (Test-Path -LiteralPath $cfgCur) { Copy-Item -LiteralPath $cfgCur -Destination (Join-Path $bak 'config.json') -Force }
+        Say ('  当前 data\ 已备份：' + $bak) 'DarkGray'
+    }
+
+    New-Item -ItemType Directory -Force -Path $dstData | Out-Null
+    & robocopy (Join-Path $srcFull 'data') $dstData /E /XF *.log /NFL /NDL /NJH /NJS /R:1 /W:1 | Out-Null
+    if ($LASTEXITCODE -ge 8) { throw ('复制 data\ 失败（robocopy 退出码 ' + $LASTEXITCODE + '）') }
+
+    $cfgSrc = Join-Path $srcFull 'config.json'
+    if ((Test-Path -LiteralPath $cfgSrc) -and -not (Test-Path -LiteralPath (Join-Path $dstFull 'config.json'))) {
+        Copy-Item -LiteralPath $cfgSrc -Destination (Join-Path $dstFull 'config.json') -Force
+        Say '  config.json 也一起带过来了（主人名单 / token 保留）' 'Green'
+    }
+
+    $stAfter = Get-StoreStats -Root $dstFull
+    if ([int]$stAfter.Sessions -ne [int]$stSrc.Sessions -or [int]$stAfter.Messages -lt [int]$stSrc.Messages) {
+        if (Test-Path -LiteralPath (Join-Path $bak 'data')) {
+            & robocopy (Join-Path $bak 'data') $dstData /E /NFL /NDL /NJH /NJS /R:1 /W:1 | Out-Null
+        }
+        throw ('迁移校验没过：源 ' + $stSrc.Sessions + ' 会话/' + $stSrc.Messages + ' 条，目标 ' + $stAfter.Sessions + '/' + $stAfter.Messages + ' 条，已回滚。')
+    }
+
+    if ($Move) {
+        $trash = Join-Path $srcFull ('backup\moved-away-' + $stamp)
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $trash) | Out-Null
+        Move-Item -LiteralPath (Join-Path $srcFull 'data') -Destination $trash -Force
+        Say ('  源 data\ 已挪到：' + $trash) 'DarkGray'
+    }
+
+    Save-KnownRoot $srcFull
+    Say ''
+    Say ('  ✓ 迁移完成：' + $stAfter.Sessions + ' 个会话 / ' + $stAfter.Messages + ' 条消息') 'Green'
+    Say ('    来自：' + $srcFull) 'Gray'
+    return $true
+}
+
+# 把 runtime 里的 exe 从 Low 标回 Medium（和 scripts\fix-python-il.bat 一个思路）
+function Repair-ExeIntegrity {
+    param([string]$Root)
+    $user = $env:USERDOMAIN + '\' + $env:USERNAME
+    $n = 0
+    foreach ($rel in @('runtime\node.exe', 'runtime\python\python.exe', 'runtime\python\pythonw.exe')) {
+        $p = Join-Path $Root $rel
+        if (-not (Test-Path -LiteralPath $p)) { continue }
+        & icacls $p /grant:r ($user + ':(F)') 2>&1 | Out-Null
+        & icacls $p /setintegritylevel Medium 2>&1 | Out-Null
+        $n++
+    }
+    return $n
+}
+
 function Get-ReleaseInfo {
     param([string[]]$Urls)
     $out = Join-Path $Work 'release.json'
@@ -334,6 +595,28 @@ function Get-ReleaseInfo {
         }
     }
     return $null
+}
+
+# 所有 API 镜像都挂了时，退一步：让镜像把 releases/latest 页面抓回来，从里面抠 tag
+function Get-LatestTagFromMirror {
+    param([string]$Helper, [string]$Work)
+    $node = Find-NodeExe $script:appRoot
+    if (-not $node -or -not $Helper) { return '' }
+    $urls = @(
+        ('https://ghfast.top/https://github.com/' + $Repo + '/releases/latest'),
+        ('https://gh-proxy.org/https://github.com/' + $Repo + '/releases/latest')
+    )
+    foreach ($u in $urls) {
+        $out = Join-Path $Work 'latest.html'
+        Remove-Item -LiteralPath $out -Force -ErrorAction SilentlyContinue
+        try {
+            $null = @(& $node $Helper 'json' $u $out 2>&1)
+            if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $out)) { continue }
+            $html = Get-Content -LiteralPath $out -Raw -Encoding UTF8
+            if ($html -match 'releases/tag/(v?[0-9][0-9A-Za-z\.\-]*)') { return $Matches[1] }
+        } catch { }
+    }
+    return ''
 }
 
 function Save-ReleaseAsset {
@@ -383,7 +666,7 @@ function Save-ReleaseAsset {
             if (Test-Path -LiteralPath $Dest) { Remove-Item -LiteralPath $Dest -Force -ErrorAction SilentlyContinue }
         }
     }
-    throw ('所有下载源都失败：' + ($errors -join ' / ') + '。可手动下载 zip 后用 一键升级.bat，或用 -Mirror 指定镜像。')
+    throw ('所有下载源都失败：' + ($errors -join ' / ') + '。可手动下载 zip 拖到 一键更新.bat 上，或用 -Mirror 指定镜像。')
 }
 
 # ---------------------------------------------------------------- 解压 / 体检
@@ -438,9 +721,7 @@ function Test-NewCodeSyntax {
     $targets = @('server.js')
     $srcDir = Join-Path $SrcRoot 'src'
     if (Test-Path -LiteralPath $srcDir) {
-        foreach ($f in @(Get-ChildItem -LiteralPath $srcDir -Recurse -Filter '*.js' -ErrorAction SilentlyContinue)) {
-            $targets += $f.FullName.Substring($SrcRoot.Length + 1)
-        }
+        foreach ($f in @(Get-ChildItem -LiteralPath $srcDir -Filter '*.js' -ErrorAction SilentlyContinue)) { $targets += ('src\' + $f.Name) }
     }
     foreach ($t in $targets) {
         $full = Join-Path $SrcRoot $t
@@ -455,9 +736,9 @@ function Test-NewCodeSyntax {
 
 $FeatureMarks = @(
     [pscustomobject]@{ File = 'examples\whale_sticker.py';       Pattern = $null;               Name = '收藏表情发送' },
-    [pscustomobject]@{ File = 'src\pipeline\chat.js';            Pattern = 'takeStickerMarks';  Name = '表情标记解析' },
-    [pscustomobject]@{ File = 'bridge\engine.py';                Pattern = 'class MergeQueue';  Name = '连发合并队列' },
-    [pscustomobject]@{ File = 'src\llm\client.js';               Pattern = 'x-opencode-session'; Name = 'OpenCode 会话头' }
+    [pscustomobject]@{ File = 'src\bot.js';                      Pattern = 'takeStickerMarks';  Name = '表情标记解析' },
+    [pscustomobject]@{ File = 'examples\wechatauto_bridge.py';   Pattern = 'class MergeQueue';  Name = '连发合并队列' },
+    [pscustomobject]@{ File = 'src\llm.js';                      Pattern = 'x-opencode-session'; Name = 'OpenCode 会话头' }
 )
 
 function Get-PresentFeatures {
@@ -639,10 +920,78 @@ try {
 
     if ($Rollback) { Invoke-RollbackFlow }
 
-    New-Item -ItemType Directory -Force -Path $StateDir | Out-Null
-    Set-Content -LiteralPath $StateFile -Value $script:appRoot -Encoding UTF8
+    Save-KnownRoot $script:appRoot
 
-    $Work = Join-Path $env:TEMP ('whale-online-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
+    if ($Migrate) {
+        Say '  🐋 鲸鲸 · 迁移记忆' 'Cyan'
+        Say '  ─────────────────────────────────────────────'
+        Say '  只搬 data\ + config.json，不动代码' 'DarkGray'
+        Say ''
+        $src = Select-MigrationSource -Root $script:appRoot
+        if ($src -eq 'QUIT') { Show-Result -Kind 'cancelled' -Message '已退出，什么都没动'; exit 0 }
+        if (-not $src) {
+            Show-Result -Kind 'cancelled' -Message '没有迁移，什么都没动' -Detail @('要指定旧目录：一键更新.bat -Migrate -FromDir "D:\旧版本\whale-girl"')
+            exit 0
+        }
+        $script:Stage = 'migrate'
+        [void](Invoke-DataMigration -Root $script:appRoot -Source $src)
+        Show-Result -Kind 'ok' -Message '迁移完成，现在可以双击 启动鲸鱼娘.bat' -Detail @('之后更新直接双击 一键更新.bat 即可')
+        exit 0
+    }
+
+    # 新目录第一次跑：先问要不要把旧版本的记忆搬过来
+    if (-not $Check -and -not $DryRun) {
+        $stCur = Get-StoreStats -Root $script:appRoot
+        if (-not $stCur.Exists -or [int]$stCur.Sessions -le 0) {
+            Say ''
+            Say '  这个目录还没有聊天记忆。' 'Yellow'
+            $src = Select-MigrationSource -Root $script:appRoot
+            if ($src -eq 'QUIT') { Show-Result -Kind 'cancelled' -Message '已退出，什么都没动'; exit 0 }
+            if ($src) {
+                $script:Stage = 'migrate'
+                [void](Invoke-DataMigration -Root $script:appRoot -Source $src)
+                $script:Stage = 'net'
+            } else {
+                Say '  跳过迁移，继续更新（更新不会碰 data\）。' 'Gray'
+            }
+        }
+    }
+
+    $nodeExe = Find-NodeExe $script:appRoot
+    if (-not $Check -and -not $DryRun -and $nodeExe -and $env:TEMP) {
+        $tempCand = Join-Path $env:TEMP 'whale-girl-tools'
+        if (-not (Test-NodeWritable -NodeExe $nodeExe -Dir $tempCand)) {
+            Say ''
+            Say '  安装目录的 exe 带着 Low 标签（node 写不了 %TEMP%），先修一下…' 'Yellow'
+            $fixedCount = Repair-ExeIntegrity -Root $script:appRoot
+            $nodeExe = Find-NodeExe $script:appRoot
+            if (Test-NodeWritable -NodeExe $nodeExe -Dir $tempCand) {
+                Say ('  已修好 ' + $fixedCount + ' 个 exe：node 现在是 Medium，临时文件不用落安装目录了。') 'Green'
+            } else {
+                Say '  修不动（可能要右键以管理员运行），改用安装目录里的临时目录。' 'Yellow'
+            }
+        }
+    }
+    $workRoots = @(
+        (Join-Path $env:TEMP 'whale-girl-tools'),
+        (Join-Path $script:appRoot 'backup\.update'),
+        (Join-Path $PSScriptRoot '..\backup\.update')
+    )
+    $WorkRoot = ''
+    foreach ($cand in $workRoots) {
+        if ($cand -and (Test-NodeWritable -NodeExe $nodeExe -Dir $cand)) { $WorkRoot = $cand; break }
+    }
+    if (-not $WorkRoot) {
+        throw '找不到 node 能写的临时目录（%TEMP% 和安装目录下的 backup\ 都写不进去）。可以手动下载 zip，拖到 一键更新.bat 上离线更新。'
+    }
+    if ($WorkRoot -ne $StateDir) {
+        $StateDir = $WorkRoot
+        $StateFile = Join-Path $StateDir 'last-root.txt'
+    }
+    New-Item -ItemType Directory -Force -Path $StateDir | Out-Null
+    try { Set-Content -LiteralPath $StateFile -Value $script:appRoot -Encoding UTF8 } catch { }
+
+    $Work = Join-Path $WorkRoot ('work-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
     New-Item -ItemType Directory -Force -Path $Work | Out-Null
     $Helper = Join-Path $Work 'whale-http.js'
     Write-HttpHelper -Path $Helper
@@ -678,7 +1027,11 @@ try {
         $apiUrls += $ApiUrl
     } else {
         $apiUrls += ('https://api.github.com/repos/' + $Repo + '/releases/' + $apiPath)
-        $apiUrls += ('https://api.kkgithub.com/repos/' + $Repo + '/releases/' + $apiPath)
+        if (-not $NoMirror) {
+            # 官方 API 被墙时走代理；镜像只转发，sha256 仍按官方给的值校验
+            $apiUrls += ('https://gh-proxy.com/https://api.github.com/repos/' + $Repo + '/releases/' + $apiPath)
+            $apiUrls += ('https://gh-proxy.org/https://api.github.com/repos/' + $Repo + '/releases/' + $apiPath)
+        }
     }
     Say '  正在查询 GitHub Release…' 'DarkGray'
     $rel = Get-ReleaseInfo -Urls $apiUrls
@@ -706,8 +1059,22 @@ try {
             })
         }
         Say ('  ⚠ 拿不到 GitHub API，按 -Tag 直连构造下载地址：' + $Tag) 'Yellow'
+    } elseif (-not $NoMirror -and ($htmlTag = Get-LatestTagFromMirror -Helper $Helper -Work $Work)) {
+        $v = $htmlTag -replace '^[vV]', ''
+        $rel = [pscustomobject]@{
+            tag_name = $htmlTag
+            name = '（镜像页面解析）'
+            body = ''
+            assets = @([pscustomobject]@{
+                name = ('whale-girl-' + $v + '.zip')
+                size = 0
+                digest = ''
+                browser_download_url = ('https://github.com/' + $Repo + '/releases/download/' + $htmlTag + '/whale-girl-' + $v + '.zip')
+            })
+        }
+        Say ('  ⚠ API 全挂，从镜像页面拿到最新版：' + $htmlTag + '（这一路没有 sha256，只校验大小）') 'Yellow'
     } else {
-        throw '查不到任何版本信息（API 被墙 / 断网 / 限流）。可以：① 挂代理后重跑；② 手动下载 zip 后双击 一键升级.bat；③ 加 -Tag v3.54 走直连模式。'
+        throw '查不到任何版本信息（API 被墙 / 断网 / 限流）。可以：① 挂代理后重跑；② 手动下载 zip 后拖到 一键更新.bat 上；③ 加 -Tag v3.54 走直连模式。'
     }
 
     $remoteVer = ([string]$rel.tag_name) -replace '^[vV]', ''
@@ -727,22 +1094,33 @@ try {
 
     if ($asset.size) { Say ('  安装包：' + $asset.name + '（' + (Format-Size ([long]$asset.size)) + '）') 'Gray' }
 
+    # 规则很简单：版本号和 latest 一样才跳过，不一样就覆盖成 latest。
+    # 不做大小比较——作者把 3.55.x 直接跳到 3.6.0，纯数字比较会误判成"本地更新"。
     $cmp = Compare-Ver $remoteVer $localVer
-    if ($cmp -le 0 -and -not $Force) {
+    if ($cmp -eq 0 -and -not $Force) {
         Say ''
-        if ($Tag -and $cmp -lt 0) {
-            Say ('  当前 ' + $localVer + ' 比指定的 ' + $remoteVer + ' 还新，不需要更新。' ) 'Green'
-            Say ('     真要降级/重装请加 -Force（会先备份，可回滚）。') 'DarkGray'
-        } else {
-            Say '  ✅ 已经是最新版本，不用更新。' 'Green'
-            Say ('     （想强制重装同版本请加 -Force）') 'DarkGray'
-        }
+        Say '  ✅ 已经是最新版本，不用更新。' 'Green'
+        Say ('     （想强制重装同版本请加 -Force）') 'DarkGray'
         exit 0
+    }
+    if ($Tag -and $cmp -lt 0 -and -not $Force) {
+        # 明确指定了一个更旧的版本：仍然要求 -Force，避免手滑降级
+        Say ''
+        Say ('  当前 ' + $localVer + ' 比指定的 ' + $remoteVer + ' 还新。') 'Green'
+        Say ('     真要降级请加 -Force（会先备份，可回滚）。') 'DarkGray'
+        exit 0
+    }
+    if ($cmp -lt 0) {
+        Say ('  ℹ 最新版是 ' + $remoteVer + '，本地是 ' + $localVer + '；版本号虽然变小，但不是同一个版本，仍覆盖成 latest。') 'Yellow'
     }
 
     if ($Check) {
         Say ''
-        Say ('  有新版：' + $localVer + ' → ' + $remoteVer) 'Yellow'
+        if ($cmp -lt 0) {
+            Say ('  版本不同：' + $localVer + ' → ' + $remoteVer + '（按 latest 覆盖）') 'Yellow'
+        } else {
+            Say ('  有新版：' + $localVer + ' → ' + $remoteVer) 'Yellow'
+        }
         Say '  双击 一键更新.bat 即可更新（会先备份、再覆盖代码）。' 'Gray'
         exit 0
     }
@@ -803,7 +1181,7 @@ try {
         if ($Mirror) { $urls += ($Mirror.TrimEnd('/') + '/' + $official) }
         $urls += $official
         if (-not $NoMirror) {
-            foreach ($m in @('https://ghfast.top/', 'https://gh-proxy.com/', 'https://ghproxy.net/')) {
+            foreach ($m in @('https://ghfast.top/', 'https://gh-proxy.com/', 'https://gh-proxy.org/', 'https://ghproxy.net/')) {
                 $urls += ($m + $official)
             }
         }
@@ -996,6 +1374,14 @@ try {
     if ($script:Stage -eq 'rollback') {
         Show-Result -Kind 'failed' -Message '回滚失败' -Detail @(('原因：' + $err), '可以手动把 backup\update-*\code 覆盖回安装目录。')
         exit 4
+    }
+    if ($script:Stage -eq 'migrate') {
+        Show-Result -Kind 'failed' -Message '迁移没有完成' -Detail @(
+            ('原因：' + $err),
+            '新目录的 data\ 保持原样；覆盖前的旧数据在 backup\before-migrate-* 里。',
+            '也可以手动把旧目录的 data\ 和 config.json 复制过来。'
+        )
+        exit 2
     }
     if ($script:Stage -eq 'net') {
         Show-Result -Kind 'network' -Message '网络失败，没有改动任何东西' -Detail @(
