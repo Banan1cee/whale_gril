@@ -1,0 +1,35 @@
+{
+    "name": "whale-girl-bot-modular",
+    "version": "3.55.1",
+    "private": false,
+    "description": "鲸鲸 —— 模块化重构版（CommonJS，零 npm 依赖）",
+    "main": "server.js",
+    "type": "commonjs",
+    "scripts": {
+        "start": "node server.js",
+        "doctor": "node server.js --doctor",
+        "test": "node --test",
+        "smoke": "node scripts/smoke.js",
+        "release-check": "node scripts/release-check.js --release",
+        "deploy": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/deploy.ps1",
+        "release": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-release.ps1",
+        "bump": "node scripts/bump-version.js"
+    },
+    "engines": {
+        "node": ">=18"
+    },
+    "keywords": [
+        "deepseek",
+        "chatbot",
+        "wechat",
+        "wechat-bot",
+        "bilibili",
+        "llm"
+    ],
+    "license": "MIT",
+    "author": "",
+    "repository": {
+        "type": "git",
+        "url": ""
+    }
+}

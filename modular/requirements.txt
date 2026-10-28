@@ -1,0 +1,5 @@
+# 微信桥接的可选依赖（仅 Windows 需要）
+# 安装：py -3.12 -m pip install -r requirements.txt
+wechatauto-replica>=1.2.7
+psutil>=5.9
+pywin32>=306
