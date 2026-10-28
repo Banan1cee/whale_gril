@@ -597,7 +597,8 @@ def apply(verbose: bool = True) -> bool:
     cls.open_chat = open_chat
 
     # ⑤ 步骤埋点：卡死时能看出停在哪一步（WHALE_STEPLOG=1 才逐条打） ---------
-    step_names = ("ensure_window", "back_to_chat_tab", "_search_box", "_search_button",
+    # _search_button 是 staticmethod，包一层会多传 self（TypeError），这里不埋点它。
+    step_names = ("ensure_window", "back_to_chat_tab", "_search_box",
                   "_find_search_list", "_collect_results", "_set_text", "_paste_into",
                   "_click_ctrl", "current_chat", "_chat_input", "open_chat", "send_text")
     verbose_steps = bool(os.environ.get("WHALE_STEPLOG"))

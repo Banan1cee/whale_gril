@@ -124,6 +124,33 @@ class TransportTest(unittest.TestCase):
         )
         self.assertTrue(allowed, '明确指定了账号且数据库就是这个号，应当放行')
 
+    def test_sole_logged_in_account_is_enough_without_picking_one(self):
+        # 现场故障：默认配置（网页里没选账号、机器上有 3 个历史账号目录），
+        # 明明只登着一个号，表情包却一条也发不出去，还提示「去选一个账号」。
+        allowed = transport.account_evidence_allowed(
+            configured_account='', db_account='wxid_a', reason='本机只登了一个号',
+            explicit_pin=False, account_dirs=['a', 'b', 'c'], visible_windows=1)
+        self.assertTrue(allowed, '只登着一个微信时不需要手动选账号')
+
+    def test_multiple_logged_in_accounts_still_need_explicit_choice(self):
+        cases = [
+            dict(configured_account='', db_account='wxid_a'),
+            dict(configured_account='wxid_a', db_account=''),
+            dict(configured_account='wxid_a', db_account='wxid_b'),
+        ]
+        for case in cases:
+            self.assertFalse(transport.account_evidence_allowed(
+                reason='本机只登了一个号', explicit_pin=False, account_dirs=['a', 'b'],
+                visible_windows=2, **case), case)
+        self.assertTrue(transport.account_evidence_allowed(
+            reason='本机只登了一个号', explicit_pin=False, account_dirs=['a', 'b'],
+            visible_windows=2, configured_account='wxid_a', db_account='wxid_a'),
+            '多开时明确选了账号且数据库对得上就放行')
+        self.assertTrue(transport.account_evidence_allowed(
+            reason='本机只登了一个号', explicit_pin=True, account_dirs=['a', 'b'],
+            visible_windows=3, configured_account='', db_account='wxid_a'),
+            '手动钉窗口时总会放行')
+
     def test_sole_window_refused_when_account_is_ambiguous(self):
         cases = [
             dict(configured_account='', db_account='wxid_a', reason='本机只登了一个号'),
@@ -462,6 +489,7 @@ class BridgeContractTest(unittest.TestCase):
                         sticker_activity_allowed=Mock(return_value=True),
                         sticker_quarantine_allows=Mock(return_value=True), sticker_draft_quarantine={},
                         sticker_account_evidence_allowed=Mock(return_value=True),
+                        wechat_main_window_count=Mock(return_value=1),
                         account_send_allowed=Mock(return_value=True), ACCOUNT={'verified': True, 'hwnd': 100},
                         wechat_window_alive=Mock(return_value=True),
                         WindowsDesktop=Mock(return_value=FakeDesktop()),
@@ -620,13 +648,17 @@ class BridgeContractTest(unittest.TestCase):
         self.assertIn('peer', env['sticker_draft_quarantine'])
 
     def test_sole_visible_window_needs_the_configured_account(self):
-        # 现场回归：多开过的机器只登一个号时，以前一律拒绝，表情包永远发不出去。
-        # 现在只要求「明确指定了账号 + 数据库就是这个号」，与文字发送的证据一致。
+        # 现场回归 1：只登着一个号时，不需要在网页里选账号，表情包也应该能发。
         env, _, _ = self.quarantine_environment()
         env['ACCOUNT']['why'] = '本机只登了一个号'
         env['acct_dirs'] = ['test-account', 'another-account']
         env['acct'] = ''
-        self.assertFalse(env['sticker_account_evidence_allowed'](), '没指定账号时不猜')
+        env['wechat_main_window_count'].return_value = 1
+        self.assertTrue(env['sticker_account_evidence_allowed'](), '只登一个号时默认就能发')
+
+        # 现场回归 2：真·多开（两个号同时登着）时才要求明确选账号。
+        env['wechat_main_window_count'].return_value = 2
+        self.assertFalse(env['sticker_account_evidence_allowed'](), '多开且没指定账号时不猜')
         env['acct'] = 'test-account'  # 与 db.account 一致
         self.assertTrue(env['sticker_account_evidence_allowed'](), '指定了正确账号应放行')
         env['acct'] = 'another-account'
