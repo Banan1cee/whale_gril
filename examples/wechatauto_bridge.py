@@ -2183,6 +2183,25 @@ def main():
                           "无法读取清空证据时，请手动清空后重启桥接。", ttl=60)
         return allowed
 
+    def wechat_main_window_count():
+        """当前有几个微信主窗（= 登着几个号）。只读，不点击。"""
+        try:
+            import win32gui
+            from wechatauto.uia_driver import WeChatUIA
+            probe = WeChatUIA()
+            hwnds = list(probe._wechat_hwnds() or ())
+        except Exception:                     # noqa: BLE001
+            return None
+        count = 0
+        for h in hwnds:
+            try:
+                cls = win32gui.GetClassName(int(h)) or ""
+            except Exception:                 # noqa: BLE001
+                continue
+            if "QWindowIcon" in cls or "mmui::" in cls:
+                count += 1
+        return count
+
     def sticker_account_evidence_allowed():
         # 只有一个可见微信窗口时，文字消息一直是认的；表情包以前额外要求
         # 「手动钉窗口」，结果多开过的机器全都发不出去（日志里就是
@@ -2196,6 +2215,7 @@ def main():
             reason=ACCOUNT.get("why"),
             explicit_pin=explicit_pin,
             account_dirs=acct_dirs,
+            visible_windows=wechat_main_window_count(),
         )
         if not allowed:
             log_throttled(
