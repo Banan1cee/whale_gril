@@ -136,7 +136,7 @@ async function live(t) {
   fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ server: { port: 0, openBrowser: false }, watchConfig: false,
     persona: { ownerName: '测试主人', master: { wxids: ['wxid-master'] } },
     gateway: { wechat: { enabled: true, inboundToken: 'sticker-test-token' } } }));
-  const inst = await startServer({ root, env: { WHALE_LOG_FILE: '' }, port: 0, openBrowser: false });
+  const inst = await startServer({ root, env: { WHALE_LOG_FILE: '', WHALE_TEST_NO_SHELL: '1' }, port: 0, openBrowser: false });
   t.after(() => inst.close());
   async function request(route, body, token) {
     const response = await fetch(inst.url + route, { method: body === undefined ? 'GET' : 'POST',
@@ -255,6 +255,23 @@ test('HTTP：缩略图只回传表情包目录里的真图，越界/未知情绪
     const r = await fetch(`${inst.url}/api/stickers/image?${query}`);
     assert.equal(r.status, 404, query);
   }
+});
+
+test('HTTP：可以删掉单张表情包；越界和未知情绪删不掉；能打开文件夹', async (t) => {
+  const { root, request, toggle } = await live(t);
+  await toggle(true);
+  const up = await request('/api/stickers/upload', { emotion: 'happy', files: [{ name: 'a.gif', data: GIF.toString('base64') }] });
+  const name = up.body.uploaded[0].name;
+  const file = path.join(root, 'data/stickers/开心', name);
+  assert.ok(fs.existsSync(file));
+  assert.equal((await request('/api/stickers/delete', { emotion: 'happy', name: '../config.json' })).status, 404);
+  assert.equal((await request('/api/stickers/delete', { emotion: 'nope', name })).status, 404);
+  assert.equal((await request('/api/stickers/delete', { emotion: 'happy', name })).status, 200);
+  assert.equal(fs.existsSync(file), false, '文件要被真删掉');
+  assert.equal((await request('/api/stickers/delete', { emotion: 'happy', name })).status, 404, '重复删要 404');
+  const folder = await request('/api/stickers/open-folder', {});
+  assert.equal(folder.status, 200);
+  assert.ok(folder.body.dir.endsWith('stickers'));
 });
 
 test('桥接：mock-only Python安全行为测试', (t) => {

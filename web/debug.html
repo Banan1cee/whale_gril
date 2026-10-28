@@ -86,6 +86,9 @@
   .sticker-rate input { width:70px; padding:6px; text-align:center; }
   .stk-thumbs { display:flex; gap:4px; flex-wrap:wrap; justify-content:center; min-height:0; }
   .stk-thumb { width:42px; height:42px; object-fit:cover; border-radius:8px; border:1px solid var(--line); background:rgba(2,14,26,.6); }
+  .stk-thumb-wrap { position:relative; display:inline-block; }
+  .stk-del { position:absolute; top:-6px; right:-6px; width:18px; height:18px; line-height:1; padding:0; border-radius:50%;
+    font-size:12px; background:#7f1d1d; border-color:#fca5a5; color:#fff; }
 
 
 </style>
@@ -128,6 +131,10 @@
       <div id="stkTestResult" class="muted" role="status"></div>
       <div id="stkStatus" class="muted" role="status"></div>
       <div id="stkJobs" class="muted" aria-live="polite"></div>
+      <div class="row" style="margin-top:6px">
+        <button type="button" id="stkOpenFolder">打开表情包文件夹</button>
+        <span id="stkFolderMsg" class="muted" role="status"></span>
+      </div>
       <details class="muted"><summary>查看图片保存位置</summary><div id="stkLocation"></div></details>
     </div>
   </div>
@@ -669,6 +676,33 @@ async function saveStickerRates() {
   finally { STICKER_RATES_SAVING = false; $('stkSaveRates').disabled = !STICKER_RATES_DIRTY; }
 }
 
+async function deleteSticker(emotion, file) {
+  if (!STICKERS_ENABLED) return;
+  if (!confirm('删掉这张表情包？\n' + file)) return;
+  const msg = $('stkFolderMsg');
+  try {
+    const r = await fetch('/api/stickers/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ emotion, name: file }) });
+    const d = await r.json();
+    if (!r.ok || !d.ok) throw new Error(d.error || '删除失败');
+    msg.textContent = '已删除：' + file;
+    await loadStickers();
+  } catch (e) {
+    msg.textContent = '删除失败：' + stickerMessage(e);
+  }
+}
+
+async function openStickerFolder() {
+  const msg = $('stkFolderMsg');
+  try {
+    const r = await fetch('/api/stickers/open-folder', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    const d = await r.json();
+    if (!r.ok || !d.ok) throw new Error(d.error || '打不开');
+    msg.textContent = '已打开：' + d.dir;
+  } catch (e) {
+    msg.textContent = '打开文件夹失败：' + stickerMessage(e);
+  }
+}
+
 async function queueStickerTest() {
   const result = $('stkTestResult');
   if (!STICKERS_ENABLED) { result.textContent = '请先开启表情包总开关。'; return; }
@@ -798,6 +832,7 @@ function bindStickerUi() {
     }
   });
   $('stkSaveRates').addEventListener('click', saveStickerRates);
+  $('stkOpenFolder').addEventListener('click', openStickerFolder);
   $('stkChat').addEventListener('input', () => { STICKER_CHAT_INITIALIZED = true; });
   $('stkSend').addEventListener('click', queueStickerTest);
   $('stkMaster').addEventListener('change', async () => {
@@ -843,14 +878,26 @@ async function loadStickers() {
       const thumbBox = $('stkThumbs-' + key);
       if (thumbBox) {
         thumbBox.replaceChildren();
-        for (const file of (found && found.files ? found.files.slice(-4) : [])) {
+        for (const file of (found && found.files ? found.files : [])) {
+          const wrap = document.createElement('span');
+          wrap.className = 'stk-thumb-wrap';
           const img = document.createElement('img');
           img.className = 'stk-thumb';
           img.loading = 'lazy';
           img.alt = file;
-          img.title = file;
+          img.title = file + '（点击删除请按右上角 ×）';
           img.src = '/api/stickers/image?emotion=' + encodeURIComponent(key) + '&name=' + encodeURIComponent(file);
-          thumbBox.appendChild(img);
+          wrap.appendChild(img);
+          const del = document.createElement('button');
+          del.type = 'button';
+          del.className = 'stk-del';
+          del.id = 'stkDelete-' + key + '-' + file;
+          del.textContent = '×';
+          del.title = '删掉这张：' + file;
+          del.setAttribute('aria-label', '删掉这张表情包 ' + file);
+          del.addEventListener('click', (event) => { event.stopPropagation(); deleteSticker(key, file); });
+          wrap.appendChild(del);
+          thumbBox.appendChild(wrap);
         }
       }
       $('stkFiles-' + key).textContent = found && found.files && found.files.length ? '最近保存：' + found.files.slice(-3).join('、') : (count ? '图片已保存到这一类。' : '还没有图片，拖进来即可添加。');
