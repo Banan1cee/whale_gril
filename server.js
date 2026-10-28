@@ -1285,6 +1285,37 @@ function createHandler(runtime) {
           res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-store' });
           return fs.createReadStream(file).pipe(res);
         }
+        if (pathname === '/api/stickers/delete' && method === 'POST') {
+          // 删掉某一张表情包（只在表情包目录内，且必须是真文件）
+          const body = await readBody(req);
+          const emotion = String((body && body.emotion) || '');
+          const name = path.basename(String((body && body.name) || ''));
+          const dir = stickers.stickerDir(config, config.root);
+          const file = path.join(dir, stickers.EMOTIONS[emotion] || '', name);
+          if (!name || !stickers.EMOTIONS[emotion] || !stickers.regularFile(file, dir)) {
+            return json(res, 404, { ok: false, error: '找不到这张表情包（可能已经删掉了）' });
+          }
+          try {
+            fs.unlinkSync(file);
+          } catch (err) {
+            return json(res, 500, { ok: false, error: '删除失败：' + (err && err.message ? err.message : err) });
+          }
+          logger.info(`表情包已删除：${stickers.EMOTIONS[emotion]}/${name}`);
+          return json(res, 200, { ok: true, emotions: service.status().emotions });
+        }
+        if (pathname === '/api/stickers/open-folder' && method === 'POST') {
+          // 在本机资源管理器里打开表情包目录（只打开这一个固定目录）
+          const dir = stickers.stickerDir(config, config.root);
+          fs.mkdirSync(dir, { recursive: true });
+          if (process.platform === 'win32' && process.env.WHALE_TEST_NO_SHELL !== '1') {
+            try {
+              exec(`explorer.exe "${dir}"`, () => {});
+            } catch (err) {
+              return json(res, 500, { ok: false, error: '打开文件夹失败：' + (err && err.message ? err.message : err) });
+            }
+          }
+          return json(res, 200, { ok: true, dir });
+        }
         if (pathname === '/api/stickers/upload' && method === 'POST') {
           const body = await readBody(req, 29 * 1024 * 1024);
           service.requireEnabled(); // Toggle may have changed while a large upload was in flight.
