@@ -32,7 +32,9 @@ class StickerService {
       }
     }
     for (const job of this.jobs.values()) {
-      if (ACTIVE.has(job.status) && this.now() - job.at > 5 * 60000) {
+      // 卡住的任务 90 秒就释放：以前是 5 分钟，失败一次就把这个会话堵 5 分钟，
+      // 用户感觉「25% 概率压根没生效」。
+      if (ACTIVE.has(job.status) && this.now() - job.at > 90 * 1000) {
         job.status = job.status === 'sending' ? 'unconfirmed' : 'cancelled';
         job.error = '任务超时，未自动重试';
       }
@@ -54,7 +56,8 @@ class StickerService {
     if (!this.reconcile() || msg?.platform !== 'wechat' || !msg.chatId) return null;
     const key = `wechat:${msg.chatId}`;
     // 同一个会话只排一个任务，避免连发刷屏；不做时间间隔限制。
-    if ([...this.jobs.values()].some((j) => j.key === key && ACTIVE.has(j.status))) return null;
+    // 只挡「刚刚排上/正在发」的任务；超过 45 秒还挂着说明卡住了，不该再挡住新表情
+    if ([...this.jobs.values()].some((j) => j.key === key && ACTIVE.has(j.status) && this.now() - j.at < 45 * 1000)) return null;
     const hit = stickers.pick({ config: this.config, root: this.config.root, key, text, request,
       recent: this.recent.get(key) || [], rng: this.rng });
     if (!hit) return null;
