@@ -178,11 +178,21 @@ class Gateway {
       senderName: msg.senderName,
       local,
     });
+    // 表情包（实验性）：总闸关着返回 null，桥接就看不到这个字段
+    let sticker = null;
+    try {
+      if (local && this.platform === 'wechat' && this.bot && typeof this.bot.stickerFor === 'function') {
+        sticker = this.bot.stickerFor({ msg }, result.reply, msg.text);
+      }
+    } catch (err) {
+      this.logger && this.logger.warn && this.logger.warn('挑表情包失败：' + (err && err.message ? err.message : err));
+    }
     return {
       ok: true,
       action: 'reply',
       reply: result.reply,
       bubbles: result.bubbles || [result.reply],
+      ...(sticker ? { sticker } : {}),
       // 群里要真的 @ 某人时，桥接据此调 at_member
       mention: result.mention || '',
       // 演示模式（没配 Key，说的是内置台词）：桥接据此在日志里提醒一次，

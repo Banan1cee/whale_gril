@@ -74,7 +74,10 @@ class Router {
       return json(res, 404, { ok: false, error: 'not found' });
     } catch (err) {
       const status = err.statusCode || 500;
-      runtime.logger.error(`${method} ${pathname} 出错：` + (err && err.stack ? err.stack : err));
+      // 关掉的表情包接口 / 被拒绝的测试是预期行为，不该刷 ERROR
+      if (!(pathname.startsWith('/api/stickers') && status < 500)) {
+        runtime.logger.error(`${method} ${pathname} 出错：` + (err && err.stack ? err.stack : err));
+      }
       if (status === 500) return json(res, 500, { ok: false, error: '服务器打了个结，请看控制台日志' });
       return json(res, status, { ok: false, error: err.message });
     }

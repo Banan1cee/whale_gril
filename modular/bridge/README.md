@@ -9,6 +9,7 @@ bridge/
 ├─ __main__.py      # python -m bridge 入口（已完成）
 ├─ bg_sender.py     # 零焦点发送通道（已完成，见 docs/微信消息后台发送.md）
 ├─ msg_pipeline.py  # 消息调度：同一会话串行、跨会话并发（已完成）
+├─ sticker_transport.py  # 表情包一次性发送（fail-closed，mock 可测）
 ├─ engine.py        # 当前完整实现（待拆）
 ├─ config.py        # TODO reload_config / read_config / build_bot_url / wait_for_server
 ├─ wechat_db.py     # TODO looks_like_db_root / resolve_db_dir / find_account_dirs / list_accounts_cli

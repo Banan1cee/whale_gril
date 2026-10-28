@@ -37,8 +37,15 @@ if (!['patch', 'minor', 'major'].includes(level)) {
 const pkgPath = path.join(root, 'package.json');
 const clPath = path.join(root, 'CHANGELOG.md');
 const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-const [maj, min, pat] = String(pkg.version).split('.').map((n) => Number(n) || 0);
-const next = level === 'major' ? `${maj + 1}.0.0` : level === 'minor' ? `${maj}.${min + 1}.0` : `${maj}.${min}.${pat + 1}`;
+// 版本号允许两段（3.60）或三段（3.55.1）：两段式加补丁就补成三段，别凭空造怪号。
+const parts = String(pkg.version).split('.').map((n) => Number(n) || 0);
+const maj = parts[0];
+const min = parts[1] || 0;
+const threePart = parts.length >= 3;
+const pat = threePart ? parts[2] : 0;
+const next = level === 'major' ? `${maj + 1}.0.0`
+  : level === 'minor' ? (threePart ? `${maj}.${min + 1}.0` : `${maj}.${min + 1}`)
+    : (threePart ? `${maj}.${min}.${pat + 1}` : `${maj}.${min}.1`);
 
 let cl = fs.readFileSync(clPath, 'utf8');
 const dupRe = new RegExp('^##\\s*' + next.replace(/\./g, '\\.') + '\\b', 'm');

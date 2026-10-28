@@ -45,6 +45,17 @@ import subprocess
 import threading
 import time
 
+# Windows embeddable Python's ._pth omits the script directory; load only our
+# shipped helper from this explicit directory, never from the current working directory.
+_EXAMPLES_DIR = os.path.dirname(os.path.abspath(__file__))
+if _EXAMPLES_DIR not in sys.path:
+    sys.path.insert(0, _EXAMPLES_DIR)
+from sticker_transport import (guarded_send as guarded_sticker_send, read_enabled_config,
+                               resolve_target as resolve_sticker_target, result as sticker_result,
+                               WindowsDesktop, quarantined_input_value,
+                               account_evidence_allowed as sticker_account_evidence_ok,
+                               alias_match as sticker_alias_match)
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_PATH = os.path.join(ROOT, "config.json")
 LOG_FILE = os.path.join(ROOT, "data", "wechat-bridge-4x.log")
@@ -59,6 +70,18 @@ DIGEST_MINUTES = 30
 MASTER_WXID = ''
 # 超过这么多秒的旧消息直接不回，避免“回上一条”
 STALE_AFTER = float(os.environ.get("WHALE_STALE_AFTER", "4"))
+
+# 主动搭话（care）的开关：先给默认值，下面读 config 时再覆盖。
+# 保底：只要启动时配置解析失败，这些名字也必须存在，否则后台线程会 NameError 退出。
+CARE_ENABLED = False
+CARE_ALLOW_GROUPS = False
+CARE_ONLY_MASTER = True
+CARE_ALLOW_OTHERS = False
+CARE_QUIET_MIN = 20.0
+# Fail closed even when an earlier setting makes startup config parsing fail.
+STICKER_TEST_ON = False
+
+
 def _as_bool(value, default=False):
     """配置里的布尔：兼容写成字符串 "false" 的老配置。
 
@@ -1858,27 +1881,65 @@ def main():
             SEND_STATE["active"] = False
 
     def force_foreground(hwnd):
-        """把微信强制拉到前台（SetForegroundWindow 单用会被系统拒绝）。"""
+        """把微信强制拉到前台，并且**确认真的到位**。
+
+        原来的实现「调用完就 return True」，但 SetForegroundWindow 会被 Windows
+        的前台锁拒绝（你正在浏览器里打字时尤其明显），于是表情包发送时判断
+        「微信不在前台」→ 直接失败。现在每轮都读一次 GetForegroundWindow 复核，
+        并补上两种业界常用的解锁手段：
+          ① 轻点一下 ALT 解除前台锁，再 SwitchToThisWindow；
+          ② AttachThreadInput + BringWindowToTop + SetForegroundWindow。
+        连续几轮都不成功才返回 False，交给调用方明确报错。
+        """
         try:
             import ctypes
-            user32 = ctypes.windll.user32
-            if user32.GetForegroundWindow() == hwnd:
+            import win32api
+            import win32con
+            import win32gui
+        except Exception:
+            return False
+        hwnd = int(hwnd or 0)
+        if not hwnd:
+            return False
+        user32 = ctypes.windll.user32
+        try:
+            if win32gui.GetForegroundWindow() == hwnd:
                 return True
-            fg = user32.GetForegroundWindow()
-            tid_fg = user32.GetWindowThreadProcessId(fg, None)
-            tid = user32.GetWindowThreadProcessId(hwnd, None)
+        except Exception:
+            return False
+        for _attempt in range(4):
             try:
-                user32.AttachThreadInput(tid_fg, tid, True)
-                user32.ShowWindow(hwnd, 9)  # SW_RESTORE
-                user32.SetForegroundWindow(hwnd)
-                user32.BringWindowToTop(hwnd)
-            finally:
+                fg = win32gui.GetForegroundWindow()
+                tid_fg = user32.GetWindowThreadProcessId(fg, None)
+                tid = user32.GetWindowThreadProcessId(hwnd, None)
                 try:
-                    user32.AttachThreadInput(tid_fg, tid, False)
+                    user32.AttachThreadInput(tid_fg, tid, True)
+                    win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+                    user32.BringWindowToTop(hwnd)
+                    win32gui.SetForegroundWindow(hwnd)
+                finally:
+                    try:
+                        user32.AttachThreadInput(tid_fg, tid, False)
+                    except Exception:
+                        pass
+                if win32gui.GetForegroundWindow() == hwnd:
+                    return True
+                # 前台锁最常见：先按一下 ALT，把「前台占用」释放掉
+                win32api.keybd_event(win32con.VK_MENU, 0, 0, 0)
+                win32api.keybd_event(win32con.VK_MENU, 0, win32con.KEYEVENTF_KEYUP, 0)
+                time.sleep(0.05)
+                try:
+                    user32.SwitchToThisWindow(hwnd, True)
                 except Exception:
                     pass
+                time.sleep(0.15)
+                if win32gui.GetForegroundWindow() == hwnd:
+                    return True
+            except Exception:
+                pass
             time.sleep(0.15)
-            return True
+        try:
+            return win32gui.GetForegroundWindow() == hwnd
         except Exception:
             return False
 
@@ -2363,6 +2424,290 @@ def main():
         log("键盘通道：按键发了，但数据库里没确认到（可能发到了别的会话），这条按失败处理")
         return False
 
+    # Protected by send_lock. Feature OFF must not erase a latent attachment
+    # draft: this guard protects ordinary text/@ sends too, without sending keys.
+    sticker_draft_quarantine = {}
+
+    def sticker_quarantine_allows(username, shown="", gui_locked=False):
+        requested = str(username or "").strip()
+        matches = [(key, entry) for key, entry in sticker_draft_quarantine.items()
+                   if key == requested or (not requested and
+                       (str(shown or "").strip() == key or str(shown or "").strip() in entry["aliases"]))]
+        if not matches:
+            return True
+
+        def inspect():
+            for key, entry in matches:
+                value = None
+                try:
+                    compat = _compat_mod()
+                    if (ACCOUNT.get("verified") and int(ACCOUNT.get("hwnd") or 0) == entry["hwnd"]
+                            and compat is not None and int(compat.pinned_window() or 0) == entry["hwnd"]
+                            and wechat_window_alive()):
+                        value = quarantined_input_value(gui, entry["hwnd"], entry["aliases"])
+                except Exception:
+                    pass
+                if value not in (None, ""):
+                    entry["draft_observed"] = True
+                if value == "" and entry["draft_observed"]:
+                    sticker_draft_quarantine.pop(key, None)
+                else:
+                    return False
+            return True
+
+        if gui_locked:
+            allowed = inspect()
+        else:
+            with gui_lock:
+                allowed = inspect()
+        if not allowed:
+            log_throttled("uncertain-attachment-draft", "发送暂停：上次附件操作可能留有草稿；请手动清空目标输入框后重试。"
+                          "无法读取清空证据时，请手动清空后重启桥接。", ttl=60)
+        return allowed
+
+    def sticker_account_evidence_allowed():
+        # 只有一个可见微信窗口时，文字消息一直是认的；表情包以前额外要求
+        # 「手动钉窗口」，结果多开过的机器全都发不出去（日志里就是
+        # 「failed target account window could not be verified」）。
+        # 现在和文字用同一套证据：只要明确指定了账号、且数据库就是用这个号
+        # 打开的，就放行；没指定账号、多个账号目录又分不清时才拒绝。
+        explicit_pin = bool(WINDOW_HWND and int(WINDOW_HWND) == int(ACCOUNT.get("hwnd") or 0))
+        allowed = sticker_account_evidence_ok(
+            configured_account=acct,
+            db_account=getattr(db, "account", ""),
+            reason=ACCOUNT.get("why"),
+            explicit_pin=explicit_pin,
+            account_dirs=acct_dirs,
+        )
+        if not allowed:
+            log_throttled(
+                "sticker-account-ambiguous",
+                "表情包跳过：这台机器有多个微信账号目录，但没指定用哪一个。"
+                "去网页「设置 → 微信账号」选一个再发（文字消息已经在用「最近活跃」那个，"
+                "表情包不猜，免得从别的号发出去）。",
+                ttl=300,
+            )
+        return allowed
+
+    sticker_headers = {"x-bot-token": token, "x-whale-bridge": "1"}
+    sticker_base = bot_url.rsplit("/webhook", 1)[0]
+
+    def sticker_config_now():
+        # Dormant worker does no sticker HTTP/path/GUI work while the cached flag
+        # is off. Only config_watch re-enables it; an on flag is NEVER authority
+        # to act without a fresh disk read.
+        global STICKER_TEST_ON
+        if not STICKER_TEST_ON:
+            return None
+        current = read_enabled_config(CONFIG_PATH)
+        if current is None:
+            STICKER_TEST_ON = False
+            return None
+        # A pending account change must not send through the old DB/window while
+        # config_watch is still waiting to restart the bridge.
+        if str((current.get("wechat") or {}).get("account") or "").strip() != ACCOUNT_WANTED:
+            return None
+        return current
+
+    def sticker_gate(generation, job_id=""):
+        if not generation or sticker_config_now() is None:
+            return False
+        try:
+            response = LOCAL_HTTP.get(sticker_base + "/api/stickers/status",
+                                      headers=sticker_headers, timeout=3)
+            status = response.json() if response.status_code == 200 else None
+            return bool(isinstance(status, dict) and status.get("ok") is True
+                        and status.get("enabled") is True
+                        and status.get("generation") == generation
+                        and (not job_id or any(isinstance(job, dict) and job.get("id") == job_id
+                                               and job.get("status") == "sending"
+                                               and job.get("generation", generation) == generation
+                                               for job in (status.get("jobs") or [])))
+                        and sticker_config_now() is not None)
+        except Exception:
+            return False
+
+    def sticker_activity_allowed(username=""):
+        try:
+            return not (AWAY["on"] or away_active() or game_running() or foreground_is_fullscreen()
+                        or (username and (username in dead_chats or not group_is_alive(username))))
+        except Exception:
+            return False
+
+    def send_sticker(path, chat_display_name, chat_username="", generation="", job_id=""):
+        """一次性、无导航的图片粘贴；只能向已在前台打开且聚焦的精确会话发送。"""
+        if not job_id or not sticker_gate(generation, job_id):
+            return sticker_result("cancelled", "stickers are disabled or generation expired")
+        with send_lock:
+            if not sticker_gate(generation, job_id):
+                return sticker_result("cancelled", "stickers are disabled or generation expired")
+            if not sticker_quarantine_allows(chat_username, chat_display_name):
+                return sticker_result("failed", "an uncertain attachment draft must be cleared manually before further sends")
+            if not sticker_activity_allowed(chat_username):
+                return sticker_result("failed", "activity gate rejected the sticker")
+            if (not account_send_allowed("表情包") or not ACCOUNT.get("verified")
+                    or not wechat_window_alive() or not sticker_account_evidence_allowed()):
+                return sticker_result("failed", "target account window could not be verified")
+            hwnd = int(ACCOUNT.get("hwnd") or 0)
+            snap = None
+            try:
+                desktop = WindowsDesktop()
+                if not desktop.foreground(hwnd):
+                    # 以前这里是「微信不在前台就不发」，结果用户点完发送还得自己去切窗口，
+                    # 实际表现就是「表情包发不出去」。文字发送本来就是先抬一下微信、发完还原；
+                    # 这里做同样的事：短暂抬到前台，粘贴前仍会重新校验会话标题/焦点/空输入框。
+                    snap = snapshot_win_state()
+                    if not force_foreground(hwnd) or not desktop.foreground(hwnd):
+                        return sticker_result("failed", "could not bring the WeChat window to the foreground")
+                    log_throttled("sticker-foreground", "表情包：微信不在前台，先切过去（发完会把窗口还原）", ttl=120)
+            except Exception:
+                return sticker_result("failed", "foreground safety checks are unavailable")
+            try:
+              with gui_lock:
+                # Do not initialize/activate any window just to send a sticker.
+                current_gui = gui
+                if current_gui is None:
+                    return sticker_result("failed", "window driver is not ready")
+                if not sticker_gate(generation, job_id):
+                    return sticker_result("cancelled", "stickers are disabled or generation expired")
+                try:
+                    canonical, aliases = resolve_sticker_target(db, chat_display_name, chat_username)
+                    if not sticker_quarantine_allows(canonical, chat_display_name, gui_locked=True):
+                        return sticker_result("failed", "an uncertain attachment draft must be cleared manually before further sends")
+                    if not sticker_activity_allowed(canonical):
+                        return sticker_result("failed", "target or activity gate rejected the sticker")
+                    # Unlike bind_gui_window(), failure must not be silently ignored.
+                    if not sticker_gate(generation, job_id) or not desktop.foreground(hwnd):
+                        return sticker_result("cancelled", "send gates changed before binding")
+                    if not current_gui.use_window(hwnd) or int(current_gui.main_hwnd) != hwnd:
+                        return sticker_result("failed", "unable to bind the verified account window")
+                    uia = getattr(current_gui, "_uia", None)
+                    if uia is None:
+                        return sticker_result("failed", "UIA target proof is unavailable; no OCR fallback")
+                    # 目标会话没打开就自己切过去（和文字发送一样用 UIA 打开），
+                    # 打开之后必须核对标题确实是目标，否则宁可不发。
+                    # 搜索顺序：先显示名，再其它别名（昵称/备注/wxid）。
+                    search_keys = [chat_display_name] + [a for a in aliases if a and a != chat_display_name]
+                    try:
+                        if not sticker_alias_match(uia.current_chat(), aliases):
+                            uia.open_chat(search_keys)
+                            # 切换会话有时要 1 秒左右才稳定，最多等 2 秒
+                            for _ in range(8):
+                                time.sleep(0.25)
+                                if sticker_alias_match(uia.current_chat(), aliases):
+                                    break
+                    except Exception:
+                        return sticker_result("failed", "exact target is not open in the pinned window")
+                    if not sticker_alias_match(uia.current_chat(), aliases):
+                        return sticker_result("failed", "exact target is not open in the pinned window")
+                    current = sticker_config_now()
+                    if current is None:
+                        return sticker_result("cancelled", "stickers are disabled")
+                    directory = (current.get("sticker") or {}).get("dir") or "data/stickers"
+                    directory = directory if os.path.isabs(directory) else os.path.join(ROOT, directory)
+
+                    def pinned_account_valid():
+                        try:
+                            compat = _compat_mod()
+                            return bool(ACCOUNT.get("verified") and int(ACCOUNT.get("hwnd") or 0) == hwnd
+                                        and sticker_account_evidence_allowed()
+                                        and wechat_window_alive() and compat is not None
+                                        and int(compat.pinned_window() or 0) == hwnd)
+                        except Exception:
+                            return False
+
+                    def transaction_gate():
+                        if not sticker_gate(generation, job_id):
+                            return False
+                        latest = sticker_config_now()
+                        if latest is None:
+                            return False
+                        latest_dir = (latest.get("sticker") or {}).get("dir") or "data/stickers"
+                        latest_dir = latest_dir if os.path.isabs(latest_dir) else os.path.join(ROOT, latest_dir)
+                        wanted_hwnd = int((latest.get("wechat") or {}).get("windowHwnd") or 0)
+                        return (os.path.normcase(os.path.abspath(latest_dir)) == os.path.normcase(os.path.abspath(directory))
+                                and wanted_hwnd in (0, hwnd))
+
+                    SEND_STATE["active"] = True
+                    SEND_STATE["start"] = time.time()
+                    try:
+                        outcome = guarded_sticker_send(
+                            current_gui, uia, hwnd, aliases, path, directory, db, canonical,
+                            gate=transaction_gate, account_valid=pinned_account_valid,
+                            activity_allowed=lambda: sticker_activity_allowed(canonical), desktop=desktop)
+                        if not isinstance(outcome, dict) or outcome.get("status") not in {
+                                "confirmed", "unconfirmed", "failed", "cancelled"}:
+                            raise ValueError("unknown attachment result")
+                    except Exception:
+                        outcome = sticker_result("unconfirmed", "transport action is uncertain; a draft may remain; do not retry",
+                                                 draft_may_remain=True)
+                    finally:
+                        SEND_STATE["active"] = False
+                    if outcome.get("draft_may_remain") or outcome.get("status") == "unconfirmed":
+                        sticker_draft_quarantine[canonical] = {
+                            "hwnd": hwnd, "aliases": aliases,
+                            "draft_observed": bool(outcome.get("draft_observed"))}
+                    return outcome
+                except Exception:
+                    return sticker_result("failed", "sticker safety checks are unavailable")
+            finally:
+                if snap:
+                    try:
+                        restore_win_state(snap)
+                    except Exception:
+                        pass
+
+    def claim_and_send_sticker(item, expected_chat="", expected_username=""):
+        """Atomic claim precedes every send, including normal webhook stickers.
+
+        Never send from an unclaimed payload, never retry a claim or attachment,
+        and never interpret a truthy result dictionary as confirmed delivery.
+        """
+        if not isinstance(item, dict) or not sticker_gate(item.get("generation")):
+            return sticker_result("cancelled", "stickers are disabled or generation expired")
+        job_id = str(item.get("id") or "")
+        if not job_id:
+            return sticker_result("failed", "sticker job id is missing")
+        try:
+            response = LOCAL_HTTP.post(sticker_base + "/api/stickers/claim", json={"id": job_id},
+                                       headers=sticker_headers, timeout=3)
+            claimed = response.json() if response.status_code == 200 else None
+            claimed = claimed.get("item") if isinstance(claimed, dict) and claimed.get("ok") is True else None
+        except Exception:
+            claimed = None
+        if not isinstance(claimed, dict):
+            return sticker_result("failed", "sticker job was not claimed; nothing was sent")
+        if (claimed.get("id") != job_id or claimed.get("generation") != item.get("generation")
+                or claimed.get("status") != "sending"
+                or (expected_chat and not expected_username and claimed.get("chat") != expected_chat)
+                or (expected_username and claimed.get("chatUsername") != expected_username)):
+            outcome = sticker_result("failed", "claimed job identity did not match the request")
+        else:
+            outcome = send_sticker(claimed.get("path"), claimed.get("chat") or "",
+                                   claimed.get("chatUsername") or "", claimed.get("generation"), job_id)
+        # Off means no sticker requests/logs, including acknowledgements. The
+        # server cancels/ages its claimed jobs; loss of ack NEVER causes a resend.
+        if sticker_gate(item.get("generation")):
+            # 结果必须写回服务端，否则控制台会一直显示「尝试发送中」。
+            # 服务端是单线程 Node：正好在生成长回复时，3 秒超时会有概率失败，
+            # 以前这里 except: pass 把它吞了，于是界面永远停在 sending。
+            payload = {"id": job_id, "status": outcome["status"], "error": outcome["error"]}
+            for attempt in range(3):
+                try:
+                    resp = LOCAL_HTTP.post(sticker_base + "/api/stickers/ack", json=payload,
+                                           headers=sticker_headers, timeout=8)
+                    if getattr(resp, "status_code", 0) in (200, 404, 409):
+                        break
+                except Exception as exc:
+                    if attempt == 2:
+                        log_throttled("sticker-ack-fail",
+                                      "表情包结果没能写回服务端（不影响已经发出的消息）：" + repr(exc),
+                                      ttl=300)
+                time.sleep(0.4)
+            if sticker_config_now() is not None:
+                log("表情包结果：", outcome["status"], outcome["error"])
+        return outcome
+
     def send_text(text, chat_display_name, chat_username="", force=False, quote_text=None):
         nonlocal gui
         if chat_username and chat_username in dead_chats:
@@ -2381,6 +2726,8 @@ def main():
         if not account_send_allowed("发送"):
             return False
         with send_lock:
+            if not sticker_quarantine_allows(chat_username, chat_display_name):
+                return False
             if not force and (AWAY["on"] or away_active() or game_running() or foreground_is_fullscreen()):
                 with pending_lock:
                     pending_replies[chat_username or chat_display_name] = (text, chat_display_name, chat_username, time.time())
@@ -2529,6 +2876,8 @@ def main():
         if not account_send_allowed("@ 成员"):
             return False
         with send_lock:
+            if not sticker_quarantine_allows(chat_username, chat_display_name):
+                return False
             with gui_lock:
                 if gui is None:
                     log("初始化微信窗口驱动…（会抢一下焦点，约 5~10 秒）")
@@ -2919,6 +3268,11 @@ def main():
                 send_text(line, target, username, quote_text=(content if first and QUOTE_REPLY else None))
                 first = False
                 time.sleep(0.6)
+            # Stale/queued webhook payloads must claim a current-generation job;
+            # local master OFF is silent even if an old server response has a sticker.
+            _stk = data.get("sticker") or None
+            if STICKER_TEST_ON and isinstance(_stk, dict):
+                claim_and_send_sticker(_stk, expected_chat=target, expected_username=username)
         except Exception as e:
             log("处理消息异常：", repr(e))
 
@@ -2930,6 +3284,28 @@ def main():
         log=log,
     )
     log("消息调度：%d 个 worker（同一会话串行、跨会话并发）" % PIPELINE_WORKERS)
+
+    def sticker_test_loop():
+        """常驻但默认休眠：关闭时不访问任何表情包接口、文件或窗口，也不打印日志。"""
+        while True:
+            try:
+                if STICKER_TEST_ON and sticker_config_now() is not None:
+                    response = LOCAL_HTTP.get(sticker_base + "/api/stickers/pending",
+                                              headers=sticker_headers, timeout=3)
+                    body = response.json() if response.status_code == 200 else None
+                    items = body.get("items") if isinstance(body, dict) and body.get("ok") is True else []
+                    for item in items if isinstance(items, list) else []:
+                        if not STICKER_TEST_ON or sticker_config_now() is None:
+                            break
+                        claim_and_send_sticker(item)
+            except Exception:
+                # Network/auth/JSON failures are not permission to send or to
+                # log an experimental feature while its switch is changing.
+                pass
+            time.sleep(5)
+
+    threading.Thread(target=sticker_test_loop, daemon=True).start()
+
 
     def on_message(msg, listener):
         # 收（Listener 线程）→ 判（这里，按会话排队）→ 发（send_text 内部串行）

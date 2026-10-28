@@ -12,6 +12,14 @@
 
 const REGISTRY = [
   {
+    key: 'stickers',
+    path: 'features.stickers',
+    label: '表情包（实验性）',
+    desc: '默认关闭。开启后可按五种情绪上传表情包；关闭立即取消未发送任务，不挑图、不带回包字段、不轮询，管理接口停用。实验发送只在已打开的目标微信会话前台校验通过时进行，不自动切会话。',
+    default: false,
+    experimental: true,
+  },
+  {
     key: 'groupAddressGuard',
     path: 'features.groupAddressGuard',
     label: '群里先分清「你」在说谁',

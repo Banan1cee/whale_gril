@@ -68,7 +68,10 @@ function toPatch(preset) {
   if (!preset) return null;
   const patch = {};
   const str = (v, max) => String(v == null ? '' : v).trim().slice(0, max);
-  if (preset.name) patch.name = str(preset.name, 40);
+  // preset.name 是「这一版预设的标题」（如「鲸鲸 v1：像群友一样聊天」），
+  // 绝不能写进 persona.name —— 那会把她的名字改成预设标题。
+  // 预设真想改名时用单独的 personaName 字段。
+  if (preset.personaName) patch.name = str(preset.personaName, 40);
   if (preset.appearance) patch.appearance = str(preset.appearance, 400);
   if (preset.personality) patch.personality = str(preset.personality, 500);
   if (preset.background) patch.background = str(preset.background, 500);
