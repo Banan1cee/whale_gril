@@ -29,9 +29,11 @@ function freshConfig() {
 }
 
 test('页面保存时会把「自定义提示词」发出去', () => {
-  const body = page.slice(page.indexOf('async function save()'));
-  const fn = body.slice(0, body.indexOf('async function load') > 0 ? body.indexOf('async function load') : 4000);
-  assert.match(fn, /customPrompt:\s*\$\('customPrompt'\)\.value/, 'save() 必须带 customPrompt，否则写了等于没写');
+  // 保存用 readForm() 拼 payload；customPrompt 必须在里面
+  const body = page.slice(page.indexOf('function readForm()'));
+  const fn = body.slice(0, body.indexOf('async function save()'));
+  assert.match(fn, /customPrompt:\s*\$\('customPrompt'\)\.value/, '保存必须带 customPrompt，否则写了等于没写');
+  assert.match(page.slice(page.indexOf('async function save()')), /\.\.\.readForm\(\)/, 'save() 要用 readForm()');
 });
 
 test('页面加载/导入后会把「自定义提示词」回填进输入框', () => {
@@ -89,6 +91,49 @@ test('人设页预览接口：GET 只读不写，返回内容给输入框', () =
   assert.match(server, /body\.sourcePreset !== undefined/, '保存时接受来源预设');
 });
 
+test('预设标题不能当她的名字；只有 personaName 才能改名', () => {
+  const presets = require('../src/presets');
+  const cfg = { paths: { root } };
+  for (const item of presets.list(cfg)) {
+    const one = presets.load(cfg, item.id);
+    const patch = presets.toPatch(one);
+    assert.ok(one.name, item.id + ' 预设本身有标题');
+    assert.ok(!('name' in patch), item.id + ' 的标题不能写进 persona.name');
+  }
+  const patch = presets.toPatch({ name: '别拿标题当名字', personaName: '真正的名字' });
+  assert.equal(patch.name, '真正的名字');
+});
+
+test('预览只覆盖预设里有的字段，不会清空外形/性格/背景', () => {
+  const body = page.slice(page.indexOf('function applyPresetToForm'));
+  const fn = body.slice(0, body.indexOf('async function previewPreset'));
+  assert.match(fn, /readForm\(\)/, '要拿当前表单的值做底');
+  assert.match(fn, /\.\.\.patch/, '再把预设字段盖上去');
+  assert.match(page, /function readForm\(\)/, '保存和预览共用同一份读表单逻辑');
+});
+
+test('HTTP：预览不写盘；导入预设不打乱她的名字和外形', async (t) => {
+  const os2 = require('node:os');
+  const fs2 = require('node:fs');
+  const tmp = fs2.mkdtempSync(path.join(os2.tmpdir(), 'whale-preset-name-'));
+  fs2.writeFileSync(path.join(tmp, 'config.json'), JSON.stringify({ server: { port: 0, openBrowser: false }, watchConfig: false, log: { level: 'error' } }));
+  fs2.mkdirSync(path.join(tmp, 'personas'), { recursive: true });
+  for (const name of ['persona-v1.json', 'persona-v2.json']) {
+    fs2.copyFileSync(path.join(root, 'personas', name), path.join(tmp, 'personas', name));
+  }
+  const { startServer } = require('../server');
+  const inst = await startServer({ root: tmp, env: { WHALE_LOG_FILE: '' }, port: 0, openBrowser: false });
+  t.after(() => inst.close());
+  const get = async (route) => (await fetch(inst.url + route)).json();
+  const before = (await get('/api/persona')).persona;
+  const preview = await get('/api/persona/preset?id=persona-v1');
+  assert.ok(!('name' in preview.patch), '预览里不能带名字');
+  assert.equal((await get('/api/persona')).persona.sourcePreset, before.sourcePreset, '预览不能写盘');
+  const applied = await (await fetch(inst.url + '/api/persona/preset', {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: 'persona-v1' }) })).json();
+  assert.equal(applied.persona.name, before.name, '导入预设不能把她改名成预设标题');
+  assert.equal(applied.persona.appearance, before.appearance, '外形不能丢');
+});
 test('三个人设预设的差异确实在 customPrompt 上（都写了内容且互不相同）', () => {
   const dir = path.join(root, 'personas');
   const seen = new Map();
