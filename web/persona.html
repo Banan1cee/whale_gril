@@ -237,8 +237,8 @@ function showSourcePreset(p) {
     : (chars ? `当前生效：自定义提示词（${chars} 字，不是从预设导入的）` : '当前生效：用下面的控件拼的人设');
 }
 
-async function save() {
-  const body = {
+function readForm() {
+  return {
     name: $('name').value,
     age: Number($('age').value),
     job: $('job').value,
@@ -260,9 +260,11 @@ async function save() {
     links: $('links').checked,
     freeChat: $('freeChat').checked,
     mutedGroups: $('mutedGroups').value.split(/[、,，\s]+/).map((x) => x.trim()).filter(Boolean),
-    model: $('model').value.trim(),
-    sourcePreset: PREVIEW_PRESET || '',
   };
+}
+
+async function save() {
+  const body = { ...readForm(), model: $('model').value.trim(), sourcePreset: PREVIEW_PRESET || '' };
   $('saveHint').textContent = '保存中…';
   const r = await fetch('/api/persona', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   const d = await r.json();
@@ -320,7 +322,9 @@ async function loadPresets() {
 let PREVIEW_PRESET = '';
 
 function applyPresetToForm(patch, info) {
-  fill({ ...patch }, null);
+  // 只替换预设里真的写了的字段：预设通常不含「外形 / 性格 / 背景」，
+  // 直接整体覆盖会把这几栏清空（用户点保存就永久丢了）。
+  fill({ ...readForm(), ...patch }, null);
   PREVIEW_PRESET = info.id;
   const ver = info.version ? ' v' + info.version : '';
   $('presetAutoHint').textContent = `已载入 ${info.id}${ver}${info.name ? ' · ' + info.name : ''}：下面显示的就是这一版，点最下面「保存」才会生效。`;

@@ -214,8 +214,21 @@ function isPlainObject(v) {
   return v !== null && typeof v === 'object' && !Array.isArray(v);
 }
 
+// 深拷贝：老实现只做 `{ ...base }` 浅拷贝，persona 这类嵌套对象会和
+// DEFAULT_CONFIG 共享同一个引用 —— 一次「导入预设」就把模块级默认值改了，
+// 同进程里之后新建的配置、以及测试之间都会互相污染。
+function cloneDeep(value) {
+  if (Array.isArray(value)) return value.map(cloneDeep);
+  if (isPlainObject(value)) {
+    const out = {};
+    for (const key of Object.keys(value)) out[key] = cloneDeep(value[key]);
+    return out;
+  }
+  return value;
+}
+
 function deepMerge(base, extra) {
-  const out = Array.isArray(base) ? base.slice() : { ...base };
+  const out = cloneDeep(base);
   if (!isPlainObject(extra)) return out;
   for (const [k, v] of Object.entries(extra)) {
     if (k.startsWith('_')) continue; // 以 _ 开头的是说明字段，忽略
