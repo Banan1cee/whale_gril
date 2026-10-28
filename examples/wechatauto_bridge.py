@@ -2183,6 +2183,25 @@ def main():
                           "无法读取清空证据时，请手动清空后重启桥接。", ttl=60)
         return allowed
 
+    def wechat_main_window_count():
+        """当前有几个微信主窗（= 登着几个号）。只读，不点击。"""
+        try:
+            import win32gui
+            from wechatauto.uia_driver import WeChatUIA
+            probe = WeChatUIA()
+            hwnds = list(probe._wechat_hwnds() or ())
+        except Exception:                     # noqa: BLE001
+            return None
+        count = 0
+        for h in hwnds:
+            try:
+                cls = win32gui.GetClassName(int(h)) or ""
+            except Exception:                 # noqa: BLE001
+                continue
+            if "QWindowIcon" in cls or "mmui::" in cls:
+                count += 1
+        return count
+
     def sticker_account_evidence_allowed():
         # 只有一个可见微信窗口时，文字消息一直是认的；表情包以前额外要求
         # 「手动钉窗口」，结果多开过的机器全都发不出去（日志里就是
@@ -2196,6 +2215,7 @@ def main():
             reason=ACCOUNT.get("why"),
             explicit_pin=explicit_pin,
             account_dirs=acct_dirs,
+            visible_windows=wechat_main_window_count(),
         )
         if not allowed:
             log_throttled(
@@ -2496,6 +2516,10 @@ def main():
                         log("重新激活后仍失败：", repr(e))
                 log("UIA 发不出去，跳过 OCR 兜底：", chat_display_name)
             else:
+                log_throttled("uia-unavailable",
+                              "UIA 不可用：先试键盘通道；如果一直这样，双击「一键诊断UIA.bat」看原因"
+                              "（常见：微信需要重新登录、鲸鱼娘不是管理员而微信是、微信缩在托盘）",
+                              ttl=600)
                 log("UIA 不可用，走 OCR 兜底")
             # ①.5 键盘兜底：完全不碰 accessibility（Ctrl+F 搜索会话 → 粘贴 → 回车），
             #      并用数据库回读确认。OCR 这条路会卡在截屏，所以先试它。
@@ -2527,9 +2551,10 @@ def main():
 
                     _th = threading.Thread(target=_ocr_send, daemon=True)
                     _th.start()
-                    _th.join(25)
+                    # 8 秒足够 OCR 定位；等太久只会让用户看到「发了没反应」
+                    _th.join(8)
                     if _th.is_alive():
-                        log("OCR 兜底 25 秒没返回（卡在截屏），放弃这条，等下次消息")
+                        log("OCR 兜底 8 秒没返回（卡在截屏），放弃这条，等下次消息")
                         resp = False
                     else:
                         if "e" in _box:
