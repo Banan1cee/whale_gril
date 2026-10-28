@@ -361,7 +361,7 @@ function Save-KnownRoot {
 
 # 找「带记忆的旧安装」：同级 / 上级 / 桌面 / 下载 / 文档 / 各盘根目录 / 以前用过的路径
 function Find-OldInstalls {
-    param([string]$CurrentRoot, [int]$MaxDepth = 3, [int]$MaxDirs = 4000)
+    param([string]$CurrentRoot, [int]$MaxDepth = 4, [int]$MaxDirs = 8000)
     $skipNames = @('node_modules', '.git', '.cache', '__pycache__', 'Windows', 'Program Files', 'Program Files (x86)',
         'ProgramData', 'AppData', '$Recycle.Bin', 'System Volume Information', 'WindowsApps', 'Microsoft', 'Packages')
     $scopes = New-Object System.Collections.Generic.List[string]
@@ -375,8 +375,10 @@ function Find-OldInstalls {
         if ($special -and (Test-Path -LiteralPath $special)) { $scopes.Add($special) }
     }
     try {
-        foreach ($drv in @(Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue)) {
-            if ($drv.Root -and (Test-Path -LiteralPath $drv.Root)) { $scopes.Add($drv.Root) }
+        foreach ($drv in @([IO.DriveInfo]::GetDrives())) {
+            if ($drv.IsReady -and $drv.DriveType -ne 'CDRom' -and $drv.DriveType -ne 'Network') {
+                $scopes.Add($drv.RootDirectory.FullName)
+            }
         }
     } catch { }
     $rootsFile = Join-Path $StateDir 'last-roots.json'
@@ -392,14 +394,20 @@ function Find-OldInstalls {
     $found = New-Object System.Collections.Generic.List[object]
     $appSeen = @{}
     $dirSeen = @{}
-    $visited = 0
+    $scanned = 0
+    $sw = [Diagnostics.Stopwatch]::StartNew()
     foreach ($scope in ($scopes | Select-Object -Unique)) {
         if (-not $scope) { continue }
+        $scopeCount = 0
         $queue = New-Object System.Collections.Generic.Queue[object]
         $queue.Enqueue([pscustomobject]@{ Path = $scope; Depth = 0 })
-        while ($queue.Count -gt 0 -and $visited -lt $MaxDirs -and $found.Count -lt 30) {
+        while ($queue.Count -gt 0 -and $scopeCount -lt $MaxDirs -and $found.Count -lt 30) {
             $item = $queue.Dequeue()
-            $visited++
+            $scopeCount++
+            $scanned++
+            if (($scanned % 500) -eq 0) {
+                Say ('  正在找旧版本… 已看 ' + $scanned + ' 个目录（' + [int]$sw.Elapsed.TotalSeconds + ' 秒）') 'DarkGray'
+            }
             $dirs = @()
             try { $dirs = @(Get-ChildItem -LiteralPath $item.Path -Directory -ErrorAction Stop) } catch { continue }
             foreach ($d in $dirs) {
@@ -415,12 +423,15 @@ function Find-OldInstalls {
                         $st = Get-StoreStats -Root $full
                         if ($st.Exists -and [int]$st.Sessions -gt 0) {
                             $appSeen[$full] = $true
+                            $saved = $null
+                            try { $saved = (Get-Item -LiteralPath $st.Path -Force).LastWriteTime } catch { $saved = $null }
+                            if (-not $saved) { $saved = [datetime]::MinValue }
                             $found.Add([pscustomobject]@{
-                                Path     = $full
-                                Sessions = [int]$st.Sessions
-                                Messages = [int]$st.Messages
-                                Size     = [long]$st.Size
-                                SavedAt  = [string]$st.SavedAt
+                                Path        = $full
+                                Sessions    = [int]$st.Sessions
+                                Messages    = [int]$st.Messages
+                                Size        = [long]$st.Size
+                                SavedAtTime = $saved
                             })
                         }
                     }
@@ -429,10 +440,10 @@ function Find-OldInstalls {
                     $queue.Enqueue([pscustomobject]@{ Path = $full; Depth = ($item.Depth + 1) })
                 }
             }
-            if ($visited -ge $MaxDirs) { break }
         }
     }
-    return @($found | Sort-Object -Property Messages -Descending)
+    Say ('  找完了：扫了 ' + $scanned + ' 个目录，用时 ' + [int]$sw.Elapsed.TotalSeconds + ' 秒') 'DarkGray'
+    return @($found | Sort-Object -Property SavedAtTime -Descending)
 }
 
 # 选一个旧目录（-FromDir 优先；非交互时返回空）
@@ -451,11 +462,17 @@ function Select-MigrationSource {
         return ''
     }
     Say ''
-    Say '  发现这些旧安装（带记忆）：'
+    Say '  发现这些旧安装（带记忆）—— 回车 = 搬 [1]，输序号换一个：'
     for ($i = 0; $i -lt $cands.Count; $i++) {
         $c = $cands[$i]
+        $when = ''
+        try {
+            if ($c.SavedAtTime -and $c.SavedAtTime -ne [datetime]::MinValue) {
+                $when = ' / 最后保存 ' + $c.SavedAtTime.ToString('yyyy-MM-dd HH:mm')
+            }
+        } catch { }
         Say ('    [' + ($i + 1) + '] ' + $c.Path) 'White'
-        Say ('        ' + $c.Sessions + ' 个会话 / ' + $c.Messages + ' 条消息 / ' + (Format-Size ([long]$c.Size))) 'DarkGray'
+        Say ('        ' + $c.Sessions + ' 个会话 / ' + $c.Messages + ' 条消息' + $when) 'DarkGray'
     }
     Say ''
     while ($true) {
@@ -988,6 +1005,10 @@ try {
         $apiUrls += $ApiUrl
     } else {
         $apiUrls += ('https://api.github.com/repos/' + $Repo + '/releases/' + $apiPath)
+        if (-not $NoMirror) {
+            # 官方 API 被墙时走代理；镜像只转发，sha256 仍按官方给的值校验
+            $apiUrls += ('https://gh-proxy.com/https://api.github.com/repos/' + $Repo + '/releases/' + $apiPath)
+        }
     }
     Say '  正在查询 GitHub Release…' 'DarkGray'
     $rel = Get-ReleaseInfo -Urls $apiUrls
