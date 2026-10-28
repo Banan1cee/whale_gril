@@ -21,6 +21,7 @@ const persona = require('./persona');
 const features = require('./features');
 const { matchMaster } = require('./master');
 const links = require('./links');
+const stickers = require('./stickers');
 const websearch = require('./websearch');
 const { LlmError } = require('./llm');
 const { saveSettings } = require('./config');
@@ -233,6 +234,8 @@ class Bot {
     this.mockChunkDelayMs = mockChunkDelayMs;
     this.linkReader = linkReader || ((url) => links.describeLink(url, { timeoutMs: (config.links && config.links.timeoutMs) || 6000 }));
     this.startedAt = Date.now();
+    // 表情包冷却：会话 key → 上次发图时间
+    this._stickerState = new Map();
   }
 
   sessionKey(msg) {
@@ -1455,6 +1458,34 @@ class Bot {
   }
 
   /** 写入鲸鲸自己的回复，返回气泡数组 */
+  /**
+   * 这条回复要不要补一张表情包（实验性）。
+   * 总闸关着直接返回 null，调用方无需再判断。
+   * @returns {{emotion: string, path: string}|null}
+   */
+  stickerFor(decision, text, request = '') {
+    if (!stickers.isOn(this.config)) return null;
+    const msg = (decision && decision.msg) || {};
+    const cfg = this.config.sticker || {};
+    if (cfg.onlyGroup && msg.chatType !== 'group') return null;
+    const key = msg.chatId ? this.sessionKey(msg) : 'default';
+    try {
+      return stickers.pick({
+        config: this.config,
+        root: this.config.root || process.cwd(),
+        key,
+        text,
+        request,
+        state: this._stickerState,
+        now: Date.now(),
+        rng: this.rng,
+      });
+    } catch (err) {
+      if (this.logger) this.logger.warn('挑表情包失败：' + (err && err.message ? err.message : err));
+      return null;
+    }
+  }
+
   finalize(decision, text, { error = false } = {}) {
     text = String(text == null ? '' : text).trim();
     // 正文里的 emoji 剥出来，单独发一条
