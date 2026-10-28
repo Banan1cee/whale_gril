@@ -82,6 +82,31 @@
 </header>
 
 <main>
+  <div class="card" id="stickerCard">
+    <h2>表情包（实验性）</h2>
+    <div class="row">
+      <label><input type="checkbox" id="stkMaster" disabled /> 实验性表情包总开关</label>
+      <span id="stkMasterState" class="muted" role="status">读取开关中…</span>
+    </div>
+    <p class="muted">总开关控制自动选图、上传和测试发送。关闭后停止使用表情包；测试发送会向微信发送真实消息，请先确认接收会话。</p>
+    <div id="stkControls" hidden>
+      <h3 style="font-size:14px">按情绪上传图片</h3>
+      <p class="muted">每次每类最多 5 张、每张不超过 4 MB；支持 GIF、PNG、JPEG、WebP。上传只保存图片，不会发送消息。</p>
+      <div id="stkUploads"></div>
+      <div id="stkUploadResult" class="muted" role="status"></div>
+      <h3 style="font-size:14px">可选：真实消息测试</h3>
+      <p class="muted">测试前请手动打开目标微信会话并保持前台、清空输入框；不会自动切会话/抢焦点。安全校验不通过会跳过；排队不代表送达。</p>
+      <div class="row">
+        <label>情绪 <select id="stkEmotion"></select></label>
+        <label>接收会话 <input type="text" id="stkChat" value="文件传输助手" style="min-width:180px" /></label>
+        <button id="stkSend" type="button">排队测试发送</button>
+      </div>
+      <div id="stkTestResult" class="muted" role="status"></div>
+      <div id="stkStatus" class="muted" role="status"></div>
+      <div id="stkJobs" class="muted" aria-live="polite"></div>
+    </div>
+  </div>
+
   <div class="card" id="cfgCard">
     <h2>全部设置（每一项都能改，改完点“保存修改”）</h2>
     <p class="muted">这里保存的内容会写回 <code>config.json</code>，并且立刻生效，不用重启（只有「服务 / 网页」里的地址、端口要重启）。<br>
@@ -104,31 +129,9 @@
     <div class="card"><h2>网关 / 记忆</h2><table id="tGate"></table></div>
   </div>
 
-  <div class="card" id="stickerCard" style="display:none">
-    <h2>表情包（实验性）· 测试发送</h2>
-    <p class="muted">
-      总开关在下面「功能开关」第一行。这里的图来自 <code>data/stickers/&lt;情绪&gt;/</code>；
-      发的是真消息，会出现在微信里（默认发到「文件传输助手」，也就是你自己的号）。
-    </p>
-    <div class="row" style="margin-bottom:10px">
-      <label>情绪
-        <select id="stkEmotion">
-          <option value="happy">开心</option>
-          <option value="angry">炸毛</option>
-          <option value="cute">撒娇</option>
-          <option value="meh">嫌弃</option>
-          <option value="bored">敷衍</option>
-        </select>
-      </label>
-      <label>发到 <input type="text" id="stkChat" value="文件传输助手" style="min-width:180px" /></label>
-      <button id="stkSend">发送这张</button>
-    </div>
-    <div id="stkStatus" class="muted">加载中…</div>
-  </div>
-
   <div class="card" id="featCard">
     <h2>功能开关（新功能都在这里，可开可关）</h2>
-    <p class="muted">关掉 = 回到旧行为。改动会写进 config.json，重启也还在。群聊相关的两个开关要重启桥接/服务才完全生效。</p>
+    <p class="muted">表情包总开关在页面顶部。其他功能开关列在这里；改动会保存，重启也还在。群聊相关的两个开关要重启桥接/服务才完全生效。</p>
     <table id="tFeatures"><tr><td class="muted">加载中…</td></tr></table>
   </div>
 
@@ -340,6 +343,7 @@ function fieldsHtml(obj, prefix) {
   for (const [k, v] of Object.entries(obj)) {
     if (k.startsWith('_')) continue;
     const path = prefix ? prefix + '.' + k : k;
+    if (['features.stickers', 'sticker.enabled', 'sticker.maxSide'].includes(path)) continue; // 总闸只在顶部，隐藏旧版无效选项。
     if (isPlainObject(v) && !JSON_FIELDS.has(path)) subs.push(subHtml(path, v));
     else flat.push(fieldHtml(path, v));
   }
@@ -444,30 +448,164 @@ function wireForm() {
 }
 
 
-async function loadStickers() {
-  const card = document.getElementById('stickerCard');
-  const host = document.getElementById('stkStatus');
-  if (!card || !host) return;
+const STICKER_EMOTIONS = [['happy', '开心'], ['angry', '炸毛'], ['cute', '撒娇'], ['meh', '嫌弃'], ['bored', '敷衍']];
+const STICKER_JOB_LABELS = { queued: '排队中', sending: '尝试发送中', confirmed: '已确认送达', unconfirmed: '已尝试，未确认送达', failed: '发送失败', cancelled: '已取消' };
+let STICKERS_ENABLED = false;
+let STICKER_UI_BOUND = false;
+let STICKER_CHAT_INITIALIZED = false;
+let STICKER_STATUS_REQUEST = 0;
+let STICKER_POLL = null;
+
+function setStickerEnabled(enabled) {
+  STICKERS_ENABLED = Boolean(enabled);
+  $('stkMaster').checked = STICKERS_ENABLED;
+  $('stkControls').hidden = !STICKERS_ENABLED;
+  $('stkMasterState').textContent = STICKERS_ENABLED ? '已开启（实验性）' : '已关闭';
+  if (!STICKERS_ENABLED) {
+    STICKER_STATUS_REQUEST += 1;
+    if (STICKER_POLL !== null) clearInterval(STICKER_POLL);
+    STICKER_POLL = null;
+  } else if (STICKER_POLL === null) {
+    STICKER_POLL = setInterval(() => loadStickers(), 3000);
+  }
+}
+
+function stickerFileBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || '').split(',')[1] || '');
+    reader.onerror = () => reject(new Error('读取图片失败：' + file.name));
+    reader.onabort = () => reject(new Error('读取图片已取消'));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function uploadStickers(emotion, input, button) {
+  const result = $('stkUploadResult');
+  if (!STICKERS_ENABLED) { result.textContent = '请先开启表情包总开关。'; return; }
+  const selected = Array.from(input.files || []);
+  if (!selected.length || selected.length > 5) { result.textContent = '请选择 1～5 张图片。'; return; }
+  if (selected.some((file) => !/\.(gif|png|jpe?g|webp)$/i.test(file.name) || file.size <= 0 || file.size > 4 * 1024 * 1024)) {
+    result.textContent = '上传未开始：仅支持非空 GIF、PNG、JPEG、WebP，每张不超过 4 MB。'; return;
+  }
+  button.disabled = true;
+  result.textContent = '正在读取并上传图片（不会发送消息）…';
   try {
-    const r = await fetch('/api/stickers/status');
-    if (r.status === 404) { card.style.display = 'none'; return; }
-    const d = await r.json();
-    if (!d.ok) { card.style.display = 'none'; return; }
-    card.style.display = '';
-    document.getElementById('stkChat').value = d.testChat || '文件传输助手';
-    const lines = d.emotions.map((e) => `${e.label}(${e.key})：${e.files.length} 张`);
-    host.textContent = '目录：' + d.dir + ' ｜ ' + lines.join(' ／ ') + (d.pending ? ` ｜ 排队中 ${d.pending}` : '');
-    const sel = document.getElementById('stkEmotion');
-    if (sel) {
-      sel.innerHTML = '';
-      for (const e of d.emotions) {
-        const o = document.createElement('option');
-        o.value = e.key;
-        o.textContent = `${e.label}（${e.files.length} 张）`;
-        sel.appendChild(o);
-      }
+    const files = await Promise.all(selected.map(async (file) => ({ name: file.name, data: await stickerFileBase64(file) })));
+    if (!STICKERS_ENABLED) throw new Error('总开关已关闭，上传已取消');
+    const response = await fetch('/api/stickers/upload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ emotion, files }) });
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw new Error(data.error || '上传失败');
+    result.textContent = '已保存图片，未发送：' + (data.uploaded || []).map((file) => file.name).join('、');
+    input.value = '';
+    await loadStickers();
+  } catch (error) { result.textContent = '上传失败：' + (error && error.message ? error.message : error); }
+  finally { button.disabled = false; }
+}
+
+async function queueStickerTest() {
+  const result = $('stkTestResult');
+  if (!STICKERS_ENABLED) { result.textContent = '请先开启表情包总开关。'; return; }
+  const chat = $('stkChat').value.trim();
+  if (!chat) { result.textContent = '请填写明确的接收会话，未排队。'; return; }
+  $('stkSend').disabled = true;
+  result.textContent = '正在申请排队…';
+  try {
+    const response = await fetch('/api/stickers/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ emotion: $('stkEmotion').value, chat }) });
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw new Error(data.error || '排队失败');
+    result.textContent = '已排队（不代表已发送或送达）：' + (data.queued && data.queued.id || '') + ' → ' + chat + '。下方会更新结果。';
+    await loadStickers();
+  } catch (error) { result.textContent = '排队失败：' + (error && error.message ? error.message : error); }
+  finally { $('stkSend').disabled = false; }
+}
+
+function bindStickerUi() {
+  if (STICKER_UI_BOUND) return;
+  STICKER_UI_BOUND = true;
+  for (const [key, label] of STICKER_EMOTIONS) {
+    const option = document.createElement('option');
+    option.value = key;
+    option.textContent = label;
+    option.id = 'stkOption-' + key;
+    $('stkEmotion').appendChild(option);
+    const row = document.createElement('div');
+    row.className = 'row';
+    const title = document.createElement('label');
+    title.textContent = label + '：';
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.id = 'stkUpload-' + key;
+    input.multiple = true;
+    input.accept = '.gif,.png,.jpg,.jpeg,.webp,image/gif,image/png,image/jpeg,image/webp';
+    title.appendChild(input);
+    row.appendChild(title);
+    const count = document.createElement('span');
+    count.id = 'stkCount-' + key;
+    count.className = 'muted';
+    count.textContent = '该类 0 张';
+    row.appendChild(count);
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.id = 'stkUploadButton-' + key;
+    button.textContent = '上传到' + label;
+    button.addEventListener('click', () => uploadStickers(key, input, button));
+    row.appendChild(button);
+    $('stkUploads').appendChild(row);
+  }
+  $('stkChat').addEventListener('input', () => { STICKER_CHAT_INITIALIZED = true; });
+  $('stkSend').addEventListener('click', queueStickerTest);
+  $('stkMaster').addEventListener('change', async () => {
+    const before = STICKERS_ENABLED;
+    const next = $('stkMaster').checked;
+    $('stkMaster').disabled = true;
+    $('stkMasterState').textContent = '保存开关中…';
+    try {
+      const response = await fetch('/api/features', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: 'stickers', value: next }) });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || '保存失败');
+      setStickerEnabled(typeof data.value === 'boolean' ? data.value : next);
+      await loadStickers();
+    } catch (error) {
+      setStickerEnabled(before);
+      $('stkMasterState').textContent = '开关保存失败：' + (error && error.message ? error.message : error);
+    } finally { $('stkMaster').disabled = false; }
+  });
+}
+
+async function loadStickers() {
+  if (!STICKERS_ENABLED) return;
+  const request = ++STICKER_STATUS_REQUEST;
+  try {
+    const response = await fetch('/api/stickers/status');
+    if (request !== STICKER_STATUS_REQUEST || !STICKERS_ENABLED) return;
+    if (response.status === 404) { setStickerEnabled(false); return; }
+    const data = await response.json();
+    if (request !== STICKER_STATUS_REQUEST || !STICKERS_ENABLED) return;
+    if (!response.ok || !data.ok) throw new Error(data.error || '读取状态失败');
+    if (!STICKER_CHAT_INITIALIZED) {
+      $('stkChat').value = data.testChat || '文件传输助手';
+      STICKER_CHAT_INITIALIZED = true;
     }
-  } catch { card.style.display = 'none'; }
+    const emotions = Array.isArray(data.emotions) ? data.emotions : [];
+    const lines = [];
+    for (const [key, label] of STICKER_EMOTIONS) {
+      const found = emotions.find((emotion) => emotion.key === key);
+      const count = found ? (Number.isFinite(found.count) ? found.count : (found.files || []).length) : 0;
+      $('stkOption-' + key).textContent = label + '（' + count + ' 张）';
+      $('stkCount-' + key).textContent = '该类 ' + count + ' 张';
+      lines.push(label + '：' + count + ' 张');
+    }
+    $('stkStatus').textContent = '目录：' + (data.dir || '') + ' ｜ ' + lines.join(' ／ ') + ' ｜ 待处理 ' + (data.pending || 0);
+    $('stkJobs').replaceChildren();
+    for (const job of Array.isArray(data.jobs) ? data.jobs : []) {
+      const line = document.createElement('div');
+      line.textContent = (STICKER_JOB_LABELS[job.status] || String(job.status || '未知状态')) + ' ｜ ' + String(job.filename || '') + ' → ' + String(job.chat || '') + ' ｜ ' + String(job.id || '') + (job.error ? ' ｜ ' + String(job.error) : '');
+      $('stkJobs').appendChild(line);
+    }
+  } catch (error) {
+    if (request === STICKER_STATUS_REQUEST && STICKERS_ENABLED) $('stkStatus').textContent = '状态更新失败：' + (error && error.message ? error.message : error);
+  }
 }
 
 async function loadFeatures() {
@@ -477,6 +615,11 @@ async function loadFeatures() {
     if (!d.ok) throw new Error(d.error || '读取失败');
     host.innerHTML = '';
     for (const f of d.features) {
+      if (f.key === 'stickers') {
+        setStickerEnabled(f.value);
+        $('stkMaster').disabled = false;
+        continue;
+      }
       const tr = document.createElement('tr');
       const td1 = document.createElement('td');
       const label = document.createElement('strong');
@@ -515,8 +658,10 @@ async function loadFeatures() {
       tr.appendChild(td2);
       host.appendChild(tr);
     }
+    await loadStickers();
   } catch (e) {
     host.innerHTML = '<tr><td class="bad">读取失败：' + esc(String(e && e.message || e)) + '</td></tr>';
+    $('stkMasterState').textContent = '开关状态读取失败，请刷新重试。';
   }
 }
 
@@ -574,6 +719,7 @@ async function saveConfig() {
   ORIG = null;
   renderForm(CFG);
   loadState();
+  loadFeatures();
 }
 
 function revertForm() {
@@ -696,34 +842,13 @@ async function makePrompt() {
       : '');
 }
 
-$('btnReload').addEventListener('click', () => { loadConfig();
-
-  const stkBtn = document.getElementById('stkSend');
-  if (stkBtn) {
-    stkBtn.addEventListener('click', async () => {
-      stkBtn.disabled = true;
-      try {
-        const r = await fetch('/api/stickers/test', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            emotion: document.getElementById('stkEmotion').value,
-            chat: document.getElementById('stkChat').value.trim(),
-          }),
-        });
-        const out = await r.json();
-        if (!out.ok) throw new Error(out.error || '发送失败');
-        alert('已排队，桥接 5 秒内会发出去：\n' + out.queued.path.split(/[\\/]/).pop() + ' → ' + out.queued.chat);
-        loadStickers();
-      } catch (e) {
-        alert('失败：' + (e && e.message ? e.message : e));
-      } finally {
-        stkBtn.disabled = false;
-      }
-    });
-  }
-
-  loadFeatures(); loadState(); loadSessions(); loadStickers(); });
+bindStickerUi();
+$('btnReload').addEventListener('click', () => {
+  loadConfig();
+  loadFeatures();
+  loadState();
+  loadSessions();
+});
 $('btnFetch').addEventListener('click', async () => {
   if (refreshDirty().length && !confirm('有没保存的改动，重新读取会丢掉它们，继续？')) return;
   await loadConfig();

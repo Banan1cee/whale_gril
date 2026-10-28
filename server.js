@@ -28,6 +28,7 @@ const memoryBackup = require('./src/memoryBackup');
 const mediaCache = require('./src/mediaCache');
 const features = require('./src/features');
 const stickers = require('./src/stickers');
+const { StickerService } = require('./src/stickerService');
 const presets = require('./src/presets');
 const links = require('./src/links');
 const bilibili = require('./src/bilibili');
@@ -67,16 +68,20 @@ function readBody(req, limit = MAX_BODY) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let size = 0;
+    let tooLarge = false;
     req.on('data', (c) => {
+      if (tooLarge) return;
       size += c.length;
       if (size > limit) {
+        tooLarge = true;
+        chunks.length = 0;
         reject(Object.assign(new Error('请求体太大'), { statusCode: 413 }));
-        req.destroy();
-        return;
+        return; // Drain the request, but keep the socket alive so the caller receives 413.
       }
       chunks.push(c);
     });
     req.on('end', () => {
+      if (tooLarge) return;
       const raw = Buffer.concat(chunks).toString('utf8');
       if (!raw.trim()) return resolve({});
       try {
@@ -112,54 +117,6 @@ function sanitizeId(id) {
 /* ------------------------------------------------------------------ */
 /* 运行时组装                                                          */
 /* ------------------------------------------------------------------ */
-
-/* ------------------------------------------------------------------ */
-/* 表情包（实验性）：测试发送 / 桥接取任务                              */
-/* ------------------------------------------------------------------ */
-
-function stickerQueueFile(root) {
-  return path.join(root, 'data', 'sticker-queue.json');
-}
-
-function readStickerQueue(root) {
-  try {
-    const raw = fs.readFileSync(stickerQueueFile(root), 'utf8');
-    const arr = JSON.parse(raw.replace(/^\uFEFF/, ''));
-    return Array.isArray(arr) ? arr : [];
-  } catch {
-    return [];
-  }
-}
-
-function writeStickerQueue(root, arr) {
-  try {
-    fs.mkdirSync(path.join(root, 'data'), { recursive: true });
-    fs.writeFileSync(stickerQueueFile(root), JSON.stringify(arr.slice(-50), null, 2) + '\n', 'utf8');
-  } catch { /* 写不了就算了，桥接下一轮什么都拿不到 */ }
-}
-
-/** 控制台/接口共用：按情绪挑一张（不受概率和冷却影响，手动测试要必中） */
-function pickStickerNow(runtime, emotion) {
-  const root = runtime.config.root || projectRoot();
-  const dir = stickers.stickerDir(runtime.config, root);
-  const pool = stickers.imagesFor(dir, String(emotion || ''));
-  if (!pool.length) return null;
-  const file = pool[Math.floor(Math.random() * pool.length)];
-  return { emotion: String(emotion || ''), path: file };
-}
-
-/** 实验性：给这条回复挑一张表情包（总闸关着返回 null，桥接就看不到这个字段） */
-function pickStickerFor(runtime, decision, text, request) {
-  try {
-    if (!features.isOn(runtime.config, 'stickers')) return null;
-    const hit = runtime.bot.stickerFor(decision, text, request);
-    if (!hit) return null;
-    return { emotion: hit.emotion, path: hit.path };
-  } catch (err) {
-    try { runtime.logger.warn('挑表情包失败：' + (err && err.message ? err.message : err)); } catch { /* 忽略 */ }
-    return null;
-  }
-}
 
 function createRuntime({ root = projectRoot(), env = process.env, loggerLevel } = {}) {
   ensureConfigFile(root);
@@ -211,7 +168,9 @@ function createRuntime({ root = projectRoot(), env = process.env, loggerLevel } 
   const llm = new DeepSeekClient({ config, logger });
   const bot = new Bot({ config, store, llm, logger });
   const gateways = createGateways({ config, bot, logger });
-  const runtime = { config, logger, store, llm, bot, gateways, startedAt: Date.now(), version: VERSION };
+  const stickerService = new StickerService(config);
+  bot.stickerService = stickerService;
+  const runtime = { config, logger, store, llm, bot, gateways, stickerService, startedAt: Date.now(), version: VERSION };
   watchConfigFile(runtime);
   return runtime;
 }
@@ -252,6 +211,7 @@ function watchConfigFile(runtime) {
           const raw = fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '');
           JSON.parse(raw); // 先确认是合法 JSON，写坏了就别覆盖内存里的好配置
           mergeConfigInPlace(runtime.config, loadConfig({ root: runtime.config.root, env: runtime.config.env }));
+          runtime.stickerService?.reconcile();
           if (runtime.llm && typeof runtime.llm.reload === 'function') runtime.llm.reload();
           runtime.logger.info('config.json 已重新加载（改动已生效，不用重启）');
         } catch (err) {
@@ -427,6 +387,7 @@ function applyConfigPatch(runtime, patch) {
   fs.writeFileSync(file, JSON.stringify(raw, null, 2) + '\n', 'utf8');
   const cleared = clearSettingsShadow(runtime, changed);
   mergeConfigInPlace(runtime.config, loadConfig({ root: runtime.config.root, env: runtime.config.env }));
+          runtime.stickerService?.reconcile();
   if (runtime.llm && typeof runtime.llm.reload === 'function') runtime.llm.reload();
   runtime.logger.info(`调试台保存了设置：${changed.join('、')}${cleared.length ? `（同时清了 ${cleared.join('、')}，让改动真的生效）` : ''}`);
   return { changed, cleared };
@@ -1030,7 +991,6 @@ async function handleChat(runtime, req, res) {
     return json(res, 200, { ok: true, action: 'ignore', reason: decision.reason });
   }
 
-  const reqText = String((msg && (msg.text || msg.content)) || '').trim();
   sseInit(res);
   sseSend(res, {
     type: 'meta',
@@ -1050,7 +1010,7 @@ async function handleChat(runtime, req, res) {
       sseSend(res, { type: 'delta', text: full.slice(i, i + 3) });
     }
     const bubbles = bot.finalize(decision, full);
-    sseSend(res, { type: 'done', text: full, bubbles, reason: decision.reason, commandType: decision.commandType || '', sticker: pickStickerFor(runtime, decision, full, reqText) });
+    sseSend(res, { type: 'done', text: full, bubbles, reason: decision.reason, commandType: decision.commandType || '' });
     return res.end();
   }
 
@@ -1078,7 +1038,7 @@ async function handleChat(runtime, req, res) {
 
   const clean = String(full || '').trim();
   const bubbles = bot.finalize(decision, clean);
-  sseSend(res, { type: 'done', text: clean, bubbles, reason: decision.reason, mock: Boolean(decision.mock), sticker: pickStickerFor(runtime, decision, clean, reqText) });
+  sseSend(res, { type: 'done', text: clean, bubbles, reason: decision.reason, mock: Boolean(decision.mock) });
   res.end();
 }
 
@@ -1297,60 +1257,38 @@ function createHandler(runtime) {
 
       // ---- 功能开关（控制台可开关；关掉就回到旧行为）----
       /* ---- 表情包（实验性）---- */
-      if (pathname.startsWith('/api/stickers')) {
-        if (!features.isOn(runtime.config, 'stickers')) {
-          return json(res, 404, { ok: false, error: '表情包是实验性功能，先在调试台打开总开关' });
+      if (pathname === '/api/stickers' || pathname.startsWith('/api/stickers/')) {
+        const service = runtime.stickerService;
+        service.requireEnabled(); // No file I/O, queue replay or enabled UI while off.
+        const generation = service.generation;
+        if (!isLoopbackRequest(req)) return json(res, 403, { ok: false, error: '表情包管理仅允许本机访问' });
+        const bridgeOnly = ['/api/stickers/pending', '/api/stickers/claim', '/api/stickers/ack'].includes(pathname);
+        if (bridgeOnly && !gateways.get('wechat')?.verifyToken(req, null)) {
+          return json(res, 403, { ok: false, error: '桥接 token 不正确' });
         }
-        const root = runtime.config.root || projectRoot();
-        if (pathname === '/api/stickers/status' && method === 'GET') {
-          const dir = stickers.stickerDir(runtime.config, root);
-          const emotions = Object.keys(stickers.EMOTIONS).map((key) => {
-            const files = stickers.imagesFor(dir, key).map((f) => path.basename(f));
-            return { key, label: stickers.EMOTION_LABELS[key], files };
-          });
-          return json(res, 200, {
-            ok: true,
-            enabled: true,
-            dir,
-            testChat: (runtime.config.sticker && runtime.config.sticker.testChat) || '文件传输助手',
-            emotions,
-            pending: readStickerQueue(root).length,
-          });
+        if (pathname === '/api/stickers/status' && method === 'GET') return json(res, 200, service.status());
+        if (pathname === '/api/stickers/upload' && method === 'POST') {
+          const body = await readBody(req, 29 * 1024 * 1024);
+          service.requireEnabled(); // Toggle may have changed while a large upload was in flight.
+          if (generation !== service.generation) return json(res, 409, { ok: false, error: '开关已变化，请重新上传' });
+          const uploaded = stickers.upload(config, config.root, body.emotion, body.files);
+          return json(res, 200, { ok: true, uploaded });
         }
         if (pathname === '/api/stickers/test' && method === 'POST') {
           const body = await readBody(req);
-          const emotion = String((body && body.emotion) || '').trim();
-          if (emotion && !stickers.EMOTIONS[emotion]) {
-            return json(res, 400, { ok: false, error: '没有这个情绪：' + emotion });
-          }
-          const chat = String((body && body.chat) || (runtime.config.sticker && runtime.config.sticker.testChat) || '文件传输助手').trim();
-          const picked = pickStickerNow(runtime, emotion || 'happy');
-          if (!picked) {
-            return json(res, 400, { ok: false, error: '这个情绪的文件夹里没有图（先往 data/stickers 里丢几张）' });
-          }
-          const item = {
-            id: 'st-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6),
-            path: picked.path,
-            emotion: picked.emotion,
-            chat,
-            at: Date.now(),
-          };
-          const q = readStickerQueue(root);
-          q.push(item);
-          writeStickerQueue(root, q);
-          logger.info(`表情包测试：${path.basename(picked.path)}（${picked.emotion}）→ ${chat}`);
-          return json(res, 200, { ok: true, queued: item });
+          service.requireEnabled();
+          if (generation !== service.generation) return json(res, 409, { ok: false, error: '开关已变化，请重新排队' });
+          const queued = service.enqueue(body.emotion || 'happy', body.chat ?? config.sticker?.testChat ?? '文件传输助手');
+          return json(res, 200, { ok: true, queued });
         }
-        // 桥接来取任务（它自己会发，并把结果写回来）
-        if (pathname === '/api/stickers/pending' && method === 'GET') {
-          return json(res, 200, { ok: true, items: readStickerQueue(root) });
+        if (pathname === '/api/stickers/pending' && method === 'GET') return json(res, 200, { ok: true, items: service.pending() });
+        if (pathname === '/api/stickers/claim' && method === 'POST') {
+          const body = await readBody(req);
+          return json(res, 200, { ok: true, item: service.claim(body.id) });
         }
         if (pathname === '/api/stickers/ack' && method === 'POST') {
           const body = await readBody(req);
-          const id = String((body && body.id) || '').trim();
-          const q = readStickerQueue(root).filter((it) => it.id !== id);
-          writeStickerQueue(root, q);
-          return json(res, 200, { ok: true, remaining: q.length });
+          return json(res, 200, { ok: true, item: service.ack(body.id, body.status, body.error) });
         }
         return json(res, 404, { ok: false, error: 'not found' });
       }
@@ -1363,7 +1301,7 @@ function createHandler(runtime) {
         const key = String((body && body.key) || '').trim();
         const entry = features.REGISTRY.find((f) => f.key === key);
         if (!entry) return json(res, 400, { ok: false, error: '没有这个开关：' + key });
-        const on = Boolean(body.value);
+        const on = features.toBool(body.value, false);
         try {
           applyConfigPatch(runtime, { [entry.path]: on });
           logger.info(`功能开关 ${entry.label} → ${on ? '开' : '关'}`);
@@ -1782,7 +1720,10 @@ function createHandler(runtime) {
       return json(res, 404, { ok: false, error: 'not found' });
     } catch (err) {
       const status = err.statusCode || 500;
-      logger.error(`${method} ${pathname} 出错：` + (err && err.stack ? err.stack : err));
+      // A disabled experimental route / rejected test is expected, not a crashing service.
+      if (!(pathname.startsWith('/api/stickers') && status < 500)) {
+        logger.error(`${method} ${pathname} 出错：` + (err && err.stack ? err.stack : err));
+      }
       if (status === 500) return json(res, 500, { ok: false, error: '服务器打了个结，请看控制台日志' });
       return json(res, status, { ok: false, error: err.message });
     }

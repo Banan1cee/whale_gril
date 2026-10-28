@@ -184,6 +184,7 @@
   },
   "features": {
     "_说明": "功能开关。关掉 = 回到旧行为，也可以直接在调试台「功能开关」卡片里勾。",
+    "stickers": false,
     "groupAddressGuard": true,
     "fightQuoteCheck": true,
     "mediaCleanup": true,
@@ -191,7 +192,6 @@
   },
   "sticker": {
     "_说明": "表情包（实验性）：总闸在 features.stickers。文件夹 data/stickers/<开心|炸毛|撒娇|嫌弃|敷衍>/（中英文名都认），没图回落「通用」。",
-    "enabled": true,
     "dir": "data/stickers",
     "chances": {
       "happy": 0.1,
@@ -203,7 +203,6 @@
     "genericChance": 0.1,
     "cooldownMinutes": 10,
     "onlyGroup": false,
-    "maxSide": 960,
     "testChat": "文件传输助手"
   }
 }
