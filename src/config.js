@@ -250,12 +250,33 @@ function projectRoot(from = __dirname) {
   return path.resolve(from, '..');
 }
 
+/**
+ * 本机 / 内网主机名（不带协议），这类服务通常不需要 API Key，比如 Ollama、LM Studio、vLLM。
+ * `host.docker.internal` 是 Docker/WSL 里指向宿主机的固定名，`.local` 是局域网 mDNS。
+ */
+const LOCAL_HOST = String.raw`(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]|host\.docker\.internal|[a-z0-9-]+\.local)`;
+const LOCAL_NET = String.raw`(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})`;
+// 主机部分之后必须紧跟端口 / 路径 / 结束，否则 127.0.0.10 会被认成 127.0.0.1
+const LOCAL_HOST_RE = new RegExp(`^(?:${LOCAL_HOST}|${LOCAL_NET})(?::\\d+)?(?:[/?#]|$)`);
+
 /** 本机或内网地址（这类服务通常不需要 API Key，比如 Ollama、LM Studio） */
 function isLocalUrl(url) {
   const s = String(url || '').trim().toLowerCase();
   if (!/^https?:\/\//.test(s)) return false;
-  return /\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(:|\/|$)/.test(s) ||
-    /\/\/(10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})(:|\/|$)/.test(s);
+  return LOCAL_HOST_RE.test(s.replace(/^https?:\/\//, '').replace(/^[^/]*@/, ''));
+}
+
+/**
+ * 用户少写协议（`127.0.0.1:11434/v1`）是很常见的，本机 / 内网地址自动补 http://。
+ * 公网域名不补：补成 http 反而打不开（那些服务基本都只认 https）。
+ */
+function normalizeBaseUrl(url) {
+  const s = String(url || '').trim();
+  if (!s) return '';
+  if (/^https?:\/\//i.test(s)) return s;
+  if (/^\/\//.test(s)) return 'http:' + s;
+  if (LOCAL_HOST_RE.test(s.toLowerCase().replace(/^[^/]*@/, ''))) return 'http://' + s;
+  return s;
 }
 
 /**
@@ -411,7 +432,16 @@ function resolveRuntime(cfg) {
   const local = isLocalUrl(baseUrl);
   const needsKey = provider === 'ollama' ? false : preset.needsKey && !local;
   const explicitMock = typeof settings.mock === 'boolean' ? settings.mock : null;
-  const mock = explicitMock === null ? !apiKey && needsKey : explicitMock;
+  // 「演示模式」只是「没有 Key 时的兜底」，不能反过来把本来能用的接口挡在门外：
+  // 目标服务不需要 Key（本地 Ollama / 本机 / 内网自建）而且地址已经填好，就一律当真接入。
+  // 之前这里直接信 settings.mock，于是「新装默认勾着演示模式」的用户选完本地模型，
+  // 一次请求都不会发到本地服务，还一直提示「还没拿到 API Key」。
+  const keyFree = !needsKey && /^https?:\/\//i.test(baseUrl);
+  const mock = keyFree
+    ? false
+    : explicitMock === null
+      ? !apiKey && needsKey
+      : explicitMock;
   return {
     settings,
     provider,
@@ -439,6 +469,8 @@ module.exports = {
   LEGACY_SAMPLING,
   migrateSampling,
   isLocalUrl,
+  normalizeBaseUrl,
+  LOCAL_HOST_RE,
   loadConfig,
   ensureConfigFile,
   loadSettings,
