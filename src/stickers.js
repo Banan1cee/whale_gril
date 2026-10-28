@@ -69,8 +69,9 @@ function imagesFor(dir, emotion) {
   if (category.length) return category;
   const generic = listImages(path.join(dir, GENERIC), { root: dir });
   if (generic.length) return generic;
-  // Never borrow a different emotion just because this category is empty.
-  return listImages(dir, { recursive: false });
+  // 这一类还没放图时，用库里其它图兜底：只要开关开着就能发出表情包，
+  // 而不是「明明传了图却一张也发不出去」。分类计数仍然是精确的。
+  return listImages(dir);
 }
 function isOn(config) { return features.isOn(config, 'stickers'); }
 function detectEmotion(text, hour = new Date().getHours()) {
@@ -90,13 +91,12 @@ function choose(pool, rng = Math.random, recent = []) {
   const index = Math.min(options.length - 1, Math.max(0, Math.floor((Number.isFinite(random) ? random : 0) * options.length)));
   return options[index];
 }
-// Selection does NOT start a cooldown. The service commits it on delivery/uncertain attempt ACK.
-function pick({ config, root, key = '', text = '', request = '', state, recent = [], now = Date.now(), rng = Math.random } = {}) {
+// 没有冷却、也不按会话类型限制：总开关开着就按概率（或对方明确要）发。
+// 同一个会话同时只会存在一个待发任务，避免连发刷屏。
+function pick({ config, root, key = '', text = '', request = '', recent = [], rng = Math.random } = {}) {
   if (!isOn(config)) return null;
   const emotion = detectEmotion(String(text || request));
-  const cooldown = Math.max(0, Number(config?.sticker?.cooldownMinutes) || 0) * 60000;
   const want = /(发|来|甩|扔|给|丢)(个|一个|张)?\s*(表情包?|动图|贴纸)/.test(String(request || ''));
-  if (!want && state?.has(key) && now - state.get(key) < cooldown) return null;
   if (!want && !(rng() < chanceFor(config, emotion))) return null;
   const file = choose(imagesFor(stickerDir(config, root), emotion), rng, recent);
   return file ? { emotion, path: file } : null;

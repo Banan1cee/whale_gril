@@ -46,7 +46,8 @@ if _EXAMPLES_DIR not in sys.path:
 from sticker_transport import (guarded_send as guarded_sticker_send, read_enabled_config,
                                resolve_target as resolve_sticker_target, result as sticker_result,
                                WindowsDesktop, quarantined_input_value,
-                               account_evidence_allowed as sticker_account_evidence_ok)
+                               account_evidence_allowed as sticker_account_evidence_ok,
+                               alias_match as sticker_alias_match)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_PATH = os.path.join(ROOT, "config.json")
@@ -2303,14 +2304,19 @@ def main():
                         return sticker_result("failed", "UIA target proof is unavailable; no OCR fallback")
                     # 目标会话没打开就自己切过去（和文字发送一样用 UIA 打开），
                     # 打开之后必须核对标题确实是目标，否则宁可不发。
+                    # 搜索顺序：先显示名，再其它别名（昵称/备注/wxid）。
+                    search_keys = [chat_display_name] + [a for a in aliases if a and a != chat_display_name]
                     try:
-                        if str(uia.current_chat() or "") not in aliases:
-                            if not uia.open_chat(list(aliases) or [chat_display_name]):
-                                return sticker_result("failed", "exact target is not open in the pinned window")
-                            time.sleep(0.4)
+                        if not sticker_alias_match(uia.current_chat(), aliases):
+                            uia.open_chat(search_keys)
+                            # 切换会话有时要 1 秒左右才稳定，最多等 2 秒
+                            for _ in range(8):
+                                time.sleep(0.25)
+                                if sticker_alias_match(uia.current_chat(), aliases):
+                                    break
                     except Exception:
                         return sticker_result("failed", "exact target is not open in the pinned window")
-                    if str(uia.current_chat() or "") not in aliases:
+                    if not sticker_alias_match(uia.current_chat(), aliases):
                         return sticker_result("failed", "exact target is not open in the pinned window")
                     current = sticker_config_now()
                     if current is None:

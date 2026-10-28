@@ -247,6 +247,28 @@ class WindowsDesktop:
             win32clipboard.CloseClipboard()
 
 
+def _norm_chat(name):
+    import re
+    return re.sub(r'\s+', '', str(name or '')).casefold()
+
+
+def _alias_match(current, aliases):
+    """微信标题常有多余空格/大小写差异，比较前统一归一化。
+
+    现场问题：私聊里 UIA 读到的标题和数据库昵称差一个空格，严格 == 判定就
+    一直「目标会话没打开」，表情包永远发不出去。
+    """
+    cur = _norm_chat(current)
+    if not cur:
+        return False
+    return any(_norm_chat(alias) == cur for alias in (aliases or ()))
+
+
+def alias_match(current, aliases):
+    """公开的标题比较：空格/大小写不敏感。"""
+    return _alias_match(current, aliases)
+
+
 def quarantined_input_value(gui, hwnd, aliases):
     """Read-only proof for a quarantined target; never creates/rebinds UIA.
 
@@ -259,11 +281,11 @@ def quarantined_input_value(gui, hwnd, aliases):
         uia = getattr(gui, '_uia', None)
         if (uia is None or int(getattr(uia, '_pinned_hwnd', 0)) != hwnd
                 or uia._win is None or int(uia._win.NativeWindowHandle) != hwnd
-                or uia.current_chat() not in aliases):
+                or not _alias_match(uia.current_chat(), aliases)):
             return None
         control = uia._chat_input()
         if (control is None or getattr(control, 'ControlTypeName', '') != 'EditControl'
-                or _input_title(getattr(control, 'Name', '')) not in aliases
+                or not _alias_match(_input_title(getattr(control, 'Name', '')), aliases)
                 or 'chat_input_field' not in str(getattr(control, 'AutomationId', '')).split('.')):
             return None
         pattern = control.GetValuePattern()
@@ -304,11 +326,11 @@ def guarded_send(gui, uia, hwnd, aliases, path, root, db, username, gate,
             if (not desktop.foreground(hwnd) or int(getattr(gui, 'main_hwnd', 0)) != hwnd
                     or int(getattr(uia, '_pinned_hwnd', 0)) != hwnd
                     or uia._win is None or int(uia._win.NativeWindowHandle) != hwnd
-                    or uia.current_chat() not in aliases):
+                    or not _alias_match(uia.current_chat(), aliases)):
                 return None
             control = uia._chat_input()
             if (control is None or getattr(control, 'ControlTypeName', '') != 'EditControl'
-                    or _input_title(getattr(control, 'Name', '')) not in aliases):
+                    or not _alias_match(_input_title(getattr(control, 'Name', '')), aliases)):
                 return None
             aid = str(getattr(control, 'AutomationId', '') or '')
             if 'chat_input_field' not in aid.split('.') or not desktop.focused(control, hwnd):
@@ -318,7 +340,16 @@ def guarded_send(gui, uia, hwnd, aliases, path, root, db, username, gate,
         control = guard()
         if control is None:
             return result('failed', 'open the exact target in the pinned foreground window and focus its input')
-        if desktop.value(control) != '':
+        # 刚发完文字时微信输入框偶尔还有短暂残留（私聊里尤其常见），
+        # 这里只「等它自己清空」，绝不替用户按删除键；等不到才失败。
+        for _ in range(20):
+            if desktop.value(control) == '':
+                break
+            sleep(0.2)
+            control = guard()
+            if control is None:
+                return result('cancelled', 'send gates changed while waiting for an empty input')
+        else:
             return result('failed', 'input contains a draft; clear it manually before sending')
         # Validation can take time. Repeat guards before changing the clipboard/pasting.
         if validate_path(approved, root, image_check)[1] != fingerprint:

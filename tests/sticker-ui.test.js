@@ -278,24 +278,23 @@ test('probabilities are visible as percentages under all five drop cards; editin
     await h.ids.get('stkDrop-' + key).dispatch('click', { target: input });
     assert.equal(h.ids.get('stkUpload-' + key).clicks || 0, 0, '不能把改概率当选图');
   }
-  assert.equal(Number(h.ids.get('stkCooldown').value), 10);
   assert.equal(h.ids.get('stkSaveRates').disabled, true);
   const generic = h.run("fieldsHtml({chances:{happy:0.1},cooldownMinutes:10},'sticker')");
   assert.equal(generic.includes('data-path="sticker.chances.happy"'), false, '不要出现两份概率控件');
 });
 
-test('percentage save sends numeric fractions and cooldown only, never toggles feature or sends a message', async () => {
+test('percentage save sends only the five probabilities, never toggles feature or sends a message', async () => {
   const h = harness(); await h.run('loadFeatures()');
   const chance = h.ids.get('stkChance-angry'); chance.value = '12.5'; await chance.dispatch('input');
   h.ids.get('stkChance-happy').value = '0'; await h.ids.get('stkChance-happy').dispatch('input');
-  h.ids.get('stkCooldown').value = '8'; await h.ids.get('stkCooldown').dispatch('input');
   await h.ids.get('stkSaveRates').dispatch('click');
   const writes = h.calls.filter(c => c.url === '/api/config' && c.method === 'POST');
   assert.equal(writes.length, 1);
   assert.deepEqual(writes[0].body.patch, {
     'sticker.chances.happy':0,'sticker.chances.angry':0.125,'sticker.chances.cute':0.12,
-    'sticker.chances.meh':0.08,'sticker.chances.bored':0.06,'sticker.cooldownMinutes':8,
+    'sticker.chances.meh':0.08,'sticker.chances.bored':0.06,
   });
+  assert.equal(h.ids.get('stkCooldown'), undefined, '不应再有发送间隔控件');
   assert.equal(h.config.persona.ownerName, '测试主人');
   assert.equal(h.calls.some(c => c.url === '/api/stickers/test' || (c.url === '/api/features' && c.method === 'POST')), false);
   assert.match(h.ids.get('stkRatesStatus').textContent, /已保存/);

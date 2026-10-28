@@ -450,6 +450,7 @@ class BridgeContractTest(unittest.TestCase):
                                             _uia=SimpleNamespace(current_chat=lambda: 'Peer',
                                                                  open_chat=Mock(return_value=True))),
                         resolve_sticker_target=Mock(return_value=('peer', {'Peer'})),
+                        sticker_alias_match=transport.alias_match,
                         force_foreground=Mock(return_value=True),
                         snapshot_win_state=Mock(return_value={'hwnd': 100, 'iconic': False, 'fg': 0}),
                         restore_win_state=Mock(), log_throttled=Mock(),

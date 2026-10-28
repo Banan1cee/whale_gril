@@ -112,11 +112,10 @@
       <div id="stkUploads" class="sticker-categories"></div>
       <div id="stkUploadResult" class="muted" role="status"></div>
       <div class="row" style="margin-top:12px">
-        <label>自动表情最少间隔 <input id="stkCooldown" type="number" min="0" step="0.1" value="10" disabled style="width:76px" /> 分钟</label>
         <button id="stkSaveRates" type="button" disabled>保存发送概率</button>
         <span id="stkRatesStatus" class="muted" role="status">正在读取发送概率…</span>
       </div>
-      <p class="muted">每个分类框下方可直接调整百分比，填 10 就是百分之十。只控制普通聊天自动配图，不限制手动测试；炸毛也不会每次必发。</p>
+      <p class="muted">每个分类框下方可直接调整百分比，填 10 就是百分之十。私聊、群聊都按这个概率发，只要总开关开着；不设发送间隔，也不限制手动测试。</p>
       <h3 style="font-size:14px">可选：真实消息测试</h3>
       <p class="muted">测试前请手动打开目标微信会话并保持前台、清空输入框；不会自动切会话/抢焦点。安全校验不通过会跳过；排队不代表送达。</p>
       <div class="row">
@@ -620,9 +619,6 @@ function applyStickerRates(config) {
     $('stkChance-' + key).value = String(Number((Math.min(1, Math.max(0, Number.isFinite(raw) ? raw : 0)) * 100).toFixed(2)));
     $('stkChance-' + key).disabled = false;
   }
-  const cooldown = Number(cfg.cooldownMinutes === undefined ? 10 : cfg.cooldownMinutes);
-  $('stkCooldown').value = String(Number.isFinite(cooldown) ? Math.max(0, cooldown) : 10);
-  $('stkCooldown').disabled = false;
   STICKER_RATES_READY = true;
 }
 
@@ -654,12 +650,6 @@ async function saveStickerRates() {
     }
     patch['sticker.chances.' + key] = Number((percent / 100).toFixed(6));
   }
-  const rawCooldown = String($('stkCooldown').value).trim();
-  const cooldown = Number(rawCooldown);
-  if (!rawCooldown || !Number.isFinite(cooldown) || cooldown < 0) {
-    $('stkRatesStatus').textContent = '表情间隔请填写大于或等于零的分钟数。'; return;
-  }
-  patch['sticker.cooldownMinutes'] = cooldown;
   const edit = STICKER_RATE_EDIT;
   STICKER_RATES_SAVING = true;
   $('stkSaveRates').disabled = true;
@@ -801,7 +791,6 @@ function bindStickerUi() {
       if (eventName === 'drop') $('stkUploadResult').textContent = STICKERS_ENABLED ? '请把图片拖到上面的对应情绪框内。' : '请先开启表情包总开关。';
     }
   });
-  $('stkCooldown').addEventListener('input', stickerRatesEdited);
   $('stkSaveRates').addEventListener('click', saveStickerRates);
   $('stkChat').addEventListener('input', () => { STICKER_CHAT_INITIALIZED = true; });
   $('stkSend').addEventListener('click', queueStickerTest);

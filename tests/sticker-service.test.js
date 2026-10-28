@@ -32,7 +32,7 @@ test('上传按情绪归档，保留 GIF 原始字节且同名不覆盖', (t) =>
   assert.deepEqual(fs.readFileSync(path.join(root, 'data/stickers/开心', one.name)), GIF);
   assert.equal(upload(cfg, root)[0].name, one.name, '重复上传应幂等');
   assert.equal(stickers.categoryImages(stickers.stickerDir(cfg, root), 'angry').length, 0);
-  assert.deepEqual(stickers.imagesFor(stickers.stickerDir(cfg, root), 'angry'), [], '不得把开心图当炸毛发');
+  assert.equal(stickers.imagesFor(stickers.stickerDir(cfg, root), 'angry').length, 1, '该类没图时用库里其它图兜底（保证发得出去）');
 });
 
 test('上传拒绝伪装/超限/路径穿越/未知情绪；无有效批次不落盘', (t) => {
@@ -56,8 +56,8 @@ test('分类统计不把通用算到每类，选择不跨其他情绪，普通�
   const { root, cfg } = fixture(t);
   upload(cfg, root, 'angry');
   const dir = stickers.stickerDir(cfg, root);
-  assert.equal(stickers.categoryImages(dir, 'happy').length, 0);
-  assert.deepEqual(stickers.imagesFor(dir, 'happy'), []);
+  assert.equal(stickers.categoryImages(dir, 'happy').length, 0, '分类计数必须是精确的');
+  assert.equal(stickers.imagesFor(dir, 'happy').length, 1, '该类没图时用库里其它图兜底，保证发得出去');
   fs.mkdirSync(path.join(dir, '通用'));
   fs.writeFileSync(path.join(dir, '通用/g.gif'), GIF);
   assert.equal(stickers.imagesFor(dir, 'happy').length, 1);
@@ -99,24 +99,23 @@ test('任务原子领取，仅一次；失败/未确认状态不伪装成成功�
   assert.deepEqual(service.pending(), []);
 });
 
-test('冷却只在实际发送ACK后开始，失败释放预留，不会挑图就锁十分钟', (t) => {
+test('没有冷却：私聊也能连续按概率发；同一会话同时只排一个任务', (t) => {
   const { root, cfg } = fixture(t);
   upload(cfg, root);
-  let now = 100000;
-  const service = new StickerService(cfg, { now: () => now, rng: () => 0 });
+  cfg.sticker.chances.happy = 1;
+  const service = new StickerService(cfg, { rng: () => 0 });
   const msg = { platform: 'wechat', chatId: 'wxid-test', chatType: 'private' };
-  const failed = service.plan(msg, '哈哈');
-  assert.equal(failed.status, 'reserved');
-  assert.equal(service.plan(msg, '哈哈'), null, '尚未发完不能重复规划');
+  const first = service.plan(msg, '哈哈');
+  assert.equal(first.status, 'reserved', '私聊也要能自动发');
+  assert.equal(service.plan(msg, '哈哈'), null, '同一会话同时只排一个，避免连发刷屏');
   assert.equal(service.pending().length, 0, '自动回复应等文字发完，不让轮询抢先发图');
-  service.claim(failed.id); service.ack(failed.id, 'failed');
-  const retry = service.plan(msg, '哈哈');
-  assert.ok(retry, '失败没有触发冷却');
-  service.claim(retry.id); service.ack(retry.id, 'confirmed');
-  assert.equal(service.plan(msg, '哈哈'), null);
-  now += 10 * 60000;
-  assert.ok(service.plan(msg, '哈哈'));
-  assert.equal(service.plan({ ...msg, platform: 'web' }, '哈哈'), null);
+  service.claim(first.id); service.ack(first.id, 'confirmed');
+  // 立刻就能再发，不需要等十分钟
+  const second = service.plan(msg, '哈哈');
+  assert.ok(second, '确认后立刻可以再发（无冷却）');
+  service.claim(second.id); service.ack(second.id, 'confirmed');
+  assert.ok(service.plan(msg, '哈哈'), '再紧接着也还能发');
+  assert.equal(service.plan({ ...msg, platform: 'web' }, '哈哈'), null, '网页聊天不排表情包');
 });
 
 test('任务过期不重试，满队列明确报错而非静默丢任务', (t) => {
@@ -188,7 +187,7 @@ test('网关默认关回包真正无sticker字段，不给远程/其他平台发
   assert.equal(Object.hasOwn(remote, 'sticker'), false);
 });
 
-test('HTTP：自动回包带一次性任务，网页SSE不泄漏本地路径，不消费自动冷却', async (t) => {
+test('HTTP：自动回包带一次性任务，网页SSE不泄漏本地路径，网页聊天不占微信配额', async (t) => {
   const { root, inst, request, toggle } = await live(t);
   await toggle(true);
   await request('/api/stickers/upload', { emotion: 'happy', files: [{ name: 'a.gif', data: GIF.toString('base64') }] });
@@ -204,7 +203,7 @@ test('HTTP：自动回包带一次性任务，网页SSE不泄漏本地路径，�
   const web = await fetch(inst.url + '/api/chat', { method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ text: '在吗', sessionId: 'sticker-visibility' }) });
   assert.equal((await web.text()).includes('"sticker"'), false);
-  assert.equal(inst.runtime.stickerService.jobs.size, 1, '网页聊天不能预占微信冷却');
+  assert.equal(inst.runtime.stickerService.jobs.size, 1, '网页聊天不该排队表情包');
   await toggle(false);
   const off = await fetch(inst.url + '/webhook/wechat', { method: 'POST',
     headers: { 'content-type': 'application/json', 'x-bot-token': 'sticker-test-token', 'x-whale-bridge': '1' },
