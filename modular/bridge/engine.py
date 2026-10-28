@@ -16,10 +16,18 @@
 用法：
   python examples/wechatauto_bridge.py
 
+发送通道（按优先级，前一条失败才试下一条）：
+  0. 零焦点通道  PostMessage 伪焦点 + GBK 字节 WM_CHAR + 点发送按钮
+                 （bridge/bg_sender.py，见 docs/微信消息后台发送.md，不抢前台）
+  1. UIA 通道    wechatauto 驱动控件树（默认打 quiet 补丁，但仍可能抢前台）
+  2. 键盘通道    Ctrl+F 搜会话 → 剪贴板粘贴 → 回车（一定抢前台）
+  3. OCR 通道    截图找发送按钮（最后兜底，可能卡在截屏）
+
 注意：
-  - 发送消息会抢微信窗口焦点，这是 4.x 自动化的正常表现。
   - 微信必须保持登录；退出登录后数据库密钥会失效。
   - 自动化不是微信官方接口，仍有账号风险，只用小号 + 测试群。
+  - 零焦点通道要求：微信窗口**未最小化**、两边权限一致（都普通或都管理员）、
+    中文系统（代码页 936）。任一不满足会自动退回下面的通道。
 """
 
 import json
@@ -35,7 +43,6 @@ os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 import sys
 import subprocess
 import threading
-from concurrent.futures import ThreadPoolExecutor
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -52,6 +59,61 @@ DIGEST_MINUTES = 30
 MASTER_WXID = ''
 # 超过这么多秒的旧消息直接不回，避免“回上一条”
 STALE_AFTER = float(os.environ.get("WHALE_STALE_AFTER", "4"))
+def _as_bool(value, default=False):
+    """配置里的布尔：兼容写成字符串 "false" 的老配置。
+
+    以前 bool("false") 是 True —— 于是 care.allowGroups 明明写着 "false"，
+    桥接却当成「允许进群」。
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value).strip().lower() in ("1", "true", "yes", "on", "开")
+
+
+def _parse_bg_send(wechat_cfg):
+    """解析 `wechat.bgSend`（零焦点发送通道）。
+
+    默认全开：这是唯一不抢前台的通道，关掉就等于退回「发一条抢一次焦点」。
+    """
+    raw = (wechat_cfg or {}).get("bgSend")
+    if not isinstance(raw, dict):
+        raw = {}
+
+    def _num(key, default, lo, hi):
+        try:
+            v = float(raw.get(key, default))
+        except Exception:
+            v = float(default)
+        return min(hi, max(lo, v))
+
+    return {
+        "enabled": _as_bool(raw.get("enabled", True), True),
+        # 文档 §4.7：字节间隔 ≤45ms，太短会丢字；给个 20~80 的安全区间
+        "charGap": _num("charGapMs", 40, 20, 80) / 1000.0,
+        # 发完回读输入框是否清空；关掉能省 ~0.5s，但少了「真发出去」的证据
+        "verify": _as_bool(raw.get("verify", True), True),
+        # 后台通道失败时要不要退回会抢前台的旧通道
+        "fallback": _as_bool(raw.get("fallbackToForeground", True), True),
+        # GBK 编不了的字符（emoji 等）是跳过还是整条退回旧通道
+        "strip": _as_bool(raw.get("stripUnencodable", True), True),
+        # 微信缩在托盘里（窗口隐藏）时，用「显示但不激活」把它拉出来 —— 不抢前台
+        "unhide": _as_bool(raw.get("unhideWindow", True), True),
+    }
+
+
+# 零焦点发送通道的默认值：config 读失败时也能工作（这个通道失败会自动退回旧通道，
+# 所以默认开着是安全的）。
+BG_SEND = {"enabled": True, "charGap": 0.04, "verify": True,
+           "fallback": True, "strip": True, "unhide": True}
+
+# 消息调度：同一个会话串行、跨会话并发。workers=1 就等于旧行为（全部串行）。
+PIPELINE_WORKERS = 4
+PIPELINE_QUEUE_LIMIT = 4
+
 _cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "config.json")
 # 新版发行包不再自带 config.json（免得覆盖安装时把用户的主人名单/token 冲掉）。
 # 如果用户先双击了桥接、服务还没起过，这里用 example 生成一份，避免「token 空 → 401 → 她不回话」。
@@ -82,6 +144,25 @@ try:
     KEYBOARD_FALLBACK = bool(_wechat.get("keyboardFallback", True))
     # 后台发送：不抢前台直接发（实测最小化/被遮挡也能发）。false = 每次先把微信拉到前台
     BACKGROUND_SEND = bool(_wechat.get("backgroundSend", True))
+    # 零焦点通道（bridge/bg_sender.py）：真正不碰前台的发送方式。
+    # 和上面那个 backgroundSend 的区别：backgroundSend 是「尽量少占前台，失败就拉前台」，
+    # bgSend 是「结构上不碰前台，做不到就退回旧通道」。
+    try:
+        BG_SEND = _parse_bg_send(_wechat)
+    except Exception:
+        pass
+    try:
+        PIPELINE_WORKERS = max(1, min(16, int(_wechat.get("pipelineWorkers", 4) or 4)))
+        PIPELINE_QUEUE_LIMIT = max(1, min(32, int(_wechat.get("pipelineQueueLimit", 4) or 4)))
+    except Exception:
+        pass
+    # 调试用：WHALE_PIPELINE_WORKERS=1 可以立刻退回「全串行」的旧行为
+    try:
+        _pw = os.environ.get("WHALE_PIPELINE_WORKERS")
+        if _pw:
+            PIPELINE_WORKERS = max(1, min(16, int(_pw)))
+    except Exception:
+        pass
     # 多账号（同时登着大号 + 小号）：启动时钉死在 wechat.account 指定的那个号上，
     # 发送前再确认「要发消息的那个窗口就是这个号」；认不出来宁可不发，也不从别的号发。
     # accountGuard=false 只用于「本机确实只登一个号、但窗口读取时好时坏」的兜底。
@@ -109,20 +190,6 @@ try:
 except Exception:
     pass
 
-def _as_bool(value, default=False):
-    """配置里的布尔：兼容写成字符串 "false" 的老配置。
-
-    以前 bool("false") 是 True —— 于是 care.allowGroups 明明写着 "false"，
-    桥接却当成「允许进群」。
-    """
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return value != 0
-    return str(value).strip().lower() in ("1", "true", "yes", "on", "开")
-
 START_TS = time.time()
 
 
@@ -131,8 +198,49 @@ START_TS = time.time()
 # HTTP_PROXY 会让连 127.0.0.1 的请求也走代理 → 报「由于目标计算机积极拒绝」。
 import requests as _requests  # 延迟到这里再 import，避免顶部依赖顺序问题
 
-LOCAL_HTTP = _requests.Session()
-LOCAL_HTTP.trust_env = False
+
+class _ThreadLocalHTTP:
+    """每个线程一个 `requests.Session`。
+
+    `requests.Session` 不是线程安全的，而 3.57 起消息是**跨会话并发**处理的
+    （`MessagePipeline`）。共用一个 Session 会出现连接池 / header 串台。
+    接口和 Session 一样（get / post / close），调用方不用改。
+    """
+
+    trust_env = False
+
+    def __init__(self):
+        self._local = threading.local()
+        self._all = []
+        self._guard = threading.Lock()
+
+    def _session(self):
+        s = getattr(self._local, "session", None)
+        if s is None:
+            s = _requests.Session()
+            s.trust_env = False          # 本机请求不读系统代理（Clash 没开时会积极拒绝）
+            self._local.session = s
+            with self._guard:
+                self._all.append(s)
+        return s
+
+    def get(self, *args, **kwargs):
+        return self._session().get(*args, **kwargs)
+
+    def post(self, *args, **kwargs):
+        return self._session().post(*args, **kwargs)
+
+    def close(self):
+        with self._guard:
+            for s in self._all:
+                try:
+                    s.close()
+                except Exception:
+                    pass
+            self._all.clear()
+
+
+LOCAL_HTTP = _ThreadLocalHTTP()
 os.environ["NO_PROXY"] = ",".join(filter(None, [os.environ.get("NO_PROXY", ""), "127.0.0.1,localhost,::1"]))
 _THROTTLE_LOG = {}
 # 和服务端的连接状态：用来只在「断开→恢复」时各打一次日志
@@ -165,6 +273,7 @@ def reload_config(path=None):
     """
     global GAME_TOKENS, AWAY_NOTICE, RETURN_NOTICE, QUEUED_MAX_AGE, QUEUED_MAX_CHATS
     global QUOTE_REPLY, KEYBOARD_FALLBACK, BACKGROUND_SEND, LOW_BATTERY_PCT, GOODNIGHT_TEXT
+    global BG_SEND, PIPELINE_WORKERS, PIPELINE_QUEUE_LIMIT
     global ACCOUNT_GUARD, WINDOW_HWND
     global SHARE_ENABLED, SHARE_EVERY, CARE_ENABLED, CARE_QUIET_MIN, DIGEST_MINUTES
     global STALE_AFTER, SYSTEM_SENDER_NAMES, BASE_SYSTEM_SENDERS, MASTER_WXID
@@ -194,6 +303,15 @@ def reload_config(path=None):
     QUOTE_REPLY = bool(w.get("quoteReply", False))
     KEYBOARD_FALLBACK = bool(w.get("keyboardFallback", True))
     BACKGROUND_SEND = bool(w.get("backgroundSend", True))
+    try:
+        BG_SEND = _parse_bg_send(w)
+    except Exception:
+        pass
+    try:
+        PIPELINE_WORKERS = max(1, min(16, int(w.get("pipelineWorkers", PIPELINE_WORKERS) or 4)))
+        PIPELINE_QUEUE_LIMIT = max(1, min(32, int(w.get("pipelineQueueLimit", PIPELINE_QUEUE_LIMIT) or 4)))
+    except Exception:
+        pass
     ACCOUNT_GUARD = bool(w.get("accountGuard", True))
     try:
         WINDOW_HWND = int(w.get("windowHwnd") or 0)
@@ -781,13 +899,76 @@ def ensure_ffmpeg_env():
     return False
 
 
+try:
+    from .msg_pipeline import MessagePipeline
+except ImportError:                                  # 以脚本方式跑（bridge/ 在 sys.path 上）
+    from msg_pipeline import MessagePipeline
+
+def _bg_cli(argv=None):
+    """零焦点通道的命令行自检 / 发送。
+
+    ```
+    python -m bridge --bg-probe                 只读自检：物化、读控件、前后前台
+    python -m bridge --bg-send "测试" --to 文件传输助手
+    ```
+
+    放在 main() 最前面（和 --list-accounts 一样），不抢单实例锁，
+    所以桥接正跑着的时候也能用。
+    """
+    argv = list(sys.argv[1:] if argv is None else argv)
+    try:
+        import bg_sender
+    except Exception:
+        try:
+            from . import bg_sender          # type: ignore
+        except Exception as e:               # noqa: BLE001
+            log("导入 bg_sender 失败：", repr(e))
+            return 1
+
+    if "--bg-send" in argv:
+        i = argv.index("--bg-send")
+        text = argv[i + 1] if len(argv) > i + 1 else ""
+        to = None
+        if "--to" in argv:
+            j = argv.index("--to")
+            to = argv[j + 1] if len(argv) > j + 1 else None
+        ok, why = bg_sender.send(text, chat=to, log=log,
+                                 char_gap=BG_SEND["charGap"],
+                                 strip_unencodable=BG_SEND["strip"],
+                                 verify=BG_SEND["verify"],
+                                 unhide=BG_SEND["unhide"])
+        log("发送 = %s（%s）" % (ok, why))
+        return 0 if ok else 1
+
+    res = bg_sender.probe(log=log)
+    return 0 if res.get("edit") else 1
+
+
 def main():
     boot("进入 main()")
     # 给网页「设置 → 微信账号」下拉用：只扫账号、不连消息，跑完就退出。
     # 必须放在单实例锁之前 —— 否则桥接正跑着的时候，这条命令会以为自己"重复启动"直接退出。
     if "--list-accounts" in sys.argv:
         return list_accounts_cli()
+    if "--bg-probe" in sys.argv or "--bg-send" in sys.argv:
+        return _bg_cli()
+    # 零焦点通道要求 UIA 的物理像素坐标和 ScreenToClient 用同一套 DPI 上下文，
+    # 所以尽量在创建任何窗口之前把进程切成 per-monitor aware（切不动会自动降级）。
+    try:
+        import bg_sender
+        bg_sender.ensure_dpi_aware()
+    except Exception:
+        pass
     ensure_ffmpeg_env()
+    # 权限自检：微信 4.x 的控件树和 PostMessage 都受 UIPI 约束。桥接比微信低一级时
+    # 零焦点通道会静默失败（节点数 0），只剩会抢前台的旧通道。
+    try:
+        import ctypes
+        if not ctypes.windll.shell32.IsUserAnAdmin():
+            log("[!] 当前不是管理员：如果微信也是管理员运行的，零焦点发送会用不了（UIPI）。")
+            log("    用「启动微信桥接.bat」启动会自动提权；手动跑请右键「以管理员身份运行」。")
+    except Exception:
+        pass
     # 微信的 Qt accessibility 只在「纯英文路径」下能热激活成功；路径里带中文时，
     # UIA 认不出主窗（ensure_window 超时 37s），之后每次发送都退到 OCR 并报
     # error(5, 'SetWindowPos', '拒绝访问')，日志刷屏、消息发不出去。
@@ -998,10 +1179,17 @@ def main():
         log("  （这里直接停下，绝不会用 %s 继续跑。）" % db.account)
         return 2
     _media_box = {"downloader": None}
+    _media_lock = threading.Lock()
 
     def _get_media():
-        """按需创建媒体下载器；图片和表情识别共用一个实例。"""
-        if _media_box["downloader"] is None:
+        """按需创建媒体下载器；图片和表情识别共用一个实例。
+
+        多条消息现在会并发识别图片，所以创建过程要加锁：否则会同时 new 出
+        两个 MediaDownloader，各自往同一个缓存目录里落文件。
+        """
+        with _media_lock:
+            if _media_box["downloader"] is not None:
+                return _media_box["downloader"]
             save_dir = os.path.join(ROOT, "data", "media-cache")
             os.makedirs(save_dir, exist_ok=True)
             dl = MediaDownloader(db, save_dir=save_dir)
@@ -1020,7 +1208,7 @@ def main():
             except Exception as _e:
                 log("图片目录兜底没装上（默认路径不受影响）：", repr(_e))
             _media_box["downloader"] = dl
-        return _media_box["downloader"]
+            return dl
 
     me = db.wxid
     _self_nick = ""
@@ -1832,6 +2020,111 @@ def main():
         except Exception as e:                      # noqa: BLE001
             log("后台模式补丁没打上（不影响发送）：", repr(e))
 
+    # ---------------------------------------------------------------- 零焦点通道
+    BG_STATS = {"tried": 0, "ok": 0, "last": "", "lastAt": 0.0,
+                "disabled": False, "treeFails": 0, "cooldownUntil": 0.0}
+
+    def _bg_hwnd():
+        try:
+            return int(ACCOUNT.get("hwnd") or 0) or find_weixin_hwnd()
+        except Exception:
+            return 0
+
+    def bg_send(text, chat_display_name, chat_username=""):
+        """零焦点通道：用窗口消息打字 + 点发送，全程不抢前台。
+
+        见 `bridge/bg_sender.py` 与 `docs/微信消息后台发送.md`。失败返回 False，
+        由 send_text 继续走 UIA / 键盘 / OCR。**不动 gui、不碰 win32gui**，
+        所以即使 wechatauto 的 UIA 引擎挂了这条也能用。
+        """
+        if not BG_SEND.get("enabled", True) or BG_STATS["disabled"]:
+            return False
+        # 树连续起不来（多半是微信版本不支持）就先歇 10 分钟，
+        # 免得每条消息都白等 2 秒的物化时间。
+        if time.time() < BG_STATS["cooldownUntil"]:
+            return False
+        try:
+            import bg_sender
+        except Exception:
+            try:
+                from . import bg_sender          # type: ignore
+            except Exception as e:               # noqa: BLE001
+                BG_STATS["disabled"] = True
+                log("后台通道：模块导入失败，本次运行内关闭这条通道：", repr(e))
+                return False
+
+        hwnd = _bg_hwnd()
+        if not hwnd:
+            return False
+        if chat_username:
+            keys = aliases_for(chat_username, chat_display_name) or [chat_display_name]
+        else:
+            keys = [chat_display_name]
+
+        t0 = time.time()
+        try:
+            ok, why = bg_sender.send(
+                text,
+                chat=keys,
+                hwnd=hwnd,
+                log=log,
+                char_gap=BG_SEND.get("charGap", 0.04),
+                strip_unencodable=BG_SEND.get("strip", True),
+                verify=BG_SEND.get("verify", True),
+                unhide=BG_SEND.get("unhide", True),
+            )
+        except Exception as e:                   # noqa: BLE001
+            ok, why = False, "exception:" + type(e).__name__
+            log("后台通道异常：", repr(e))
+
+        BG_STATS["tried"] += 1
+        BG_STATS["last"] = why
+        BG_STATS["lastAt"] = time.time()
+        if ok:
+            BG_STATS["ok"] += 1
+            BG_STATS["treeFails"] = 0
+            log("后台通道发送成功（%s，%.1fs）" % (why, time.time() - t0))
+            return True
+
+        log("后台通道没发出去（%s，%.1fs），换下一条通道：%s"
+            % (why, time.time() - t0, chat_display_name))
+
+        if why == "tree_not_ready":
+            BG_STATS["treeFails"] += 1
+            if BG_STATS["treeFails"] >= 3:
+                BG_STATS["cooldownUntil"] = time.time() + 600
+                BG_STATS["treeFails"] = 0
+                log_throttled(
+                    "bg-tree-cooldown",
+                    "后台通道连续 3 次读不到控件树，先停 10 分钟再试"
+                    "（其余通道不受影响）。排查：python -m bridge --bg-probe",
+                )
+
+        # 这几类是「环境问题」，报一次就够，别每条消息刷屏
+        if why == "uipi_denied":
+            log_throttled(
+                "bg-uipi",
+                "后台通道被 UIPI 拒绝：微信是管理员权限、桥接不是。"
+                "把两边权限调成一样（都用管理员，或都不用）即可。",
+            )
+        elif why == "minimized":
+            log_throttled(
+                "bg-min",
+                "微信最小化了：零焦点通道要求窗口显示出来"
+                "（用「显示但不激活」拉出来，不抢前台）。",
+            )
+        elif why == "tree_not_ready":
+            log_throttled(
+                "bg-tree",
+                "后台通道读不到控件树：确认微信没缩在托盘；"
+                "4.2 需要 wechatauto 的 gate 热激活，必要时提权重试。"
+                "诊断：python -m bridge --bg-probe",
+            )
+        elif why == "chat_not_found" and chat_username:
+            # 会话列表只有最近十来个，老会话得靠前台通道搜索；这种情况不吵
+            log("后台通道：%s 不在会话列表里，改用会搜索的通道" % chat_display_name)
+        return False
+
     def uia_send(text, who, username=""):
         """优先用 UIA 发送：不依赖 OCR 找发送按钮，成功后返回 True。"""
         # 账号闸：先确认「要打字的这个窗口」就是配置指定的那个号，窗口换了就重认
@@ -2093,13 +2386,38 @@ def main():
                     pending_replies[chat_username or chat_display_name] = (text, chat_display_name, chat_username, time.time())
                 log("游戏/全屏中，先排队：", chat_display_name)
                 return True
+            # ⓪ 零焦点通道：不依赖 WeChatGUI（构造它本身就会抢一次焦点），先试这条。
+            #    见 bridge/bg_sender.py 与 docs/微信消息后台发送.md。
+            #    失败才往下走会动窗口的旧通道。
+            t_start = time.time()
+            allow_mark_dead = True
+            if BG_SEND.get("enabled", True):
+                SEND_STATE["active"] = True
+                SEND_STATE["start"] = time.time()
+                try:
+                    if bg_send(text, chat_display_name, chat_username):
+                        fail_streak.pop(chat_username, None)
+                        log("发送成功（后台通道，%.1fs）→ %s"
+                            % (time.time() - t_start, chat_display_name))
+                        return True
+                except Exception as e:            # noqa: BLE001
+                    log("后台通道异常，继续用旧通道：", repr(e))
+                finally:
+                    SEND_STATE["active"] = False
+                if not BG_SEND.get("fallback", True):
+                    # 用户明确要求「绝不抢前台」：这条不发，但不把会话标死
+                    # （窗口最小化、会话不在列表里都是可恢复状态）。
+                    allow_mark_dead = False
+                    log("后台通道失败且已关闭前台兜底，这条不发：", chat_display_name)
+                    return False
+
             with gui_lock:
                 if gui is None:
                     log("初始化微信窗口驱动…（会抢一下焦点，约 5~10 秒）")
                     gui = WeChatGUI()
             # 多账号：GUI 的坐标/OCR 目标也要对齐到钉住的账号窗口
             bind_gui_window(gui)
-            # ⓪ 引用回复（引用对方那条消息）——比普通发送慢，失败自动回退
+            # ① 引用回复（引用对方那条消息）——比普通发送慢，失败自动回退
             if quote_text and QUOTE_REPLY:
                 try:
                     if with_window_on_top(lambda: gui.quote_msg(text, who=chat_display_name, target_text=quote_text, verify=False)):
@@ -2107,8 +2425,7 @@ def main():
                         return True
                 except Exception as e:
                     log("引用回复失败，回退普通发送：", repr(e))
-            # ① 首选 UIA：稳定、快，不依赖 OCR 找发送按钮
-            t_start = time.time()
+            # ①.5 首选 UIA：稳定、快，不依赖 OCR 找发送按钮
             uia_available = False
             try:
                 uia_available = gui._get_uia() is not None
@@ -2183,7 +2500,7 @@ def main():
                     log("兜底发送失败：%s" % resp)
                 except Exception as e:
                     log("兜底发送异常：%r" % e)
-            if chat_username:
+            if chat_username and allow_mark_dead:
                 # 账号窗口认不出来导致的失败，不算「这个会话失效」——
                 # 否则双开时认不出号会把这个群/好友永久标死，之后就再也不回了。
                 if (time.time() - float(ACCOUNT.get("blockedAt") or 0)) < 30:
@@ -2607,12 +2924,18 @@ def main():
 
     wait_for_server(bot_url, timeout=30)
     log("开始监听新消息…（Ctrl+C 退出）")
-    executor = ThreadPoolExecutor(max_workers=1)
+    pipeline = MessagePipeline(
+        workers=PIPELINE_WORKERS,
+        per_chat_limit=PIPELINE_QUEUE_LIMIT,
+        log=log,
+    )
+    log("消息调度：%d 个 worker（同一会话串行、跨会话并发）" % PIPELINE_WORKERS)
 
     def on_message(msg, listener):
-        # 每条消息丢线程池：发送慢不再阻塞后面消息的接收
+        # 收（Listener 线程）→ 判（这里，按会话排队）→ 发（send_text 内部串行）
+        # 以前是 max_workers=1：一张长截图的 OCR 能把后面所有消息堵几分钟。
         try:
-            executor.submit(on_message_inner, msg, listener)
+            pipeline.submit(msg.get("username") or "unknown", on_message_inner, msg, listener)
         except Exception as e:
             log("提交消息处理失败：", repr(e))
 
@@ -3176,6 +3499,10 @@ def main():
             time.sleep(1)
     except KeyboardInterrupt:
         log("正在退出…")
+        try:
+            pipeline.close(wait=False)
+        except Exception:
+            pass
         listener.stop()
     return 0
 

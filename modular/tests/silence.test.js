@@ -168,7 +168,7 @@ test('静默期优先级高于「主人说话就回」', () => {
 });
 
 test('「让他滚」（指别的男生）不该把她赶走', () => {
-  const botSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'pipeline', 'chat.js'), 'utf8');
+  const botSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'pipeline', 'stages', 'canned.js'), 'utf8');
   // 第三人称正则里不能出现单独一个「他」
   const m = botSrc.match(/\(让\|叫\|把\|喊\|请\)\(\?:([^)]*)\)/);
   assert.ok(m, '找得到第三人称 dismiss 正则');

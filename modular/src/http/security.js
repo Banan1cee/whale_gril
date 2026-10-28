@@ -1,10 +1,47 @@
 'use strict';
 
+const crypto = require('node:crypto');
+
 /**
  * 请求安全闸：
  *   1) CSRF：浏览器跨站写请求一律拒绝（同源写操作还必须是 JSON）
  *   2) 远程写：默认只许本机；开 allowRemote + x-bot-token 才放行
+ *   3) 安全响应头：nosniff / 禁 referrer / 禁外部脚本
  */
+
+/** 恒定时间字符串比较：避免靠响应时间猜 token */
+function safeEqual(a, b) {
+  const ba = Buffer.from(String(a == null ? '' : a), 'utf8');
+  const bb = Buffer.from(String(b == null ? '' : b), 'utf8');
+  if (ba.length !== bb.length) return false;
+  try {
+    return crypto.timingSafeEqual(ba, bb);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 给每个响应挂安全头。
+ *
+ * CSP 里 script-src 保留了 'unsafe-inline'：网页里有两段内联脚本，
+ * 去掉会直接白屏。即使如此，外部脚本仍然加载不了（default-src 'self'），
+ * 这对「本机控制台」这个威胁模型够了。
+ */
+function applySecurityHeaders(res) {
+  try {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=()');
+    res.setHeader(
+      'Content-Security-Policy',
+      "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; " +
+        "img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; " +
+        "object-src 'none'; base-uri 'none'; form-action 'self'"
+    );
+  } catch { /* 头写不进去不影响响应体 */ }
+}
 
 function isLoopbackRequest(req) {
   const ip = String((req.socket && req.socket.remoteAddress) || '');
@@ -19,7 +56,7 @@ function remoteAuthorized(req, runtime) {
     (runtime.config.gateway && runtime.config.gateway.wechat && runtime.config.gateway.wechat.inboundToken) || ''
   ).trim();
   if (!token || token === 'change-me-wechat') return false;
-  return String(req.headers['x-bot-token'] || '').trim() === token;
+  return safeEqual(String(req.headers['x-bot-token'] || '').trim(), token);
 }
 
 /**
@@ -63,4 +100,4 @@ function checkRequest(runtime, req, { pathname, method }) {
   return null;
 }
 
-module.exports = { isLoopbackRequest, remoteAuthorized, checkRequest };
+module.exports = { isLoopbackRequest, remoteAuthorized, checkRequest, applySecurityHeaders, safeEqual };

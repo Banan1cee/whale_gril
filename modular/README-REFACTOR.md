@@ -17,13 +17,14 @@ modular/
 │  ├─ app.js              # 唯一的依赖注入点：createRuntime()
 │  ├─ core/               # 纯逻辑（无 IO），最容易单测
 │  ├─ pipeline/           # 对话主流程（Bot：判断 → 组 prompt → 生成 → 落记忆）
+│  │  └─ stages/          # 固定话术分支（canned.js，从 decide() 拆出的第一批）
 │  ├─ persona/            # 人设、语料、预设、主人调教结果
 │  ├─ memory/             # 会话存储 + 备份/恢复
 │  ├─ llm/                # 模型客户端（DeepSeek / OpenAI 兼容 / Ollama / 演示模式）
 │  ├─ services/           # 面向用例的业务服务（HTTP 层直接调用）
 │  ├─ adapters/           # 外部世界：网关、链接、B站、联网搜索、视觉、媒体缓存
 │  ├─ http/               # HTTP 基础设施 + 按领域拆分的路由
-│  └─ infra/              # 配置、日志、功能开关、配置热更新
+│  └─ infra/              # 配置、日志、功能开关、配置热更新、配置校验
 ├─ bridge/                # Python 微信桥接（`python -m bridge`）
 ├─ examples/              # 兼容入口与媒体兜底模块
 ├─ scripts/               # 运维脚本（版本号、发布、部署、桥接守护）
@@ -102,6 +103,21 @@ python examples\wechatauto_bridge.py
 `bridge/engine.py` 内部的 `main()` 仍是大型闭包，后续拆分计划写在 `bridge/README.md`。
 所有运维脚本、`.bat`、文档里的旧命令都仍然有效。
 
+### 发送通道（3.56 起）
+
+```
+send_text()
+  ├─ 0. bg_sender.py      零焦点：伪焦点 + GBK 字节 WM_CHAR + PostMessage 点发送
+  ├─ 1. uia_send()        wechatauto 的 UIA 驱动
+  ├─ 2. keyboard_send()   Ctrl+F 搜会话 + 剪贴板 + 回车
+  └─ 3. OCR              截图找发送按钮
+```
+
+- 0 是新增的**真正的后台通道**，见 `examples/wechat_bg.py`、`docs/微信消息后台发送.md`；
+  它可以独立单测（`scripts/bg-selftest.py`）和实机自检（`python -m bridge --bg-probe`）。
+- 0 不依赖 `WeChatGUI`，所以首次发送不会触发「初始化窗口驱动（抢 5~10 秒焦点）」。
+- 1~3 是原有链路，只在 0 失败时使用。
+
 ## 四、常用命令
 
 ```bash
@@ -114,3 +130,43 @@ node --test               # 全部测试
 
 只有一处：旧 `server.js` 里 `/api/vision`、`/api/share`、`/api/digest`、`GET /api/persona`
 各有重复注册的死代码，新路由表每个路径只保留一份，行为一致。
+
+## 六、分层与校验（3.57 起）
+
+规则写在 `scripts/check-layers.js`，`node --test` 里也会跑：
+
+| 层 | 不允许依赖 |
+| --- | --- |
+| `core` | adapters / services / http / pipeline / memory / llm / persona |
+| `adapters` | pipeline / services / http |
+| `memory` | pipeline / services / http / adapters |
+| `llm` | pipeline / services / http / adapters |
+| `persona` | pipeline / services / http |
+| `pipeline` | http |
+| `services` | `http/router`、`http/security`、`http/static`、`http/util`（协议工具走 `http/protocol`） |
+
+例外只写了一条：`core → infra/features`（只是读配置里的布尔值，没有 IO）。
+
+**配置校验**：`src/infra/configSchema.js`。启动时警告、调试台保存时整批拒绝。
+
+**记忆落盘**：`data/store.json` 是快照，`data/store.json.journal` 是增量；
+`readStoreFile()` 负责合并，备份/导出/重载都用它。对外格式没变。
+
+**还没拆完的**：`pipeline/chat.js::decide()` 仍有约 450 行（触发判定、引用、拼 prompt）。
+下一步按 `stages/` 的方式继续一批一批搬，每批跑一次全量测试。
+
+## 七、桥接的消息调度（3.57 起）
+
+```
+Listener（DB 轮询 0.4s）          收
+    ▼ on_message
+MessagePipeline                    判：按会话串行、跨会话并发
+    ▼ on_message_inner（图片/OCR/webhook）
+send_text()                        发：send_lock 串行
+```
+
+- `bridge/msg_pipeline.py` 不依赖 wechatauto，能单独自检
+- `wechat.pipelineWorkers`（默认 4）/ `pipelineQueueLimit`（默认 4）
+- `WHALE_PIPELINE_WORKERS=1` 退回旧的全串行
+
+
