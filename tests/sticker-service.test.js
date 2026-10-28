@@ -32,7 +32,7 @@ test('上传按情绪归档，保留 GIF 原始字节且同名不覆盖', (t) =>
   assert.deepEqual(fs.readFileSync(path.join(root, 'data/stickers/开心', one.name)), GIF);
   assert.equal(upload(cfg, root)[0].name, one.name, '重复上传应幂等');
   assert.equal(stickers.categoryImages(stickers.stickerDir(cfg, root), 'angry').length, 0);
-  assert.equal(stickers.imagesFor(stickers.stickerDir(cfg, root), 'angry').length, 1, '该类没图时用库里其它图兜底（保证发得出去）');
+  assert.equal(stickers.imagesFor(stickers.stickerDir(cfg, root), 'angry').length, 0, '不能拿别的情绪的图冒充');
 });
 
 test('上传拒绝伪装/超限/路径穿越/未知情绪；无有效批次不落盘', (t) => {
@@ -57,7 +57,7 @@ test('分类统计不把通用算到每类，选择不跨其他情绪，普通�
   upload(cfg, root, 'angry');
   const dir = stickers.stickerDir(cfg, root);
   assert.equal(stickers.categoryImages(dir, 'happy').length, 0, '分类计数必须是精确的');
-  assert.equal(stickers.imagesFor(dir, 'happy').length, 1, '该类没图时用库里其它图兜底，保证发得出去');
+  assert.equal(stickers.imagesFor(dir, 'happy').length, 0, '该类没图也不拿别的情绪顶替');
   fs.mkdirSync(path.join(dir, '通用'));
   fs.writeFileSync(path.join(dir, '通用/g.gif'), GIF);
   assert.equal(stickers.imagesFor(dir, 'happy').length, 1);
@@ -241,6 +241,20 @@ test('目录链接不能把上传和挑图重定向到表情包库外', (t) => {
   assert.throws(() => upload(cfg, root));
   fs.writeFileSync(path.join(outside, 'x.gif'), GIF);
   assert.deepEqual(stickers.categoryImages(dir, 'happy'), []);
+});
+
+test('HTTP：缩略图只回传表情包目录里的真图，越界/未知情绪一律 404', async (t) => {
+  const { inst, request, toggle } = await live(t);
+  await toggle(true);
+  const up = await request('/api/stickers/upload', { emotion: 'happy', files: [{ name: 'a.gif', data: GIF.toString('base64') }] });
+  const name = up.body.uploaded[0].name;
+  const ok = await fetch(`${inst.url}/api/stickers/image?emotion=happy&name=${encodeURIComponent(name)}`);
+  assert.equal(ok.status, 200);
+  assert.equal(ok.headers.get('content-type'), 'image/gif');
+  for (const query of ['emotion=happy&name=../config.json', 'emotion=../x&name=a.gif', 'emotion=happy&name=', 'emotion=nope&name=a.gif']) {
+    const r = await fetch(`${inst.url}/api/stickers/image?${query}`);
+    assert.equal(r.status, 404, query);
+  }
 });
 
 test('桥接：mock-only Python安全行为测试', (t) => {

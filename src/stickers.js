@@ -67,10 +67,11 @@ function categoryImages(dir, emotion) {
 function imagesFor(dir, emotion) {
   const category = categoryImages(dir, emotion);
   if (category.length) return category;
-  const generic = listImages(path.join(dir, GENERIC), { root: dir });
-  if (generic.length) return generic;
-  // 这一类还没放图时，用库里其它图兜底：只要开关开着就能发出表情包，
-  // 而不是「明明传了图却一张也发不出去」。分类计数仍然是精确的。
+  // 这一类没图就用「通用」；绝不拿别的情绪的图冒充（否则开心会发成炸毛）。
+  return listImages(path.join(dir, GENERIC), { root: dir });
+}
+
+function anyImages(dir) {
   return listImages(dir);
 }
 function isOn(config) { return features.isOn(config, 'stickers'); }
@@ -98,7 +99,10 @@ function pick({ config, root, key = '', text = '', request = '', recent = [], rn
   const emotion = detectEmotion(String(text || request));
   const want = /(发|来|甩|扔|给|丢)(个|一个|张)?\s*(表情包?|动图|贴纸)/.test(String(request || ''));
   if (!want && !(rng() < chanceFor(config, emotion))) return null;
-  const file = choose(imagesFor(stickerDir(config, root), emotion), rng, recent);
+  const dir = stickerDir(config, root);
+  let file = choose(imagesFor(dir, emotion), rng, recent);
+  // 对方明确要表情时，什么图都行；普通概率发送只发这一情绪的图。
+  if (!file && want) file = choose(anyImages(dir), rng, recent);
   return file ? { emotion, path: file } : null;
 }
 
@@ -158,5 +162,5 @@ function upload(config, root, emotion, files) {
   return uploaded;
 }
 module.exports = { EMOTIONS, EMOTION_LABELS, GENERIC, EXTS, MAX_FILE_BYTES, MAX_UPLOAD_FILES,
-  hasEmotion, stickerDir, regularFile, listImages, categoryImages, imagesFor, isOn,
+  hasEmotion, stickerDir, regularFile, listImages, categoryImages, imagesFor, anyImages, isOn,
   detectEmotion, chanceFor, choose, pick, imageType, upload };
