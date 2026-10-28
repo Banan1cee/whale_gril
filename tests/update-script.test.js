@@ -138,3 +138,8 @@ test('所有 API 都挂了，从镜像页面抠版本号兜底', () => {
   assert.match(ps1, /function Get-LatestTagFromMirror/);
   assert.match(ps1, /releases\/tag\//);
 });
+test('版本号只要和 latest 不同就更新，不比较大小', () => {
+  const ps1 = readPs1();
+  assert.match(ps1, /if \(\$cmp -eq 0 -and -not \$Force\)/);
+  assert.ok(!/if \(\$cmp -le 0/.test(ps1), '不要再按大小跳过');
+});
