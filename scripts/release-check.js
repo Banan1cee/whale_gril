@@ -90,12 +90,14 @@ if (release) {
 try {
   const pkg = JSON.parse(read('package.json'));
   const cl = read('CHANGELOG.md');
-  const m = cl.match(/^##\s*([0-9]+\.[0-9]+\.[0-9]+)/m);
+  const m = cl.match(/^##\s*([0-9]+\.[0-9]+(?:\.[0-9]+)?)/m);
   check('package.json 版本 = CHANGELOG 最新条目', Boolean(m) && m[1] === pkg.version,
     `package=${pkg.version} changelog=${m ? m[1] : '没找到'}`);
 
   // 6) 一个改动 = 一个版本号：不允许重复版本 / 跳号 / 空条目
-  const heads = [...cl.matchAll(/^##\s*([0-9]+)\.([0-9]+)\.([0-9]+)\s*$/gm)].map((x) => ({ raw: x[1] + '.' + x[2] + '.' + x[3], maj: Number(x[1]), min: Number(x[2]), pat: Number(x[3]), at: x.index }));
+  const heads = [...cl.matchAll(/^##\s*([0-9]+)\.([0-9]+)(?:\.([0-9]+))?\s*$/gm)].map((x) => ({
+    raw: x[1] + '.' + x[2] + (x[3] === undefined ? '' : '.' + x[3]),
+    maj: Number(x[1]), min: Number(x[2]), pat: x[3] === undefined ? 0 : Number(x[3]), at: x.index }));
   const seen = new Map();
   const dupes = [];
   for (const h of heads) {
