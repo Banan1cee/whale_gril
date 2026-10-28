@@ -1,0 +1,192 @@
+{
+  "_说明": "鲸鲸的全部设置都在这里。改完直接存盘就生效（服务在跑会自动重新加载，不用重启）。data/ 和 config.json 都不会进 git。网页「⚙️ 设置」里的东西存在 data/settings.json，优先级比这个文件高。",
+  "_模型服务": "provider 可选 deepseek / zhipu / siliconflow / qwen / tju / ollama / custom；本地地址（127.0.0.1、192.168.*）可以免 Key",
+  "provider": "deepseek",
+  "server": {
+    "_说明": "网页聊天服务的地址；openBrowser = 启动时自动开浏览器",
+    "host": "127.0.0.1",
+    "port": 8787,
+    "openBrowser": true
+  },
+  "deepseek": {
+    "_说明": "老版本的模型配置，现在一般不用改这里——Key 建议在网页「设置」里填（存 data/settings.json）。这里留空也行",
+    "provider": "deepseek",
+    "apiKey": "",
+    "baseUrl": "https://api.deepseek.com",
+    "model": "deepseek-chat",
+    "temperature": 0.95,
+    "maxTokens": 700,
+    "timeoutMs": 45000,
+    "frequencyPenalty": 0,
+    "presencePenalty": 0
+  },
+  "persona": {
+    "_说明": "人设。这些是「出厂设定」，被叫出来的语气/口癖会在 data/persona.json 里慢慢演化，网页「人设」页可以微调",
+    "name": "鲸鲸",
+    "age": 23,
+    "job": "自由职业",
+    "appearance": "深蓝色长卷发，头发上别着一枚鲸尾发夹，常穿深蓝色水手领裙子，怀里或包里总有一只软乎乎的蓝鲸玩偶（你叫它小蓝鲸）。",
+    "personality": "温柔但有点小倔，嘴硬心软，慢热；熟了话很多，会害羞、会怼人、会犯懒、偶尔 emo。",
+    "background": "因为头像和玩偶全是鲸鱼，朋友开玩笑叫你「鲸鱼娘」，你也就认了。",
+    "aliases": [
+      "鲸鲸",
+      "小鲸娘",
+      "鲸娘",
+      "深鲸娘",
+      "鲸鱼娘",
+      "小鲸"
+    ],
+    "ownerName": "主人",
+    "master": {
+      "_说明": "主人名单：names 填微信昵称，wxids 填 wxid_xxx —— 微信内部 id，不是你设置的微信号。微信里只认 wxid；wxids 全空时才退回按昵称认。谁填谁就是主人，留空则没有主人。不知道自己的 wxid 就开调试台 /debug 看「最近说过话的人」",
+      "names": [],
+      "wxids": []
+    },
+    "masterRoast": false
+  },
+  "chat": {
+    "_说明": "回复长度与上下文：privateMaxChars 私聊每条最多几个字，groupMaxChars 群聊每条，maxBubbles 一次最多连发几条，historyTurns 带多少轮历史",
+    "privateMaxChars": 140,
+    "groupMaxChars": 70,
+    "maxBubbles": 2,
+    "historyTurns": 200,
+    "groupHistoryTurns": 150,
+    "discussionMaxChars": 600,
+    "emojiChance": 0
+  },
+  "group": {
+    "_说明": "群聊行为：requireAt=只有 @ 她/叫她名字才回；freeChat=允许她偶尔主动接话（概率 freeChatChance）；cooldownSec 两次回复最少隔几秒；silentMinutes 冷场多久算这个话题结束；engagedMinutes 接话后保持参与多少分钟；muteDefaultMinutes 免打扰默认时长",
+    "requireAt": true,
+    "freeChat": false,
+    "freeChatChance": 0.06,
+    "cooldownSec": 0,
+    "masterAlwaysReply": true,
+    "engagedMinutes": 6,
+    "silentMinutes": 10,
+    "maxRepliesPerHour": 1000,
+    "muteDefaultMinutes": 30
+  },
+  "memory": {
+    "_说明": "记忆规模：最多记几个会话、每个会话多少条消息、每人多少条笔记",
+    "maxSessions": 200,
+    "maxMessages": 400,
+    "maxNotesPerUser": 6
+  },
+  "admin": {
+    "_说明": "魔咒：spell 填一段口令，主人私聊或群里发了它就能临时获得管理员权限；allowAll=true 时谁发都行；留空则关闭",
+    "spell": "",
+    "minutes": 30,
+    "allowAll": false
+  },
+  "share": {
+    "_说明": "主动分享：每隔 everyMinutes 分钟从 sources 里挑一条视频发过来（目前支持 bilibili）",
+    "enabled": true,
+    "everyMinutes": 120,
+    "sources": [
+      "bilibili"
+    ]
+  },
+  "care": {
+    "_说明": "主动找话题（她没事时自己来一句「在干啥」）。默认只找主人，不进群、不找别人： enabled=总开关；onlyMaster=只找主人；allowGroups=允许群聊；allowOthers=允许主动私聊别人。",
+    "enabled": true,
+    "windows": [
+      "09:00-12:00",
+      "14:00-23:00"
+    ],
+    "everyMinutes": 90,
+    "jitterMinutes": 25,
+    "maxPerDay": 6,
+    "quietAfterMinutes": 20,
+    "allowGroups": false,
+    "onlyMaster": true,
+    "allowOthers": false
+  },
+  "wechat": {
+    "_说明": "微信桥接（examples/wechatauto_bridge.py）的参数。桥接是独立进程，backgroundSend=不抢前台直接发送（默认 true，实测微信最小化/被遮挡也能发，电脑可照常用；设 false 则每次先把微信拉到前台）。改完这里要重启「启动微信桥接.bat」才生效。account=固定用哪个微信号（微信双开/多账号时一定要选，填账号目录名 / wxid / 昵称都行；留空=自动选「最近活跃」，可能选到另一个号）——一般不用手填，在网页「设置 → 微信账号」里点一下就行；accountGuard=认不出哪个窗口是所选账号时宁可不发（默认 true）；windowHwnd=手动钉微信主窗句柄（调试用，0=自动）；staleAfterSec=多久没新消息就当她去忙了；gameWhitelist=检测到这些游戏进程就先不打扰；ignoreSenders=这些会话永不回复；quoteReply=是否引用原消息回复；digestMinutes=离开回来后把错过的消息合并成一条摘要；dbDir=微信文件保存位置（留空会自动找：先看正在运行的微信打开了哪些文件，再扫各个盘根目录；找不到时把微信「设置→文件管理」里的路径填这里）",
+    "dbDir": "",
+    "account": "",
+    "accountGuard": true,
+    "windowHwnd": 0,
+    "staleAfterSec": 120,
+    "gameWhitelist": [
+      "valorant"
+    ],
+    "awayNotice": false,
+    "returnNotice": false,
+    "queuedMaxAgeSec": 300,
+    "queuedMaxChats": 2,
+    "digestMinutes": 30,
+    "quoteReply": false,
+    "keyboardFallback": true,
+    "backgroundSend": true,
+    "lowBatteryPercent": 5,
+    "ignoreSenders": [
+      "微信团队",
+      "微信支付",
+      "服务通知",
+      "订阅号消息",
+      "文件传输助手",
+      "微信运动"
+    ],
+    "goodnightText": "晚安，电量快没了，我先睡啦，明天见～"
+  },
+  "gateway": {
+    "_说明": "给自建中转服务用的 webhook 配置（方案B）。本地桥接不需要 outboundUrl，回复直接写在 HTTP 响应里；inboundToken 必须和桥接脚本读到的一致，否则 401",
+    "wechat": {
+      "enabled": true,
+      "inboundToken": "change-me-wechat",
+      "outboundUrl": "",
+      "outboundHeaders": {}
+    },
+    "douyin": {
+      "enabled": false,
+      "inboundToken": "change-me-douyin",
+      "outboundUrl": "",
+      "outboundHeaders": {}
+    }
+  },
+  "websearch": {
+    "_说明": "问天气/新闻等实时问题时联网现搜。city 填你所在的城市（比如「上海」），问她天气时才准；留空就按她收到的原话搜（可能搜到别的城市）。enabled=false 关闭所有联网",
+    "enabled": true,
+    "city": "",
+    "timeoutMs": 8000
+  },
+  "links": {
+    "_说明": "别人发链接时要不要读标题/摘要/正文（视频只读得到文案）",
+    "enabled": true,
+    "timeoutMs": 6000,
+    "cacheMinutes": 60
+  },
+  "log": {
+    "_说明": "日志级别：debug / info / warn / error，日志在 data/whale.log",
+    "level": "info"
+  },
+  "vision": {
+    "_说明": "图片理解（看图说话）。默认智谱 GLM-4V-Flash，免费额度就够用；apiKey 留空则用 data/settings.json 里的 Key",
+    "apiKey": "",
+    "baseUrl": "https://open.bigmodel.cn/api/paas/v4",
+    "model": "glm-4v-flash",
+    "timeoutMs": 30000
+  },
+  "voice": {
+    "_说明": "语音消息转文字。默认阿里云百炼 qwen3-asr-flash；apiKey 留空则用 data/settings.json 里的 Key。maxSeconds=超过多少秒的语音不转",
+    "enabled": true,
+    "apiKey": "",
+    "baseUrl": "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
+    "model": "qwen3-asr-flash",
+    "timeoutMs": 90000,
+    "maxSeconds": 120
+  },
+  "storage": {
+    "_说明": "媒体缓存（微信图片/表情包/语音 wav）清理策略：启动时按天数+总量清一次",
+    "mediaKeepDays": 7,
+    "mediaMaxMB": 500
+  },
+  "features": {
+    "_说明": "功能开关。关掉 = 回到旧行为，也可以直接在调试台「功能开关」卡片里勾。",
+    "groupAddressGuard": true,
+    "fightQuoteCheck": true,
+    "mediaCleanup": true,
+    "memorySnapshot": true
+  }
+}

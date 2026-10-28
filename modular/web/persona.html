@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>鲸鲸调教台</title>
+<style>
+  :root { --bg:#04121f; --card:rgba(10,36,58,.9); --line:rgba(120,210,255,.18); --text:#e6f8ff; --dim:#a9cfe4; --cyan:#57d6ff; --ok:#7ff0c0; --bad:#ffb3c0; }
+  * { box-sizing:border-box; }
+  body { margin:0; padding:20px; font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif; color:var(--text);
+    background: radial-gradient(1200px 700px at 10% -10%, #0d3f63, transparent 60%), linear-gradient(180deg,#041625,#02101d); min-height:100dvh; }
+  header { display:flex; align-items:center; gap:12px; flex-wrap:wrap; max-width:1000px; margin:0 auto 16px; }
+  header h1 { margin:0; font-size:20px; }
+  header small { color:var(--dim); font-size:12px; }
+  header .spacer { flex:1; }
+  a { color:var(--cyan); }
+  main { max-width:1000px; margin:0 auto; display:flex; flex-direction:column; gap:14px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:16px 18px; }
+  .card h2 { margin:0 0 12px; font-size:15px; color:var(--cyan); font-weight:600; }
+  .grid2 { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:12px; }
+  label { display:flex; flex-direction:column; gap:6px; font-size:13px; color:var(--dim); }
+  input[type=text], input[type=number], select, textarea { font-family:inherit; font-size:13.5px; color:var(--text); background:rgba(2,14,26,.75); border:1px solid var(--line); border-radius:10px; padding:9px 11px; outline:none; }
+  textarea { min-height:76px; resize:vertical; line-height:1.6; }
+  input:focus, select:focus, textarea:focus { border-color:rgba(87,214,255,.55); }
+  .row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .row label.chk { flex-direction:row; align-items:center; gap:8px; color:var(--text); font-size:13.5px; }
+  input[type=checkbox] { width:16px; height:16px; accent-color:#57d6ff; }
+  .hint { color:var(--dim); font-size:12px; line-height:1.6; margin:2px 0 0; }
+  button { font-family:inherit; font-size:13.5px; color:var(--text); background:rgba(87,214,255,.14); border:1px solid var(--line); border-radius:10px; padding:10px 16px; cursor:pointer; }
+  button:hover { background:rgba(87,214,255,.24); }
+  button.primary { background:rgba(87,214,255,.32); border-color:rgba(87,214,255,.5); }
+  button.danger { color:var(--bad); border-color:rgba(255,179,192,.35); background:rgba(255,120,140,.12); }
+  .actions { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+  #toast { position:fixed; left:50%; bottom:28px; transform:translateX(-50%) translateY(10px); background:rgba(10,40,64,.96); border:1px solid var(--line); border-radius:12px; padding:10px 18px; font-size:13.5px; opacity:0; transition:.25s; pointer-events:none; }
+  #toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
+  input[type=range] { width:100%; accent-color:#57d6ff; }
+  .val { color:var(--cyan); font-variant-numeric:tabular-nums; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🧠 鲸鲸调教台</h1>
+  <small>改完点保存，立刻生效、重启也保留</small>
+  <span class="spacer"></span>
+  <a href="/">← 回聊天</a>
+  <a href="/debug">调试台</a>
+</header>
+
+<main>
+  <div class="card">
+    <h2>基本设定（她是谁）</h2>
+    <div class="grid2">
+      <label>名字 <input type="text" id="name" maxlength="40" /></label>
+      <label>年龄 <input type="number" id="age" min="1" max="120" /></label>
+      <label>职业 / 身份 <input type="text" id="job" maxlength="80" /></label>
+    </div>
+    <label style="margin-top:12px">外形 <textarea id="appearance" maxlength="400"></textarea></label>
+    <label style="margin-top:12px">性格 <textarea id="personality" maxlength="500"></textarea></label>
+    <label style="margin-top:12px">背景 / 来历 <textarea id="background" maxlength="500"></textarea></label>
+    <p class="hint">这里写什么，她就照着演什么；改完保存后下一条消息就生效。</p>
+  </div>
+
+  <div class="card">
+    <h2>说话方式</h2>
+    <div class="grid2">
+      <label>整体语气
+        <select id="preset">
+          <option value="">正常（默认）</option>
+          <option value="温柔">温柔</option>
+          <option value="活泼">活泼</option>
+          <option value="可爱">可爱</option>
+          <option value="高冷">高冷</option>
+          <option value="毒舌">毒舌</option>
+          <option value="正经">正经</option>`r`n          <option value="抽象">抽象</option>
+        </select>
+      </label>
+      <label>颜文字 / emoji 用量
+        <select id="emoji">
+          <option value="关">完全不用</option>
+          <option value="少">很少</option>
+          <option value="正常">正常</option>
+          <option value="多">多用一点</option>
+        </select>
+      </label>
+      <label>私聊回复上限（字） <input type="number" id="privateMaxChars" min="40" max="800" /></label>
+      <label>群聊回复上限（字） <input type="number" id="groupMaxChars" min="20" max="300" /></label>
+    </div>
+    <label style="margin-top:12px">自由描述（优先级最高）<textarea id="text" maxlength="300" placeholder="例如：回复别超过两句，别用省略号，说话直一点"></textarea></label>
+    <label style="margin-top:12px">自定义提示词（替换角色设定，群聊指代和准确回答规则始终保留）<textarea id="customPrompt" maxlength="6000" style="min-height:160px" placeholder="粘贴完整提示词，比如文档里的那套；留空 = 用上面那些控件拼出来的人设"></textarea></label>
+    <p class="hint" id="customNotice"></p>
+    <div class="row" style="margin-top:6px">
+      <button type="button" class="btn" id="clearCustom">清空自定义提示词（改回用上面的控件）</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>人设预设</h2>
+    <p class="hint">包里自带几版通用人设，一个版本一个文件（personas/persona-v1.json…）。导入只改人设，不动模型、Key 和记忆。</p>
+    <div class="row">
+      <select id="presetPick" style="flex:1;padding:8px;border-radius:8px;border:1px solid #cfd8e3"></select>
+      <button type="button" class="btn" id="presetApply">导入</button>
+    </div>
+    <p class="hint" id="presetMsg"></p>
+  </div>
+
+  <div class="card">
+    <h2>上下文 / 记忆长度</h2>
+    <label>私聊上下文：<span class="val" id="htVal">200</span> 条
+      <input type="range" id="historyTurns" min="4" max="400" step="2" />
+    </label>
+    <label style="margin-top:12px">群聊上下文：<span class="val" id="ghtVal">150</span> 条
+      <input type="range" id="groupHistoryTurns" min="2" max="300" step="2" />
+    </label>
+    <p class="hint">这里按消息条数计算，不是问答轮数；条数越多，耗时和模型费用越高。默认私聊 200、群聊 150，上限 400 / 300。</p>
+  </div>
+
+  <div class="card">
+    <h2>人味 / 能力开关</h2>
+    <div class="row">
+      <label class="chk"><input type="checkbox" id="emotions" /> 有情绪（会开心、委屈、犯困）</label>
+      <label class="chk"><input type="checkbox" id="proactive" /> 会主动关心 / 找话题</label>
+      <label class="chk"><input type="checkbox" id="opinions" /> 有自己的观点（敢不同意你）</label>
+      <label class="chk"><input type="checkbox" id="links" /> 会读链接</label>
+      <label class="chk"><input type="checkbox" id="freeChat" /> 群聊会主动接话</label>
+    </div>
+    <label style="margin-top:12px">禁言的群（用顿号或逗号分隔，留空=都不禁言）
+      <input type="text" id="mutedGroups" placeholder="例如：鼠标、某个群" />
+    </label>
+  </div>
+
+  <div class="card">
+    <h2>模型</h2>
+    <div class="row">
+      <input type="text" id="model" style="min-width:280px" title="模型名" />
+      <span class="hint" id="modelHint">当前服务：-</span>
+    </div>
+    <p class="hint">常用：deepseek-chat（快）、deepseek-reasoner（更聪明但慢）。改完保存即切换。</p>
+  </div>
+
+  <div class="card">
+    <div class="actions">
+      <button class="primary" id="btnSave">保存</button>
+      <button class="danger" id="btnReset">恢复默认</button>
+      <span class="hint" id="saveHint"></span>
+    </div>
+  </div>
+</main>
+
+<div id="toast"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s == null ? '' : s);
+
+function toast(msg) {
+  const t = $('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => t.classList.remove('show'), 2200);
+}
+
+function fill(p, llm) {
+  $('name').value = esc(p.name || '');
+  $('age').value = p.age || 23;
+  $('job').value = esc(p.job || '');
+  $('appearance').value = esc(p.appearance || '');
+  $('personality').value = esc(p.personality || '');
+  $('background').value = esc(p.background || '');
+  // 预设里的 preset 可能是下拉里没有的值（比如「正常」），动态补一个进去，
+  // 否则 select 会静默变成空值，看着像「没设置」。
+  const presetSel = $('preset');
+  if (p.preset && ![...presetSel.options].some((o) => o.value === p.preset)) {
+    const opt = document.createElement('option');
+    opt.value = p.preset;
+    opt.textContent = p.preset;
+    presetSel.appendChild(opt);
+  }
+  presetSel.value = p.preset || '';
+  $('emoji').value = p.emoji || '正常';
+  $('privateMaxChars').value = p.privateMaxChars || 140;
+  $('groupMaxChars').value = p.groupMaxChars || 70;
+  $('text').value = esc(p.text || '');
+  // 自定义提示词必须回填：以前这里漏了，导入预设后框里还是空的，
+  // 用户根本看不出预设生效了没有。
+  $('customPrompt').value = p.customPrompt || '';
+  updateCustomNotice();
+  $('historyTurns').value = p.historyTurns || 200;
+  $('groupHistoryTurns').value = p.groupHistoryTurns || 150;
+  $('htVal').textContent = p.historyTurns || 200;
+  $('ghtVal').textContent = p.groupHistoryTurns || 150;
+  $('emotions').checked = p.emotions !== false;
+  $('proactive').checked = p.proactive !== false;
+  $('opinions').checked = p.opinions !== false;
+  $('links').checked = p.links !== false;
+  $('freeChat').checked = Boolean(p.freeChat);
+  $('mutedGroups').value = (p.mutedGroups || []).join('、');
+  if (llm) {
+    $('model').value = llm.model || '';
+    $('modelHint').textContent = '当前服务：' + (llm.providerLabel || llm.provider || '-');
+  }
+}
+
+/** 自定义提示词一旦有内容，下面那些控件就不再参与生成人设 —— 必须让人看见 */
+function updateCustomNotice() {
+  const n = $('customPrompt').value.trim().length;
+  const el = $('customNotice');
+  if (n > 0) {
+    el.textContent = `⚠ 自定义提示词生效中（${n} 字）：上面的性格 / 外貌 / 整体语气 / 自由描述都不会被使用。`
+      + '要改回用控件调，先点下面的「清空自定义提示词」。';
+    el.style.color = '#c2410c';
+  } else {
+    el.textContent = '留空 = 用上面的名字 / 性格 / 外貌 / 语气等控件拼人设。';
+    el.style.color = '';
+  }
+}
+
+
+async function load() {
+  const r = await fetch('/api/persona');
+  const d = await r.json();
+  if (d.ok) {
+    fill(d.persona, d.llm);
+    showSourcePreset(d.persona);
+  }
+}
+
+/** 直接告诉用户「现在生效的是哪版人设」，否则调完只能靠猜 */
+function showSourcePreset(p) {
+  const el = $('presetMsg');
+  const src = (p && p.sourcePreset) || '';
+  const chars = String((p && p.customPrompt) || '').trim().length;
+  el.textContent = src
+    ? `当前生效：${src}${chars ? `（自定义提示词 ${chars} 字）` : ''}`
+    : (chars ? `当前生效：自定义提示词（${chars} 字，不是从预设导入的）` : '当前生效：用下面的控件拼的人设');
+}
+
+async function save() {
+  const body = {
+    name: $('name').value,
+    age: Number($('age').value),
+    job: $('job').value,
+    appearance: $('appearance').value,
+    personality: $('personality').value,
+    background: $('background').value,
+    preset: $('preset').value,
+    emoji: $('emoji').value,
+    text: $('text').value,
+    // 以前漏了这一项：在「自定义提示词」里写什么，点保存都被静默丢弃
+    customPrompt: $('customPrompt').value,
+    privateMaxChars: Number($('privateMaxChars').value),
+    groupMaxChars: Number($('groupMaxChars').value),
+    historyTurns: Number($('historyTurns').value),
+    groupHistoryTurns: Number($('groupHistoryTurns').value),
+    emotions: $('emotions').checked,
+    proactive: $('proactive').checked,
+    opinions: $('opinions').checked,
+    links: $('links').checked,
+    freeChat: $('freeChat').checked,
+    mutedGroups: $('mutedGroups').value.split(/[、,，\s]+/).map((x) => x.trim()).filter(Boolean),
+    model: $('model').value.trim(),
+  };
+  $('saveHint').textContent = '保存中…';
+  const r = await fetch('/api/persona', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const d = await r.json();
+  if (d.ok) {
+    fill(d.persona, d.llm);
+    showSourcePreset(d.persona);
+    $('saveHint').textContent = '已保存 · ' + new Date().toLocaleTimeString('zh-CN', { hour12: false });
+    toast('已保存，立即生效');
+  } else {
+    $('saveHint').textContent = '保存失败：' + (d.error || '未知错误');
+    toast('保存失败');
+  }
+}
+
+$('historyTurns').addEventListener('input', (e) => { $('htVal').textContent = e.target.value; });
+$('groupHistoryTurns').addEventListener('input', (e) => { $('ghtVal').textContent = e.target.value; });
+$('customPrompt').addEventListener('input', updateCustomNotice);
+$('btnSave').addEventListener('click', save);
+
+// 清空自定义提示词并立刻保存，这样「改回用控件调」真的会生效
+$('clearCustom').addEventListener('click', async () => {
+  if (!$('customPrompt').value.trim()) {
+    toast('现在没有自定义提示词');
+    return;
+  }
+  if (!confirm('清空自定义提示词，改回用上面的控件拼人设？清空后立刻生效。')) return;
+  $('customPrompt').value = '';
+  updateCustomNotice();
+  await save();
+});
+
+async function loadPresets() {
+  try {
+    const r = await fetch('/api/persona/presets');
+    const d = await r.json();
+    const sel = $('presetPick');
+    sel.innerHTML = '';
+    if (!d.ok || !d.presets.length) {
+      sel.innerHTML = '<option value="">personas/ 里还没有预设</option>';
+      return;
+    }
+    for (const it of d.presets) {
+      const opt = document.createElement('option');
+      opt.value = it.id;
+      opt.textContent = `${it.id}${it.version ? ' (v' + it.version + ')' : ''}${it.name ? ' · ' + it.name : ''}`;
+      sel.appendChild(opt);
+    }
+  } catch {
+    $('presetMsg').textContent = '预设列表读取失败';
+  }
+}
+
+$('presetApply').addEventListener('click', async () => {
+  const id = $('presetPick').value;
+  if (!id) return;
+  if (!confirm('导入这个预设会覆盖当前人设和上下文设置，继续？')) return;
+  $('presetMsg').textContent = '导入中…';
+  const r = await fetch('/api/persona/preset', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) });
+  const d = await r.json();
+  if (d.ok) {
+    fill(d.persona, d.llm);
+    showSourcePreset(d.persona);
+    $('presetMsg').textContent = `已导入 ${d.applied.id}${d.applied.version ? ' v' + d.applied.version : ''}`;
+    toast('人设已导入');
+  } else {
+    $('presetMsg').textContent = '导入失败：' + (d.error || '未知错误');
+  }
+});
+
+loadPresets();
+$('btnReset').addEventListener('click', async () => {
+  if (!confirm('恢复默认？所有自定义（性格、语态、上下文、开关）都会清空。')) return;
+  const r = await fetch('/api/persona', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reset: true }) });
+  const d = await r.json();
+  if (d.ok) { fill(d.persona, d.llm); toast('已恢复默认'); }
+});
+
+load();
+</script>
+</body>
+</html>
