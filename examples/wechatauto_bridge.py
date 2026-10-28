@@ -2496,6 +2496,10 @@ def main():
                         log("重新激活后仍失败：", repr(e))
                 log("UIA 发不出去，跳过 OCR 兜底：", chat_display_name)
             else:
+                log_throttled("uia-unavailable",
+                              "UIA 不可用：先试键盘通道；如果一直这样，双击「一键诊断UIA.bat」看原因"
+                              "（常见：微信需要重新登录、鲸鱼娘不是管理员而微信是、微信缩在托盘）",
+                              ttl=600)
                 log("UIA 不可用，走 OCR 兜底")
             # ①.5 键盘兜底：完全不碰 accessibility（Ctrl+F 搜索会话 → 粘贴 → 回车），
             #      并用数据库回读确认。OCR 这条路会卡在截屏，所以先试它。
@@ -2527,9 +2531,10 @@ def main():
 
                     _th = threading.Thread(target=_ocr_send, daemon=True)
                     _th.start()
-                    _th.join(25)
+                    # 8 秒足够 OCR 定位；等太久只会让用户看到「发了没反应」
+                    _th.join(8)
                     if _th.is_alive():
-                        log("OCR 兜底 25 秒没返回（卡在截屏），放弃这条，等下次消息")
+                        log("OCR 兜底 8 秒没返回（卡在截屏），放弃这条，等下次消息")
                         resp = False
                     else:
                         if "e" in _box:

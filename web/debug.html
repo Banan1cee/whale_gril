@@ -78,7 +78,7 @@
   .sticker-drop.dragging { border-style:solid; border-color:var(--ok); background:rgba(127,240,192,.13); }
   .sticker-drop[aria-busy="true"] { opacity:.65; cursor:wait; }
   .sticker-drop h4 { margin:0; font-size:18px; color:var(--text); }
-  .sticker-drop .sticker-icon { font-size:30px; }
+  .sticker-drop .sticker-icon { font-size:30px; display:flex; align-items:center; justify-content:center; color:var(--accent, #7dd3fc); height:28px; }
   .sticker-drop .sticker-note { min-height:32px; overflow-wrap:anywhere; }
   .sticker-drop .sticker-files { max-width:100%; font-size:11px; color:var(--dim); overflow-wrap:anywhere; }
   #stkLocation { overflow-wrap:anywhere; }
@@ -97,6 +97,7 @@
 <header>
   <h1>🧪 鲸鲸调试台</h1>
   <small>本机可见 · 设置会保存到本机，点保存就生效（桥接设置 5 秒内自动重读，不用重启）</small>
+  <small id="appVersion" title="出问题先看这里：不是最新版就先升级">版本读取中…</small>
   <span class="spacer"></span>
   <a href="/">← 回聊天</a>
   <a href="/persona">人设调教</a>
@@ -521,6 +522,20 @@ function wireForm() {
 
 
 const STICKER_EMOTIONS = [['happy', '开心'], ['angry', '炸毛'], ['cute', '撒娇'], ['meh', '嫌弃'], ['bored', '敷衍']];
+// 让用户一眼看到自己跑的是哪一版：旧版本的 bug 不用再排查
+async function showAppVersion() {
+  const el = $('appVersion');
+  if (!el) return;
+  try {
+    const r = await fetch('/api/status');
+    const d = await r.json();
+    const v = (d && (d.version || (d.config && d.config.version))) || '';
+    el.textContent = v ? '当前版本 ' + v : '版本未知';
+  } catch {
+    el.textContent = '版本读取失败';
+  }
+}
+
 const STICKER_JOB_LABELS = { queued: '排队中', sending: '尝试发送中', reserved: '等待文字回复完成', confirmed: '已确认发出', unconfirmed: '已尝试，未确认送达', failed: '发送失败', cancelled: '已取消' };
 let STICKERS_ENABLED = false;
 let STICKER_UI_BOUND = false;
@@ -529,6 +544,15 @@ let STICKER_STATUS_REQUEST = 0;
 let STICKER_POLL = null;
 const STICKER_UPLOAD_BUSY = new Set();
 let STICKER_UPLOAD_EPOCH = 0;
+// 内联 SVG 图标：老系统没有彩色 emoji 字体，之前会显示成空白方块
+const STICKER_ICONS = {
+  happy: '<svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="8.6" cy="9.6" r="1.15" fill="currentColor"/><circle cx="15.4" cy="9.6" r="1.15" fill="currentColor"/><path d="M7.6 14.2c1.2 1.7 2.7 2.5 4.4 2.5s3.2-.8 4.4-2.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>',
+  angry: '<svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M6.6 7.4l3.4 1.8M17.4 7.4l-3.4 1.8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="8.7" cy="11.4" r="1.1" fill="currentColor"/><circle cx="15.3" cy="11.4" r="1.1" fill="currentColor"/><path d="M8.4 17c1-.9 2.2-1.3 3.6-1.3s2.6.4 3.6 1.3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>',
+  cute: '<svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true"><path d="M12 20.5s-7-4.1-7-9.2a4.1 4.1 0 017-2.9 4.1 4.1 0 017 2.9c0 5.1-7 9.2-7 9.2z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><circle cx="9.6" cy="10.2" r=".95" fill="currentColor"/><circle cx="14.4" cy="10.2" r=".95" fill="currentColor"/></svg>',
+  meh: '<svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M7.2 9.2h3.2M13.6 9.2h3.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M8.6 15.6h6.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>',
+  bored: '<svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M7.4 9.8c.7-.6 1.5-.6 2.2 0M14.4 9.8c.7-.6 1.5-.6 2.2 0" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M9.4 15.2c.8-.5 1.7-.5 2.6 0s1.8.5 2.6 0" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
+};
+
 const STICKER_RATE_DEFAULTS = {happy:0.25,angry:0.25,cute:0.25,meh:0.25,bored:0.25};
 let STICKER_RATES_DIRTY = false;
 let STICKER_RATES_SAVING = false;
@@ -739,7 +763,7 @@ function bindStickerUi() {
     zone.setAttribute('aria-busy', 'false');
     const icon = document.createElement('span');
     icon.className = 'sticker-icon';
-    icon.textContent = ({happy:'😄',angry:'😤',cute:'🥺',meh:'🙄',bored:'😴'})[key];
+    icon.innerHTML = STICKER_ICONS[key] || STICKER_ICONS.happy;
     icon.setAttribute('aria-hidden', 'true');
     zone.appendChild(icon);
     const title = document.createElement('h4');
@@ -1029,7 +1053,8 @@ async function saveConfig() {
   ORIG = null;
   renderForm(CFG);
   loadState();
-  loadFeatures();
+  showAppVersion();
+loadFeatures();
 }
 
 function revertForm() {
