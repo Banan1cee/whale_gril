@@ -264,6 +264,20 @@ def _alias_match(current, aliases):
     return any(_norm_chat(alias) == cur for alias in (aliases or ()))
 
 
+def _is_blank(value):
+    """微信输入框「空」时 UIA 读到的并不是空字符串，而是 '\n'（有时带空格）。
+
+    现场问题：只要按 `!= ''` 判断，输入框永远算「有草稿」，私聊里表情包
+    一张也发不出去（日志：input contains a draft）。
+    """
+    return str(value if value is not None else '').strip() == ''
+
+
+def _is_attachment(value):
+    """粘贴附件后输入框里只剩一个占位符 U+FFFC（前后可能有换行）。"""
+    return str(value if value is not None else '').strip() == '\ufffc'
+
+
 def alias_match(current, aliases):
     """公开的标题比较：空格/大小写不敏感。"""
     return _alias_match(current, aliases)
@@ -343,7 +357,7 @@ def guarded_send(gui, uia, hwnd, aliases, path, root, db, username, gate,
         # 刚发完文字时微信输入框偶尔还有短暂残留（私聊里尤其常见），
         # 这里只「等它自己清空」，绝不替用户按删除键；等不到才失败。
         for _ in range(20):
-            if desktop.value(control) == '':
+            if _is_blank(desktop.value(control)):
                 break
             sleep(0.2)
             control = guard()
@@ -359,7 +373,7 @@ def guarded_send(gui, uia, hwnd, aliases, path, root, db, username, gate,
         if not gui.copy_files_to_clipboard([approved]):
             return result('failed', 'unable to prepare attachment clipboard')
         control = guard()
-        if control is None or desktop.value(control) != '' or not desktop.clipboard_matches(approved):
+        if control is None or not _is_blank(desktop.value(control)) or not desktop.clipboard_matches(approved):
             return result('cancelled', 'target/focus/switch/draft/clipboard changed before paste')
         # Mark uncertain BEFORE calling a side-effectful function (it can partially act then raise).
         touched = True
@@ -367,13 +381,13 @@ def guarded_send(gui, uia, hwnd, aliases, path, root, db, username, gate,
         sleep(0.4)
         control = guard()
         value = desktop.value(control) if control is not None else None
-        draft_observed = isinstance(value, str) and value != ''
-        if value != '\ufffc':
+        draft_observed = isinstance(value, str) and not _is_blank(value)
+        if not _is_attachment(value):
             return result('unconfirmed', 'no exact attachment draft evidence; Enter not pressed; clear draft manually; do not retry',
                           draft_may_remain=True, draft_observed=draft_observed)
         # Recheck immediately at the irreversible action boundary, including backend generation.
         control = guard()
-        if control is None or desktop.value(control) != '\ufffc':
+        if control is None or not _is_attachment(desktop.value(control)):
             return result('unconfirmed', 'send gates changed after paste; Enter not pressed; clear draft manually; do not retry',
                           draft_may_remain=True, draft_observed=draft_observed)
         attempted_enter = True

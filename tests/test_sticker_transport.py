@@ -197,6 +197,25 @@ class TransportTest(unittest.TestCase):
         self.assertEqual(self.send()['status'], 'failed')
         self.assertEqual(self.keys, [])
 
+    def test_whitespace_only_input_counts_as_empty(self):
+        # 现场真凶：微信输入框「空」时 UIA 读到的是 '\n'，旧代码按 != '' 判断，
+        # 于是永远认为「有草稿」，私聊一张也发不出去。
+        self.desktop.value = lambda control: '\n\ufffc\n' if 0x56 in self.keys else '\n'
+        self.assertEqual(self.send()['status'], 'confirmed')
+        self.assertEqual(self.keys[:2], [0x56, 0x0D])
+
+    def test_attachment_marker_with_surrounding_newlines_is_accepted(self):
+        def key(code, **kwargs):
+            self.keys.append(code)
+            if code == 0x56:
+                self.desktop.input_value = '\ufffc'
+            if code == 0x0D:
+                self.on_enter()
+
+        self.gui._input = SimpleNamespace(key=key)
+        self.desktop.value = lambda control: '\n\ufffc\n' if 0x56 in self.keys else '\n'
+        self.assertEqual(self.send()['status'], 'confirmed')
+
     def test_off_after_clipboard_preparation_prevents_paste(self):
         self.gui.copy_files_to_clipboard.side_effect = lambda paths: setattr(self, 'allow', False) or True
         self.assertEqual(self.send()['status'], 'cancelled')
