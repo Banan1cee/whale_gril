@@ -46,8 +46,11 @@ test('表情包：默认关（总闸），关着时一片空白', () => {
 test('表情包：开关在调试台登记表最前面，并标着 experimental', () => {
   assert.equal(features.REGISTRY[0].key, 'stickers', '实验性总闸要排在最上面');
   assert.equal(features.REGISTRY[0].experimental, true);
-  const listed = features.list(loadConfig({ root: fs.mkdtempSync(path.join(os.tmpdir(), 'whale-s-')), env: {} }));
-  assert.equal(listed[0].experimental, true);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-s-'));
+  try {
+    const listed = features.list(loadConfig({ root, env: {} }));
+    assert.equal(listed[0].experimental, true);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
 test('表情包：情绪判定 5 类', () => {
@@ -70,29 +73,31 @@ test('表情包：按情绪找文件夹（中文/英文都认），没图回落�
   fs.rmSync(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 80 });
 });
 
-test('表情包：「发个表情」必发，且不受冷却限制；普通回复要掷骰子', () => {
+test('表情包：「发个表情」必发；开启后没有冷却，私聊群聊都按概率发', () => {
   const root = makeRoot(['炸毛/a.gif']);
-  const cfg = cfgOn(root, { chances: { angry: 0 }, cooldownMinutes: 60 });
-  const state = new Map();
+  const cfg = cfgOn(root, { chances: { angry: 0 } });
   // 概率 0 → 普通消息不该发
-  assert.equal(stickers.pick({ config: cfg, root, key: 'g:1', text: '你个傻逼', state, rng: () => 0.99 }), null);
+  assert.equal(stickers.pick({ config: cfg, root, key: 'g:1', text: '你个傻逼', rng: () => 0.99 }), null);
   // 明确要表情 → 必发
-  const forced = stickers.pick({ config: cfg, root, key: 'g:1', text: '发个表情', request: '发个表情', state, rng: () => 0.99 });
+  const forced = stickers.pick({ config: cfg, root, key: 'g:1', text: '发个表情', request: '发个表情', rng: () => 0.99 });
   assert.ok(forced && forced.path, '「发个表情」应该必发');
-  // 冷却内不再发
-  const again = stickers.pick({ config: cfg, root, key: 'g:1', text: '发个表情', request: '发个表情', state, rng: () => 0.99 });
-  assert.ok(again, '明确点名要表情时仍应发（不受冷却）');
+  // 紧接着再要一次也发：没有任何时间间隔限制
+  const again = stickers.pick({ config: cfg, root, key: 'g:1', text: '发个表情', request: '发个表情', rng: () => 0.99 });
+  assert.ok(again && again.path, '不应有冷却');
+  // 私聊场景（同一个 key 反复）也照概率发
+  cfg.sticker.chances.angry = 1;
+  for (let i = 0; i < 3; i += 1) {
+    assert.ok(stickers.pick({ config: cfg, root, key: 'u:1', text: '你个傻逼', rng: () => 0.01 }));
+  }
   fs.rmSync(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 80 });
 });
 
 test('表情包：概率命中才发（rng 可控）', () => {
   const root = makeRoot(['开心/h.gif']);
   const cfg = cfgOn(root, { chances: { happy: 0.5 } });
-  const state = new Map();
-  const hit = stickers.pick({ config: cfg, root, key: 'u:1', text: '你好可爱', state, rng: () => 0.1 });
+  const hit = stickers.pick({ config: cfg, root, key: 'u:1', text: '你好可爱', rng: () => 0.1 });
   assert.ok(hit && hit.emotion === 'happy');
-  const missState = new Map();
-  const miss = stickers.pick({ config: cfg, root, key: 'u:2', text: '你好可爱', state: missState, rng: () => 0.9 });
+  const miss = stickers.pick({ config: cfg, root, key: 'u:2', text: '你好可爱', rng: () => 0.9 });
   assert.equal(miss, null);
   fs.rmSync(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 80 });
 });

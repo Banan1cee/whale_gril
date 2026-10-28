@@ -1094,22 +1094,33 @@ try {
 
     if ($asset.size) { Say ('  安装包：' + $asset.name + '（' + (Format-Size ([long]$asset.size)) + '）') 'Gray' }
 
+    # 规则很简单：版本号和 latest 一样才跳过，不一样就覆盖成 latest。
+    # 不做大小比较——作者把 3.55.x 直接跳到 3.6.0，纯数字比较会误判成"本地更新"。
     $cmp = Compare-Ver $remoteVer $localVer
-    if ($cmp -le 0 -and -not $Force) {
+    if ($cmp -eq 0 -and -not $Force) {
         Say ''
-        if ($Tag -and $cmp -lt 0) {
-            Say ('  当前 ' + $localVer + ' 比指定的 ' + $remoteVer + ' 还新，不需要更新。' ) 'Green'
-            Say ('     真要降级/重装请加 -Force（会先备份，可回滚）。') 'DarkGray'
-        } else {
-            Say '  ✅ 已经是最新版本，不用更新。' 'Green'
-            Say ('     （想强制重装同版本请加 -Force）') 'DarkGray'
-        }
+        Say '  ✅ 已经是最新版本，不用更新。' 'Green'
+        Say ('     （想强制重装同版本请加 -Force）') 'DarkGray'
         exit 0
+    }
+    if ($Tag -and $cmp -lt 0 -and -not $Force) {
+        # 明确指定了一个更旧的版本：仍然要求 -Force，避免手滑降级
+        Say ''
+        Say ('  当前 ' + $localVer + ' 比指定的 ' + $remoteVer + ' 还新。') 'Green'
+        Say ('     真要降级请加 -Force（会先备份，可回滚）。') 'DarkGray'
+        exit 0
+    }
+    if ($cmp -lt 0) {
+        Say ('  ℹ 最新版是 ' + $remoteVer + '，本地是 ' + $localVer + '；版本号虽然变小，但不是同一个版本，仍覆盖成 latest。') 'Yellow'
     }
 
     if ($Check) {
         Say ''
-        Say ('  有新版：' + $localVer + ' → ' + $remoteVer) 'Yellow'
+        if ($cmp -lt 0) {
+            Say ('  版本不同：' + $localVer + ' → ' + $remoteVer + '（按 latest 覆盖）') 'Yellow'
+        } else {
+            Say ('  有新版：' + $localVer + ' → ' + $remoteVer) 'Yellow'
+        }
         Say '  双击 一键更新.bat 即可更新（会先备份、再覆盖代码）。' 'Gray'
         exit 0
     }
