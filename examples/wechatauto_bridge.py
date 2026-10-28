@@ -133,6 +133,8 @@ try:
     CARE_QUIET_MIN = float(_care.get("quietAfterMinutes", 20) or 0)
     _digest = _wechat.get("digestMinutes", 30)
     DIGEST_MINUTES = float(_digest) if isinstance(_digest, (int, float)) else 30.0
+    # 表情包（实验性）：总闸在 features.stickers。关着就不轮询、不发图、日志一句不提。
+    STICKER_TEST_ON = _as_bool(((_cfg.get("features") or {}).get("stickers", False)), False)
     MASTER_WXID = (((_cfg.get("persona") or {}).get("master") or {}).get("wxids") or [''])[0]
 except Exception as _cfg_err:                  # noqa: BLE001
     # 别再静默吞掉：整块跳过 = 上面这些开关全部保持默认值，表现成「配置改了没用」。
@@ -183,7 +185,7 @@ def reload_config(path=None):
     """
     global GAME_TOKENS, AWAY_NOTICE, RETURN_NOTICE, QUEUED_MAX_AGE, QUEUED_MAX_CHATS
     global QUOTE_REPLY, KEYBOARD_FALLBACK, BACKGROUND_SEND, LOW_BATTERY_PCT, GOODNIGHT_TEXT
-    global ACCOUNT_GUARD, WINDOW_HWND
+    global ACCOUNT_GUARD, WINDOW_HWND, STICKER_TEST_ON
     global SHARE_ENABLED, SHARE_EVERY, CARE_ENABLED, CARE_QUIET_MIN, DIGEST_MINUTES
     global STALE_AFTER, SYSTEM_SENDER_NAMES, BASE_SYSTEM_SENDERS, MASTER_WXID
     global VOICE_ENABLED, VOICE_BASE_URL, VOICE_MODEL, VOICE_API_KEY, VOICE_TIMEOUT, VOICE_MAX_SECONDS
@@ -212,6 +214,7 @@ def reload_config(path=None):
     QUOTE_REPLY = bool(w.get("quoteReply", False))
     KEYBOARD_FALLBACK = bool(w.get("keyboardFallback", True))
     BACKGROUND_SEND = bool(w.get("backgroundSend", True))
+    STICKER_TEST_ON = _as_bool(((cfg.get("features") or {}).get("stickers", False)), False)
     ACCOUNT_GUARD = bool(w.get("accountGuard", True))
     try:
         WINDOW_HWND = int(w.get("windowHwnd") or 0)
@@ -2088,6 +2091,70 @@ def main():
         log("键盘通道：按键发了，但数据库里没确认到（可能发到了别的会话），这条按失败处理")
         return False
 
+    def _resolve_chat_username(name_or_id):
+        """显示名 → 数据库里的 username（filehelper / xxx@chatroom）。查不到就原样返回。"""
+        key = str(name_or_id or "").strip()
+        if not key:
+            return ""
+        if key == "filehelper" or key.endswith("@chatroom") or key.endswith("@im.wechat"):
+            return key
+        try:
+            hits = db.search_contact(key) or []
+            for h in hits:
+                if str(h.get("nick_name") or "").strip() == key or str(h.get("remark") or "").strip() == key:
+                    return str(h.get("username") or key)
+            if hits:
+                return str(hits[0].get("username") or key)
+        except Exception:
+            pass
+        return key
+
+    def send_sticker(path, chat_display_name, chat_username=""):
+        """发一张表情包（实验性）。
+
+        用「图片文件进剪贴板 → 粘贴」的发法：微信会把 gif 认成「动画表情」，动图会动。
+        发完回读数据库确认；像「文件传输助手」这种不落库的会话，接口成功也算成功。
+        """
+        nonlocal gui
+        path = str(path or "").strip()
+        if not path or not os.path.isfile(path):
+            log("表情包跳过：文件不存在", path)
+            return False
+        try:
+            if game_running() or foreground_is_fullscreen():
+                log("你在游戏/全屏里，表情包不发：", chat_display_name)
+                return False
+        except Exception:
+            pass
+        with send_lock:
+            with gui_lock:
+                if gui is None:
+                    gui = WeChatGUI()
+            bind_gui_window(gui)
+            t0 = time.time()
+            try:
+                r = gui.send_image(path, chat_display_name)
+            except Exception as e:
+                log("表情包发送异常：" + repr(e))
+                return False
+            ok = bool(getattr(r, "ok", True)) or "成功" in str(getattr(r, "message", ""))
+            if not ok:
+                log("表情包发送失败：", getattr(r, "msg", r))
+                return False
+            for _ in range(6):
+                time.sleep(0.4)
+                try:
+                    msgs = db.get_messages(_resolve_chat_username(chat_username or chat_display_name), limit=3) or []
+                except Exception:
+                    msgs = []
+                for m in msgs:
+                    if str(m.get("type") or "") in ("图片", "表情", "动画表情") \
+                            and float(m.get("create_time") or 0) >= t0 - 3:
+                        log("表情包已发送：", os.path.basename(path), "→", chat_display_name)
+                        return True
+            log("表情包已发出（数据库没确认到，这个会话可能不落库）：", os.path.basename(path))
+            return True
+
     def send_text(text, chat_display_name, chat_username="", force=False, quote_text=None):
         nonlocal gui
         if chat_username and chat_username in dead_chats:
@@ -2620,12 +2687,47 @@ def main():
                 send_text(line, target, username, quote_text=(content if first and QUOTE_REPLY else None))
                 first = False
                 time.sleep(0.6)
+            # 服务端挑了表情包（实验性总闸开着才会有这个字段）
+            _stk = data.get("sticker") or None
+            if _stk and _stk.get("path"):
+                try:
+                    send_sticker(_stk.get("path"), target, username)
+                except Exception as _se:
+                    log("表情包跳过：" + repr(_se))
         except Exception as e:
             log("处理消息异常：", repr(e))
 
     wait_for_server(bot_url, timeout=30)
     log("开始监听新消息…（Ctrl+C 退出）")
+    def sticker_test_loop():
+        """控制台点了「发送测试表情包」→ 服务端排队 → 这里取出来发掉。总闸关着什么都不做。"""
+        base = bot_url.rsplit("/webhook", 1)[0]
+        log("表情包测试通道已启动（每 5 秒看一眼有没有要发的）")
+        while True:
+            try:
+                if STICKER_TEST_ON:
+                    r = LOCAL_HTTP.get(base + "/api/stickers/pending", timeout=5)
+                    if r.status_code == 200:
+                        items = (r.json() or {}).get("items") or []
+                        for it in items:
+                            ok = False
+                            log("表情包测试：开始发", os.path.basename(it.get("path") or ""), "→", it.get("chat"))
+                            try:
+                                ok = send_sticker(it.get("path"), it.get("chat") or "", "")
+                            except Exception as e:
+                                log("表情包测试异常：" + repr(e))
+                            try:
+                                LOCAL_HTTP.post(base + "/api/stickers/ack", json={"id": it.get("id"), "ok": ok}, timeout=5)
+                            except Exception:
+                                pass
+            except Exception as e:
+                log_throttled("sticker-test-err", "表情包测试通道出错：" + repr(e))
+            time.sleep(5)
+
     executor = ThreadPoolExecutor(max_workers=1)
+    if STICKER_TEST_ON:
+        threading.Thread(target=sticker_test_loop, daemon=True).start()
+
 
     def on_message(msg, listener):
         # 每条消息丢线程池：发送慢不再阻塞后面消息的接收

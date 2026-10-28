@@ -12,6 +12,14 @@
 
 const REGISTRY = [
   {
+    key: 'stickers',
+    path: 'features.stickers',
+    label: '表情包（实验性）',
+    desc: '总闸。关掉=这个模式完全不存在（不挑图、不回包带字段、桥接不轮询、测试接口 404）。打开后按情绪从 data/stickers/<开心|炸毛|撒娇|嫌弃|敷衍>/ 挑图，回复时偶尔补一张。',
+    default: false,
+    experimental: true,
+  },
+  {
     key: 'groupAddressGuard',
     path: 'features.groupAddressGuard',
     label: '群里先分清「你」在说谁',
@@ -120,6 +128,7 @@ function list(config) {
     desc: f.desc,
     value: isOn(config, f.key),
     default: f.default,
+    experimental: Boolean(f.experimental),
   }));
 }
 

@@ -104,6 +104,28 @@
     <div class="card"><h2>网关 / 记忆</h2><table id="tGate"></table></div>
   </div>
 
+  <div class="card" id="stickerCard" style="display:none">
+    <h2>表情包（实验性）· 测试发送</h2>
+    <p class="muted">
+      总开关在下面「功能开关」第一行。这里的图来自 <code>data/stickers/&lt;情绪&gt;/</code>；
+      发的是真消息，会出现在微信里（默认发到「文件传输助手」，也就是你自己的号）。
+    </p>
+    <div class="row" style="margin-bottom:10px">
+      <label>情绪
+        <select id="stkEmotion">
+          <option value="happy">开心</option>
+          <option value="angry">炸毛</option>
+          <option value="cute">撒娇</option>
+          <option value="meh">嫌弃</option>
+          <option value="bored">敷衍</option>
+        </select>
+      </label>
+      <label>发到 <input type="text" id="stkChat" value="文件传输助手" style="min-width:180px" /></label>
+      <button id="stkSend">发送这张</button>
+    </div>
+    <div id="stkStatus" class="muted">加载中…</div>
+  </div>
+
   <div class="card" id="featCard">
     <h2>功能开关（新功能都在这里，可开可关）</h2>
     <p class="muted">关掉 = 回到旧行为。改动会写进 config.json，重启也还在。群聊相关的两个开关要重启桥接/服务才完全生效。</p>
@@ -421,6 +443,33 @@ function wireForm() {
   });
 }
 
+
+async function loadStickers() {
+  const card = document.getElementById('stickerCard');
+  const host = document.getElementById('stkStatus');
+  if (!card || !host) return;
+  try {
+    const r = await fetch('/api/stickers/status');
+    if (r.status === 404) { card.style.display = 'none'; return; }
+    const d = await r.json();
+    if (!d.ok) { card.style.display = 'none'; return; }
+    card.style.display = '';
+    document.getElementById('stkChat').value = d.testChat || '文件传输助手';
+    const lines = d.emotions.map((e) => `${e.label}(${e.key})：${e.files.length} 张`);
+    host.textContent = '目录：' + d.dir + ' ｜ ' + lines.join(' ／ ') + (d.pending ? ` ｜ 排队中 ${d.pending}` : '');
+    const sel = document.getElementById('stkEmotion');
+    if (sel) {
+      sel.innerHTML = '';
+      for (const e of d.emotions) {
+        const o = document.createElement('option');
+        o.value = e.key;
+        o.textContent = `${e.label}（${e.files.length} 张）`;
+        sel.appendChild(o);
+      }
+    }
+  } catch { card.style.display = 'none'; }
+}
+
 async function loadFeatures() {
   const host = document.getElementById('tFeatures');
   try {
@@ -648,7 +697,33 @@ async function makePrompt() {
 }
 
 $('btnReload').addEventListener('click', () => { loadConfig();
-  loadFeatures(); loadState(); loadSessions(); });
+
+  const stkBtn = document.getElementById('stkSend');
+  if (stkBtn) {
+    stkBtn.addEventListener('click', async () => {
+      stkBtn.disabled = true;
+      try {
+        const r = await fetch('/api/stickers/test', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            emotion: document.getElementById('stkEmotion').value,
+            chat: document.getElementById('stkChat').value.trim(),
+          }),
+        });
+        const out = await r.json();
+        if (!out.ok) throw new Error(out.error || '发送失败');
+        alert('已排队，桥接 5 秒内会发出去：\n' + out.queued.path.split(/[\\/]/).pop() + ' → ' + out.queued.chat);
+        loadStickers();
+      } catch (e) {
+        alert('失败：' + (e && e.message ? e.message : e));
+      } finally {
+        stkBtn.disabled = false;
+      }
+    });
+  }
+
+  loadFeatures(); loadState(); loadSessions(); loadStickers(); });
 $('btnFetch').addEventListener('click', async () => {
   if (refreshDirty().length && !confirm('有没保存的改动，重新读取会丢掉它们，继续？')) return;
   await loadConfig();

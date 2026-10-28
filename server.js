@@ -27,6 +27,7 @@ const personaStore = require('./src/personaStore');
 const memoryBackup = require('./src/memoryBackup');
 const mediaCache = require('./src/mediaCache');
 const features = require('./src/features');
+const stickers = require('./src/stickers');
 const presets = require('./src/presets');
 const links = require('./src/links');
 const bilibili = require('./src/bilibili');
@@ -111,6 +112,54 @@ function sanitizeId(id) {
 /* ------------------------------------------------------------------ */
 /* 运行时组装                                                          */
 /* ------------------------------------------------------------------ */
+
+/* ------------------------------------------------------------------ */
+/* 表情包（实验性）：测试发送 / 桥接取任务                              */
+/* ------------------------------------------------------------------ */
+
+function stickerQueueFile(root) {
+  return path.join(root, 'data', 'sticker-queue.json');
+}
+
+function readStickerQueue(root) {
+  try {
+    const raw = fs.readFileSync(stickerQueueFile(root), 'utf8');
+    const arr = JSON.parse(raw.replace(/^\uFEFF/, ''));
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeStickerQueue(root, arr) {
+  try {
+    fs.mkdirSync(path.join(root, 'data'), { recursive: true });
+    fs.writeFileSync(stickerQueueFile(root), JSON.stringify(arr.slice(-50), null, 2) + '\n', 'utf8');
+  } catch { /* 写不了就算了，桥接下一轮什么都拿不到 */ }
+}
+
+/** 控制台/接口共用：按情绪挑一张（不受概率和冷却影响，手动测试要必中） */
+function pickStickerNow(runtime, emotion) {
+  const root = runtime.config.root || projectRoot();
+  const dir = stickers.stickerDir(runtime.config, root);
+  const pool = stickers.imagesFor(dir, String(emotion || ''));
+  if (!pool.length) return null;
+  const file = pool[Math.floor(Math.random() * pool.length)];
+  return { emotion: String(emotion || ''), path: file };
+}
+
+/** 实验性：给这条回复挑一张表情包（总闸关着返回 null，桥接就看不到这个字段） */
+function pickStickerFor(runtime, decision, text, request) {
+  try {
+    if (!features.isOn(runtime.config, 'stickers')) return null;
+    const hit = runtime.bot.stickerFor(decision, text, request);
+    if (!hit) return null;
+    return { emotion: hit.emotion, path: hit.path };
+  } catch (err) {
+    try { runtime.logger.warn('挑表情包失败：' + (err && err.message ? err.message : err)); } catch { /* 忽略 */ }
+    return null;
+  }
+}
 
 function createRuntime({ root = projectRoot(), env = process.env, loggerLevel } = {}) {
   ensureConfigFile(root);
@@ -981,6 +1030,7 @@ async function handleChat(runtime, req, res) {
     return json(res, 200, { ok: true, action: 'ignore', reason: decision.reason });
   }
 
+  const reqText = String((msg && (msg.text || msg.content)) || '').trim();
   sseInit(res);
   sseSend(res, {
     type: 'meta',
@@ -1000,7 +1050,7 @@ async function handleChat(runtime, req, res) {
       sseSend(res, { type: 'delta', text: full.slice(i, i + 3) });
     }
     const bubbles = bot.finalize(decision, full);
-    sseSend(res, { type: 'done', text: full, bubbles, reason: decision.reason, commandType: decision.commandType || '' });
+    sseSend(res, { type: 'done', text: full, bubbles, reason: decision.reason, commandType: decision.commandType || '', sticker: pickStickerFor(runtime, decision, full, reqText) });
     return res.end();
   }
 
@@ -1028,7 +1078,7 @@ async function handleChat(runtime, req, res) {
 
   const clean = String(full || '').trim();
   const bubbles = bot.finalize(decision, clean);
-  sseSend(res, { type: 'done', text: clean, bubbles, reason: decision.reason, mock: Boolean(decision.mock) });
+  sseSend(res, { type: 'done', text: clean, bubbles, reason: decision.reason, mock: Boolean(decision.mock), sticker: pickStickerFor(runtime, decision, clean, reqText) });
   res.end();
 }
 
@@ -1246,6 +1296,65 @@ function createHandler(runtime) {
       if (pathname === '/healthz') return json(res, 200, { ok: true, up: true });
 
       // ---- 功能开关（控制台可开关；关掉就回到旧行为）----
+      /* ---- 表情包（实验性）---- */
+      if (pathname.startsWith('/api/stickers')) {
+        if (!features.isOn(runtime.config, 'stickers')) {
+          return json(res, 404, { ok: false, error: '表情包是实验性功能，先在调试台打开总开关' });
+        }
+        const root = runtime.config.root || projectRoot();
+        if (pathname === '/api/stickers/status' && method === 'GET') {
+          const dir = stickers.stickerDir(runtime.config, root);
+          const emotions = Object.keys(stickers.EMOTIONS).map((key) => {
+            const files = stickers.imagesFor(dir, key).map((f) => path.basename(f));
+            return { key, label: stickers.EMOTION_LABELS[key], files };
+          });
+          return json(res, 200, {
+            ok: true,
+            enabled: true,
+            dir,
+            testChat: (runtime.config.sticker && runtime.config.sticker.testChat) || '文件传输助手',
+            emotions,
+            pending: readStickerQueue(root).length,
+          });
+        }
+        if (pathname === '/api/stickers/test' && method === 'POST') {
+          const body = await readBody(req);
+          const emotion = String((body && body.emotion) || '').trim();
+          if (emotion && !stickers.EMOTIONS[emotion]) {
+            return json(res, 400, { ok: false, error: '没有这个情绪：' + emotion });
+          }
+          const chat = String((body && body.chat) || (runtime.config.sticker && runtime.config.sticker.testChat) || '文件传输助手').trim();
+          const picked = pickStickerNow(runtime, emotion || 'happy');
+          if (!picked) {
+            return json(res, 400, { ok: false, error: '这个情绪的文件夹里没有图（先往 data/stickers 里丢几张）' });
+          }
+          const item = {
+            id: 'st-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6),
+            path: picked.path,
+            emotion: picked.emotion,
+            chat,
+            at: Date.now(),
+          };
+          const q = readStickerQueue(root);
+          q.push(item);
+          writeStickerQueue(root, q);
+          logger.info(`表情包测试：${path.basename(picked.path)}（${picked.emotion}）→ ${chat}`);
+          return json(res, 200, { ok: true, queued: item });
+        }
+        // 桥接来取任务（它自己会发，并把结果写回来）
+        if (pathname === '/api/stickers/pending' && method === 'GET') {
+          return json(res, 200, { ok: true, items: readStickerQueue(root) });
+        }
+        if (pathname === '/api/stickers/ack' && method === 'POST') {
+          const body = await readBody(req);
+          const id = String((body && body.id) || '').trim();
+          const q = readStickerQueue(root).filter((it) => it.id !== id);
+          writeStickerQueue(root, q);
+          return json(res, 200, { ok: true, remaining: q.length });
+        }
+        return json(res, 404, { ok: false, error: 'not found' });
+      }
+
       if (pathname === '/api/features' && method === 'GET') {
         return json(res, 200, { ok: true, features: features.list(runtime.config) });
       }
