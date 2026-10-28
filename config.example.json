@@ -194,13 +194,13 @@
     "_说明": "表情包（实验性）：总闸在 features.stickers。文件夹 data/stickers/<开心|炸毛|撒娇|嫌弃|敷衍>/（中英文名都认），没图回落「通用」。",
     "dir": "data/stickers",
     "chances": {
-      "happy": 0.1,
-      "angry": 0.2,
-      "cute": 0.12,
-      "meh": 0.08,
-      "bored": 0.06
+      "happy": 0.25,
+      "angry": 0.25,
+      "cute": 0.25,
+      "meh": 0.25,
+      "bored": 0.25
     },
-    "genericChance": 0.1,
+    "genericChance": 0.25,
     "testChat": "文件传输助手"
   }
 }
