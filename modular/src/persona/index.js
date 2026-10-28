@@ -515,6 +515,13 @@ function buildSystem({ config, msg, profile, notes = [], now = new Date() }) {
     lines.push('你：这个我可不敢替你决定，你先说说到底咋回事');
   }
 
+  // 表情包开关打开时，明确告诉她「你有这个能力」——否则她会说「我发不了表情」。
+  if (!custom && config && config.features && config.features.stickers) {
+    lines.push('');
+    lines.push('【表情包】你能发表情包（微信里的动图表情）。聊到情绪点、或者对方说「发个表情包」「来张表情」的时候，');
+    lines.push('就直接发一张，不用问对方要不要、也不用嘴上解释「我给你发个表情包」——发完接着正常说话就行。');
+  }
+
   const styleText = String((config.persona && config.persona.styleText) || '').trim();
   const stylePreset = String((config.persona && config.persona.stylePreset) || '').trim();
   const emojiLevel = String((config.persona && config.persona.emojiLevel) || '').trim();

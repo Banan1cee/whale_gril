@@ -15,6 +15,29 @@ import time
 MAX_BYTES = 4 * 1024 * 1024
 IMAGE_TYPES = {'.gif': 'GIF', '.png': 'PNG', '.jpg': 'JPEG', '.jpeg': 'JPEG', '.webp': 'WEBP'}
 MEDIA_TYPES = {'图片', '表情', '动画表情'}
+FILE_TYPES = {'文件', '文件/链接/卡片', '链接/卡片', '其他'}
+
+
+def _file_marker(path):
+    """算出「怎么证明刚发出去的就是这张图」的指纹。"""
+    try:
+        with open(path, 'rb') as handle:
+            digest = hashlib.md5(handle.read()).hexdigest()
+        return {'md5': digest, 'name': os.path.basename(path)}
+    except Exception:
+        return None
+
+
+def _message_matches(message, marker):
+    """这条新消息能证明是「我们刚粘的那张图」吗？"""
+    content = str(message.get('content') or '')
+    if marker:
+        if marker.get('md5') and marker['md5'].lower() in content.lower():
+            return True
+        name = str(marker.get('name') or '')
+        if name and name.lower() in content.lower():
+            return True
+    return message.get('type') in MEDIA_TYPES
 
 
 def result(status, error='', draft_may_remain=False, draft_observed=False):
@@ -145,18 +168,27 @@ def resolve_target(db, shown, username=''):
     return canonical, frozenset(safe)
 
 
-def account_evidence_allowed(*, configured_account, db_account, reason, explicit_pin, account_dirs):
-    """May a sole visible WeChat window be trusted for this account?
+def account_evidence_allowed(*, configured_account, db_account, reason, explicit_pin,
+                             account_dirs, visible_windows=None):
+    """May the current window be trusted for this account?
 
-    Text messages have always accepted "only one window is visible". Stickers
-    used to demand more (an explicit window pin), which made them fail on every
-    machine that has more than one historical account directory while only one
-    account is logged in now. Accept the same evidence as text sends, but only
-    when the operator explicitly configured the account and the database was
-    opened with exactly that account; otherwise the choice is ambiguous.
+    规则（从宽到严）：
+      1. 手动钉过窗口 → 认。
+      2. **本机只登着一个微信（只有一个主窗）→ 认。**
+         这时候根本不存在「从别的号发出去」的可能，历史账号目录多不多无关。
+         以前这里要求「先在网页里选账号」，结果默认配置下表情包一条也发不出去。
+      3. 账号目录只有一个 → 认。
+      4. 多开（多个主窗）且分不清 → 要求：网页里明确选了账号，且数据库就是用
+         这个号打开的，否则拒绝（这时候猜错真的会从别人的号发消息）。
     """
     if explicit_pin:
         return True
+    if visible_windows is not None:
+        try:
+            if int(visible_windows) <= 1:
+                return True
+        except (TypeError, ValueError):
+            pass
     if str(reason or '') != '本机只登了一个号' or len(account_dirs or []) <= 1:
         return True
     wanted, current = str(configured_account or '').strip(), str(db_account or '').strip()
@@ -188,7 +220,7 @@ def _outgoing(db, message, own_username):
 
 
 def confirm_delivery(db, username, baseline, identity, gate, timeout=5.0,
-                     clock=time.monotonic, sleep=time.sleep):
+                     clock=time.monotonic, sleep=time.sleep, marker=None):
     deadline = clock() + timeout
     while True:
         if not gate():
@@ -197,8 +229,19 @@ def confirm_delivery(db, username, baseline, identity, gate, timeout=5.0,
             if db_identity(db) != identity:
                 return result('unconfirmed', 'database account changed; do not retry')
             messages = db.get_new_messages(username, since_seq=baseline, limit=30)
-            candidates = [m for m in messages if int(m.get('sort_seq') or 0) > baseline
-                          and m.get('type') in MEDIA_TYPES and _outgoing(db, m, identity[1])]
+            fresh = [m for m in messages if int(m.get('sort_seq') or 0) > baseline
+                     and _outgoing(db, m, identity[1])]
+            # 现场问题：把 gif 粘进输入框后，微信有时发成「文件卡片」而不是「图片/表情」，
+            # 老逻辑只认 MEDIA_TYPES，于是明明发出去了还报「未确认」。
+            # 现在先用 md5 / 文件名认领，认不到再看类型。
+            strong = [m for m in fresh if marker and _message_matches(m, marker) and (
+                str(marker.get('md5') or '').lower() in str(m.get('content') or '').lower()
+                or str(marker.get('name') or '').lower() in str(m.get('content') or '').lower())]
+            if len(strong) == 1:
+                return result('confirmed')
+            if len(strong) > 1:
+                return result('unconfirmed', 'multiple outgoing messages match the sticker; delivery is ambiguous; do not retry')
+            candidates = [m for m in fresh if m.get('type') in MEDIA_TYPES]
             # More than one candidate is ambiguous. Never claim which image was sent.
             if len(candidates) == 1:
                 return result('confirmed')
@@ -393,7 +436,8 @@ def guarded_send(gui, uia, hwnd, aliases, path, root, db, username, gate,
         attempted_enter = True
         gui._input.key(0x0D)  # exactly one Enter, never Ctrl+Enter or retry
         outcome = confirm_delivery(db, username, baseline, identity, gate,
-                                   timeout=confirm_timeout, sleep=sleep)
+                                   timeout=confirm_timeout, sleep=sleep,
+                                   marker=_file_marker(approved))
         if outcome['status'] != 'confirmed':
             outcome.update(draft_may_remain=True, draft_observed=draft_observed)
         return outcome
