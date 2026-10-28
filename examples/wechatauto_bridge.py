@@ -38,6 +38,15 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 import time
 
+# Windows embeddable Python's ._pth omits the script directory; load only our
+# shipped helper from this explicit directory, never from the current working directory.
+_EXAMPLES_DIR = os.path.dirname(os.path.abspath(__file__))
+if _EXAMPLES_DIR not in sys.path:
+    sys.path.insert(0, _EXAMPLES_DIR)
+from sticker_transport import (guarded_send as guarded_sticker_send, read_enabled_config,
+                               resolve_target as resolve_sticker_target, result as sticker_result,
+                               WindowsDesktop, quarantined_input_value)
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_PATH = os.path.join(ROOT, "config.json")
 LOG_FILE = os.path.join(ROOT, "data", "wechat-bridge-4x.log")
@@ -63,6 +72,8 @@ CARE_ALLOW_GROUPS = False
 CARE_ONLY_MASTER = True
 CARE_ALLOW_OTHERS = False
 CARE_QUIET_MIN = 20.0
+# Fail closed even when an earlier setting makes startup config parsing fail.
+STICKER_TEST_ON = False
 
 
 def _as_bool(value, default=False):
@@ -2091,69 +2102,233 @@ def main():
         log("键盘通道：按键发了，但数据库里没确认到（可能发到了别的会话），这条按失败处理")
         return False
 
-    def _resolve_chat_username(name_or_id):
-        """显示名 → 数据库里的 username（filehelper / xxx@chatroom）。查不到就原样返回。"""
-        key = str(name_or_id or "").strip()
-        if not key:
-            return ""
-        if key == "filehelper" or key.endswith("@chatroom") or key.endswith("@im.wechat"):
-            return key
-        try:
-            hits = db.search_contact(key) or []
-            for h in hits:
-                if str(h.get("nick_name") or "").strip() == key or str(h.get("remark") or "").strip() == key:
-                    return str(h.get("username") or key)
-            if hits:
-                return str(hits[0].get("username") or key)
-        except Exception:
-            pass
-        return key
+    # Protected by send_lock. Feature OFF must not erase a latent attachment
+    # draft: this guard protects ordinary text/@ sends too, without sending keys.
+    sticker_draft_quarantine = {}
 
-    def send_sticker(path, chat_display_name, chat_username=""):
-        """发一张表情包（实验性）。
+    def sticker_quarantine_allows(username, shown="", gui_locked=False):
+        requested = str(username or "").strip()
+        matches = [(key, entry) for key, entry in sticker_draft_quarantine.items()
+                   if key == requested or (not requested and
+                       (str(shown or "").strip() == key or str(shown or "").strip() in entry["aliases"]))]
+        if not matches:
+            return True
 
-        用「图片文件进剪贴板 → 粘贴」的发法：微信会把 gif 认成「动画表情」，动图会动。
-        发完回读数据库确认；像「文件传输助手」这种不落库的会话，接口成功也算成功。
-        """
-        nonlocal gui
-        path = str(path or "").strip()
-        if not path or not os.path.isfile(path):
-            log("表情包跳过：文件不存在", path)
+        def inspect():
+            for key, entry in matches:
+                value = None
+                try:
+                    compat = _compat_mod()
+                    if (ACCOUNT.get("verified") and int(ACCOUNT.get("hwnd") or 0) == entry["hwnd"]
+                            and compat is not None and int(compat.pinned_window() or 0) == entry["hwnd"]
+                            and wechat_window_alive()):
+                        value = quarantined_input_value(gui, entry["hwnd"], entry["aliases"])
+                except Exception:
+                    pass
+                if value not in (None, ""):
+                    entry["draft_observed"] = True
+                if value == "" and entry["draft_observed"]:
+                    sticker_draft_quarantine.pop(key, None)
+                else:
+                    return False
+            return True
+
+        if gui_locked:
+            allowed = inspect()
+        else:
+            with gui_lock:
+                allowed = inspect()
+        if not allowed:
+            log_throttled("uncertain-attachment-draft", "发送暂停：上次附件操作可能留有草稿；请手动清空目标输入框后重试。"
+                          "无法读取清空证据时，请手动清空后重启桥接。", ttl=60)
+        return allowed
+
+    def sticker_account_evidence_allowed():
+        # A sole visible window is not account proof when several historical
+        # account DBs exist. Refuse for this experimental transport unless the
+        # operator explicitly pinned the verified account's window.
+        explicit_pin = bool(WINDOW_HWND and int(WINDOW_HWND) == int(ACCOUNT.get("hwnd") or 0))
+        return not (ACCOUNT.get("why") == "本机只登了一个号"
+                    and len(acct_dirs) > 1 and not explicit_pin)
+
+    sticker_headers = {"x-bot-token": token, "x-whale-bridge": "1"}
+    sticker_base = bot_url.rsplit("/webhook", 1)[0]
+
+    def sticker_config_now():
+        # Dormant worker does no sticker HTTP/path/GUI work while the cached flag
+        # is off. Only config_watch re-enables it; an on flag is NEVER authority
+        # to act without a fresh disk read.
+        global STICKER_TEST_ON
+        if not STICKER_TEST_ON:
+            return None
+        current = read_enabled_config(CONFIG_PATH)
+        if current is None:
+            STICKER_TEST_ON = False
+            return None
+        # A pending account change must not send through the old DB/window while
+        # config_watch is still waiting to restart the bridge.
+        if str((current.get("wechat") or {}).get("account") or "").strip() != ACCOUNT_WANTED:
+            return None
+        return current
+
+    def sticker_gate(generation, job_id=""):
+        if not generation or sticker_config_now() is None:
             return False
         try:
-            if game_running() or foreground_is_fullscreen():
-                log("你在游戏/全屏里，表情包不发：", chat_display_name)
-                return False
+            response = LOCAL_HTTP.get(sticker_base + "/api/stickers/status",
+                                      headers=sticker_headers, timeout=3)
+            status = response.json() if response.status_code == 200 else None
+            return bool(isinstance(status, dict) and status.get("ok") is True
+                        and status.get("enabled") is True
+                        and status.get("generation") == generation
+                        and (not job_id or any(isinstance(job, dict) and job.get("id") == job_id
+                                               and job.get("status") == "sending"
+                                               and job.get("generation", generation) == generation
+                                               for job in (status.get("jobs") or [])))
+                        and sticker_config_now() is not None)
         except Exception:
-            pass
+            return False
+
+    def sticker_activity_allowed(username=""):
+        try:
+            return not (AWAY["on"] or away_active() or game_running() or foreground_is_fullscreen()
+                        or (username and (username in dead_chats or not group_is_alive(username))))
+        except Exception:
+            return False
+
+    def send_sticker(path, chat_display_name, chat_username="", generation="", job_id=""):
+        """一次性、无导航的图片粘贴；只能向已在前台打开且聚焦的精确会话发送。"""
+        if not job_id or not sticker_gate(generation, job_id):
+            return sticker_result("cancelled", "stickers are disabled or generation expired")
         with send_lock:
-            with gui_lock:
-                if gui is None:
-                    gui = WeChatGUI()
-            bind_gui_window(gui)
-            t0 = time.time()
+            if not sticker_gate(generation, job_id):
+                return sticker_result("cancelled", "stickers are disabled or generation expired")
+            if not sticker_quarantine_allows(chat_username, chat_display_name):
+                return sticker_result("failed", "an uncertain attachment draft must be cleared manually before further sends")
+            if not sticker_activity_allowed(chat_username):
+                return sticker_result("failed", "activity gate rejected the sticker")
+            if (not account_send_allowed("表情包") or not ACCOUNT.get("verified")
+                    or not wechat_window_alive() or not sticker_account_evidence_allowed()):
+                return sticker_result("failed", "target account window could not be verified")
+            hwnd = int(ACCOUNT.get("hwnd") or 0)
             try:
-                r = gui.send_image(path, chat_display_name)
-            except Exception as e:
-                log("表情包发送异常：" + repr(e))
-                return False
-            ok = bool(getattr(r, "ok", True)) or "成功" in str(getattr(r, "message", ""))
-            if not ok:
-                log("表情包发送失败：", getattr(r, "msg", r))
-                return False
-            for _ in range(6):
-                time.sleep(0.4)
+                desktop = WindowsDesktop()
+                if not desktop.foreground(hwnd):
+                    return sticker_result("failed", "open the target account window in the foreground first")
+            except Exception:
+                return sticker_result("failed", "foreground safety checks are unavailable")
+            with gui_lock:
+                # Do not initialize/activate any window just to send a sticker.
+                current_gui = gui
+                if current_gui is None:
+                    return sticker_result("failed", "window driver is not ready")
+                if not sticker_gate(generation, job_id):
+                    return sticker_result("cancelled", "stickers are disabled or generation expired")
                 try:
-                    msgs = db.get_messages(_resolve_chat_username(chat_username or chat_display_name), limit=3) or []
+                    canonical, aliases = resolve_sticker_target(db, chat_display_name, chat_username)
+                    if not sticker_quarantine_allows(canonical, chat_display_name, gui_locked=True):
+                        return sticker_result("failed", "an uncertain attachment draft must be cleared manually before further sends")
+                    if not sticker_activity_allowed(canonical):
+                        return sticker_result("failed", "target or activity gate rejected the sticker")
+                    # Unlike bind_gui_window(), failure must not be silently ignored.
+                    if not sticker_gate(generation, job_id) or not desktop.foreground(hwnd):
+                        return sticker_result("cancelled", "send gates changed before binding")
+                    if not current_gui.use_window(hwnd) or int(current_gui.main_hwnd) != hwnd:
+                        return sticker_result("failed", "unable to bind the verified account window")
+                    uia = getattr(current_gui, "_uia", None)
+                    if uia is None:
+                        return sticker_result("failed", "UIA target proof is unavailable; no OCR fallback")
+                    current = sticker_config_now()
+                    if current is None:
+                        return sticker_result("cancelled", "stickers are disabled")
+                    directory = (current.get("sticker") or {}).get("dir") or "data/stickers"
+                    directory = directory if os.path.isabs(directory) else os.path.join(ROOT, directory)
+
+                    def pinned_account_valid():
+                        try:
+                            compat = _compat_mod()
+                            return bool(ACCOUNT.get("verified") and int(ACCOUNT.get("hwnd") or 0) == hwnd
+                                        and sticker_account_evidence_allowed()
+                                        and wechat_window_alive() and compat is not None
+                                        and int(compat.pinned_window() or 0) == hwnd)
+                        except Exception:
+                            return False
+
+                    def transaction_gate():
+                        if not sticker_gate(generation, job_id):
+                            return False
+                        latest = sticker_config_now()
+                        if latest is None:
+                            return False
+                        latest_dir = (latest.get("sticker") or {}).get("dir") or "data/stickers"
+                        latest_dir = latest_dir if os.path.isabs(latest_dir) else os.path.join(ROOT, latest_dir)
+                        wanted_hwnd = int((latest.get("wechat") or {}).get("windowHwnd") or 0)
+                        return (os.path.normcase(os.path.abspath(latest_dir)) == os.path.normcase(os.path.abspath(directory))
+                                and wanted_hwnd in (0, hwnd))
+
+                    SEND_STATE["active"] = True
+                    SEND_STATE["start"] = time.time()
+                    try:
+                        outcome = guarded_sticker_send(
+                            current_gui, uia, hwnd, aliases, path, directory, db, canonical,
+                            gate=transaction_gate, account_valid=pinned_account_valid,
+                            activity_allowed=lambda: sticker_activity_allowed(canonical), desktop=desktop)
+                        if not isinstance(outcome, dict) or outcome.get("status") not in {
+                                "confirmed", "unconfirmed", "failed", "cancelled"}:
+                            raise ValueError("unknown attachment result")
+                    except Exception:
+                        outcome = sticker_result("unconfirmed", "transport action is uncertain; a draft may remain; do not retry",
+                                                 draft_may_remain=True)
+                    finally:
+                        SEND_STATE["active"] = False
+                    if outcome.get("draft_may_remain") or outcome.get("status") == "unconfirmed":
+                        sticker_draft_quarantine[canonical] = {
+                            "hwnd": hwnd, "aliases": aliases,
+                            "draft_observed": bool(outcome.get("draft_observed"))}
+                    return outcome
                 except Exception:
-                    msgs = []
-                for m in msgs:
-                    if str(m.get("type") or "") in ("图片", "表情", "动画表情") \
-                            and float(m.get("create_time") or 0) >= t0 - 3:
-                        log("表情包已发送：", os.path.basename(path), "→", chat_display_name)
-                        return True
-            log("表情包已发出（数据库没确认到，这个会话可能不落库）：", os.path.basename(path))
-            return True
+                    return sticker_result("failed", "sticker safety checks are unavailable")
+
+    def claim_and_send_sticker(item, expected_chat="", expected_username=""):
+        """Atomic claim precedes every send, including normal webhook stickers.
+
+        Never send from an unclaimed payload, never retry a claim or attachment,
+        and never interpret a truthy result dictionary as confirmed delivery.
+        """
+        if not isinstance(item, dict) or not sticker_gate(item.get("generation")):
+            return sticker_result("cancelled", "stickers are disabled or generation expired")
+        job_id = str(item.get("id") or "")
+        if not job_id:
+            return sticker_result("failed", "sticker job id is missing")
+        try:
+            response = LOCAL_HTTP.post(sticker_base + "/api/stickers/claim", json={"id": job_id},
+                                       headers=sticker_headers, timeout=3)
+            claimed = response.json() if response.status_code == 200 else None
+            claimed = claimed.get("item") if isinstance(claimed, dict) and claimed.get("ok") is True else None
+        except Exception:
+            claimed = None
+        if not isinstance(claimed, dict):
+            return sticker_result("failed", "sticker job was not claimed; nothing was sent")
+        if (claimed.get("id") != job_id or claimed.get("generation") != item.get("generation")
+                or claimed.get("status") != "sending"
+                or (expected_chat and not expected_username and claimed.get("chat") != expected_chat)
+                or (expected_username and claimed.get("chatUsername") != expected_username)):
+            outcome = sticker_result("failed", "claimed job identity did not match the request")
+        else:
+            outcome = send_sticker(claimed.get("path"), claimed.get("chat") or "",
+                                   claimed.get("chatUsername") or "", claimed.get("generation"), job_id)
+        # Off means no sticker requests/logs, including acknowledgements. The
+        # server cancels/ages its claimed jobs; loss of ack NEVER causes a resend.
+        if sticker_gate(item.get("generation")):
+            try:
+                LOCAL_HTTP.post(sticker_base + "/api/stickers/ack",
+                                json={"id": job_id, "status": outcome["status"], "error": outcome["error"]},
+                                headers=sticker_headers, timeout=3)
+            except Exception:
+                pass
+            if sticker_config_now() is not None:
+                log("表情包结果：", outcome["status"], outcome["error"])
+        return outcome
 
     def send_text(text, chat_display_name, chat_username="", force=False, quote_text=None):
         nonlocal gui
@@ -2173,6 +2348,8 @@ def main():
         if not account_send_allowed("发送"):
             return False
         with send_lock:
+            if not sticker_quarantine_allows(chat_username, chat_display_name):
+                return False
             if not force and (AWAY["on"] or away_active() or game_running() or foreground_is_fullscreen()):
                 with pending_lock:
                     pending_replies[chat_username or chat_display_name] = (text, chat_display_name, chat_username, time.time())
@@ -2297,6 +2474,8 @@ def main():
         if not account_send_allowed("@ 成员"):
             return False
         with send_lock:
+            if not sticker_quarantine_allows(chat_username, chat_display_name):
+                return False
             with gui_lock:
                 if gui is None:
                     log("初始化微信窗口驱动…（会抢一下焦点，约 5~10 秒）")
@@ -2687,46 +2866,37 @@ def main():
                 send_text(line, target, username, quote_text=(content if first and QUOTE_REPLY else None))
                 first = False
                 time.sleep(0.6)
-            # 服务端挑了表情包（实验性总闸开着才会有这个字段）
+            # Stale/queued webhook payloads must claim a current-generation job;
+            # local master OFF is silent even if an old server response has a sticker.
             _stk = data.get("sticker") or None
-            if _stk and _stk.get("path"):
-                try:
-                    send_sticker(_stk.get("path"), target, username)
-                except Exception as _se:
-                    log("表情包跳过：" + repr(_se))
+            if STICKER_TEST_ON and isinstance(_stk, dict):
+                claim_and_send_sticker(_stk, expected_chat=target, expected_username=username)
         except Exception as e:
             log("处理消息异常：", repr(e))
 
     wait_for_server(bot_url, timeout=30)
     log("开始监听新消息…（Ctrl+C 退出）")
     def sticker_test_loop():
-        """控制台点了「发送测试表情包」→ 服务端排队 → 这里取出来发掉。总闸关着什么都不做。"""
-        base = bot_url.rsplit("/webhook", 1)[0]
-        log("表情包测试通道已启动（每 5 秒看一眼有没有要发的）")
+        """常驻但默认休眠：关闭时不访问任何表情包接口、文件或窗口，也不打印日志。"""
         while True:
             try:
-                if STICKER_TEST_ON:
-                    r = LOCAL_HTTP.get(base + "/api/stickers/pending", timeout=5)
-                    if r.status_code == 200:
-                        items = (r.json() or {}).get("items") or []
-                        for it in items:
-                            ok = False
-                            log("表情包测试：开始发", os.path.basename(it.get("path") or ""), "→", it.get("chat"))
-                            try:
-                                ok = send_sticker(it.get("path"), it.get("chat") or "", "")
-                            except Exception as e:
-                                log("表情包测试异常：" + repr(e))
-                            try:
-                                LOCAL_HTTP.post(base + "/api/stickers/ack", json={"id": it.get("id"), "ok": ok}, timeout=5)
-                            except Exception:
-                                pass
-            except Exception as e:
-                log_throttled("sticker-test-err", "表情包测试通道出错：" + repr(e))
+                if STICKER_TEST_ON and sticker_config_now() is not None:
+                    response = LOCAL_HTTP.get(sticker_base + "/api/stickers/pending",
+                                              headers=sticker_headers, timeout=3)
+                    body = response.json() if response.status_code == 200 else None
+                    items = body.get("items") if isinstance(body, dict) and body.get("ok") is True else []
+                    for item in items if isinstance(items, list) else []:
+                        if not STICKER_TEST_ON or sticker_config_now() is None:
+                            break
+                        claim_and_send_sticker(item)
+            except Exception:
+                # Network/auth/JSON failures are not permission to send or to
+                # log an experimental feature while its switch is changing.
+                pass
             time.sleep(5)
 
     executor = ThreadPoolExecutor(max_workers=1)
-    if STICKER_TEST_ON:
-        threading.Thread(target=sticker_test_loop, daemon=True).start()
+    threading.Thread(target=sticker_test_loop, daemon=True).start()
 
 
     def on_message(msg, listener):

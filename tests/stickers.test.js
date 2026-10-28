@@ -46,8 +46,11 @@ test('表情包：默认关（总闸），关着时一片空白', () => {
 test('表情包：开关在调试台登记表最前面，并标着 experimental', () => {
   assert.equal(features.REGISTRY[0].key, 'stickers', '实验性总闸要排在最上面');
   assert.equal(features.REGISTRY[0].experimental, true);
-  const listed = features.list(loadConfig({ root: fs.mkdtempSync(path.join(os.tmpdir(), 'whale-s-')), env: {} }));
-  assert.equal(listed[0].experimental, true);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-s-'));
+  try {
+    const listed = features.list(loadConfig({ root, env: {} }));
+    assert.equal(listed[0].experimental, true);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
 test('表情包：情绪判定 5 类', () => {
@@ -72,6 +75,8 @@ test('表情包：按情绪找文件夹（中文/英文都认），没图回落�
 
 test('表情包：「发个表情」必发，且不受冷却限制；普通回复要掷骰子', () => {
   const root = makeRoot(['炸毛/a.gif']);
+  fs.mkdirSync(path.join(root, 'data/stickers/通用'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'data/stickers/通用/g.gif'), 'x');
   const cfg = cfgOn(root, { chances: { angry: 0 }, cooldownMinutes: 60 });
   const state = new Map();
   // 概率 0 → 普通消息不该发
