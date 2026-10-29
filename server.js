@@ -686,26 +686,6 @@ async function careForChat(runtime, chatId) {
 
 /* ---------------- 消息汇总 ---------------- */
 
-function buildDigest(items) {
-  if (!items.length) return { ok: true, count: 0, text: '' };
-  const map = new Map();
-  for (const it of items) {
-    const key = (it.chatType === 'group' ? '群 ' : '私聊 ') + (it.chat || it.sender || '');
-    if (!map.has(key)) map.set(key, []);
-    map.get(key).push(it);
-  }
-  const lines = [`📥 消息汇总（${items.length} 条）`];
-  let n = 0;
-  for (const [key, arr] of map) {
-    lines.push(`【${key}】${arr.length} 条`);
-    for (const it of arr.slice(-5)) {
-      lines.push(`- ${String(it.sender || '对方')}：${String(it.text || '').replace(/\s+/g, ' ').slice(0, 80)}`);
-    }
-    n += 1;
-    if (n >= 10) { lines.push('……还有更多会话未列出'); break; }
-  }
-  return { ok: true, count: items.length, text: lines.join('\n') };
-}
 
 /* ---------------- 人设调教（浏览器表单用） ---------------- */
 
@@ -1291,11 +1271,11 @@ function createHandler(runtime) {
         if (pathname === '/api/stickers/image' && method === 'GET') {
           // 控制台缩略图：只回传表情包目录里的真图，不能读任意文件
           const q = new URL(req.url, 'http://localhost');
-          const emotion = String(q.searchParams.get('emotion') || '');
-          const name = path.basename(String(q.searchParams.get('name') || ''));
+          const emotion = stickers.normalizeEmotion(q.searchParams.get('emotion'));
+          const name = String(q.searchParams.get('name') || '');
           const dir = stickers.stickerDir(config, config.root);
-          const file = path.join(dir, stickers.EMOTIONS[emotion] || '', name);
-          if (!name || !stickers.EMOTIONS[emotion] || !stickers.regularFile(file, dir)) {
+          const file = stickers.resolveImage(dir, emotion, name);
+          if (!file) {
             return json(res, 404, { ok: false, error: '找不到这张表情包' });
           }
           const type = MIME[path.extname(file).toLowerCase()] || 'application/octet-stream';
@@ -1305,11 +1285,13 @@ function createHandler(runtime) {
         if (pathname === '/api/stickers/delete' && method === 'POST') {
           // 删掉某一张表情包（只在表情包目录内，且必须是真文件）
           const body = await readBody(req);
-          const emotion = String((body && body.emotion) || '');
-          const name = path.basename(String((body && body.name) || ''));
+          service.requireEnabled();
+          if (generation !== service.generation) return json(res, 409, { ok: false, error: '开关已变化，请重新删除' });
+          const emotion = stickers.normalizeEmotion(body && body.emotion);
+          const name = String((body && body.name) || '');
           const dir = stickers.stickerDir(config, config.root);
-          const file = path.join(dir, stickers.EMOTIONS[emotion] || '', name);
-          if (!name || !stickers.EMOTIONS[emotion] || !stickers.regularFile(file, dir)) {
+          const file = stickers.resolveImage(dir, emotion, name);
+          if (!file) {
             return json(res, 404, { ok: false, error: '找不到这张表情包（可能已经删掉了）' });
           }
           try {
@@ -1323,13 +1305,13 @@ function createHandler(runtime) {
         if (pathname === '/api/stickers/open-folder' && method === 'POST') {
           // 在本机资源管理器里打开表情包目录（只打开这一个固定目录）
           const dir = stickers.stickerDir(config, config.root);
-          fs.mkdirSync(dir, { recursive: true });
-          if (process.platform === 'win32' && process.env.WHALE_TEST_NO_SHELL !== '1') {
-            try {
-              exec(`explorer.exe "${dir}"`, () => {});
-            } catch (err) {
-              return json(res, 500, { ok: false, error: '打开文件夹失败：' + (err && err.message ? err.message : err) });
-            }
+          stickers.safeDirectory(dir);
+          if (process.platform === 'win32' && config.env?.WHALE_TEST_NO_SHELL !== '1') {
+            // No shell expansion of a user-configured directory (%, &, etc.).
+            await new Promise((resolve, reject) => {
+              const child = spawn('explorer.exe', [dir], { shell: false, windowsHide: true, stdio: 'ignore' });
+              child.once('spawn', resolve); child.once('error', reject);
+            });
           }
           return json(res, 200, { ok: true, dir });
         }
@@ -1344,7 +1326,7 @@ function createHandler(runtime) {
           const body = await readBody(req);
           service.requireEnabled();
           if (generation !== service.generation) return json(res, 409, { ok: false, error: '开关已变化，请重新排队' });
-          const queued = service.enqueue(body.emotion || 'happy', body.chat ?? config.sticker?.testChat ?? '文件传输助手');
+          const queued = service.enqueue(body.emotion || 'other', body.chat ?? config.sticker?.testChat ?? '文件传输助手');
           return json(res, 200, { ok: true, queued });
         }
         if (pathname === '/api/stickers/pending' && method === 'GET') return json(res, 200, { ok: true, items: service.pending() });
@@ -1516,12 +1498,6 @@ function createHandler(runtime) {
         }
       }
 
-      if (pathname === '/api/digest' && method === 'GET') {
-        const q = new URL(req.url, 'http://localhost');
-        const since = Number(q.searchParams.get('since') || 0);
-        const items = runtime.store.listDigest(since).slice(-120);
-        return json(res, 200, buildDigest(items));
-      }
 
       if (pathname === '/api/persona' && method === 'GET') {
         return json(res, 200, { ok: true, persona: personaStore.summary(runtime.config), llm: { provider: runtime.llm.provider, providerLabel: runtime.llm.providerLabel, model: runtime.llm.model, mock: runtime.llm.isMock } });
@@ -1738,12 +1714,6 @@ function createHandler(runtime) {
         }
       }
 
-      if (pathname === '/api/digest' && method === 'GET') {
-        const q = new URL(req.url, 'http://localhost');
-        const since = Number(q.searchParams.get('since') || 0);
-        const items = runtime.store.listDigest(since).slice(-120);
-        return json(res, 200, buildDigest(items));
-      }
 
       if (pathname === '/api/persona' && method === 'GET') {
         return json(res, 200, {

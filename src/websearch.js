@@ -117,14 +117,134 @@ function dropStaleResults(query, results, { maxAgeDays = 550 } = {}) {
   return fresh.length ? fresh : results;
 }
 
+const STOP_WORDS = /(帮我|请问|请|一下|查查|查一查|搜搜|搜索|看看|我想知道|谁是|是谁|这个|那个|什么|怎么|为什么|是不是|有没有|最新|现在|目前|当前|今天|多少钱|什么价|价格是|怎么样|如何|的|吗|呢|啊|呀|吧|了|嘛|呗)/gi;
+
+/** 把口语问句拆成可判定相关性的词块（英文词 + 中文二字组）。 */
+// 品牌口语 → 检索词。现场问题：搜「苹果最新的机器是什么」命中的是
+// 「苹果（蔷薇科植物）」和「苹果公司」百科，她只能回答「我记的是旧的」。
+// 手机/电脑语境下换成 iPhone / Mac，结果才对得上。
+const BRAND_HINTS = [
+  { test: /(苹果|apple)[^。！？]{0,6}(手机|机器|机型|型号|出到|几代|第几|新机)|(手机|机器|机型|型号|出到|几代|第几|新机)[^。！？]{0,6}(苹果|apple)/i,
+    from: /苹果手机|苹果|apple/gi, to: 'iPhone' },
+  { test: /(苹果|apple)[^。！？]{0,6}(电脑|笔记本|mac)|(电脑|笔记本|mac)[^。！？]{0,6}(苹果|apple)/i,
+    from: /苹果电脑|苹果笔记本|苹果|apple|macbook/gi, to: 'Mac' },
+];
+
+/** 只改检索式，不改变原句语义。 */
+function expandBrand(text) {
+  let out = String(text || '');
+  for (const rule of BRAND_HINTS) {
+    if (!rule.test.test(out)) continue;
+    const replaced = out.replace(rule.from, rule.to).replace(/\s+/g, ' ').trim();
+    if (replaced && replaced !== out) out = replaced;
+  }
+  return out;
+}
+
+// 检索式写成 iPhone、原句写的是「苹果」时也要算命中。
+const TOKEN_ALIASES = { '苹果': ['iphone', 'apple', 'mac'], iphone: ['苹果'], mac: ['苹果', 'macbook'] };
+
+// 这些二字组太泛，几乎任何页面都能命中（「谁」「这个」「时候」…），
+// 用它们判相关性等于没判，会把字典页、歌词页当成有效资料。
+const GENERIC_TOKENS = new Set([
+  '谁是', '是谁', '这个', '那个', '一个', '什么', '怎么', '为什', '什们', '时候', '东西',
+  '事情', '问题', '方法', '我们', '你们', '他们', '自己', '可以', '不是', '就是', '还是',
+  '如果', '但是', '所以', '因为', '这样', '那样', '知道', '觉得', '应该', '需要', '很多',
+  '非常', '真的', '一直', '已经', '开始', '结束', '现在', '今天', '明天', '如何', '哪些',
+]);
+
+function queryTokens(query) {
+  const text = expandBrand(String(query || '')).replace(STOP_WORDS, ' ');
+  const latin = (text.match(/[a-z0-9][a-z0-9+.\-]{1,}/gi) || []).map((w) => w.toLowerCase());
+  const cjkRuns = text.match(/[\u4e00-\u9fa5]{2,}/g) || [];
+  const bigrams = [];
+  for (const run of cjkRuns) {
+    for (let i = 0; i + 1 < run.length; i += 1) bigrams.push(run.slice(i, i + 2));
+  }
+  for (const run of cjkRuns) if (run.length <= 4) bigrams.push(run);
+  return [...new Set([...latin, ...bigrams])]
+    .filter((t) => t.length >= 2 && (!GENERIC_TOKENS.has(t) || /^[a-z0-9]/.test(t)));
+}
+
+/**
+ * 相关性过滤。现场问题：「最新 iPhone 多少钱」经 Bing 中国站返回的是 Yandex 官网，
+ * 「显卡行情」返回「帮」字字典页——垃圾结果照样喂给模型，她只能回答「我记的是旧的」。
+ * 判据：标题或摘要里至少命中一个查询词块。
+ */
+function keepRelevant(query, results) {
+  const tokens = queryTokens(query);
+  // 现场问题：问「苹果最新的机器」时命中「苹果（蔷薇科植物）」百科，
+  // 提示词里塞进水果条目，她只能答非所问。
+  const phoneContext = /(手机|机器|机型|型号|出到|几代|第几|新机|iphone)/i.test(String(query || ''));
+  const fruitPage = /(蔷薇科|苹果属|Malus|水果|落叶乔木|栽培苹果|果树)/i;
+  if (!tokens.length) return results;
+  const kept = [];
+  for (const item of results) {
+    const hay = `${item.title || ''} ${item.snippet || ''}`.toLowerCase();
+    if (phoneContext && fruitPage.test(hay)) continue;
+    if (tokens.some((t) => hay.includes(t)
+      || (TOKEN_ALIASES[t] || []).some((alias) => hay.includes(alias)))) kept.push(item);
+  }
+  return kept;
+}
+
+/** 去掉口语填充词后的检索式，供第一次结果跑题时重搜。 */
+function cleanQuery(query) {
+  let text = String(query || '')
+    .replace(/^\s*(帮我|请|你|麻烦)?\s*(查一下|查查|查一查|查|搜一下|搜搜|搜|找一下|找|看看)/, ' ')
+    .replace(STOP_WORDS, ' ')
+    .replace(/[，。！？、,.!?]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  text = expandBrand(text) || text;
+  // 「苹果最新的机器是什么」清洗后会剩「iPhone 机器是」这种别扭短语，
+  // 搜出来还是百科页。收敛成「iPhone 最新机型」这类能出硬货的检索式。
+  text = text.replace(/\s*(是|有|在|了)\s*$/g, '').replace(/\s+/g, ' ').trim();
+  if (/iphone/i.test(text) && /(机器|机型|型号|出到|几代|第几|最新|新机|发布)/.test(text)) {
+    text = 'iPhone 最新机型';
+  } else if (/\bmac\b/i.test(text) && /(机器|机型|型号|最新|笔记本|发布)/.test(text)) {
+    text = 'Mac 最新机型';
+  }
+  // 「多少钱 / 什么价」问的是价格：保留这个意图，否则只会搜到官网首页。
+  if (/(多少钱|什么价|价格|报价)/.test(String(query || '')) && !/价格|报价|行情/.test(text)) {
+    text = (text + ' 价格').trim();
+  }
+  return text || String(query || '').trim();
+}
+
 async function search(query, { limit = 5, timeoutMs = 8000 } = {}) {
   const q = String(query || '').trim().slice(0, 100);
   if (!q) return [];
-  const url = 'https://cn.bing.com/search?q=' + encodeURIComponent(q) + '&setlang=zh-CN&count=10';
+  const ask = async (term) => {
+    const url = 'https://cn.bing.com/search?q=' + encodeURIComponent(term) + '&setlang=zh-CN&count=10';
+    return parseBing(await getText(url, timeoutMs));
+  };
   try {
-    const html = await getText(url, timeoutMs);
-    const parsed = parseBing(html);
-    return dropStaleResults(q, parsed).slice(0, limit);
+    const first = keepRelevant(q, await ask(q));
+    // 产品类问句（「苹果最新的机器是什么」）Bing 只给官网首页，首页摘要里没有型号。
+    // 官方「机型比较」页的摘要会直接列出当前阵容（实测含 iPhone 18 Pro / iPhone Duo），
+    // 所以这类问题优先补一次站内检索。
+    const wantsLineup = /(苹果|iphone|mac|macbook)[^。！？]{0,8}(最新|机器|机型|型号|出到|几代|第几|新机|发布)|(最新|机器|机型|型号|出到|几代|第几|新机|发布)[^。！？]{0,8}(苹果|iphone|mac)/i.test(q);
+    const lineup = /(电脑|笔记本|mac(book)?)/i.test(q)
+      ? 'site:apple.com.cn Mac 机型'
+      : 'site:apple.com.cn iPhone 机型';
+    if (wantsLineup) {
+      const official = keepRelevant(q, await ask(lineup));
+      // 官方机型页信息最硬（摘要里直接列当前阵容），排在前面，避免被官网首页挤掉。
+      const merged0 = [...official, ...first].filter((item, i, all) => all.findIndex((x) => x.url === item.url) === i);
+      if (merged0.length >= 2) return dropStaleResults(q, merged0).slice(0, limit);
+    }
+    if (first.length >= 2) return dropStaleResults(q, first).slice(0, limit);
+    // 结果跑题或太少：归一化检索式、词块各重搜一次（纠错，不是重试）。
+    const attempts = [...new Set([cleanQuery(q), queryTokens(q).join(' ')])
+      .filter((term) => term && term !== q)].slice(0, 2);
+    const extra = [];
+    for (const term of attempts) {
+      extra.push(...keepRelevant(q, await ask(term)));
+      if (extra.length >= 2) break;
+    }
+    const merged = [...first, ...extra].filter((item, i, all) => all.findIndex((x) => x.url === item.url) === i);
+    return dropStaleResults(q, merged).slice(0, limit);
   } catch {
     return [];
   }
@@ -270,6 +390,10 @@ async function weatherText(city, opts = {}) {
 }
 
 module.exports = {
+  expandBrand,
+  queryTokens,
+  keepRelevant,
+  cleanQuery,
   dropStaleResults,
   isTimeSensitive,
   parseSnippetAgeDays,
