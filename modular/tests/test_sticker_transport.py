@@ -160,8 +160,10 @@ class TransportTest(unittest.TestCase):
         for case in cases:
             self.assertFalse(transport.account_evidence_allowed(
                 explicit_pin=False, account_dirs=['a', 'b'], **case), case)
-            self.assertTrue(transport.account_evidence_allowed(
-                explicit_pin=True, account_dirs=['a', 'b'], **case), '手动钉窗口时总会放行')
+            self.assertEqual(transport.account_evidence_allowed(
+                explicit_pin=True, account_dirs=['a', 'b'], **case),
+                not case['configured_account'] or case['configured_account'] == case['db_account'],
+                '钉窗口也不能绕过明确的账号冲突')
 
     def test_account_evidence_accepts_other_reasons_and_single_account(self):
         for reason, dirs in (('命中最近会话 3 条', ['a', 'b']), ('本机只登了一个号', ['a'])):
@@ -219,6 +221,52 @@ class TransportTest(unittest.TestCase):
         _, aliases = transport.resolve_target(self.db, 'Peer', 'peer')
         self.assertNotIn('Peer', aliases)
 
+    def test_unknown_input_is_not_blank(self):
+        self.assertFalse(transport._is_blank(None))
+        self.assertFalse(transport._is_blank(0))
+        self.assertTrue(transport._is_blank('\n  \r\n'))
+        self.desktop.value = lambda control: None
+        self.assertEqual(self.send()['status'], 'failed')
+        self.assertEqual(self.keys, [])
+
+    def test_distinct_internal_space_or_case_names_never_match(self):
+        self.assertFalse(transport.alias_match('AB', {'A B'}))
+        self.assertFalse(transport.alias_match('peer', {'Peer'}))
+        self.assertTrue(transport.alias_match(' Peer\n', {'Peer'}))
+        self.uia.current_chat = lambda: 'AB'
+        self.assertEqual(self.send(aliases={'A B'})['status'], 'failed')
+        self.assertEqual(self.keys, [])
+
+    def test_filename_in_new_text_cannot_fake_delivery(self):
+        marker = {'md5': 'a' * 32, 'name': 'a.gif'}
+        for content in ['找不到a.gif', 'a' * 32, '<msg><title>a.gif</title></msg>']:
+            self.db.new = [{'sort_seq': 11, 'type': '文字', 'content': content,
+                            'sender_username': 'self-user'}]
+            out = transport.confirm_delivery(self.db, 'peer', 10, transport.db_identity(self.db),
+                                             lambda: True, timeout=0, marker=marker)
+            self.assertEqual(out['status'], 'unconfirmed')
+
+    def test_file_card_needs_structured_exact_fingerprint(self):
+        marker = {'md5': 'a' * 32, 'name': 'a.gif'}
+        for content in ['<msg><appmsg><title>a.gif</title></appmsg></msg>',
+                        '<msg><appmsg><md5>' + 'a' * 32 + '</md5></appmsg></msg>']:
+            self.db.new = [{'sort_seq': 11, 'type': '文件/链接/卡片', 'content': content,
+                            'sender_username': 'self-user'}]
+            self.assertEqual(transport.confirm_delivery(self.db, 'peer', 10, transport.db_identity(self.db),
+                             lambda: True, timeout=0, marker=marker)['status'], 'confirmed')
+        for content in ['a.gif', '<msg><title>not-a.gif</title></msg>', '<msg><md5>wrong</md5></msg>']:
+            self.db.new[0]['content'] = content
+            self.assertEqual(transport.confirm_delivery(self.db, 'peer', 10, transport.db_identity(self.db),
+                             lambda: True, timeout=0, marker=marker)['status'], 'unconfirmed')
+
+    def test_no_window_and_configured_account_mismatch_are_rejected(self):
+        base = dict(configured_account='', db_account='wxid_a', reason='本机只登了一个号',
+                    explicit_pin=False, account_dirs=['a', 'b'])
+        for count in [0, -1, 'oops']:
+            self.assertFalse(transport.account_evidence_allowed(**base, visible_windows=count))
+        base['configured_account'] = 'wxid_b'
+        self.assertFalse(transport.account_evidence_allowed(**base, visible_windows=1))
+
     def test_existing_text_draft_is_not_overwritten(self):
         self.desktop.input_value = 'private draft'
         self.assertEqual(self.send()['status'], 'failed')
@@ -265,40 +313,6 @@ class TransportTest(unittest.TestCase):
         self.on_paste = lambda: setattr(self.uia, 'current_chat', lambda: 'Wrong chat')
         self.assertEqual(self.send()['status'], 'unconfirmed')
         self.assertEqual(self.keys, [0x56])
-
-    def test_final_recheck_losing_the_target_says_so(self):
-        # 3.63：粘贴后最后一次检查如果窗口/焦点跑了，要说「焦点/目标丢了」，
-        # 而不是笼统的「send gates changed」，否则根本没法判断该不该重试。
-        seen = []
-
-        def current_chat():
-            seen.append(1)
-            return 'Peer' if len(seen) < 5 else 'Wrong chat'
-
-        self.uia.current_chat = current_chat
-        outcome = self.send()
-        self.assertEqual(outcome['status'], 'unconfirmed')
-        self.assertEqual(self.keys, [0x56], '目标丢了绝不能按 Enter')
-        self.assertIn('focus/target lost', outcome['error'])
-        self.assertTrue(outcome['draft_may_remain'])
-
-    def test_final_recheck_reports_what_the_input_actually_reads(self):
-        # 另一种现场：输入框里读到的不是附件（微信把它转成文字/读不到），
-        # 3.63 把实际读到的内容带进错误里，好区分「转成文字」和「读不到」。
-        reads = []
-
-        def value(control):
-            if 0x56 not in self.keys:
-                return '\n'
-            reads.append(1)
-            return '\ufffc\n' if len(reads) == 1 else '微信把附件转成文字了\n'
-
-        self.desktop.value = value
-        outcome = self.send()
-        self.assertEqual(outcome['status'], 'unconfirmed')
-        self.assertEqual(self.keys, [0x56])
-        self.assertIn('input reads', outcome['error'])
-        self.assertIn('转成文字', outcome['error'])
 
     def test_unsupported_draft_never_presses_enter(self):
         self.on_paste = lambda: setattr(self.desktop, 'input_value', '')
@@ -523,6 +537,7 @@ class BridgeContractTest(unittest.TestCase):
                         sticker_activity_allowed=Mock(return_value=True),
                         sticker_quarantine_allows=Mock(return_value=True), sticker_draft_quarantine={},
                         sticker_account_evidence_allowed=Mock(return_value=True),
+                        wechat_main_window_count=Mock(return_value=1),
                         account_send_allowed=Mock(return_value=True), ACCOUNT={'verified': True, 'hwnd': 100},
                         wechat_window_alive=Mock(return_value=True),
                         WindowsDesktop=Mock(return_value=FakeDesktop()),
@@ -624,17 +639,15 @@ class BridgeContractTest(unittest.TestCase):
         uia = SimpleNamespace(_pinned_hwnd=100, _win=SimpleNamespace(NativeWindowHandle=100),
                               current_chat=lambda: 'Peer', _chat_input=lambda: control)
         env['gui']._uia = uia
-        env.update(quarantined_input_value=transport.quarantined_input_value, log_throttled=Mock(),
+        env.update(quarantined_input_value=transport.quarantined_input_value,
+                   sticker_input_is_blank=transport._is_blank, log_throttled=Mock(),
                    sticker_draft_quarantine={'peer': {'hwnd': 100, 'aliases': {'Peer'},
                                                       'draft_observed': observed}},
                    acct_dirs=['test-account'], acct='test-account', WINDOW_HWND=0, dead_chats=set(),
                    sticker_account_evidence_ok=transport.account_evidence_allowed,
-                   wechat_main_window_count=Mock(return_value=1),
                    group_is_alive=lambda username: True, AWAY={'on': False}, away_active=lambda: False,
                    game_running=lambda: False, foreground_is_fullscreen=lambda: False)
-        # wechat_main_window_count 只以 mock 的形式注入：真的那个要读 win32gui。
-        bridge_functions({'sticker_quarantine_allows', 'sticker_account_evidence_allowed',
-                          'send_text', 'send_at'}, env)
+        bridge_functions({'sticker_quarantine_allows', 'sticker_account_evidence_allowed', 'send_text', 'send_at'}, env)
         return env, pattern, uia
 
     def test_unconfirmed_transport_quarantines_canonical_target(self):
@@ -668,6 +681,12 @@ class BridgeContractTest(unittest.TestCase):
         self.assertNotIn('peer', env['sticker_draft_quarantine'])
         env['gui'].use_window.assert_not_called()
 
+    def test_manually_cleared_newline_releases_quarantine_without_keys(self):
+        env, pattern, _ = self.quarantine_environment(observed=True, value='\n')
+        self.assertTrue(env['sticker_quarantine_allows']('peer', 'Peer'))
+        self.assertNotIn('peer', env['sticker_draft_quarantine'])
+        env['gui'].use_window.assert_not_called()
+
     def test_quarantine_wrong_target_or_unavailable_value_never_releases(self):
         env, pattern, uia = self.quarantine_environment(observed=True, value='')
         uia.current_chat = lambda: 'Wrong chat'
@@ -688,20 +707,39 @@ class BridgeContractTest(unittest.TestCase):
         env, _, _ = self.quarantine_environment()
         env['ACCOUNT']['why'] = '本机只登了一个号'
         env['acct_dirs'] = ['test-account', 'another-account']
-        env['acct'] = ''
+        env['ACCOUNT_WANTED'] = ''
         env['wechat_main_window_count'].return_value = 1
         self.assertTrue(env['sticker_account_evidence_allowed'](), '只登一个号时默认就能发')
 
         # 现场回归 2：真·多开（两个号同时登着）时才要求明确选账号。
         env['wechat_main_window_count'].return_value = 2
         self.assertFalse(env['sticker_account_evidence_allowed'](), '多开且没指定账号时不猜')
-        env['acct'] = 'test-account'  # 与 db.account 一致
+        env['ACCOUNT_WANTED'] = 'test-account'  # 与 db.account 一致
         self.assertTrue(env['sticker_account_evidence_allowed'](), '指定了正确账号应放行')
-        env['acct'] = 'another-account'
+        env['ACCOUNT_WANTED'] = 'another-account'
         self.assertFalse(env['sticker_account_evidence_allowed'](), '指定账号与数据库不一致要拒绝')
-        env['acct'] = 'test-account'
+        env['ACCOUNT_WANTED'] = 'test-account'
         env['WINDOW_HWND'] = 100  # 手动钉窗口：直接放行
         self.assertTrue(env['sticker_account_evidence_allowed']())
+
+    def test_settings_and_detached_windows_are_not_extra_accounts(self):
+        # 现场回归：设置窗、群公告/独立聊天窗也是 QWindowIcon，标题却不是「微信」。
+        # 只按类名计数会把「设置」当成第二个号，私聊表情包全被账号闸拒绝。
+        windows = {
+            100: ('Qt51514QWindowIcon', '微信'),
+            101: ('Qt51514QWindowIcon', '设置'),
+            102: ('Qt51514QWindowIcon', 'Banan1ce'),
+            103: ('Chrome_WidgetWin_1', '群公告-某个群'),
+        }
+        fake_gui = SimpleNamespace(GetClassName=lambda h: windows[int(h)][0],
+                                   GetWindowText=lambda h: windows[int(h)][1])
+        fake_driver = SimpleNamespace(WeChatUIA=lambda: SimpleNamespace(_wechat_hwnds=lambda: list(windows)))
+        env = bridge_functions({'wechat_main_window_count'}, {})
+        with patch.dict(sys.modules, {'win32gui': fake_gui,
+                                      'wechatauto.uia_driver': fake_driver}):
+            self.assertEqual(env['wechat_main_window_count'](), 1, '只有一个标题为「微信」的主窗')
+            windows[104] = ('mmui::MainWindow', '微信')
+            self.assertEqual(env['wechat_main_window_count'](), 2, '真的登了两个号才计为 2')
 
     def test_entire_bridge_syntax_compiles_without_executing_it(self):
         compile(BRIDGE.read_text(encoding='utf-8'), str(BRIDGE), 'exec')

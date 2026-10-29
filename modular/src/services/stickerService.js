@@ -17,6 +17,8 @@ class StickerService {
     this.generation = '';
     this.jobs = new Map();
     this.recent = new Map();
+    this.libraryDir = '';
+    this.migration = { moved: 0, deduplicated: 0, errors: [] };
     this.reconcile();
   }
   reconcile() {
@@ -39,6 +41,14 @@ class StickerService {
         job.error = '任务超时，未自动重试';
       }
     }
+    if (enabled) {
+      const dir = stickers.stickerDir(this.config, this.config.root);
+      // Migrate once per enabled library; never move a file held by an active job.
+      if (this.libraryDir !== dir && ![...this.jobs.values()].some((j) => ACTIVE.has(j.status))) {
+        this.migration = stickers.migrateLegacy(this.config, this.config.root);
+        this.libraryDir = dir;
+      }
+    } else this.libraryDir = '';
     // Preserve active jobs, but bound terminal history and session caches.
     const completed = [...this.jobs.values()].filter((j) => !ACTIVE.has(j.status));
     for (const job of completed.slice(0, Math.max(0, completed.length - 50))) this.jobs.delete(job.id);
@@ -55,9 +65,9 @@ class StickerService {
   plan(msg, text, request = '') {
     if (!this.reconcile() || msg?.platform !== 'wechat' || !msg.chatId) return null;
     const key = `wechat:${msg.chatId}`;
-    // 同一个会话只排一个任务，避免连发刷屏；不做时间间隔限制。
-    // 只挡「刚刚排上/正在发」的任务；超过 45 秒还挂着说明卡住了，不该再挡住新表情
-    if ([...this.jobs.values()].some((j) => j.key === key && ACTIVE.has(j.status) && this.now() - j.at < 45 * 1000)) return null;
+    // No cooldown after a completed send. An in-flight job remains exclusive until
+    // ACK or the 90s expiry; the old 45s bypass could queue two sends for one chat.
+    if ([...this.jobs.values()].some((j) => j.key === key && ACTIVE.has(j.status))) return null;
     const hit = stickers.pick({ config: this.config, root: this.config.root, key, text, request,
       recent: this.recent.get(key) || [], rng: this.rng });
     if (!hit) return null;
@@ -65,7 +75,8 @@ class StickerService {
   }
   enqueue(emotion, chat) {
     this.requireEnabled();
-    if (!stickers.hasEmotion(emotion)) throw fail('请选择有效的情绪');
+    emotion = stickers.normalizeEmotion(emotion);
+    if (!emotion) throw fail('请选择有效的情绪');
     chat = String(chat || '').trim();
     if (!chat || chat.length > 160 || /[\r\n\x00-\x1f]/.test(chat)) throw fail('请输入明确的目标会话名称');
     const file = stickers.choose(stickers.imagesFor(stickers.stickerDir(this.config, this.config.root), emotion), this.rng);
@@ -104,10 +115,13 @@ class StickerService {
     this.requireEnabled();
     const dir = stickers.stickerDir(this.config, this.config.root);
     const emotions = Object.keys(stickers.EMOTIONS).map((key) => {
-      const files = stickers.categoryImages(dir, key).map((f) => path.basename(f));
-      return { key, label: stickers.EMOTIONS[key], files, count: files.length };
+      const items = stickers.categoryImages(dir, key).map((file) => ({
+        name: path.basename(file), id: path.relative(dir, file).split(path.sep).join('/'),
+      }));
+      return { key, label: stickers.EMOTIONS[key], files: items.map((item) => item.name), items,
+        count: items.length, chance: stickers.chanceFor(this.config, key) };
     });
-    return { ok: true, enabled: true, generation: this.generation, dir,
+    return { ok: true, enabled: true, generation: this.generation, dir, migration: this.migration,
       testChat: this.config.sticker?.testChat || '文件传输助手', emotions,
       pending: [...this.jobs.values()].filter((j) => ACTIVE.has(j.status)).length,
       jobs: [...this.jobs.values()].filter((j) => ACTIVE.has(j.status))

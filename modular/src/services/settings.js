@@ -1,6 +1,6 @@
 'use strict';
 
-const { loadSettings, saveSettings, resolveRuntime, maskKey, PROVIDERS } = require('../infra/config');
+const { loadSettings, saveSettings, resolveRuntime, maskKey, PROVIDERS, isLocalUrl, normalizeBaseUrl } = require('../infra/config');
 const { applyConfigPatch } = require('../infra/configPatch');
 const vision = require('../adapters/vision');
 const { statusPayload } = require('./status');
@@ -60,13 +60,15 @@ async function applySettings(runtime, body) {
       const preset = PROVIDERS[provider];
       if (typeof body.baseUrl !== 'string' || !body.baseUrl.trim()) patch.baseUrl = preset.baseUrl;
       if (typeof body.model !== 'string' || !body.model.trim()) patch.model = preset.model;
-      if (preset.needsKey === false) patch.mock = false;
     }
   }
 
   if (typeof body.baseUrl === 'string') {
-    const baseUrl = body.baseUrl.trim().slice(0, 300);
-    if (baseUrl && !/^https?:\/\/[^\s]+$/.test(baseUrl)) throw new Error('接口地址要以 http:// 或 https:// 开头');
+    // 少写协议（`127.0.0.1:11434/v1`）很常见：本机 / 内网地址自动补 http://
+    const baseUrl = normalizeBaseUrl(body.baseUrl).slice(0, 300);
+    if (baseUrl && !/^https?:\/\/[^\s]+$/.test(baseUrl)) {
+      throw new Error('接口地址要以 http:// 或 https:// 开头（本机/内网地址可以直接写 127.0.0.1:11434/v1，会自动补 http://）');
+    }
     patch.baseUrl = baseUrl;
   }
   if (typeof body.apiKey === 'string') {
@@ -96,6 +98,19 @@ async function applySettings(runtime, body) {
   if (typeof body.userName === 'string') patch.userName = body.userName.trim().slice(0, 24);
   // 只要这次填了 Key，就默认关闭演示模式（防止「有 Key 还在说内置台词」）
   if (patch.apiKey) patch.mock = false;
+  // 目标服务本来就不需要 Key（本地 Ollama / 本机 / 内网自建）时，演示模式一律关掉。
+  // 网页每次都会把开关一起提交，新装用户默认就勾着 —— 以前这里被 body.mock 覆盖回 true，
+  // 于是「选好本地模型、保存、测试连接」全程一次请求都没发到本地服务。
+  {
+    const nextProvider = patch.provider || current.provider;
+    const nextBaseUrl = typeof patch.baseUrl === 'string' ? patch.baseUrl : current.baseUrl;
+    const nextPreset = PROVIDERS[nextProvider] || PROVIDERS.custom;
+    const keyFree = nextProvider === 'ollama' || !nextPreset.needsKey || isLocalUrl(nextBaseUrl);
+    if (keyFree && /^https?:\/\//i.test(nextBaseUrl)) {
+      if (patch.mock !== false) runtime.logger.info('目标服务不需要 Key（本地/内网），已自动关掉演示模式');
+      patch.mock = false;
+    }
+  }
   if (typeof body.temperature === 'number' && Number.isFinite(body.temperature)) {
     patch.temperature = Math.max(0, Math.min(2, body.temperature));
   }

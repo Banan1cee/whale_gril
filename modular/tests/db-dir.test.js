@@ -105,7 +105,11 @@ test('配置里的 dbDir 是错的（用户填错路径）时不会卡死，会�
   ].join('\n'));
 
   const last = out.trim().split(/\r?\n/).pop();
-  assert.equal(last, "''", '填错了就当没填，不该抛异常：' + last);
+  const value = last.replace(/^'|'$/g, '');
+  // 本机微信正在跑时，resolve_db_dir 会从进程打开的文件里扫到真实目录 —— 那是正确行为。
+  // 这条用例只保证「填错的那个路径不会被当成结果」，不锁死必须是空串。
+  assert.notEqual(value, path.join(dir, 'not-exist'), '填错的路径不能被当成结果');
+  assert.ok(value === '' || fs.existsSync(value), '要么空串，要么是真实存在的目录：' + last);
 });
 
 test('调试台有「微信文件保存位置」字段，且说明要重启桥接', () => {

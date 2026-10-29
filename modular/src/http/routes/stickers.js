@@ -12,7 +12,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { exec } = require('node:child_process');
+const { spawn } = require('node:child_process');
 
 const stickers = require('../../adapters/stickers');
 const { json, readBody, MIME } = require('../protocol');
@@ -22,11 +22,9 @@ const BRIDGE_ONLY = new Set(['/api/stickers/pending', '/api/stickers/claim', '/a
 
 function stickerPath(config, emotion, name) {
   const dir = stickers.stickerDir(config, config.root);
-  const safeName = path.basename(String(name || ''));
-  const folder = stickers.EMOTIONS[emotion];
-  if (!safeName || !folder) return null;
-  const file = path.join(dir, folder, safeName);
-  return stickers.regularFile(file, dir) ? { dir, file } : null;
+  // 相对路径身份：新结构下子目录也算，不能再拼 EMOTIONS[emotion]/name
+  const file = stickers.resolveImage(dir, stickers.normalizeEmotion(emotion), String(name || ''));
+  return file ? { dir, file } : null;
 }
 
 module.exports = function register(router) {
@@ -65,6 +63,9 @@ module.exports = function register(router) {
     if (pathname === '/api/stickers/delete' && method === 'POST') {
       return (async () => {
         const body = await readBody(req);
+        // 删盘期间开关可能被关掉
+        service.requireEnabled();
+        if (generation !== service.generation) return json(res, 409, { ok: false, error: '开关已变化，请重新删除' });
         const hit = stickerPath(config, body && body.emotion, body && body.name);
         if (!hit) return json(res, 404, { ok: false, error: '找不到这张表情包（可能已经删掉了）' });
         try {
@@ -79,16 +80,23 @@ module.exports = function register(router) {
 
     // 在本机资源管理器里打开表情包目录（只打开这一个固定目录）
     if (pathname === '/api/stickers/open-folder' && method === 'POST') {
-      const dir = stickers.stickerDir(config, config.root);
-      fs.mkdirSync(dir, { recursive: true });
-      if (process.platform === 'win32' && process.env.WHALE_TEST_NO_SHELL !== '1') {
-        try {
-          exec(`explorer.exe "${dir}"`, () => {});
-        } catch (err) {
-          return json(res, 500, { ok: false, error: '打开文件夹失败：' + ((err && err.message) || err) });
+      return (async () => {
+        const dir = stickers.stickerDir(config, config.root);
+        stickers.safeDirectory(dir);
+        const noShell = ((config.env && config.env.WHALE_TEST_NO_SHELL) || process.env.WHALE_TEST_NO_SHELL) === '1';
+        if (process.platform === 'win32' && !noShell) {
+          // 不再把用户配置的目录拼进命令行（%, & 之类会被 shell 解释）
+          try {
+            await new Promise((resolve, reject) => {
+              const child = spawn('explorer.exe', [dir], { shell: false, windowsHide: true, stdio: 'ignore' });
+              child.once('spawn', resolve); child.once('error', reject);
+            });
+          } catch (err) {
+            return json(res, 500, { ok: false, error: '打开文件夹失败：' + ((err && err.message) || err) });
+          }
         }
-      }
-      return json(res, 200, { ok: true, dir });
+        return json(res, 200, { ok: true, dir });
+      })();
     }
 
     if (pathname === '/api/stickers/upload' && method === 'POST') {
@@ -112,7 +120,7 @@ module.exports = function register(router) {
           return json(res, 409, { ok: false, error: '开关已变化，请重新排队' });
         }
         const queued = service.enqueue(
-          (body && body.emotion) || 'happy',
+          (body && body.emotion) || 'other',
           body && body.chat !== undefined ? body.chat : (config.sticker && config.sticker.testChat) || '文件传输助手'
         );
         return json(res, 200, { ok: true, queued });

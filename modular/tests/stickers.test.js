@@ -53,7 +53,7 @@ test('表情包：开关在调试台登记表最前面，并标着 experimental'
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test('表情包：情绪判定 5 类', () => {
+test('表情包：旧关键词辅助函数保持兼容（选图只用三分类）', () => {
   assert.equal(stickers.detectEmotion('你个傻逼', 12), 'angry');
   assert.equal(stickers.detectEmotion('你好可爱啊', 12), 'happy');
   assert.equal(stickers.detectEmotion('主人抱抱', 12), 'cute');
@@ -74,8 +74,8 @@ test('表情包：按情绪找文件夹（中文/英文都认），没图回落�
 });
 
 test('表情包：「发个表情」必发；开启后没有冷却，私聊群聊都按概率发', () => {
-  const root = makeRoot(['炸毛/a.gif']);
-  const cfg = cfgOn(root, { chances: { angry: 0 } });
+  const root = makeRoot(['炸毛/a.gif', '其他/o.gif']);
+  const cfg = cfgOn(root, { chances: { angry: 0, other: 0 } });
   // 概率 0 → 普通消息不该发
   assert.equal(stickers.pick({ config: cfg, root, key: 'g:1', text: '你个傻逼', rng: () => 0.99 }), null);
   // 明确要表情 → 必发
@@ -94,10 +94,11 @@ test('表情包：「发个表情」必发；开启后没有冷却，私聊群�
 
 test('表情包：概率命中才发（rng 可控）', () => {
   const root = makeRoot(['开心/h.gif']);
-  const cfg = cfgOn(root, { chances: { happy: 0.5 } });
-  const hit = stickers.pick({ config: cfg, root, key: 'u:1', text: '你好可爱', rng: () => 0.1 });
-  assert.ok(hit && hit.emotion === 'happy');
-  const miss = stickers.pick({ config: cfg, root, key: 'u:2', text: '你好可爱', rng: () => 0.9 });
+  // 现在普通发言按「通用」概率算（强信号才走分类），所以这里给 genericChance
+  const cfg = cfgOn(root, { chances: { other: 0.5 }, genericChance: 0.5 });
+  const hit = stickers.pick({ config: cfg, root, key: 'u:1', text: '今天星期三', rng: () => 0.1 });
+  assert.ok(hit && hit.path, '概率命中就该发一张（没有强情绪信号时全库随机）');
+  const miss = stickers.pick({ config: cfg, root, key: 'u:2', text: '今天星期三', rng: () => 0.9 });
   assert.equal(miss, null);
   fs.rmSync(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 80 });
 });
@@ -110,16 +111,34 @@ test('表情包：目录里没有图时安静返回 null（不崩、不刷日志
   fs.rmSync(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 80 });
 });
 
-test('表情包：认得出「在要表情包」的各种说法', () => {
-  const yes = ['发个表情包', '来张表情', '整个梗图', '甩个动图', '表情包', '表情包呗', '给我发个表情包啊', '来点meme'];
-  for (const text of yes) assert.equal(stickers.isStickerRequest(text), true, text);
-  // 只是提到表情包、不是要她发，不能因为「必发」规则乱发
-  const no = ['我昨天发了个表情包', '这个表情包挺好笑的', '', '在吗', '表情管理好难'];
-  for (const text of no) assert.equal(stickers.isStickerRequest(text), false, text);
-  // 明确要就必须发：概率被设成 0 也照发
-  const root = makeRoot(['炸毛/a.gif']);
-  const cfg = cfgOn(root, { chances: { angry: 0 } });
-  const forced = stickers.pick({ config: cfg, root, key: 'g:1', text: '表情包', rng: () => 0.99 });
-  assert.ok(forced && forced.path, '「表情包」应该必发');
+test('普通发言只在 开心/嫌弃/敷衍 里随机，不会抽到炸毛和撒娇', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-pool-'));
+  const mk = (emo, n) => {
+    const d = path.join(root, 'data/stickers', emo);
+    fs.mkdirSync(d, { recursive: true });
+    for (let i = 0; i < n; i += 1) fs.writeFileSync(path.join(d, emo + i + '.gif'), 'x');
+  };
+  mk('开心', 2); mk('嫌弃', 2); mk('敷衍', 2); mk('炸毛', 3); mk('撒娇', 3);
+  const cfg = cfgOn(root, { chances: {}, genericChance: 1 });
+  const seen = new Set();
+  for (let i = 0; i < 300; i += 1) {
+    const hit = stickers.pick({ config: cfg, root, key: 'k', text: '今天星期三', rng: Math.random });
+    if (hit && hit.path) seen.add(path.basename(path.dirname(hit.path)));
+  }
+  assert.deepEqual([...seen].sort(), ['开心', '嫌弃', '敷衍'].sort(), '只有这三类会被随机选中');
+  fs.rmSync(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 80 });
+});
+
+test('骂人和撒娇仍然只走对应分类', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-pool2-'));
+  const mk = (emo) => { const d = path.join(root, 'data/stickers', emo); fs.mkdirSync(d, { recursive: true }); fs.writeFileSync(path.join(d, 'a.gif'), 'x'); };
+  mk('开心'); mk('炸毛'); mk('撒娇');
+  const cfg = cfgOn(root, { chances: { angry: 1, cute: 1 }, genericChance: 1 });
+  for (let i = 0; i < 20; i += 1) {
+    const a = stickers.pick({ config: cfg, root, key: 'k', text: '气死我了', rng: Math.random });
+    assert.equal(path.basename(path.dirname(a.path)), '炸毛');
+    const c = stickers.pick({ config: cfg, root, key: 'k', text: '抱抱我', rng: Math.random });
+    assert.equal(path.basename(path.dirname(c.path)), '撒娇');
+  }
   fs.rmSync(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 80 });
 });

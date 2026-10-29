@@ -64,31 +64,10 @@ function recentSenders(store, limit = 8) {
 
 /* ---------------- 消息汇总 ---------------- */
 
-function buildDigest(items) {
-  if (!items.length) return { ok: true, count: 0, text: '' };
-  const map = new Map();
-  for (const it of items) {
-    const key = (it.chatType === 'group' ? '群 ' : '私聊 ') + (it.chat || it.sender || '');
-    if (!map.has(key)) map.set(key, []);
-    map.get(key).push(it);
-  }
-  const lines = [`📥 消息汇总（${items.length} 条）`];
-  let n = 0;
-  for (const [key, arr] of map) {
-    lines.push(`【${key}】${arr.length} 条`);
-    for (const it of arr.slice(-5)) {
-      lines.push(`- ${String(it.sender || '对方')}：${String(it.text || '').replace(/\s+/g, ' ').slice(0, 80)}`);
-    }
-    n += 1;
-    if (n >= 10) { lines.push('……还有更多会话未列出'); break; }
-  }
-  return { ok: true, count: items.length, text: lines.join('\n') };
-}
-
 function replyChannelLabel(config) {
   const g = (config.gateway && config.gateway.wechat) || {};
   if (g.outboundUrl) return `中转网关 ${g.outboundUrl}`;
   return '本地桥接（要另开一个「启动微信桥接.bat」窗口，回复才发得出去）';
 }
 
-module.exports = { storeSummary, statusPayload, recentSenders, buildDigest, replyChannelLabel };
+module.exports = { storeSummary, statusPayload, recentSenders, replyChannelLabel };

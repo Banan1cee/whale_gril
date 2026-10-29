@@ -169,6 +169,20 @@ class DeepSeekClient {
     return base + '/chat/completions';
   }
 
+  /**
+   * 备用路径：本地服务（Ollama / LM Studio / vLLM / llama.cpp）的 OpenAI 兼容接口一般挂在
+   * `/v1/chat/completions`。用户照着文档只填 `http://127.0.0.1:11434`（没有 /v1）时，
+   * 主路径会打到不存在的 `/chat/completions` 上拿到 404 —— 这里给出另一条路，404 时再试一次。
+   * 只在本地 / 内网地址上这么做：云端 404 一般是模型名不对，换路径没有意义。
+   */
+  altEndpoint() {
+    if (!this.runtime || !this.runtime.isLocal) return '';
+    const ep = this.endpoint();
+    if (/\/v1\/chat\/completions$/.test(ep)) return ep.replace(/\/v1\/chat\/completions$/, '/chat/completions');
+    if (/\/chat\/completions$/.test(ep)) return ep.replace(/\/chat\/completions$/, '/v1/chat/completions');
+    return '';
+  }
+
   describe() {
     return {
       mock: this.isMock,
@@ -215,30 +229,9 @@ class DeepSeekClient {
     return payload;
   }
 
-  _open(payload, { signal, stream }) {
-    if (this.isMock) throw new LlmError(FRIENDLY.nokey, { code: 'nokey' });
-    let url;
-    try {
-      url = new URL(this.endpoint());
-    } catch {
-      throw new LlmError(FRIENDLY.default, { code: 'bad_url', detail: 'invalid baseUrl: ' + this.baseUrl });
-    }
+  /** 真发一次 POST；调用方决定要不要换路径重来 */
+  _post(url, { body, headers, signal }) {
     const mod = url.protocol === 'http:' ? http : https;
-    const body = JSON.stringify(payload);
-    const headers = {
-      'Content-Type': 'application/json',
-      'Content-Length': Buffer.byteLength(body),
-      Accept: stream ? 'text/event-stream' : 'application/json',
-    };
-    // 本地模型（Ollama / LM Studio 等）通常不需要 Key，别带空的 Authorization
-    if (this.apiKey) headers.Authorization = `Bearer ${this.apiKey}`;
-    // OpenCode Go（opencode.ai）拒收不带会话头的请求：
-    //   HTTP 400 "Request is missing x-opencode-session and cannot be routed efficiently"
-    // 文档也要求客户端用自家 User-Agent 而不是通用 SDK 名。
-    if (/(^|\.)opencode\.ai$/i.test(url.hostname)) {
-      headers['x-opencode-session'] = this.sessionId;
-      headers['User-Agent'] = 'whale-girl/3.54';
-    }
     return new Promise((resolve, reject) => {
       const req = mod.request(
         {
@@ -277,6 +270,45 @@ class DeepSeekClient {
       }
       req.end(body);
     });
+  }
+
+  async _open(payload, { signal, stream } = {}) {
+    if (this.isMock) throw new LlmError(FRIENDLY.nokey, { code: 'nokey' });
+    let url;
+    try {
+      url = new URL(this.endpoint());
+    } catch {
+      throw new LlmError(FRIENDLY.default, { code: 'bad_url', detail: 'invalid baseUrl: ' + this.baseUrl });
+    }
+    const body = JSON.stringify(payload);
+    const headers = {
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(body),
+      Accept: stream ? 'text/event-stream' : 'application/json',
+    };
+    // 本地模型（Ollama / LM Studio 等）通常不需要 Key，别带空的 Authorization
+    if (this.apiKey) headers.Authorization = `Bearer ${this.apiKey}`;
+    // OpenCode Go（opencode.ai）拒收不带会话头的请求：
+    //   HTTP 400 "Request is missing x-opencode-session and cannot be routed efficiently"
+    // 文档也要求客户端用自家 User-Agent 而不是通用 SDK 名。
+    if (/(^|\.)opencode\.ai$/i.test(url.hostname)) {
+      headers['x-opencode-session'] = this.sessionId;
+      headers['User-Agent'] = 'whale-girl/3.54';
+    }
+    const first = await this._post(url, { body, headers, signal });
+    if (first.res.statusCode !== 404) return first;
+    // 404 且是本地服务：多半是 /v1 少了或多了（Ollama 根地址），换另一条路径再试一次
+    const alt = this.altEndpoint();
+    if (!alt) return first;
+    let altUrl;
+    try {
+      altUrl = new URL(alt);
+    } catch {
+      return first;
+    }
+    try { first.res.resume(); } catch { /* ignore */ }
+    this.logger && this.logger.debug(`本地服务 404（${url.pathname}），换 ${altUrl.pathname} 再试一次`);
+    return this._post(altUrl, { body, headers, signal });
   }
 
   async _readAll(res) {
