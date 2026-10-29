@@ -257,5 +257,29 @@
             </Setter>
         </Style>
         <Style TargetType="ComboBox" BasedOn="{StaticResource DarkCombo}" />
+
+        <!-- 深色输入框 -->
+        <Style TargetType="TextBox">
+            <Setter Property="Background" Value="#FF22262B" />
+            <Setter Property="Foreground" Value="{StaticResource Text}" />
+            <Setter Property="CaretBrush" Value="{StaticResource Text}" />
+            <Setter Property="BorderBrush" Value="{StaticResource CardBorder}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Padding" Value="7,5" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="SelectionBrush" Value="{StaticResource Accent}" />
+        </Style>
+        <Style TargetType="PasswordBox">
+            <Setter Property="Background" Value="#FF22262B" />
+            <Setter Property="Foreground" Value="{StaticResource Text}" />
+            <Setter Property="CaretBrush" Value="{StaticResource Text}" />
+            <Setter Property="BorderBrush" Value="{StaticResource CardBorder}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Padding" Value="7,5" />
+            <Setter Property="FontSize" Value="12" />
+        </Style>
+        <Style TargetType="ScrollBar">
+            <Setter Property="Width" Value="10" />
+        </Style>
     </Application.Resources>
 </Application>

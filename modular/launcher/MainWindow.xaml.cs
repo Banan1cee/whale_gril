@@ -7,6 +7,8 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Runtime.InteropServices;
+using System.Windows.Interop;
 using System.Windows.Threading;
 using WhaleLauncher.Views;
 
@@ -62,6 +64,29 @@ namespace WhaleLauncher
             Closed += (_, __) => _sup.Dispose();
         }
 
+        // ── 窗口外观与拖拽放行 ──────────────────────────────────
+        protected override void OnSourceInitialized(EventArgs e)
+        {
+            base.OnSourceInitialized(e);
+            var hwnd = new WindowInteropHelper(this).Handle;
+            int dark = 1;
+            // 20 = DWMWA_USE_IMMERSIVE_DARK_MODE（Win10 2004+），老系统用 19
+            if (DwmSetWindowAttribute(hwnd, 20, ref dark, sizeof(int)) != 0)
+                DwmSetWindowAttribute(hwnd, 19, ref dark, sizeof(int));
+
+            // 常态提权后，非管理员资源管理器的拖拽会被 UIPI 拦掉；放行这三条消息即可
+            const uint MSGFLT_ALLOW = 1;
+            ChangeWindowMessageFilterEx(hwnd, 0x0233 /* WM_DROPFILES */, MSGFLT_ALLOW, IntPtr.Zero);
+            ChangeWindowMessageFilterEx(hwnd, 0x0049 /* WM_COPYGLOBALDATA */, MSGFLT_ALLOW, IntPtr.Zero);
+            ChangeWindowMessageFilterEx(hwnd, 0x004A /* WM_COPYDATA */, MSGFLT_ALLOW, IntPtr.Zero);
+        }
+
+        [DllImport("dwmapi.dll", PreserveSig = true)]
+        private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool ChangeWindowMessageFilterEx(IntPtr hwnd, uint msg, uint action, IntPtr changeInfo);
+
         // ── 导航 ────────────────────────────────────────────────
         private void OnNavChanged(object sender, SelectionChangedEventArgs e)
         {
@@ -90,9 +115,14 @@ namespace WhaleLauncher
             switch (key)
             {
                 case "状态": return new StatusPage(_sup);
+                case "人设": return new PersonaPage(_sup);
+                case "记忆": return new MemoryPage(_sup);
+                case "表情包": return new StickerPage(_sup);
                 case "微信桥接": return new BridgePage(_sup);
+                case "诊断": return new DiagPage(_sup);
+                case "设置": return new SettingsPage(_sup);
                 default:
-                    return new PlaceholderPage(key, PlaceholderPage.HintFor(key));
+                    return new PlaceholderPage(key, "这一页还没做。");
             }
         }
 
