@@ -1,9 +1,14 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Text.RegularExpressions;
+using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Threading;
+using WhaleLauncher.Views;
 
 namespace WhaleLauncher
 {
@@ -11,7 +16,14 @@ namespace WhaleLauncher
     {
         private readonly RuntimeSupervisor _sup;
         private readonly DispatcherTimer _timer;
+        private readonly Dictionary<string, UserControl> _pages = new Dictionary<string, UserControl>();
         private bool _busy;
+        private Snapshot _last;
+
+        private static readonly string[] NavKeys =
+        {
+            "状态", "人设", "记忆", "表情包", "微信桥接", "诊断", "设置"
+        };
 
         public MainWindow()
         {
@@ -19,96 +31,195 @@ namespace WhaleLauncher
 
             var dir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
             _sup = new RuntimeSupervisor(dir);
-            _sup.Log += AppendLog;
 
-            var versionPath = Path.Combine(dir, "package.json");
-            if (File.Exists(versionPath))
+            var ver = "v4.0.0-alpha";
+            try
             {
-                try
+                var vp = Path.Combine(dir, "package.json");
+                if (File.Exists(vp))
                 {
-                    var text = File.ReadAllText(versionPath);
-                    var m = System.Text.RegularExpressions.Regex.Match(text, "\"version\"\\s*:\\s*\"([^\"]+)\"");
-                    if (m.Success) VersionText.Text = "v" + m.Groups[1].Value + "-alpha";
+                    var m = Regex.Match(File.ReadAllText(vp), "\"version\"\\s*:\\s*\"([^\"]+)\"");
+                    if (m.Success) ver = "v" + m.Groups[1].Value + "-alpha";
                 }
-                catch { }
             }
+            catch { }
+            VersionText.Text = ver;
+            FootVersion.Text = ver;
 
-            AppendLog("启动器就绪");
-            AppendLog("安装目录：" + dir);
+            foreach (var k in NavKeys) Nav.Items.Add(k);
+
+            _sup.Say("启动器就绪 · " + dir);
 
             _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
             _timer.Tick += async (_, __) => await RefreshAsync();
             _timer.Start();
-            Loaded += async (_, __) => await RefreshAsync();
+
+            Loaded += async (_, __) =>
+            {
+                Nav.SelectedIndex = 0;
+                await RefreshAsync();
+            };
             Closed += (_, __) => _sup.Dispose();
         }
 
-        private void AppendLog(string line) => LogBox.AppendText(line + Environment.NewLine);
+        // ── 导航 ────────────────────────────────────────────────
+        private void OnNavChanged(object sender, SelectionChangedEventArgs e)
+        {
+            var key = Nav.SelectedItem as string;
+            if (string.IsNullOrEmpty(key)) return;
 
-        private async void OnStart(object sender, RoutedEventArgs e)
+            if (!_pages.TryGetValue(key, out var page))
+            {
+                try
+                {
+                    page = CreatePage(key);
+                }
+                catch (Exception ex)
+                {
+                    _sup.Say("页面创建失败（" + key + "）：" + ex.Message);
+                    page = new PlaceholderPage(key, "这一页创建失败了：" + ex.Message);
+                }
+                _pages[key] = page;
+            }
+            Host.Content = page;
+            if (page is IRefreshable r) _ = r.RefreshAsync();
+        }
+
+        private UserControl CreatePage(string key)
+        {
+            switch (key)
+            {
+                case "状态": return new StatusPage(_sup);
+                case "微信桥接": return new BridgePage(_sup);
+                default:
+                    return new PlaceholderPage(key, PlaceholderPage.HintFor(key));
+            }
+        }
+
+        private void GoTo(string key)
+        {
+            Nav.SelectedItem = key;
+            Nav.ScrollIntoView(key);
+        }
+
+        private void OnSettings(object sender, RoutedEventArgs e) => GoTo("设置");
+
+        // ── 顶栏动作 ────────────────────────────────────────────
+        private bool AnythingRunning => _sup.NodeRunning || _sup.BridgeRunning;
+
+        private async void OnToggle(object sender, RoutedEventArgs e)
         {
             if (_busy) return;
             _busy = true;
             try
             {
-                BtnStart.IsEnabled = false;
-                AppendLog("— 启动中 —");
-                _sup.StartNode();
-                await System.Threading.Tasks.Task.Delay(1200);
-                _sup.StartBridge();
-                await RefreshAsync();
+                if (AnythingRunning)
+                {
+                    BtnToggle.IsEnabled = false;
+                    _sup.Say("— 停止中 —");
+                    _sup.StopAll();
+                    await Task.Delay(200);
+                }
+                else
+                {
+                    BtnToggle.IsEnabled = false;
+                    _sup.Say("— 启动中 —");
+                    _sup.StartNode();
+                    await Task.Delay(1200);   // 等内核监听端口，再拉桥接
+                    _sup.StartBridge();
+                }
             }
             finally
             {
-                BtnStart.IsEnabled = true;
+                BtnToggle.IsEnabled = true;
                 _busy = false;
+                await RefreshAsync();
             }
         }
 
-        private async void OnStop(object sender, RoutedEventArgs e)
+        private async void OnRestart(object sender, RoutedEventArgs e)
         {
-            AppendLog("— 停止中 —");
-            _sup.StopAll();
-            await RefreshAsync();
+            if (_busy) return;
+            _busy = true;
+            try
+            {
+                BtnRestart.IsEnabled = false;
+                _sup.Say("— 重启中 —");
+                _sup.StopAll();
+                await Task.Delay(600);
+                _sup.StartNode();
+                await Task.Delay(1200);
+                _sup.StartBridge();
+            }
+            finally
+            {
+                BtnRestart.IsEnabled = true;
+                _busy = false;
+                await RefreshAsync();
+            }
         }
 
-        private void OnOpen(object sender, RoutedEventArgs e)
+        private void OnOpenData(object sender, RoutedEventArgs e) => OpenDataDir();
+
+        public void OpenDataDir()
         {
             try
             {
-                Process.Start(new ProcessStartInfo(_sup.Url) { UseShellExecute = true });
-                AppendLog("已在浏览器打开 " + _sup.Url);
+                Directory.CreateDirectory(_sup.DataDir);
+                Process.Start(new ProcessStartInfo(_sup.DataDir) { UseShellExecute = true });
             }
             catch (Exception ex)
             {
-                AppendLog("打不开控制台：" + ex.Message);
+                _sup.Say("打开数据目录失败：" + ex.Message);
             }
         }
 
-        private async System.Threading.Tasks.Task RefreshAsync()
+        // ── 刷新 ────────────────────────────────────────────────
+        private async Task RefreshAsync()
         {
             try
             {
                 var s = await _sup.ProbeAsync();
+                _last = s;
 
                 DotNode.Fill = s.NodeUp ? (Brush)FindResource("Ok") : (Brush)FindResource("Idle");
-                TextNode.Text = s.NodeUp ? $"在线 · 端口 {_sup.Port}" : "未启动";
+                DotBridge.Fill = s.BrOnline ? (Brush)FindResource("Ok")
+                    : (s.NodeUp ? (Brush)FindResource("Warn") : (Brush)FindResource("Idle"));
+                DotWechat.Fill = s.BrOnline && s.BrAccountOk ? (Brush)FindResource("Ok")
+                    : (s.BrOnline ? (Brush)FindResource("Warn") : (Brush)FindResource("Idle"));
 
-                DotBridge.Fill = s.BridgeUp ? (Brush)FindResource("Ok") : (s.NodeUp ? (Brush)FindResource("Warn") : (Brush)FindResource("Idle"));
-                TextBridge.Text = s.BridgeUp ? "在线" : (s.NodeUp ? "未连上" : "未启动");
+                var who = string.IsNullOrEmpty(s.BrAccountNick) ? s.BrAccount : s.BrAccountNick;
+                WechatLabel.Text = string.IsNullOrEmpty(who) ? "微信" : "微信 · " + who;
+                BtnToggle.Content = AnythingRunning ? "⏻ 停止" : "⏻ 启动";
 
-                DotWechat.Fill = s.BridgeUp ? (Brush)FindResource("Ok") : (Brush)FindResource("Idle");
-                TextWechat.Text = s.Wechat;
+                var parts = new List<string>();
+                if (!s.NodeUp) parts.Add("内核未启动");
+                else parts.Add("内核 " + Uptime(s.UptimeSec));
+                if (s.NodeUp)
+                {
+                    if (s.BrOnline) parts.Add(s.BrLastSeenSec >= 0 ? $"桥接 {s.BrLastSeenSec} 秒前心跳" : "桥接在线");
+                    else parts.Add("桥接离线");
+                }
+                if (s.NodeUp && !s.HasKey) parts.Add("还没填 Key");
+                if (s.StFailed > 0) parts.Add($"发送失败 {s.StFailed}");
+                parts.Add("端口 " + s.Port);
+                StatusLine.Text = string.Join(" · ", parts);
 
-                TextChannel.Text = string.IsNullOrEmpty(s.Channel) ? "—" : s.Channel;
-                if (!string.IsNullOrEmpty(s.LastChat)) TextLast.Text = s.LastChat;
-
-                BtnStop.IsEnabled = s.NodeUp || s.BridgeUp;
+                if (Host.Content is IRefreshable r) await r.RefreshAsync();
             }
             catch (Exception ex)
             {
-                AppendLog("刷新状态出错：" + ex.Message);
+                StatusLine.Text = "刷新状态出错：" + ex.Message;
             }
+        }
+
+        private static string Uptime(long sec)
+        {
+            if (sec <= 0) return "0 秒";
+            var t = TimeSpan.FromSeconds(sec);
+            if (t.TotalHours >= 1) return $"{(int)t.TotalHours}:{t.Minutes:00}:{t.Seconds:00}";
+            if (t.TotalMinutes >= 1) return $"{t.Minutes} 分 {t.Seconds} 秒";
+            return $"{t.Seconds} 秒";
         }
     }
 }
