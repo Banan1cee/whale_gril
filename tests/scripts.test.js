@@ -115,7 +115,11 @@ test('部署脚本只同步代码，绝不覆盖运行数据', () => {
 test('出包脚本会跑测试与发布自检，并从 zip 里复核内容', () => {
   const text = fs.readFileSync(path.join(root, 'scripts', 'build-release.ps1'), 'utf8');
   assert.match(text, /--test/, '要先跑测试');
-  assert.match(text, /release-check\.js' --release|release-check\.js --release/, '要跑发布自检');
+  assert.match(text, /release-check\.js['"]?\)?\s+--release/, '要跑发布自检');
+  assert.doesNotMatch(text, /Copy-Item[^\n]*config\.example\.json[^\n]*config\.json/, '完整包不得写入 config.json');
+  assert.match(text, /'\.git'/, '暂存源码必须排除Git信息');
+  assert.match(text, /prepare-sticker-runtime\.py/, '便携运行时修复必须可重复出包');
+  assert.match(text, /Get-FileHash/, '从zip读取全部源码后应校验哈希');
   assert.match(text, /ZipFile/, '要从 zip 里读文件复核');
   assert.match(text, /visionApiKey/, '要检查看图字段真的在包里（3.0.3 事故）');
 });

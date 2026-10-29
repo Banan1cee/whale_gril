@@ -47,7 +47,8 @@ from sticker_transport import (guarded_send as guarded_sticker_send, read_enable
                                resolve_target as resolve_sticker_target, result as sticker_result,
                                WindowsDesktop, quarantined_input_value,
                                account_evidence_allowed as sticker_account_evidence_ok,
-                               alias_match as sticker_alias_match)
+                               alias_match as sticker_alias_match,
+                               _is_blank as sticker_input_is_blank)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_PATH = os.path.join(ROOT, "config.json")
@@ -59,7 +60,6 @@ ONLY_CHATS = []
 
 # 距离启动多久之前的消息不处理（秒）
 SKIP_OLDER_THAN = 10
-DIGEST_MINUTES = 30
 MASTER_WXID = ''
 # 超过这么多秒的旧消息直接不回，避免“回上一条”
 STALE_AFTER = float(os.environ.get("WHALE_STALE_AFTER", "4"))
@@ -144,8 +144,6 @@ try:
     CARE_ONLY_MASTER = _as_bool(_care.get("onlyMaster", True), True)
     CARE_ALLOW_OTHERS = _as_bool(_care.get("allowOthers", False), False)
     CARE_QUIET_MIN = float(_care.get("quietAfterMinutes", 20) or 0)
-    _digest = _wechat.get("digestMinutes", 30)
-    DIGEST_MINUTES = float(_digest) if isinstance(_digest, (int, float)) else 30.0
     # 表情包（实验性）：总闸在 features.stickers。关着就不轮询、不发图、日志一句不提。
     STICKER_TEST_ON = _as_bool(((_cfg.get("features") or {}).get("stickers", False)), False)
     MASTER_WXID = (((_cfg.get("persona") or {}).get("master") or {}).get("wxids") or [''])[0]
@@ -199,7 +197,7 @@ def reload_config(path=None):
     global GAME_TOKENS, AWAY_NOTICE, RETURN_NOTICE, QUEUED_MAX_AGE, QUEUED_MAX_CHATS
     global QUOTE_REPLY, KEYBOARD_FALLBACK, BACKGROUND_SEND, LOW_BATTERY_PCT, GOODNIGHT_TEXT
     global ACCOUNT_GUARD, WINDOW_HWND, STICKER_TEST_ON
-    global SHARE_ENABLED, SHARE_EVERY, CARE_ENABLED, CARE_QUIET_MIN, DIGEST_MINUTES
+    global SHARE_ENABLED, SHARE_EVERY, CARE_ENABLED, CARE_QUIET_MIN
     global STALE_AFTER, SYSTEM_SENDER_NAMES, BASE_SYSTEM_SENDERS, MASTER_WXID
     global VOICE_ENABLED, VOICE_BASE_URL, VOICE_MODEL, VOICE_API_KEY, VOICE_TIMEOUT, VOICE_MAX_SECONDS
     target = path or CONFIG_PATH
@@ -242,10 +240,6 @@ def reload_config(path=None):
         # 直接 os._exit 而不是 sys.exit：这里是后台线程，sys.exit 退不掉整个进程。
         os._exit(7)
     GOODNIGHT_TEXT = str(w.get("goodnightText") or GOODNIGHT_TEXT)
-    try:
-        DIGEST_MINUTES = float(w.get("digestMinutes", 30))
-    except Exception:
-        DIGEST_MINUTES = 30.0
     # 忽略名单：系统会话是固定底表，配置里的只追加
     SYSTEM_SENDER_NAMES = set(BASE_SYSTEM_SENDERS)
     SYSTEM_SENDER_NAMES |= {str(x).strip() for x in (w.get("ignoreSenders") or []) if str(x).strip()}
@@ -1205,10 +1199,15 @@ def main():
             h = int(h)
             try:
                 cls = win32gui.GetClassName(h) or ""
+                title = (win32gui.GetWindowText(h) or "").strip()
             except Exception:                     # noqa: BLE001
-                cls = ""
+                cls, title = "", ""
             # 托盘消息窗/工具窗也带 Qt 类名，只有真主窗是 QWindowIcon 或 mmui::MainWindow
             if not ("QWindowIcon" in cls or "mmui::" in cls):
+                continue
+            # 「设置」窗、独立聊天窗、群公告弹窗也都是 QWindowIcon，但标题不是「微信」。
+            # 以前把它们当主窗统计，日志会出现「本机有 2 个微信主窗」的假多开。
+            if title != "微信":
                 continue
             try:
                 probe._hot_activate_accessibility(h)
@@ -1349,6 +1348,10 @@ def main():
             return False
         scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
         newest_ok, nhit, h, _c, rows = scored[0]
+        if sum(1 for candidate in scored if candidate[:2] == scored[0][:2]) != 1:
+            ACCOUNT.update(verified=False, hwnd=0,
+                           why="多个微信窗口的账号证据相同，不能唯一确认")
+            return False
         if not newest_ok:
             best_hits = scored[0][1]
             tied = [x for x in scored if x[1] == best_hits]
@@ -2165,9 +2168,9 @@ def main():
                         value = quarantined_input_value(gui, entry["hwnd"], entry["aliases"])
                 except Exception:
                     pass
-                if value not in (None, ""):
+                if isinstance(value, str) and not sticker_input_is_blank(value):
                     entry["draft_observed"] = True
-                if value == "" and entry["draft_observed"]:
+                if sticker_input_is_blank(value) and entry["draft_observed"]:
                     sticker_draft_quarantine.pop(key, None)
                 else:
                     return False
@@ -2184,7 +2187,13 @@ def main():
         return allowed
 
     def wechat_main_window_count():
-        """当前有几个微信主窗（= 登着几个号）。只读，不点击。"""
+        """当前登着几个微信账号 = 标题为「微信」的主窗数量。
+
+        现场问题：设置窗、独立聊天窗、群公告弹窗也都是 QWindowIcon，但标题
+        分别是「设置」/ 联系人名 / 群公告。以前只按类名计数，把「设置」当成
+        第二个账号，于是「本机只登了一个号」的机器被误判成多开，私聊表情包
+        全被账号闸拒绝（日志：表情包跳过 / 账号信息不一致）。
+        """
         try:
             import win32gui
             from wechatauto.uia_driver import WeChatUIA
@@ -2196,9 +2205,10 @@ def main():
         for h in hwnds:
             try:
                 cls = win32gui.GetClassName(int(h)) or ""
+                title = (win32gui.GetWindowText(int(h)) or "").strip()
             except Exception:                 # noqa: BLE001
                 continue
-            if "QWindowIcon" in cls or "mmui::" in cls:
+            if ("QWindowIcon" in cls or "mmui::" in cls) and title == "微信":
                 count += 1
         return count
 
@@ -2210,7 +2220,7 @@ def main():
         # 打开的，就放行；没指定账号、多个账号目录又分不清时才拒绝。
         explicit_pin = bool(WINDOW_HWND and int(WINDOW_HWND) == int(ACCOUNT.get("hwnd") or 0))
         allowed = sticker_account_evidence_ok(
-            configured_account=acct,
+            configured_account=ACCOUNT_WANTED,
             db_account=getattr(db, "account", ""),
             reason=ACCOUNT.get("why"),
             explicit_pin=explicit_pin,
@@ -2220,9 +2230,8 @@ def main():
         if not allowed:
             log_throttled(
                 "sticker-account-ambiguous",
-                "表情包跳过：这台机器有多个微信账号目录，但没指定用哪一个。"
-                "去网页「设置 → 微信账号」选一个再发（文字消息已经在用「最近活跃」那个，"
-                "表情包不猜，免得从别的号发出去）。",
+                "表情包跳过：当前微信窗口和账号信息不一致，或多个窗口无法区分。"
+                "只登录一个号且数据库匹配时无需手选；多开时请在设置中选账号。",
                 ttl=300,
             )
         return allowed
@@ -3275,31 +3284,6 @@ def main():
                     except Exception as e:
                         log("回来通知失败：", repr(e))
 
-    def digest_watch():
-        last = time.time()
-        while True:
-            time.sleep(30)
-            if DIGEST_MINUTES <= 0 or not MASTER_WXID:
-                continue
-            if time.time() - last < DIGEST_MINUTES * 60:
-                continue
-            if AWAY["on"] or away_active() or game_running() or foreground_is_fullscreen():
-                continue
-            try:
-                base = bot_url.rsplit("/webhook", 1)[0]
-                r = LOCAL_HTTP.get(base + "/api/digest", params={"since": int(last * 1000)}, timeout=30)
-                data = r.json()
-            except Exception as e:
-                log("拉取消息汇总失败：", repr(e))
-                continue
-            if data.get("count") and data.get("text"):
-                name = display_name(MASTER_WXID) or "主人"
-                log("给主人发消息汇总：%d 条" % data["count"])
-                if send_text(data["text"], name, MASTER_WXID, force=True):
-                    last = time.time()
-            else:
-                last = time.time()
-
     def explain_uia_failure():
         """UIA 拿不到时把原因说清楚。
 
@@ -3558,7 +3542,6 @@ def main():
     threading.Thread(target=flush_pending, daemon=True).start()
     threading.Thread(target=config_watch, daemon=True).start()
     threading.Thread(target=game_watch, daemon=True).start()
-    threading.Thread(target=digest_watch, daemon=True).start()
     threading.Thread(target=warmup, daemon=True).start()
     threading.Thread(target=send_watchdog, daemon=True).start()
     threading.Thread(target=battery_watch, daemon=True).start()

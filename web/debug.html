@@ -117,7 +117,7 @@
       <p class="muted">拖到哪一类，就自动保存到哪一类；也可以点击分类框选择图片。每次最多 5 张，每张不超过 4 兆，支持动图和常见图片。上传不会发送微信消息。</p>
       <div class="row" id="stkFolderRow" style="margin-bottom:8px">
         <button type="button" id="stkOpenFolder">打开表情包文件夹</button>
-        <span class="muted">打开后可以直接把 gif 拖进 <code>开心</code> / <code>炸毛</code> / <code>撒娇</code> / <code>嫌弃</code> / <code>敷衍</code> 这些子文件夹，也可以在里面删文件；放好后这里 3 秒内会自动出现。</span>
+        <span class="muted">打开后可以直接把 gif 拖进 <code>傲娇</code> / <code>炸毛</code> / <code>其他</code> 这些子文件夹，也可以在里面删文件；放好后自动刷新；旧分类在首次开启时会无覆盖合并。</span>
         <span id="stkFolderMsg" class="muted" role="status"></span>
       </div>
       <div id="stkUploads" class="sticker-categories"></div>
@@ -128,7 +128,7 @@
       </div>
       <p class="muted">每个分类框下方可直接调整百分比，填 10 就是百分之十。私聊、群聊都按这个概率发，只要总开关开着；不设发送间隔，也不限制手动测试。</p>
       <h3 style="font-size:14px">可选：真实消息测试</h3>
-      <p class="muted">测试前请手动打开目标微信会话并保持前台、清空输入框；不会自动切会话/抢焦点。安全校验不通过会跳过；排队不代表送达。</p>
+      <p class="muted">测试会发送真实微信消息，并可能短暂切换窗口，完成后还原。请先清空输入框；无法核对目标会话时不会发送，排队不代表送达。</p>
       <div class="row">
         <label>情绪 <select id="stkEmotion"></select></label>
         <label>接收会话 <input type="text" id="stkChat" value="文件传输助手" style="min-width:180px" /></label>
@@ -313,11 +313,9 @@ const META = {
   sticker: ['表情包设置', '实验性总开关在页面顶部；下面只调整选图和发送规则'],
   'sticker.dir': ['表情包保存位置', '通常无需修改；可在页面顶部按情绪拖入图片'],
   'sticker.chances': ['各类情绪的发送概率', '填 0 到 1，例如 0.1 表示一成概率；炸毛也不是必发'],
-  'sticker.chances.happy': ['开心时的发送概率', ''],
   'sticker.chances.angry': ['炸毛时的发送概率', ''],
-  'sticker.chances.cute': ['撒娇时的发送概率', ''],
-  'sticker.chances.meh': ['嫌弃时的发送概率', ''],
-  'sticker.chances.bored': ['敷衍时的发送概率', ''],
+  'sticker.chances.cute': ['傲娇时的发送概率', ''],
+  'sticker.chances.other': ['其他情况下的发送概率', ''],
   'sticker.genericChance': ['未单独配置情绪时的概率', '只有某类情绪未设置独立概率时才使用'],
   'sticker.cooldownMinutes': ['两次表情最少间隔（分钟）', '同一个会话的普通自动发送冷却时间'],
   'sticker.onlyGroup': ['只在群聊里自动发表情', '关闭后也可用于私聊'],
@@ -416,7 +414,7 @@ function fieldsHtml(obj, prefix) {
   for (const [k, v] of Object.entries(obj)) {
     if (k.startsWith('_')) continue;
     const path = prefix ? prefix + '.' + k : k;
-    if (['features.stickers', 'sticker.enabled', 'sticker.maxSide', 'sticker.chances', 'sticker.cooldownMinutes'].includes(path)) continue; // 总闸只在顶部，隐藏旧版无效选项。
+    if (['features.stickers', 'sticker.enabled', 'sticker.maxSide', 'sticker.chances', 'sticker.genericChance', 'sticker.onlyGroup', 'sticker.cooldownMinutes'].includes(path)) continue; // 总闸只在顶部，隐藏旧版无效选项。
     if (isPlainObject(v) && !JSON_FIELDS.has(path)) subs.push(subHtml(path, v));
     else flat.push(fieldHtml(path, v));
   }
@@ -521,7 +519,7 @@ function wireForm() {
 }
 
 
-const STICKER_EMOTIONS = [['happy', '开心'], ['angry', '炸毛'], ['cute', '撒娇'], ['meh', '嫌弃'], ['bored', '敷衍']];
+const STICKER_EMOTIONS = [['cute', '傲娇'], ['angry', '炸毛'], ['other', '其他']];
 // 让用户一眼看到自己跑的是哪一版：旧版本的 bug 不用再排查
 async function showAppVersion() {
   const el = $('appVersion');
@@ -546,14 +544,12 @@ const STICKER_UPLOAD_BUSY = new Set();
 let STICKER_UPLOAD_EPOCH = 0;
 // 内联 SVG 图标：老系统没有彩色 emoji 字体，之前会显示成空白方块
 const STICKER_ICONS = {
-  happy: '<svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="8.6" cy="9.6" r="1.15" fill="currentColor"/><circle cx="15.4" cy="9.6" r="1.15" fill="currentColor"/><path d="M7.6 14.2c1.2 1.7 2.7 2.5 4.4 2.5s3.2-.8 4.4-2.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>',
+  other: '<svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="8.6" cy="9.6" r="1.15" fill="currentColor"/><circle cx="15.4" cy="9.6" r="1.15" fill="currentColor"/><path d="M7.6 14.2c1.2 1.7 2.7 2.5 4.4 2.5s3.2-.8 4.4-2.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>',
   angry: '<svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M6.6 7.4l3.4 1.8M17.4 7.4l-3.4 1.8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="8.7" cy="11.4" r="1.1" fill="currentColor"/><circle cx="15.3" cy="11.4" r="1.1" fill="currentColor"/><path d="M8.4 17c1-.9 2.2-1.3 3.6-1.3s2.6.4 3.6 1.3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>',
   cute: '<svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true"><path d="M12 20.5s-7-4.1-7-9.2a4.1 4.1 0 017-2.9 4.1 4.1 0 017 2.9c0 5.1-7 9.2-7 9.2z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><circle cx="9.6" cy="10.2" r=".95" fill="currentColor"/><circle cx="14.4" cy="10.2" r=".95" fill="currentColor"/></svg>',
-  meh: '<svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M7.2 9.2h3.2M13.6 9.2h3.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M8.6 15.6h6.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>',
-  bored: '<svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M7.4 9.8c.7-.6 1.5-.6 2.2 0M14.4 9.8c.7-.6 1.5-.6 2.2 0" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M9.4 15.2c.8-.5 1.7-.5 2.6 0s1.8.5 2.6 0" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
 };
 
-const STICKER_RATE_DEFAULTS = {happy:0.25,angry:0.25,cute:0.25,meh:0.25,bored:0.25};
+const STICKER_RATE_DEFAULTS = {cute:0.25,angry:0.25,other:0.25};
 let STICKER_RATES_DIRTY = false;
 let STICKER_RATES_SAVING = false;
 let STICKER_RATES_READY = false;
@@ -649,7 +645,8 @@ function stickerRatesEdited() {
 function applyStickerRates(config) {
   const cfg = config && config.sticker || {};
   for (const [key] of STICKER_EMOTIONS) {
-    const raw = Number(cfg.chances && cfg.chances[key] !== undefined ? cfg.chances[key] : STICKER_RATE_DEFAULTS[key]);
+    const raw = Number(cfg.chances && cfg.chances[key] !== undefined ? cfg.chances[key]
+      : (key === 'other' && cfg.genericChance !== undefined ? cfg.genericChance : STICKER_RATE_DEFAULTS[key]));
     $('stkChance-' + key).value = String(Number((Math.min(1, Math.max(0, Number.isFinite(raw) ? raw : 0)) * 100).toFixed(2)));
     $('stkChance-' + key).disabled = false;
   }
@@ -695,7 +692,7 @@ async function saveStickerRates() {
     if (edit === STICKER_RATE_EDIT) {
       STICKER_RATES_DIRTY = false;
       if (data.config) applyStickerRates(data.config);
-      $('stkRatesStatus').textContent = '发送概率和表情间隔已保存，立即生效。';
+      $('stkRatesStatus').textContent = '发送概率已保存，立即生效。';
     } else $('stkRatesStatus').textContent = '已保存刚才提交的设置；你后续输入的修改还未保存。';
   } catch (error) { $('stkRatesStatus').textContent = '保存概率失败：' + stickerMessage(error); }
   finally { STICKER_RATES_SAVING = false; $('stkSaveRates').disabled = !STICKER_RATES_DIRTY; }
@@ -763,12 +760,18 @@ function bindStickerUi() {
     zone.setAttribute('aria-busy', 'false');
     const icon = document.createElement('span');
     icon.className = 'sticker-icon';
-    icon.innerHTML = STICKER_ICONS[key] || STICKER_ICONS.happy;
+    icon.innerHTML = STICKER_ICONS[key] || STICKER_ICONS.other;
     icon.setAttribute('aria-hidden', 'true');
     zone.appendChild(icon);
     const title = document.createElement('h4');
     title.textContent = label;
     zone.appendChild(title);
+    if (key === 'other') {
+      const advice = document.createElement('span');
+      advice.id = 'stkOtherHint'; advice.className = 'muted';
+      advice.textContent = '（此为绝大部分情绪，建议多加表情包）';
+      title.appendChild(advice);
+    }
     const hint = document.createElement('div');
     hint.className = 'muted';
     hint.textContent = '把图片拖到这里，松手自动保存';
@@ -903,7 +906,8 @@ async function loadStickers() {
       const thumbBox = $('stkThumbs-' + key);
       if (thumbBox) {
         thumbBox.replaceChildren();
-        for (const file of (found && found.files ? found.files : [])) {
+        for (const item of (found && found.items ? found.items : (found && found.files || []).map((name) => ({name, id:name})))) {
+          const file = item.name; const fileId = item.id;
           const wrap = document.createElement('span');
           wrap.className = 'stk-thumb-wrap';
           const img = document.createElement('img');
@@ -911,25 +915,33 @@ async function loadStickers() {
           img.loading = 'lazy';
           img.alt = file;
           img.title = file + '（点击删除请按右上角 ×）';
-          img.src = '/api/stickers/image?emotion=' + encodeURIComponent(key) + '&name=' + encodeURIComponent(file);
+          img.src = '/api/stickers/image?emotion=' + encodeURIComponent(key) + '&name=' + encodeURIComponent(fileId);
           wrap.appendChild(img);
           const del = document.createElement('button');
           del.type = 'button';
           del.className = 'stk-del';
-          del.id = 'stkDelete-' + key + '-' + file;
+          del.id = 'stkDelete-' + key + '-' + fileId;
           del.textContent = '×';
           del.title = '删掉这张：' + file;
           del.setAttribute('aria-label', '删掉这张表情包 ' + file);
-          del.addEventListener('click', (event) => { event.stopPropagation(); deleteSticker(key, file); });
+          del.addEventListener('click', (event) => { event.stopPropagation(); deleteSticker(key, fileId); });
           wrap.appendChild(del);
           thumbBox.appendChild(wrap);
         }
       }
-      $('stkFiles-' + key).textContent = found && found.files && found.files.length ? '最近保存：' + found.files.slice(-3).join('、') : (count ? '图片已保存到这一类。' : '还没有图片，拖进来即可添加。');
+      const shots = (found && found.files) ? found.files.length : 0;
+      $('stkFiles-' + key).textContent = shots === 1
+        ? '只有 1 张，她会一直发这一张；建议再拖几张进来换着发。'
+        : (shots > 1
+          ? '这一类共 ' + shots + ' 张，随机换着发（刚发过的会先跳过）。'
+          : (count ? '图片已保存到这一类。' : '还没有图片，拖进来即可添加。'));
       lines.push(label + '：' + count + ' 张');
     }
     $('stkStatus').textContent = lines.join(' ／ ') + ' ｜ 待处理 ' + (data.pending || 0) + ' 项';
     $('stkLocation').textContent = data.dir || '尚未读取到保存位置';
+    if (data.migration && data.migration.errors && data.migration.errors.length) {
+      $('stkFolderMsg').textContent = '部分旧图未能合并，原图已保留：' + data.migration.errors.join('；');
+    }
     $('stkJobs').replaceChildren();
     for (const job of Array.isArray(data.jobs) ? data.jobs : []) {
       const line = document.createElement('div');

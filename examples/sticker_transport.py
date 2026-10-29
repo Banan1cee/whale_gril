@@ -17,7 +17,7 @@ IMAGE_TYPES = {'.gif': 'GIF', '.png': 'PNG', '.jpg': 'JPEG', '.jpeg': 'JPEG', '.
 MEDIA_TYPES = {'图片', '表情', '动画表情'}
 
 
-FILE_TYPES = {'文件', '文件/链接/卡片', '链接/卡片', '其他'}
+FILE_TYPES = {'文件', '文件/链接/卡片', '链接/卡片'}
 
 
 def _file_marker(path):
@@ -33,15 +33,31 @@ def _file_marker(path):
 
 
 def _message_matches(message, marker):
-    """这条新消息能证明是「我们刚粘的那张图」吗？"""
-    content = str(message.get('content') or '')
-    if marker:
-        if marker.get('md5') and marker['md5'].lower() in content.lower():
+    """Only structured attachment evidence can strongly identify an upload.
+
+    A normal text reply such as '找不到a.gif' is NOT delivery confirmation.
+    """
+    kind = message.get('type')
+    if kind not in MEDIA_TYPES | FILE_TYPES or not isinstance(marker, dict):
+        return False
+    try:
+        import xml.etree.ElementTree as ET
+        tree = ET.fromstring(str(message.get('content') or ''))
+    except Exception:
+        return False
+    wanted_md5 = str(marker.get('md5') or '').lower()
+    wanted_name = str(marker.get('name') or '')
+    for node in tree.iter():
+        tag = str(node.tag).lower()
+        for attr, value in node.attrib.items():
+            if wanted_md5 and 'md5' in attr.lower() and str(value).lower() == wanted_md5:
+                return True
+        if wanted_md5 and 'md5' in tag and str(node.text or '').strip().lower() == wanted_md5:
             return True
-        name = str(marker.get('name') or '')
-        if name and name.lower() in content.lower():
+        if (kind in FILE_TYPES and wanted_name and tag in {'title', 'filename', 'file_name'}
+                and str(node.text or '').strip() == wanted_name):
             return True
-    return message.get('type') in MEDIA_TYPES
+    return False
 
 
 def result(status, error='', draft_may_remain=False, draft_observed=False):
@@ -185,17 +201,27 @@ def account_evidence_allowed(*, configured_account, db_account, reason, explicit
       4. 多开（多个主窗）且分不清 → 要求：网页里明确选了账号，且数据库就是用
          这个号打开的，否则拒绝（这时候猜错真的会从别人的号发消息）。
     """
-    if explicit_pin:
-        return True
+    wanted = str(configured_account or '').strip()
+    current = str(db_account or '').strip()
+    # A configured/DB mismatch must never be bypassed merely by counting windows.
+    if wanted and wanted != current:
+        return False
+    count = None
     if visible_windows is not None:
         try:
-            if int(visible_windows) <= 1:
-                return True
+            count = int(visible_windows)
         except (TypeError, ValueError):
-            pass
-    if str(reason or '') != '本机只登了一个号' or len(account_dirs or []) <= 1:
+            return False
+        if count < 1:
+            return False
+    if explicit_pin:
         return True
-    wanted, current = str(configured_account or '').strip(), str(db_account or '').strip()
+    if count == 1:
+        return bool(current)
+    if str(reason or '').startswith('命中最近会话'):
+        return bool(current)
+    if count is None and len(account_dirs or []) == 1:
+        return bool(current)
     return bool(wanted and current and wanted == current)
 
 
@@ -238,9 +264,7 @@ def confirm_delivery(db, username, baseline, identity, gate, timeout=5.0,
             # 现场问题：把 gif 粘进输入框后，微信有时发成「文件卡片」而不是「图片/表情」，
             # 老逻辑只认 MEDIA_TYPES，于是明明发出去了还报「未确认」。
             # 现在先用 md5 / 文件名认领，认不到再看类型。
-            strong = [m for m in fresh if marker and _message_matches(m, marker) and (
-                str(marker.get('md5') or '').lower() in str(m.get('content') or '').lower()
-                or str(marker.get('name') or '').lower() in str(m.get('content') or '').lower())]
+            strong = [m for m in fresh if _message_matches(m, marker)]
             if len(strong) == 1:
                 return result('confirmed')
             if len(strong) > 1:
@@ -294,21 +318,11 @@ class WindowsDesktop:
             win32clipboard.CloseClipboard()
 
 
-def _norm_chat(name):
-    import re
-    return re.sub(r'\s+', '', str(name or '')).casefold()
-
-
 def _alias_match(current, aliases):
-    """微信标题常有多余空格/大小写差异，比较前统一归一化。
-
-    现场问题：私聊里 UIA 读到的标题和数据库昵称差一个空格，严格 == 判定就
-    一直「目标会话没打开」，表情包永远发不出去。
-    """
-    cur = _norm_chat(current)
-    if not cur:
-        return False
-    return any(_norm_chat(alias) == cur for alias in (aliases or ()))
+    # Only strip surrounding UIA whitespace. Casefold/removing INTERNAL spaces
+    # merges distinct contacts ('A B' vs 'AB'), unlike resolve_target's proof.
+    cur = str(current or '').strip()
+    return bool(cur) and any(str(alias or '').strip() == cur for alias in (aliases or ()))
 
 
 def _is_blank(value):
@@ -317,7 +331,7 @@ def _is_blank(value):
     现场问题：只要按 `!= ''` 判断，输入框永远算「有草稿」，私聊里表情包
     一张也发不出去（日志：input contains a draft）。
     """
-    return str(value if value is not None else '').strip() == ''
+    return isinstance(value, str) and value.strip() == ''
 
 
 def _is_attachment(value):
@@ -326,7 +340,7 @@ def _is_attachment(value):
 
 
 def alias_match(current, aliases):
-    """公开的标题比较：空格/大小写不敏感。"""
+    """公开的标题比较：只忽略首尾空白，保留收件人身份。"""
     return _alias_match(current, aliases)
 
 
@@ -398,9 +412,48 @@ def guarded_send(gui, uia, hwnd, aliases, path, root, db, username, gate,
                 return None
             return control
 
+        def guard_problem():
+            """只读：返回第一条不满足的条件名，失败日志才有可操作信息。"""
+            try:
+                if not gate():
+                    return 'gate(reloaded config/generation)'
+                if not activity_allowed():
+                    return 'activity gate (game/fullscreen/away)'
+                if not account_valid():
+                    return 'account evidence changed'
+                if db_identity(db) != identity:
+                    return 'database account changed'
+                if not desktop.foreground(hwnd):
+                    return 'WeChat is not the foreground window'
+                if int(getattr(gui, 'main_hwnd', 0)) != hwnd:
+                    return 'window driver points at another window'
+                if int(getattr(uia, '_pinned_hwnd', 0)) != hwnd:
+                    return 'UIA is pinned to another window'
+                if uia._win is None or int(uia._win.NativeWindowHandle) != hwnd:
+                    return 'UIA root window changed'
+                chat = uia.current_chat()
+                if not _alias_match(chat, aliases):
+                    return 'current chat title is %r, expected one of %r' % (chat, sorted(aliases))
+                control = uia._chat_input()
+                if control is None:
+                    return 'chat input control not found'
+                if getattr(control, 'ControlTypeName', '') != 'EditControl':
+                    return 'chat input is not an EditControl'
+                if not _alias_match(_input_title(getattr(control, 'Name', '')), aliases):
+                    return 'chat input title is %r, expected one of %r' % (
+                        getattr(control, 'Name', ''), sorted(aliases))
+                if 'chat_input_field' not in str(getattr(control, 'AutomationId', '') or '').split('.'):
+                    return 'chat input has an unexpected AutomationId'
+                if not desktop.focused(control, hwnd):
+                    return 'chat input does not have keyboard focus'
+                return ''
+            except Exception as exc:                       # noqa: BLE001
+                return 'guard read failed: %r' % (exc,)
+
         control = guard()
         if control is None:
-            return result('failed', 'open the exact target in the pinned foreground window and focus its input')
+            problem = guard_problem() or 'unknown guard state'
+            return result('failed', 'cannot send yet: ' + problem)
         # 刚发完文字时微信输入框偶尔还有短暂残留（私聊里尤其常见），
         # 这里只「等它自己清空」，绝不替用户按删除键；等不到才失败。
         for _ in range(20):

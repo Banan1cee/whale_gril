@@ -1,6 +1,6 @@
 {
     "name": "whale-girl-bot",
-    "version": "3.63",
+    "version": "3.64",
     "private": false,
     "description": "鲸鲸 —— 可接微信群 / B 站分享的 DeepSeek 鲸鱼娘聊天机器人",
     "main": "server.js",

@@ -468,6 +468,9 @@ body {
 }
 .switch input:checked + .slider { background: linear-gradient(150deg, #4d6bfe, #2ea9e8); }
 .switch input:checked + .slider::after { transform: translateX(18px); background: #fff; }
+/* 本地/内网接口不需要 Key 时，演示模式开关置灰（开着只会让本地模型收不到请求） */
+.switch input:disabled + .slider { opacity: 0.45; }
+.switch:has(input:disabled) { cursor: default; opacity: 0.75; }
 
 .group-field {
   border: 1px solid var(--line);
