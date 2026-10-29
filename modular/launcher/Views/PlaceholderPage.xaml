@@ -1,0 +1,23 @@
+<UserControl x:Class="WhaleLauncher.Views.PlaceholderPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Background="{StaticResource Bg}">
+    <Grid Margin="20,16,20,14">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <DockPanel Grid.Row="0" LastChildFill="False">
+            <TextBlock x:Name="TitleText" DockPanel.Dock="Left" Style="{StaticResource H1}" VerticalAlignment="Center" />
+        </DockPanel>
+
+        <Border Grid.Row="1" Style="{StaticResource Card}" Margin="0,16,0,0" Padding="22,20" VerticalAlignment="Top">
+            <StackPanel>
+                <TextBlock x:Name="HintText" Style="{StaticResource Value}" TextWrapping="Wrap" LineHeight="22" />
+                <TextBlock Text="这一页的骨架已经就位，内容按 03-界面与功能归位.md 逐条填，下一轮接上。"
+                           Style="{StaticResource Small}" Margin="0,14,0,0" TextWrapping="Wrap" />
+            </StackPanel>
+        </Border>
+    </Grid>
+</UserControl>

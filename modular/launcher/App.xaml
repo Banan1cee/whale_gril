@@ -3,38 +3,82 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              StartupUri="MainWindow.xaml">
     <Application.Resources>
-        <Color x:Key="BgColor">#FF1B1D21</Color>
         <SolidColorBrush x:Key="Bg" Color="#FF1B1D21" />
-        <SolidColorBrush x:Key="Card" Color="#FF24272C" />
+        <SolidColorBrush x:Key="BgNav" Color="#FF1F2227" />
+        <SolidColorBrush x:Key="BgTop" Color="#FF202329" />
+        <SolidColorBrush x:Key="CardBg" Color="#FF24272C" />
         <SolidColorBrush x:Key="CardBorder" Color="#FF32363C" />
+        <SolidColorBrush x:Key="Line" Color="#FF2A2E34" />
         <SolidColorBrush x:Key="Text" Color="#FFE8EAED" />
         <SolidColorBrush x:Key="Muted" Color="#FF9AA0A6" />
+        <SolidColorBrush x:Key="Dim" Color="#FF6B7280" />
         <SolidColorBrush x:Key="Accent" Color="#FF7DD3FC" />
+        <SolidColorBrush x:Key="AccentDim" Color="#FF2B3037" />
         <SolidColorBrush x:Key="Ok" Color="#FF4ADE80" />
         <SolidColorBrush x:Key="Warn" Color="#FFFBBF24" />
         <SolidColorBrush x:Key="Bad" Color="#FFF87171" />
-        <SolidColorBrush x:Key="Idle" Color="#FF6B7280" />
+        <SolidColorBrush x:Key="Idle" Color="#FF4B5157" />
 
         <Style TargetType="TextBlock" x:Key="H1">
             <Setter Property="Foreground" Value="{StaticResource Text}" />
-            <Setter Property="FontSize" Value="22" />
+            <Setter Property="FontSize" Value="18" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+        <Style TargetType="TextBlock" x:Key="H2">
+            <Setter Property="Foreground" Value="{StaticResource Text}" />
+            <Setter Property="FontSize" Value="13" />
             <Setter Property="FontWeight" Value="SemiBold" />
         </Style>
         <Style TargetType="TextBlock" x:Key="Label">
             <Setter Property="Foreground" Value="{StaticResource Muted}" />
             <Setter Property="FontSize" Value="12" />
         </Style>
+        <Style TargetType="TextBlock" x:Key="Small">
+            <Setter Property="Foreground" Value="{StaticResource Dim}" />
+            <Setter Property="FontSize" Value="11" />
+        </Style>
         <Style TargetType="TextBlock" x:Key="Value">
             <Setter Property="Foreground" Value="{StaticResource Text}" />
             <Setter Property="FontSize" Value="14" />
         </Style>
 
+        <!-- 导航项 -->
+        <Style TargetType="ListBoxItem" x:Key="NavItem">
+            <Setter Property="Foreground" Value="{StaticResource Muted}" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Padding" Value="20,9" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBoxItem">
+                        <Border x:Name="b" Background="Transparent" Padding="{TemplateBinding Padding}">
+                            <Grid>
+                                <Border x:Name="accent" Width="3" Height="16" Background="Transparent"
+                                        HorizontalAlignment="Left" VerticalAlignment="Center" Margin="-20,0,0,0" CornerRadius="2" />
+                                <ContentPresenter VerticalAlignment="Center" />
+                            </Grid>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="b" Property="Background" Value="#FF272B31" />
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="b" Property="Background" Value="{StaticResource AccentDim}" />
+                                <Setter TargetName="accent" Property="Background" Value="{StaticResource Accent}" />
+                                <Setter Property="Foreground" Value="{StaticResource Text}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 按钮 -->
         <Style TargetType="Button" x:Key="Primary">
             <Setter Property="Foreground" Value="#FF0B1220" />
             <Setter Property="Background" Value="{StaticResource Accent}" />
             <Setter Property="BorderThickness" Value="0" />
-            <Setter Property="Padding" Value="18,9" />
-            <Setter Property="FontSize" Value="14" />
+            <Setter Property="Padding" Value="16,8" />
+            <Setter Property="FontSize" Value="13" />
             <Setter Property="FontWeight" Value="SemiBold" />
             <Setter Property="Cursor" Value="Hand" />
             <Setter Property="Template">
@@ -60,8 +104,8 @@
             <Setter Property="Foreground" Value="{StaticResource Text}" />
             <Setter Property="Background" Value="#FF2E3238" />
             <Setter Property="BorderThickness" Value="0" />
-            <Setter Property="Padding" Value="16,9" />
-            <Setter Property="FontSize" Value="14" />
+            <Setter Property="Padding" Value="14,7" />
+            <Setter Property="FontSize" Value="12" />
             <Setter Property="Cursor" Value="Hand" />
             <Setter Property="Template">
                 <Setter.Value>
@@ -81,5 +125,137 @@
                 </Setter.Value>
             </Setter>
         </Style>
+
+        <!-- 顶栏小按钮 -->
+        <Style TargetType="Button" x:Key="TopBtn">
+            <Setter Property="Foreground" Value="{StaticResource Muted}" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="10,5" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="b" Background="{TemplateBinding Background}" CornerRadius="5">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" Margin="{TemplateBinding Padding}" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="b" Property="Background" Value="#FF2E3238" />
+                                <Setter Property="Foreground" Value="{StaticResource Text}" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="b" Property="Opacity" Value="0.3" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 卡片 -->
+        <Style TargetType="Border" x:Key="Card">
+            <Setter Property="Background" Value="{StaticResource CardBg}" />
+            <Setter Property="BorderBrush" Value="{StaticResource CardBorder}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="8" />
+        </Style>
+
+        <!-- 深色复选框 -->
+        <Style TargetType="CheckBox" x:Key="DarkCheck">
+            <Setter Property="Foreground" Value="{StaticResource Text}" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="CheckBox">
+                        <StackPanel Orientation="Horizontal" Background="Transparent">
+                            <Border x:Name="box" Width="14" Height="14" CornerRadius="3" Background="#FF2E3238"
+                                    BorderBrush="#FF424852" BorderThickness="1" VerticalAlignment="Center">
+                                <Path x:Name="tick" Data="M1,5 L5,9 L11,2" Stroke="#FF0B1220" StrokeThickness="1.6"
+                                      Visibility="Collapsed" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Border>
+                            <ContentPresenter Margin="7,0,0,0" VerticalAlignment="Center" />
+                        </StackPanel>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="box" Property="BorderBrush" Value="{StaticResource Muted}" />
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="box" Property="Background" Value="{StaticResource Accent}" />
+                                <Setter TargetName="box" Property="BorderBrush" Value="{StaticResource Accent}" />
+                                <Setter TargetName="tick" Property="Visibility" Value="Visible" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style TargetType="CheckBox" BasedOn="{StaticResource DarkCheck}" />
+
+        <!-- 深色下拉框 -->
+        <Style TargetType="ComboBoxItem" x:Key="DarkComboItem">
+            <Setter Property="Foreground" Value="{StaticResource Text}" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Padding" Value="9,6" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBoxItem">
+                        <Border x:Name="b" Background="Transparent" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsHighlighted" Value="True">
+                                <Setter TargetName="b" Property="Background" Value="#FF31363D" />
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="b" Property="Background" Value="{StaticResource AccentDim}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style TargetType="ComboBox" x:Key="DarkCombo">
+            <Setter Property="Foreground" Value="{StaticResource Text}" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Height" Value="26" />
+            <Setter Property="ItemContainerStyle" Value="{StaticResource DarkComboItem}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBox">
+                        <Grid>
+                            <ToggleButton Focusable="False" ClickMode="Press"
+                                          IsChecked="{Binding IsDropDownOpen, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay}">
+                                <ToggleButton.Template>
+                                    <ControlTemplate TargetType="ToggleButton">
+                                        <Border Background="#FF2E3238" BorderBrush="{StaticResource CardBorder}"
+                                                BorderThickness="1" CornerRadius="5">
+                                            <Path Data="M0,0 L8,0 L4,5 Z" Fill="{StaticResource Muted}"
+                                                  HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,9,0" />
+                                        </Border>
+                                    </ControlTemplate>
+                                </ToggleButton.Template>
+                            </ToggleButton>
+                            <ContentPresenter IsHitTestVisible="False" Margin="9,0,24,0" VerticalAlignment="Center"
+                                              Content="{TemplateBinding SelectionBoxItem}"
+                                              ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}" />
+                            <Popup x:Name="PART_Popup" Placement="Bottom" AllowsTransparency="True" Focusable="False"
+                                   IsOpen="{TemplateBinding IsDropDownOpen}" PopupAnimation="Fade">
+                                <Border Background="#FF24272C" BorderBrush="{StaticResource CardBorder}" BorderThickness="1"
+                                        CornerRadius="5" Margin="0,3,0,0" MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}">
+                                    <ScrollViewer VerticalScrollBarVisibility="Auto" MaxHeight="220">
+                                        <ItemsPresenter />
+                                    </ScrollViewer>
+                                </Border>
+                            </Popup>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style TargetType="ComboBox" BasedOn="{StaticResource DarkCombo}" />
     </Application.Resources>
 </Application>
