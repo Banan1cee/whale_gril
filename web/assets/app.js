@@ -516,6 +516,42 @@ function providerMeta() {
   return (state.settings && state.settings.providers) || {};
 }
 
+/**
+ * 本机 / 内网地址（和 src/config.js 的 isLocalUrl 同一套规则）。
+ * 这类地址上的服务（Ollama、LM Studio、vLLM、自建网关）通常不用 Key，
+ * 所以「需不需要 Key」要看地址，不能只看服务商预设。
+ */
+const LOCAL_HOST_RE = /^(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]|host\.docker\.internal|[a-z0-9-]+\.local|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})(?::\d+)?(?:[/?#]|$)/i;
+
+function isLocalBaseUrl(value) {
+  const s = String(value || '').trim().replace(/^https?:\/\//i, '').replace(/^[^/]*@/, '');
+  return LOCAL_HOST_RE.test(s);
+}
+
+/** 按「服务商 + 当前地址」判断需不需要 Key，并同步 Key 提示 / 演示模式开关 */
+function applyKeyExpectation(meta = {}) {
+  const local = isLocalBaseUrl($('baseUrl').value);
+  const needsKey = meta.needsKey !== false && !local;
+  $('apiKey').placeholder = needsKey ? 'sk-…（这个服务需要 Key）' : '本地/内网地址不用 Key，留空即可';
+  $('keyState').textContent = !needsKey
+    ? '（不需要）'
+    : state.settings && state.settings.hasKey
+      ? '已保存 ' + state.settings.keyMasked
+      : '';
+  const mockEl = $('mockMode');
+  const help = $('mockHelp');
+  if (mockEl) {
+    mockEl.disabled = !needsKey;
+    // 免 Key 的服务不可能「没 Key」，演示模式开着只会让本地模型一次都不被调用
+    if (!needsKey) mockEl.checked = false;
+    if (help) {
+      help.hidden = needsKey;
+      help.textContent = '本地/内网接口不需要 Key，所以演示模式自动关掉了（开着的话本地模型一次都不会被调用）。';
+    }
+  }
+  return { local, needsKey };
+}
+
 function fillProviderFields(provider, { keepValues = false } = {}) {
   const meta = providerMeta()[provider] || {};
   $('providerHint').textContent = meta.hint || '';
@@ -530,13 +566,7 @@ function fillProviderFields(provider, { keepValues = false } = {}) {
     $('baseUrl').value = meta.baseUrl || '';
     $('model').value = meta.model || '';
   }
-  const needsKey = meta.needsKey !== false;
-  $('apiKey').placeholder = needsKey ? 'sk-…（这个服务需要 Key）' : '本地模型不需要 Key，留空即可';
-  $('keyState').textContent = !needsKey
-    ? '（不需要）'
-    : state.settings && state.settings.hasKey
-      ? '已保存 ' + state.settings.keyMasked
-      : '';
+  applyKeyExpectation(meta);
 }
 
 async function openSettings() {
@@ -565,12 +595,10 @@ async function openSettings() {
     $('baseUrl').value = data.baseUrl || '';
     $('model').value = data.model || '';
     fillProviderFields(sel.value, { keepValues: true });
-    $('keyState').textContent = data.hasKey
-      ? '已保存 ' + data.keyMasked
-      : data.needsKey
-        ? ''
-        : '（不需要）';
     $('mockMode').checked = Boolean(data.mock);
+    // 顺序很重要：先按服务端给的状态放好开关，再按「地址是不是本机/内网」纠一遍，
+    // 否则本地接口会被残留的演示模式挡住（保存后一次请求都不发）
+    applyKeyExpectation(providerMeta()[sel.value]);
     $('temperature').value = data.temperature ?? 1.25;
     if (data.hasKey && data.mock) {
       $('keyHelp').textContent = '⚠️ 已经保存了 API Key，但「演示模式」是开着的 —— 打开它只会说内置台词，不会调用模型。要真正聊天请把演示模式关掉。';
@@ -999,6 +1027,12 @@ if (acctRefreshBtn) acctRefreshBtn.addEventListener('click', () => loadWechatAcc
     fillProviderFields($('provider').value);
     $('testResult').textContent = '';
     $('testResult').className = 'test-result';
+  });
+
+  // 手改接口地址时立刻重算「要不要 Key」：填成 127.0.0.1 / 192.168.* 就自动免 Key，
+  // 顺便把演示模式关掉，否则本地模型永远收不到请求
+  $('baseUrl').addEventListener('input', () => {
+    applyKeyExpectation(providerMeta()[$('provider').value]);
   });
 
   // 点头像看名片（完整立绘）

@@ -1,103 +1,139 @@
-﻿<#
-一键出包：测试 → 发布自检 → 打两个 zip → 直接读 zip 验证关键字段。
-
-为什么需要它：3.0.3 那次就是「源码里改好了，包里还是旧文件」，用户装完发现设置里没有功能。
-这里强制：测试不过不出包、自检不过不出包、出完包再从 zip 里读文件校验。
-
-用法：
-  powershell -File scripts\build-release.ps1                          # 输出到默认目录
-  powershell -File scripts\build-release.ps1 -OutDir D:\release -Version 3.0.5
-#>
+﻿# 本地出包：测试 -> 干净源码树自检 -> 加便携运行时 -> 从 zip 验证。
+# 本脚本不推送、不创建 Release、不上传任何文件。
 param(
   [string]$OutDir = (Join-Path $env:USERPROFILE 'Documents\whale-girl-release'),
-  [string]$RuntimeSource = '',   # 默认用本目录的 runtime\
-  [switch]$SkipFull              # 只打源码包
+  [string]$RuntimeSource = '',
+  [switch]$SkipFull
 )
-
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-$node = Join-Path $root 'runtime\node.exe'
-if (-not (Test-Path $node)) { $node = 'node' }
-$rt = if ($RuntimeSource) { $RuntimeSource } else { Join-Path $root 'runtime' }
-
-function Step($msg) { Write-Host "`n=== $msg ===" -ForegroundColor Cyan }
-
-Step '1/5 运行测试'
-Push-Location $root
-& $node --test 'tests/*.test.js' 2>&1 | Select-String -Pattern '^not ok|^# (tests|pass|fail)' | ForEach-Object { Write-Host "  $($_.Line)" }
-if ($LASTEXITCODE -ne 0) { Pop-Location; throw '测试没通过，不出包' }
-
-Step '2/5 暂存（排除 data / config.json / runtime / 日志）'
-# 包名带完整版本号：以前写死 whale-girl-3.0，解压后谁也分不清 3.0.9 和 3.0.16，混用就把新修复盖掉了
-$ver = (Get-Content (Join-Path $root 'package.json') -Raw | ConvertFrom-Json).version
+$rt = if ($RuntimeSource) { (Resolve-Path -LiteralPath $RuntimeSource).Path } else { Join-Path $root 'runtime' }
+$node = Join-Path $rt 'node.exe'
+if (-not (Test-Path -LiteralPath $node)) { $node = (Get-Command node -ErrorAction Stop).Source }
+$ver = (Get-Content -LiteralPath (Join-Path $root 'package.json') -Raw -Encoding UTF8 | ConvertFrom-Json).version
 $pkgName = "whale-girl-$ver"
-$pkgNameFull = "$pkgName-full"
-Write-Host "  版本：$ver（包名 $pkgName）"
-$build = Join-Path $env:TEMP ('whale-build-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
-$stage = Join-Path $build $pkgName
-New-Item -ItemType Directory $stage -Force | Out-Null
+$OutDir = [IO.Path]::GetFullPath($OutDir)
+New-Item -ItemType Directory -Path $OutDir -Force | Out-Null
+$build = Join-Path $OutDir ('.build-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $build | Out-Null
+$testsLog = Join-Path $OutDir ($pkgName + '-tests.log')
+
+Write-Host "1/5 运行全部测试（不发微信）：$ver"
+if (Test-Path -LiteralPath (Join-Path $rt 'python\python.exe')) { $env:WHALE_TEST_PYTHON = Join-Path $rt 'python\python.exe' }
+$env:PYTHONUTF8 = '1'; $env:PYTHONIOENCODING = 'utf-8'
+Push-Location $root
+try {
+  # Python unittest writes successful results to stderr too; under Windows
+  # PowerShell 5.1 it must not be mistaken for a failing native command.
+  $ErrorActionPreference = 'Continue'
+  & $node --test 'tests/*.test.js' 2>&1 | ForEach-Object { $_.ToString() } | Set-Content -LiteralPath $testsLog -Encoding UTF8
+  $testCode = $LASTEXITCODE
+  $ErrorActionPreference = 'Stop'
+  if ($testCode -ne 0) { throw "测试失败，不出包：$testsLog" }
+} finally { Pop-Location; $ErrorActionPreference = 'Stop' }
+
+Write-Host '2/5 暂存源码（排除配置、数据、Git、运行时、缓存）'
+$sourceParent = Join-Path $build 'source'
+$stage = Join-Path $sourceParent 'whale-girl'
+New-Item -ItemType Directory -Path $stage -Force | Out-Null
 $rcArgs = @($root, $stage, '/E', '/NFL', '/NDL', '/NJH', '/NJS', '/NP', '/XD',
-  'data', 'runtime', 'wechatauto_db', 'wechatauto_logs', '__pycache__', 'whale-girl-*-full', 'backup',
-  '/XF', 'config.json', '*.log', '*.png', '*.jpg', '*.bak-*')
-robocopy @rcArgs | Out-Null
-if ($LASTEXITCODE -ge 8) { Pop-Location; throw "robocopy 失败 $LASTEXITCODE" }
-
-# 本地活动用的东西不进包：吵架大赛预设（避免别人一下载就拿去开骂）
-$localOnly = @('personas\persona-v4-fight.json', 'resources\clapback-fight.txt')
-foreach ($rel in $localOnly) {
-  $p = Join-Path $stage $rel
-  if (Test-Path $p) {
-    Remove-Item $p -Force
-    Write-Host "  已排除（本地活动用）：$rel"
+  '.git', '.github', 'data', 'runtime', 'node_modules', 'backup', '__pycache__', 'wechatauto_db', 'wechatauto_logs',
+  '/XF', 'config.json', '*.log', '*.zip', '*.pyc', '*.bak-*', '协作指南.md')
+& robocopy @rcArgs | Out-Null
+if ($LASTEXITCODE -ge 8) { throw '源码暂存失败' }
+foreach ($rel in @('personas\persona-v4-fight.json', 'resources\clapback-fight.txt')) {
+  $target = Join-Path $stage $rel
+  if (Test-Path -LiteralPath $target) {
+    $resolved = (Resolve-Path -LiteralPath $target).Path
+    if (-not $resolved.StartsWith($stage + '\', [StringComparison]::OrdinalIgnoreCase)) { throw '拒绝删除暂存树以外路径' }
+    Remove-Item -LiteralPath $resolved -Force
   }
 }
 
-Step '3/5 发布自检（--release）'
-Push-Location $stage
-& (Join-Path $root 'runtime\node.exe') 'scripts\release-check.js' --release 2>&1 | Select-Object -Last 4 | ForEach-Object { Write-Host "  $_" }
-if ($LASTEXITCODE -ne 0) { Pop-Location; Pop-Location; throw '发布自检不通过，不出包' }
-Pop-Location
+Write-Host '3/5 发布自检（只检查不含 runtime 的源码树）'
+$checkLog = Join-Path $OutDir ($pkgName + '-release-check.log')
+$ErrorActionPreference = 'Continue'
+& $node (Join-Path $stage 'scripts\release-check.js') --release 2>&1 | ForEach-Object { $_.ToString() } | Set-Content -LiteralPath $checkLog -Encoding UTF8
+$checkCode = $LASTEXITCODE
+$ErrorActionPreference = 'Stop'
+if ($checkCode -ne 0) { throw "发布自检失败，不出包：$checkLog" }
 
-Step '4/5 打包'
-New-Item -ItemType Directory $OutDir -Force | Out-Null
-$srcZip = Join-Path $OutDir ($pkgName + '.zip')
-if (Test-Path $srcZip) { Remove-Item $srcZip -Force }
-Compress-Archive -Path $stage -DestinationPath $srcZip -CompressionLevel Optimal
-Write-Host ("  源码包：{0:N0} KB  →  {1}" -f ((Get-Item $srcZip).Length / 1KB), (Split-Path $srcZip -Leaf))
-$fullZip = $null
-if (-not $SkipFull) {
-  $fullDir = Join-Path $build $pkgNameFull
-  robocopy $stage $fullDir /E /NFL /NDL /NJH /NJS /NP | Out-Null
-  robocopy $rt (Join-Path $fullDir 'runtime') /E /NFL /NDL /NJH /NJS /NP | Out-Null
-  Copy-Item (Join-Path $fullDir 'config.example.json') (Join-Path $fullDir 'config.json')
-  $fullZip = Join-Path $OutDir ($pkgNameFull + '.zip')
-  if (Test-Path $fullZip) { Remove-Item $fullZip -Force }
-  & tar -a -cf $fullZip -C $build $pkgNameFull
-  if ($LASTEXITCODE -ne 0) { Pop-Location; throw "tar 打包失败 $LASTEXITCODE" }
-  Write-Host ("  完整包：{0:N1} MB  →  {1}" -f ((Get-Item $fullZip).Length / 1MB), (Split-Path $fullZip -Leaf))
-}
-
-Step '5/5 从 zip 里读文件复核（不信任磁盘）'
+Write-Host '4/5 构建候选包（完整包也绝不带 config.json/data）'
+Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
-$checks = @(
-  @{ entry = 'web/index.html'; needle = 'visionApiKey'; label = '看图 API 字段' },
-  @{ entry = 'web/index.html'; needle = 'btnVisionTest'; label = '测试看图按钮' },
-  @{ entry = 'server.js'; needle = '/api/vision/test'; label = '看图测试接口' },
-  @{ entry = 'src/master.js'; needle = 'matchMaster'; label = '主人判定' },
-  @{ entry = 'tools/uia-diag.py'; needle = 'QACCESSIBLE_ACTIVE_RVA_BY_VERSION'; label = 'UIA 诊断工具' }
-)
-foreach ($zipPath in @($srcZip, $fullZip) | Where-Object { $_ }) {
-  $zip = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
-  foreach ($c in $checks) {
-    $e = $zip.Entries | Where-Object { $_.FullName -replace '\\', '/' -match ("/" + [regex]::Escape($c.entry) + '$') } | Select-Object -First 1
-    if (-not $e) { throw "$(Split-Path $zipPath -Leaf) 里缺 $($c.entry)" }
-    $sr = New-Object System.IO.StreamReader($e.Open()); $txt = $sr.ReadToEnd(); $sr.Close()
-    if (-not $txt.Contains($c.needle)) { throw "$(Split-Path $zipPath -Leaf) 的 $($c.entry) 不含「$($c.label)」" }
+$sourceCandidate = Join-Path $build ($pkgName + '-source.zip')
+[IO.Compression.ZipFile]::CreateFromDirectory($sourceParent, $sourceCandidate, [IO.Compression.CompressionLevel]::Optimal, $false)
+$candidates = @($sourceCandidate)
+$fullDir = $null
+if (-not $SkipFull) {
+  foreach ($required in @('node.exe', 'python\python.exe', 'ffmpeg\bin\ffmpeg.exe')) {
+    if (-not (Test-Path -LiteralPath (Join-Path $rt $required))) { throw "运行时缺少 $required" }
   }
-  $zip.Dispose()
-  Write-Host "  ✓ $(Split-Path $zipPath -Leaf) 通过 $($checks.Count) 项内容检查"
+  $fullParent = Join-Path $build 'full'
+  $fullDir = Join-Path $fullParent 'whale-girl'
+  New-Item -ItemType Directory -Path $fullDir -Force | Out-Null
+  & robocopy $stage $fullDir /E /NFL /NDL /NJH /NJS /NP | Out-Null
+  if ($LASTEXITCODE -ge 8) { throw '完整包源码复制失败' }
+  & robocopy $rt (Join-Path $fullDir 'runtime') /E /NFL /NDL /NJH /NJS /NP /XD __pycache__ /XF '*.pyc' '*.log' | Out-Null
+  if ($LASTEXITCODE -ge 8) { throw '运行时复制失败' }
+  $ErrorActionPreference = 'Continue'
+  & (Join-Path $rt 'python\python.exe') -B (Join-Path $stage 'scripts\prepare-sticker-runtime.py') $fullDir
+  $patchCode = $LASTEXITCODE
+  $ErrorActionPreference = 'Stop'
+  if ($patchCode -ne 0) { throw '运行时补丁验证失败，不出包' }
+  $fullCandidate = Join-Path $build ($pkgName + '.zip')
+  [IO.Compression.ZipFile]::CreateFromDirectory($fullParent, $fullCandidate, [IO.Compression.CompressionLevel]::Optimal, $false)
+  $candidates += $fullCandidate
 }
 
-Remove-Item $build -Recurse -Force -ErrorAction SilentlyContinue
-Pop-Location
-Write-Host "`n出包完成：$OutDir（版本 $ver）" -ForegroundColor Green
+Write-Host '5/5 从 zip 复核所有源码哈希、版本、禁带数据和关键功能'
+$checks = @(
+  @{ entry = 'web/index.html'; needle = 'visionApiKey' },
+  @{ entry = 'web/index.html'; needle = 'btnVisionTest' },
+  @{ entry = 'server.js'; needle = '/api/vision/test' },
+  @{ entry = 'src/master.js'; needle = 'matchMaster' },
+  @{ entry = 'tools/uia-diag.py'; needle = 'QACCESSIBLE_ACTIVE_RVA_BY_VERSION' },
+  @{ entry = 'src/stickers.js'; needle = 'normalizeEmotion' },
+  @{ entry = 'web/debug.html'; needle = '（此为绝大部分情绪，建议多加表情包）' }
+)
+foreach ($candidate in $candidates) {
+  $zip = [IO.Compression.ZipFile]::OpenRead($candidate)
+  try {
+    $entryMap = @{}
+    foreach ($entry in $zip.Entries) { $entryMap[$entry.FullName.Replace('\', '/')] = $entry }
+    foreach ($name in $entryMap.Keys) {
+      if ($name -match '^whale-girl/(config\.json|data/|\.git/)') { throw "包里混入运行数据：$name" }
+    }
+    foreach ($file in Get-ChildItem -LiteralPath $stage -File -Recurse) {
+      $relative = $file.FullName.Substring($stage.Length + 1).Replace('\', '/')
+      $entry = $entryMap['whale-girl/' + $relative]
+      if (-not $entry) { throw "包内缺文件：$relative" }
+      $stream = $entry.Open(); $sha = [Security.Cryptography.SHA256]::Create()
+      try { $hash = ([BitConverter]::ToString($sha.ComputeHash($stream))).Replace('-', '') } finally { $stream.Dispose(); $sha.Dispose() }
+      if ($hash -ne (Get-FileHash -LiteralPath $file.FullName).Hash) { throw "源码哈希不匹配：$relative" }
+    }
+    foreach ($check in $checks) {
+      $reader = New-Object IO.StreamReader($entryMap['whale-girl/' + $check.entry].Open())
+      try { $text = $reader.ReadToEnd() } finally { $reader.Dispose() }
+      if (-not $text.Contains($check.needle)) { throw "关键功能缺失：$($check.entry)" }
+    }
+    $reader = New-Object IO.StreamReader($entryMap['whale-girl/package.json'].Open())
+    try { $packagedVersion = ($reader.ReadToEnd() | ConvertFrom-Json).version } finally { $reader.Dispose() }
+    if ($packagedVersion -ne $ver) { throw '包内版本不一致' }
+  } finally { $zip.Dispose() }
+}
+# Only publish to the LOCAL output directory after every candidate has passed.
+$backups = Join-Path $OutDir 'local-backups'
+foreach ($candidate in $candidates) {
+  $destination = Join-Path $OutDir (Split-Path -Leaf $candidate)
+  if (Test-Path -LiteralPath $destination) {
+    New-Item -ItemType Directory -Path $backups -Force | Out-Null
+    Copy-Item -LiteralPath $destination -Destination (Join-Path $backups ((Split-Path -Leaf $destination) + '.' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.bak'))
+  }
+  Copy-Item -LiteralPath $candidate -Destination $destination -Force
+  Write-Host ('本地包：{0}（{1:N1} MB）' -f $destination, ((Get-Item -LiteralPath $destination).Length/1MB))
+}
+$resolvedBuild = (Resolve-Path -LiteralPath $build).Path
+if ((Split-Path -Parent $resolvedBuild) -ne $OutDir -or (Split-Path -Leaf $resolvedBuild) -notlike '.build-*') { throw '拒绝清理意外暂存目录' }
+Remove-Item -LiteralPath $resolvedBuild -Recurse -Force
+Write-Host "完成：$ver；没有上传。测试日志：$testsLog"

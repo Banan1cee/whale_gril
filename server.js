@@ -14,7 +14,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { exec, spawn } = require('node:child_process');
 
-const { loadConfig, ensureConfigFile, loadSettings, saveSettings, resolveRuntime, maskKey, projectRoot, PROVIDERS } = require('./src/config');
+const { loadConfig, ensureConfigFile, loadSettings, saveSettings, resolveRuntime, maskKey, projectRoot, PROVIDERS, isLocalUrl, normalizeBaseUrl } = require('./src/config');
 const { createLogger } = require('./src/logger');
 const { Store } = require('./src/memory');
 const { DeepSeekClient, LlmError } = require('./src/llm');
@@ -686,26 +686,6 @@ async function careForChat(runtime, chatId) {
 
 /* ---------------- 消息汇总 ---------------- */
 
-function buildDigest(items) {
-  if (!items.length) return { ok: true, count: 0, text: '' };
-  const map = new Map();
-  for (const it of items) {
-    const key = (it.chatType === 'group' ? '群 ' : '私聊 ') + (it.chat || it.sender || '');
-    if (!map.has(key)) map.set(key, []);
-    map.get(key).push(it);
-  }
-  const lines = [`📥 消息汇总（${items.length} 条）`];
-  let n = 0;
-  for (const [key, arr] of map) {
-    lines.push(`【${key}】${arr.length} 条`);
-    for (const it of arr.slice(-5)) {
-      lines.push(`- ${String(it.sender || '对方')}：${String(it.text || '').replace(/\s+/g, ' ').slice(0, 80)}`);
-    }
-    n += 1;
-    if (n >= 10) { lines.push('……还有更多会话未列出'); break; }
-  }
-  return { ok: true, count: items.length, text: lines.join('\n') };
-}
 
 /* ---------------- 人设调教（浏览器表单用） ---------------- */
 
@@ -1101,13 +1081,16 @@ async function applySettings(runtime, body) {
       const preset = PROVIDERS[provider];
       if (typeof body.baseUrl !== 'string' || !body.baseUrl.trim()) patch.baseUrl = preset.baseUrl;
       if (typeof body.model !== 'string' || !body.model.trim()) patch.model = preset.model;
-      if (preset.needsKey === false) patch.mock = false;
     }
   }
 
   if (typeof body.baseUrl === 'string') {
-    const baseUrl = body.baseUrl.trim().slice(0, 300);
-    if (baseUrl && !/^https?:\/\/[^\s]+$/.test(baseUrl)) throw new Error('接口地址要以 http:// 或 https:// 开头');
+    // 少写协议（`127.0.0.1:11434/v1`）很常见：本机 / 内网地址自动补 http://，
+    // 省得「明明填对了却报接口地址不合法」。
+    const baseUrl = normalizeBaseUrl(body.baseUrl).slice(0, 300);
+    if (baseUrl && !/^https?:\/\/[^\s]+$/.test(baseUrl)) {
+      throw new Error('接口地址要以 http:// 或 https:// 开头（本机/内网地址可以直接写 127.0.0.1:11434/v1，会自动补 http://）');
+    }
     patch.baseUrl = baseUrl;
   }
   if (typeof body.apiKey === 'string') {
@@ -1137,6 +1120,20 @@ async function applySettings(runtime, body) {
   if (typeof body.userName === 'string') patch.userName = body.userName.trim().slice(0, 24);
   // 只要这次填了 Key，就默认关闭演示模式（防止「有 Key 还在说内置台词」）
   if (patch.apiKey) patch.mock = false;
+  // 目标服务本来就不需要 Key（本地 Ollama / 本机 / 内网自建）时，演示模式一律关掉。
+  // 网页每次都会把开关状态一起提交，而新装用户默认就是勾着的 —— 以前这里被 body.mock
+  // 覆盖回 true，于是「选好本地模型、保存、测试连接」全程一次请求都没发到本地服务，
+  // 还一直提示「还没拿到 API Key」（用户反馈的「本地 API 接不进去」就是这个）。
+  {
+    const nextProvider = patch.provider || current.provider;
+    const nextBaseUrl = typeof patch.baseUrl === 'string' ? patch.baseUrl : current.baseUrl;
+    const nextPreset = PROVIDERS[nextProvider] || PROVIDERS.custom;
+    const keyFree = nextProvider === 'ollama' || !nextPreset.needsKey || isLocalUrl(nextBaseUrl);
+    if (keyFree && /^https?:\/\//i.test(nextBaseUrl)) {
+      if (patch.mock !== false) runtime.logger.info('目标服务不需要 Key（本地/内网），已自动关掉演示模式');
+      patch.mock = false;
+    }
+  }
   if (typeof body.temperature === 'number' && Number.isFinite(body.temperature)) {
     patch.temperature = Math.max(0, Math.min(2, body.temperature));
   }
@@ -1274,11 +1271,11 @@ function createHandler(runtime) {
         if (pathname === '/api/stickers/image' && method === 'GET') {
           // 控制台缩略图：只回传表情包目录里的真图，不能读任意文件
           const q = new URL(req.url, 'http://localhost');
-          const emotion = String(q.searchParams.get('emotion') || '');
-          const name = path.basename(String(q.searchParams.get('name') || ''));
+          const emotion = stickers.normalizeEmotion(q.searchParams.get('emotion'));
+          const name = String(q.searchParams.get('name') || '');
           const dir = stickers.stickerDir(config, config.root);
-          const file = path.join(dir, stickers.EMOTIONS[emotion] || '', name);
-          if (!name || !stickers.EMOTIONS[emotion] || !stickers.regularFile(file, dir)) {
+          const file = stickers.resolveImage(dir, emotion, name);
+          if (!file) {
             return json(res, 404, { ok: false, error: '找不到这张表情包' });
           }
           const type = MIME[path.extname(file).toLowerCase()] || 'application/octet-stream';
@@ -1288,11 +1285,13 @@ function createHandler(runtime) {
         if (pathname === '/api/stickers/delete' && method === 'POST') {
           // 删掉某一张表情包（只在表情包目录内，且必须是真文件）
           const body = await readBody(req);
-          const emotion = String((body && body.emotion) || '');
-          const name = path.basename(String((body && body.name) || ''));
+          service.requireEnabled();
+          if (generation !== service.generation) return json(res, 409, { ok: false, error: '开关已变化，请重新删除' });
+          const emotion = stickers.normalizeEmotion(body && body.emotion);
+          const name = String((body && body.name) || '');
           const dir = stickers.stickerDir(config, config.root);
-          const file = path.join(dir, stickers.EMOTIONS[emotion] || '', name);
-          if (!name || !stickers.EMOTIONS[emotion] || !stickers.regularFile(file, dir)) {
+          const file = stickers.resolveImage(dir, emotion, name);
+          if (!file) {
             return json(res, 404, { ok: false, error: '找不到这张表情包（可能已经删掉了）' });
           }
           try {
@@ -1306,13 +1305,13 @@ function createHandler(runtime) {
         if (pathname === '/api/stickers/open-folder' && method === 'POST') {
           // 在本机资源管理器里打开表情包目录（只打开这一个固定目录）
           const dir = stickers.stickerDir(config, config.root);
-          fs.mkdirSync(dir, { recursive: true });
-          if (process.platform === 'win32' && process.env.WHALE_TEST_NO_SHELL !== '1') {
-            try {
-              exec(`explorer.exe "${dir}"`, () => {});
-            } catch (err) {
-              return json(res, 500, { ok: false, error: '打开文件夹失败：' + (err && err.message ? err.message : err) });
-            }
+          stickers.safeDirectory(dir);
+          if (process.platform === 'win32' && config.env?.WHALE_TEST_NO_SHELL !== '1') {
+            // No shell expansion of a user-configured directory (%, &, etc.).
+            await new Promise((resolve, reject) => {
+              const child = spawn('explorer.exe', [dir], { shell: false, windowsHide: true, stdio: 'ignore' });
+              child.once('spawn', resolve); child.once('error', reject);
+            });
           }
           return json(res, 200, { ok: true, dir });
         }
@@ -1327,7 +1326,7 @@ function createHandler(runtime) {
           const body = await readBody(req);
           service.requireEnabled();
           if (generation !== service.generation) return json(res, 409, { ok: false, error: '开关已变化，请重新排队' });
-          const queued = service.enqueue(body.emotion || 'happy', body.chat ?? config.sticker?.testChat ?? '文件传输助手');
+          const queued = service.enqueue(body.emotion || 'other', body.chat ?? config.sticker?.testChat ?? '文件传输助手');
           return json(res, 200, { ok: true, queued });
         }
         if (pathname === '/api/stickers/pending' && method === 'GET') return json(res, 200, { ok: true, items: service.pending() });
@@ -1499,12 +1498,6 @@ function createHandler(runtime) {
         }
       }
 
-      if (pathname === '/api/digest' && method === 'GET') {
-        const q = new URL(req.url, 'http://localhost');
-        const since = Number(q.searchParams.get('since') || 0);
-        const items = runtime.store.listDigest(since).slice(-120);
-        return json(res, 200, buildDigest(items));
-      }
 
       if (pathname === '/api/persona' && method === 'GET') {
         return json(res, 200, { ok: true, persona: personaStore.summary(runtime.config), llm: { provider: runtime.llm.provider, providerLabel: runtime.llm.providerLabel, model: runtime.llm.model, mock: runtime.llm.isMock } });
@@ -1721,12 +1714,6 @@ function createHandler(runtime) {
         }
       }
 
-      if (pathname === '/api/digest' && method === 'GET') {
-        const q = new URL(req.url, 'http://localhost');
-        const since = Number(q.searchParams.get('since') || 0);
-        const items = runtime.store.listDigest(since).slice(-120);
-        return json(res, 200, buildDigest(items));
-      }
 
       if (pathname === '/api/persona' && method === 'GET') {
         return json(res, 200, {
