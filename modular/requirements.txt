@@ -3,3 +3,4 @@
 wechatauto-replica>=1.2.7
 psutil>=5.9
 pywin32>=306
+requests>=2.31

@@ -25,7 +25,7 @@
 param(
   [string]$PythonVersion = '3.12.10',
   [string]$PythonUrl = '',
-  [string[]]$Packages = @('wechatauto-replica==1.2.8.1', 'psutil', 'pywin32'),
+  [string[]]$Packages = @('wechatauto-replica==1.2.8.1', 'psutil', 'pywin32', 'requests'),
   [string]$Mirror = 'https://pypi.tuna.tsinghua.edu.cn/simple',
   [switch]$Force,
   [switch]$SkipNode

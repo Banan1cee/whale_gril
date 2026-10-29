@@ -1,6 +1,6 @@
 {
     "name": "whale-girl-bot-modular",
-    "version": "3.63",
+    "version": "3.64",
     "private": false,
     "description": "鲸鲸 —— 模块化重构版（CommonJS，零 npm 依赖）",
     "main": "server.js",
@@ -8,7 +8,7 @@
     "scripts": {
         "start": "node server.js",
         "doctor": "node server.js --doctor",
-        "test": "node --test",
+        "test": "node --test --test-isolation=none tests/*.test.js",
         "check-layers": "node scripts/check-layers.js",
         "smoke": "node scripts/smoke.js",
         "release-check": "node scripts/release-check.js --release",

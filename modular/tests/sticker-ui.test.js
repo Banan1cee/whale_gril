@@ -40,9 +40,9 @@ function harness({ enabled = true, jobs = [], deferFileRead = false, deferRatesS
   ids.get('stkChat').value = '文件传输助手';
   const calls = []; const intervals = new Map(); let timerId = 0;
   const saves = [];
-  const config = { sticker: { chances: {happy:0.1,angry:0.2,cute:0.12,meh:0.08,bored:0.06}, cooldownMinutes:10 }, persona:{ownerName:'测试主人'} };
+  const config = { sticker: { chances: {cute:0.12,angry:0.2,other:0.08}, genericChance:0.25 }, persona:{ownerName:'测试主人'} };
   const status = { ok: true, enabled: true, testChat: '默认会话', dir: 'virtual/stickers', pending: 0, jobs,
-    emotions: ['happy', 'angry', 'cute', 'meh', 'bored'].map((key) => ({ key, count: key === 'happy' ? 2 : 0, files: [] })) };
+    emotions: ['cute', 'angry', 'other'].map((key) => ({ key, count: 0, files: [], items: [] })) };
   const fetch = async (url, options = {}) => {
     const body = options.body ? JSON.parse(options.body) : null;
     calls.push({ url, method: options.method || 'GET', body });
@@ -52,6 +52,16 @@ function harness({ enabled = true, jobs = [], deferFileRead = false, deferRatesS
     else if (url === '/api/stickers/status') data = enabled ? status : { ok: false };
     else if (url === '/api/stickers/test') data = { ok: true, queued: { id: 'job-1', status: 'queued' } };
     else if (url === '/api/stickers/upload') data = { ok: true, uploaded: body.files.map((file) => ({ name: file.name, emotion: body.emotion })) };
+    else if (url === '/api/stickers/delete') {
+      const category = status.emotions.find((entry) => entry.key === body.emotion);
+      assert.ok(category, 'delete must target one of the three categories');
+      const index = category.items.findIndex((item) => item.id === body.name);
+      assert.notEqual(index, -1, 'delete must carry an exact item id, not just its basename');
+      category.items.splice(index, 1);
+      category.files = category.items.map((item) => item.name);
+      category.count = category.items.length;
+      data = { ok: true, emotions: status.emotions };
+    }
     else if (url === '/api/config') {
       if (options.method === 'POST') for (const [key,value] of Object.entries(body.patch)) {
         const parts = key.split('.'); let current = config;
@@ -88,7 +98,7 @@ test('sticker UI binds once; refresh never sends and one click creates one queue
   const h = harness();
   await h.run('loadFeatures()');
   assert.equal(h.ids.get('stkControls').hidden, false);
-  assert.equal(h.ids.get('stkUploads').children.length, 5);
+  assert.equal(h.ids.get('stkUploads').children.length, 3);
   await h.ids.get('btnReload').dispatch('click');
   await h.ids.get('btnReload').dispatch('click');
   h.run('bindStickerUi()');
@@ -167,7 +177,7 @@ test('upload is per emotion, uses base64 JSON, validates count/type/size, never 
 test('dragging files into each Chinese category automatically saves only to that category', async () => {
   const h = harness();
   await h.run('loadFeatures()');
-  const categories = [['happy','开心'],['angry','炸毛'],['cute','撒娇'],['meh','嫌弃'],['bored','敷衍']];
+  const categories = [['cute','傲娇'],['angry','炸毛'],['other','其他']];
   for (const [key, label] of categories) {
     const zone = h.ids.get('stkDrop-' + key);
     assert.match(zone.getAttribute('aria-label'), new RegExp(label));
@@ -193,7 +203,7 @@ test('dragging files into each Chinese category automatically saves only to that
 test('drag-drop off, invalid files, folders and outside category cannot upload or navigate', async () => {
   const h = harness({ enabled: false });
   await h.run('loadFeatures()');
-  const zone = h.ids.get('stkDrop-happy');
+  const zone = h.ids.get('stkDrop-other');
   const transfer = { types: ['Files'], files: [{ name: 'x.gif', size: 20 }], items: [] };
   await zone.dispatch('drop', { dataTransfer: transfer });
   assert.equal(h.calls.some((call) => call.url === '/api/stickers/upload'), false);
@@ -202,7 +212,7 @@ test('drag-drop off, invalid files, folders and outside category cannot upload o
     await zone.dispatch('drop', { dataTransfer: { files, items: [] } });
   }
   await zone.dispatch('drop', { dataTransfer: { files: transfer.files, items: [{ webkitGetAsEntry: () => ({ isDirectory: true }) }] } });
-  assert.match(h.ids.get('stkUploadState-happy').textContent, /不要拖入文件夹/);
+  assert.match(h.ids.get('stkUploadState-other').textContent, /不要拖入文件夹/);
   const outside = await h.mockWindow.dispatch('drop', { dataTransfer: transfer });
   assert.equal(outside.defaultPrevented, true);
   assert.match(h.ids.get('stkUploadResult').textContent, /对应情绪框/);
@@ -247,7 +257,7 @@ test('console field labels and group headings cover all current defaults in Chin
     }
   }
   visit(config);
-  for (const field of ['sticker.chances.happy','sticker.chances.angry','sticker.chances.cute','sticker.chances.meh','sticker.chances.bored']) {
+  for (const field of ['sticker.chances.cute','sticker.chances.angry','sticker.chances.other']) {
     const label = h.run('(META[' + JSON.stringify(field) + ']||[])[0]');
     assert.equal(/[A-Za-z]/.test(label), false);
   }
@@ -268,9 +278,9 @@ test('English bridge failures and reserved state are displayed as Chinese withou
   assert.equal(h.ids.get('stkStatus').textContent.includes('virtual/stickers'), false);
 });
 
-test('probabilities are visible as percentages under all five drop cards; editing never opens file picker', async () => {
+test('probabilities are visible as percentages under all three drop cards; editing never opens file picker', async () => {
   const h = harness(); await h.run('loadFeatures()');
-  for (const [key, percent] of [['happy',10],['angry',20],['cute',12],['meh',8],['bored',6]]) {
+  for (const [key, percent] of [['cute',12],['angry',20],['other',8]]) {
     const input = h.ids.get('stkChance-' + key);
     assert.equal(Number(input.value), percent);
     assert.equal(input.disabled, false);
@@ -279,20 +289,21 @@ test('probabilities are visible as percentages under all five drop cards; editin
     assert.equal(h.ids.get('stkUpload-' + key).clicks || 0, 0, '不能把改概率当选图');
   }
   assert.equal(h.ids.get('stkSaveRates').disabled, true);
-  const generic = h.run("fieldsHtml({chances:{happy:0.1},cooldownMinutes:10},'sticker')");
-  assert.equal(generic.includes('data-path="sticker.chances.happy"'), false, '不要出现两份概率控件');
+  const generic = h.run("fieldsHtml({chances:{cute:0.12,angry:0.2,other:0.08},cooldownMinutes:10},'sticker')");
+  for (const key of ['cute','angry','other']) {
+    assert.equal(generic.includes('data-path="sticker.chances.' + key + '"'), false, '不要出现两份概率控件');
+  }
 });
 
-test('percentage save sends only the five probabilities, never toggles feature or sends a message', async () => {
+test('percentage save sends only the three probabilities, never toggles feature or sends a message', async () => {
   const h = harness(); await h.run('loadFeatures()');
   const chance = h.ids.get('stkChance-angry'); chance.value = '12.5'; await chance.dispatch('input');
-  h.ids.get('stkChance-happy').value = '0'; await h.ids.get('stkChance-happy').dispatch('input');
+  h.ids.get('stkChance-other').value = '0'; await h.ids.get('stkChance-other').dispatch('input');
   await h.ids.get('stkSaveRates').dispatch('click');
   const writes = h.calls.filter(c => c.url === '/api/config' && c.method === 'POST');
   assert.equal(writes.length, 1);
   assert.deepEqual(writes[0].body.patch, {
-    'sticker.chances.happy':0,'sticker.chances.angry':0.125,'sticker.chances.cute':0.12,
-    'sticker.chances.meh':0.08,'sticker.chances.bored':0.06,
+    'sticker.chances.cute':0.12,'sticker.chances.angry':0.125,'sticker.chances.other':0,
   });
   assert.equal(h.ids.get('stkCooldown'), undefined, '不应再有发送间隔控件');
   assert.equal(h.config.persona.ownerName, '测试主人');
@@ -327,4 +338,106 @@ test('edits made during a save remain marked unsaved instead of being overwritte
   assert.equal(h.ids.get('stkSaveRates').disabled, false);
   assert.match(h.ids.get('stkRatesStatus').textContent, /还未保存/);
   assert.equal(h.config.sticker.chances.angry, 0.15);
+});
+
+function elementText(element) {
+  return [element.textContent, ...element.children.map(elementText)].join('');
+}
+
+function setCategoryItems(h, key, items) {
+  const category = h.status.emotions.find((entry) => entry.key === key);
+  category.items = items;
+  category.files = items.map((item) => item.name);
+  category.count = items.length;
+}
+
+test('console has only 傲娇/炸毛/其他 in that order and places the other-pool explanation beside its title', async () => {
+  const h = harness(); await h.run('loadFeatures()');
+  assert.deepEqual(h.ids.get('stkUploads').children.map((zone) => zone.id), ['stkDrop-cute','stkDrop-angry','stkDrop-other']);
+  assert.deepEqual(h.ids.get('stkEmotion').children.map((option) => option.value), ['cute','angry','other']);
+  const titles = h.ids.get('stkUploads').children.map((zone) => elementText(zone.children.find((child) => child.tagName === 'H4')));
+  assert.match(titles[0], /^傲娇/);
+  assert.match(titles[1], /^炸毛/);
+  assert.match(titles[2], /^其他[（(]此为绝大部分情绪，建议多加表情包[）)]$/);
+  for (const key of ['happy','meh','bored']) {
+    assert.equal(h.ids.has('stkDrop-' + key), false);
+    assert.equal(h.ids.has('stkOption-' + key), false);
+  }
+  for (const key of ['cute','angry','other']) {
+    delete h.config.sticker.chances[key];
+  }
+  delete h.config.sticker.genericChance;
+  await h.run('loadStickerRates()');
+  for (const key of ['cute','angry','other']) assert.equal(Number(h.ids.get('stkChance-' + key).value), 25);
+  assert.equal(h.calls.some((call) => call.url === '/api/stickers/upload' || call.url === '/api/stickers/test'), false);
+});
+
+test('deleting a thumbnail stops bubbling and never opens a picker, uploads or sends', async () => {
+  const h = harness();
+  setCategoryItems(h, 'cute', [{ name:'抱抱.gif', id:'傲娇/抱抱.gif' }]);
+  await h.run('loadFeatures()');
+  const button = h.ids.get('stkThumbs-cute').children[0].children.find((child) => child.tagName === 'BUTTON');
+  const event = await button.dispatch('click');
+  assert.equal(event.propagationStopped, true);
+  await h.ids.get('stkDrop-cute').dispatch('click', { target:button });
+  // The real click listener starts an async delete without returning its promise.
+  await new Promise((resolve) => setImmediate(resolve));
+  const deletes = h.calls.filter((call) => call.url === '/api/stickers/delete');
+  assert.equal(deletes.length, 1);
+  assert.equal(deletes[0].body.emotion, 'cute');
+  assert.equal(deletes[0].body.name, '傲娇/抱抱.gif');
+  assert.equal(h.status.emotions.find((entry) => entry.key === 'cute').count, 0);
+  assert.equal(h.ids.get('stkThumbs-cute').children.length, 0);
+  for (const key of ['cute','angry','other']) assert.equal(h.ids.get('stkUpload-' + key).clicks || 0, 0);
+  assert.equal(h.calls.some((call) => call.url === '/api/stickers/upload' || call.url === '/api/stickers/test'), false);
+});
+
+test('duplicate basenames retain distinct preview and delete ids from current and legacy folders', async () => {
+  const h = harness();
+  const items = [{name:'同名.gif',id:'其他/同名.gif'},{name:'同名.gif',id:'开心/同名.gif'}];
+  setCategoryItems(h, 'other', items.map((item) => ({...item})));
+  await h.run('loadFeatures()');
+  const thumbnails = h.ids.get('stkThumbs-other').children;
+  assert.equal(thumbnails.length, 2, 'do not deduplicate entries by basename');
+  for (let index = 0; index < items.length; index++) {
+    const image = thumbnails[index].children.find((child) => child.tagName === 'IMG');
+    const query = new URL(image.src, 'http://mock.invalid').searchParams;
+    assert.equal(query.get('emotion'), 'other');
+    assert.equal(query.get('name'), items[index].id);
+  }
+  const legacyDelete = thumbnails[1].children.find((child) => child.tagName === 'BUTTON');
+  await legacyDelete.dispatch('click');
+  // Let the listener's own delete-and-refresh chain settle before asserting the DOM.
+  await new Promise((resolve) => setImmediate(resolve));
+  const deletes = h.calls.filter((call) => call.url === '/api/stickers/delete');
+  assert.equal(deletes.length, 1);
+  assert.equal(deletes[0].body.name, '开心/同名.gif');
+  assert.deepEqual(h.status.emotions.find((entry) => entry.key === 'other').items, [items[0]], 'deleting the legacy entry must preserve the canonical same-name file');
+  const remaining = h.ids.get('stkThumbs-other').children;
+  assert.equal(remaining.length, 1);
+  const image = remaining[0].children.find((child) => child.tagName === 'IMG');
+  assert.equal(new URL(image.src, 'http://mock.invalid').searchParams.get('name'), '其他/同名.gif');
+  assert.equal(h.calls.some((call) => call.url === '/api/stickers/upload' || call.url === '/api/stickers/test'), false);
+});
+
+test('other probability falls back to genericChance, saves chances.other and survives reload', async () => {
+  const h = harness();
+  delete h.config.sticker.chances.other;
+  h.config.sticker.genericChance = 0.37;
+  await h.run('loadFeatures()');
+  const other = h.ids.get('stkChance-other');
+  assert.equal(Number(other.value), 37);
+  other.value = '16.5'; await other.dispatch('input');
+  await h.ids.get('stkSaveRates').dispatch('click');
+  const writes = h.calls.filter((call) => call.url === '/api/config' && call.method === 'POST');
+  assert.equal(writes.length, 1);
+  assert.deepEqual(writes[0].body.patch, {'sticker.chances.cute':0.12,'sticker.chances.angry':0.2,'sticker.chances.other':0.165});
+  assert.equal(h.config.sticker.chances.other, 0.165);
+  assert.equal(h.config.sticker.genericChance, 0.37, 'save must not overwrite unrelated legacy configuration');
+  await h.run('loadStickerRates()');
+  assert.equal(Number(other.value), 16.5, 'explicit chances.other must take precedence over genericChance');
+  h.config.sticker.chances.other = 0;
+  await h.run('loadStickerRates()');
+  assert.equal(Number(other.value), 0, 'zero is an explicit rate, not a missing value');
+  assert.equal(h.calls.some((call) => call.url === '/api/stickers/upload' || call.url === '/api/stickers/test' || (call.url === '/api/features' && call.method === 'POST')), false);
 });

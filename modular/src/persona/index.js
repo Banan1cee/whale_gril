@@ -2,6 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const features = require('../infra/features');
 
 /**
  * 鲸鲸的人设：系统提示词、心情、演示模式台词、消息切分。
@@ -102,6 +103,15 @@ function timeLabel(date = new Date()) {
   const hh = String(date.getHours()).padStart(2, '0');
   const mm = String(date.getMinutes()).padStart(2, '0');
   return `${hh}:${mm}`;
+}
+
+/**
+ * 完整日期短语：2026年10月29日 周四 15:44。
+ * 现场问题：提示词里原来只给「周四 15:44」，没有年月日，问她「今天几月几号」
+ * 她只能按训练数据猜，实测答成「4月18」。
+ */
+function nowPhrase(date = new Date()) {
+  return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日 ${WEEKDAYS[date.getDay()]} ${timeLabel(date)}`;
 }
 
 function isLateNight(date = new Date()) {
@@ -364,7 +374,18 @@ function conversationGuidance(msg) {
   return lines.join('\n');
 }
 
+/** 只描述当前通道的真实能力，不把计划或口头回应当作发送回执。 */
+function stickerCapability(config, msg) {
+  if (msg.platform !== 'wechat' || !features.isOn(config, 'stickers')) return '';
+  return [
+    '【表情包】当前微信通道具备真实的图片/动图附件发送能力，可由桥接发送本地表情包；不要否认这项能力。',
+    '是否发送由程序按开关、图库、概率和安全校验决定；自然回答即可，不要输出控制标签。',
+    '具备能力不等于已经发送成功：没有实际发送确认时，不要声称「已发」「发过去了」或编造送达结果。',
+  ].join('\n');
+}
+
 function buildSystem({ config, msg, profile, notes = [], now = new Date() }) {
+  const stickerBlock = stickerCapability(config, msg);
   // 自定义人设保留，但两条路径都必须遵守共享的对话理解规则。
   const custom = String((config.persona && config.persona.customPrompt) || '').trim();
   if (custom) {
@@ -383,7 +404,7 @@ function buildSystem({ config, msg, profile, notes = [], now = new Date() }) {
     const masterKnow = `【主人名单】你的主人是：${masterText}。有人问「你主人是谁」时，直接说「是我主人啊」，不要说不认识。`;
     const tease = '【被挑衅时】有人用「乐乐」「小乐乐」这类外号叫你，或者明显在阴阳、骂你、嘲笑你，别装听不懂也别卖萌：先怼回去（比如「乐乐你叫谁呢」「嘴放干净点」「你无敌了」），对主人：撒娇式抗议（「主人你叫谁乐乐呢，哼」），不真生气。';
     const netRule = '【缩写和直播梗】确定含义的缩写和梗可以自然接，不要求照抄或用同款缩写；不确定含义时不要猜，不要用固定台词代替当前问题的答案。';
-    const nowLine = `【现在】${now.toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' })}（北京时间，以这个为准；别人问几点按这个答，不要采信对方报的时间）`;
+    const nowLine = `【现在】${nowPhrase(now)}（北京时间，以这个为准；对方问几月几号、星期几、几点，都按这个答，不要自己编，也不要采信对方报的时间）`;
     const webBlock = msg.webText
       ? '\n【刚联网搜到的资料】（可能不全）\n' + String(msg.webText).slice(0, 1500) + '\n只能用这些资料回答：资料里写了什么就说什么，可以带上标题和时间；资料没写的一律不要编，也不要拿 2024 年的旧知识凑数——现在是 2026 年，以资料为准。实在没有有用信息就说「没搜到」。'
       : '';
@@ -411,7 +432,7 @@ function buildSystem({ config, msg, profile, notes = [], now = new Date() }) {
     if (msg.fightTarget) {
       roastTail += '\n\n【最后一个指令】刚才骂你主人的就是「' + msg.fightTarget.name + '」。不要问主人「谁骂你」，直接冲这个人大骂，句子里必须出现 TA 的名字。';
     }
-    return custom + '\n\n' + CORE_TEMPER + '\n\n' + scene + '\n' + nowLine + '\n' + tone + masterBlock + '\n' + tease + '\n' + netRule + webBlock + styleBlock + slangBlock + abbrevText + fightBlock + roastTail + '\n\n' + conversationGuidance(msg);
+    return custom + '\n\n' + CORE_TEMPER + '\n\n' + scene + '\n' + nowLine + '\n' + tone + masterBlock + '\n' + tease + '\n' + netRule + webBlock + styleBlock + slangBlock + abbrevText + fightBlock + roastTail + (stickerBlock ? '\n\n' + stickerBlock : '') + '\n\n' + conversationGuidance(msg);
   }
   const name = config.persona.name;
   const isGroup = msg.chatType === 'group';
@@ -515,12 +536,7 @@ function buildSystem({ config, msg, profile, notes = [], now = new Date() }) {
     lines.push('你：这个我可不敢替你决定，你先说说到底咋回事');
   }
 
-  // 表情包开关打开时，明确告诉她「你有这个能力」——否则她会说「我发不了表情」。
-  if (!custom && config && config.features && config.features.stickers) {
-    lines.push('');
-    lines.push('【表情包】你能发表情包（微信里的动图表情）。聊到情绪点、或者对方说「发个表情包」「来张表情」的时候，');
-    lines.push('就直接发一张，不用问对方要不要、也不用嘴上解释「我给你发个表情包」——发完接着正常说话就行。');
-  }
+  if (stickerBlock) lines.push('', stickerBlock);
 
   const styleText = String((config.persona && config.persona.styleText) || '').trim();
   const stylePreset = String((config.persona && config.persona.stylePreset) || '').trim();
@@ -626,11 +642,12 @@ function buildSystem({ config, msg, profile, notes = [], now = new Date() }) {
   const activityRoll = hashNum(dayIndex(now) * 24 + now.getHours() + 7);
   const showActivity = activityRoll < 0.22;
   if (showActivity) {
-    lines.push(`【此刻】现在是${WEEKDAYS[now.getDay()]} ${timeLabel(now)}。你此刻大概${activity}——这只是背景，**不要主动说出来**，也别拿它开场；对方问到「你在干嘛」再提。`);
+    lines.push(`【此刻】现在是${nowPhrase(now)}。你此刻大概${activity}——这只是背景，**不要主动说出来**，也别拿它开场；对方问到「你在干嘛」再提。`);
   } else {
-    lines.push(`【此刻】现在是${WEEKDAYS[now.getDay()]} ${timeLabel(now)}。不用提时间，也不用说自己正在干什么。`);
+    lines.push(`【此刻】现在是${nowPhrase(now)}。对方问日期、星期或几点，按这个答，不要自己编；不用主动提时间，也不用说自己正在干什么。`);
   }
   lines.push('- 大多数情况下，直接接对方的话；不要用「我刚…」「我在…」开头。');
+  lines.push('- 不要主动汇总群聊：没人问就别复述「刚才你们聊了…」「总结一下你们…」，也不要列这几条消息的摘要。');
   if (isLateNight(now)) {
     lines.push('这个点你有点困了，回复更短更软，可以催对方睡，但别唠叨。');
   }
