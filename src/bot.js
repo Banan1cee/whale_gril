@@ -604,18 +604,6 @@ class Bot {
     }
 
 
-    // 别人的消息存一份，方便主人随时要汇总
-    if (!isMaster && clean.text) {
-      try {
-        this.store.addDigest({
-          ts: nowMs,
-          chat: msg.chatTitle || session.title || (isGroup ? msg.chatId : ''),
-          chatType: msg.chatType,
-          sender: msg.senderName || '',
-          text: String(clean.text).slice(0, 300),
-        });
-      } catch { /* ignore */ }
-    }
 
     // 「没你事儿了，走吧」→ 回一句就退场，之后不再接
     const dismissText = String(clean.text || '').trim();
@@ -809,7 +797,7 @@ class Bot {
     const searchPattern = new RegExp(
       [
         '(查一下|查查|搜一下|搜搜|帮我查|帮我看看|最新|热搜|新闻|发生了什么|怎么回事|多少钱|什么价格|几块钱)',
-        '(什么时候|是谁|谁是|行情|报价|天气)',
+        '(什么时候|是谁|谁是|行情|报价|天气|下雨|下雪|气温|多少度|冷不冷|热不热|台风|雾霾|空气质量)',
         '(出到|出到哪|第几代|几代|什么型号|哪个型号|哪个版本|什么版本|现在还|现在最新|今年|去年)',
         '(苹果|iphone|ipad|华为|小米|三星|索尼|任天堂|switch|ps5|显卡|rtx|骁龙|麒麟|芯片|发布会)',
       ].join('|'),
@@ -873,6 +861,9 @@ class Bot {
     // msg 上从没挂过 webText，于是 persona 里那段「【刚联网搜到的资料】」永远是空——
     // 表现就是「问她天气她不知道」，明明日志里已经搜到了。
     msg.webText = webText;
+    // 现场问题：日志有「联网搜索」，回复却说「我记的是旧的」——光看日志分不清
+    // 资料到底有没有进提示词。这里把注入长度也记下来，一眼能对上。
+    if (webText && this.logger) this.logger.info('联网资料已注入提示词：' + String(webText).length + ' 字');
 
     // 认真讨论（不是随口闲聊）→ 允许说长一点、有观点
     const discussPattern = /(讨论|探讨|你觉得|你怎么看|你认为|为什么|该不该|要不要|是不是应该|如何选择|怎么选|怎么看|有道理吗|值得吗|价值观|人生|意义|观点|看法|利弊|优缺点)/;

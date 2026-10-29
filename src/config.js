@@ -145,9 +145,9 @@ const DEFAULT_CONFIG = {
   // 关闭时整个功能不生效：不挑图、不回包带字段、桥接不轮询、测试接口 404。
   sticker: {
     dir: 'data/stickers',
-    // 5 类情绪，键名对应 data/stickers 下的文件夹（中文名也认）
-    chances: { happy: 0.25, angry: 0.25, cute: 0.25, meh: 0.25, bored: 0.25 },
-    genericChance: 0.25,    // 五类都没单独配时的兜底概率
+    // 三类：傲娇 / 炸毛 / 其他。普通聊天只用「其他」，不跨分类兜底。
+    chances: { cute: 0.25, angry: 0.25, other: 0.25 },
+    genericChance: 0.25,    // 兼容旧配置，三分类界面统一修改 chances.other
     testChat: '文件传输助手', // 控制台「发送测试表情包」默认发到哪
   },
   features: {
@@ -316,6 +316,12 @@ function loadConfig({ root = projectRoot(), env = process.env } = {}) {
   const configExists = fs.existsSync(configPath);
   const fromFile = configExists ? readJson(configPath, {}) : {};
   const cfg = deepMerge(DEFAULT_CONFIG, fromFile);
+  // In-memory compatibility only: a legacy genericChance must not be masked by
+  // the new default chances.other. Never rewrite credentials/persona for this.
+  if (fromFile.sticker && !Object.hasOwn(fromFile.sticker.chances || {}, 'other')
+      && fromFile.sticker.genericChance !== undefined) {
+    cfg.sticker.chances.other = fromFile.sticker.genericChance;
+  }
   // 老配置迁移（在 env 覆盖之前做，避免把用户的 env 设置改掉）
   const migrated = migrateSampling(cfg);
   if (migrated && configExists) {
