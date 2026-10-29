@@ -1,0 +1,5 @@
+
+# 4.0 构建产物
+WhaleLauncher.exe
+launcher/bin/
+launcher/obj/
