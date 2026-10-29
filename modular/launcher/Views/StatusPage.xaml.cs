@@ -162,7 +162,7 @@ namespace WhaleLauncher.Views
                 // /api/recent 还没做，或者内核刚起
                 Recent.ItemsSource = null;
                 RecentEmpty.Visibility = Visibility.Visible;
-                RecentEmpty.Text = "最近动态还会在下一轮接上（/api/recent 未就绪）。";
+                RecentEmpty.Text = "还没有消息。她在微信里说上话之后，这里会显示最近 10 条。";
                 RecentHint.Text = "";
             }
         }

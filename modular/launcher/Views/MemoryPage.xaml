@@ -1,0 +1,120 @@
+<UserControl x:Class="WhaleLauncher.Views.MemoryPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Background="{StaticResource Bg}">
+    <Grid Margin="20,16,20,14">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <DockPanel Grid.Row="0" LastChildFill="False" Margin="0,0,0,12">
+            <TextBlock DockPanel.Dock="Left" Text="记忆" Style="{StaticResource H1}" VerticalAlignment="Center" />
+            <Button DockPanel.Dock="Right" Content="⟳ 刷新" Style="{StaticResource Ghost}" HorizontalAlignment="Right" Click="OnReload" />
+        </DockPanel>
+
+        <!-- 概览 -->
+        <Border Grid.Row="1" Style="{StaticResource Card}" Padding="16,12">
+            <WrapPanel>
+                <StackPanel Margin="0,0,36,0">
+                    <TextBlock Text="会话" Style="{StaticResource Label}" />
+                    <TextBlock x:Name="StatSessions" Text="—" FontSize="20" FontWeight="SemiBold" Foreground="{StaticResource Text}" />
+                </StackPanel>
+                <StackPanel Margin="0,0,36,0">
+                    <TextBlock Text="消息" Style="{StaticResource Label}" />
+                    <TextBlock x:Name="StatMessages" Text="—" FontSize="20" FontWeight="SemiBold" Foreground="{StaticResource Text}" />
+                </StackPanel>
+                <StackPanel Margin="0,0,36,0">
+                    <TextBlock Text="笔记" Style="{StaticResource Label}" />
+                    <TextBlock x:Name="StatNotes" Text="—" FontSize="20" FontWeight="SemiBold" Foreground="{StaticResource Text}" />
+                </StackPanel>
+                <StackPanel>
+                    <TextBlock Text="快照" Style="{StaticResource Label}" />
+                    <TextBlock x:Name="StatBackups" Text="—" FontSize="20" FontWeight="SemiBold" Foreground="{StaticResource Text}" />
+                </StackPanel>
+            </WrapPanel>
+        </Border>
+
+        <!-- 工具栏 -->
+        <WrapPanel Grid.Row="2" Margin="0,12,0,0">
+            <Button Content="立即备份" Style="{StaticResource Ghost}" Click="OnBackup" />
+            <ComboBox x:Name="CmbBackups" Width="260" Height="28" Margin="10,0,0,0" />
+            <Button Content="从这份恢复" Style="{StaticResource Ghost}" Margin="8,0,0,0" Click="OnRestore" />
+            <Button Content="打开备份目录" Style="{StaticResource Ghost}" Margin="8,0,0,0" Click="OnOpenBackupDir" />
+            <Button Content="导出记忆" Style="{StaticResource Ghost}" Margin="8,0,0,0" Click="OnExport" />
+            <CheckBox x:Name="ChkSnapshot" Content="自动快照（每次启动 + 每 30 分钟）" Margin="18,0,0,0"
+                      VerticalAlignment="Center" Click="OnToggleSnapshot" />
+        </WrapPanel>
+
+        <!-- 会话 + 详情 -->
+        <Grid Grid.Row="3" Margin="0,12,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="300" />
+                <ColumnDefinition Width="12" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <Border Grid.Column="0" Style="{StaticResource Card}" Padding="0">
+                <DockPanel>
+                    <TextBox x:Name="TxtFilter" DockPanel.Dock="Top" Margin="10,10,10,6" ToolTip="按名字或会话 key 过滤"
+                             TextChanged="OnFilterChanged" />
+                    <ListBox x:Name="Sessions" Background="Transparent" BorderThickness="0"
+                             SelectionChanged="OnSessionChanged" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem">
+                                <Setter Property="Padding" Value="0" />
+                                <Setter Property="Template">
+                                    <Setter.Value>
+                                        <ControlTemplate TargetType="ListBoxItem">
+                                            <Border x:Name="b" Background="Transparent" Padding="10,7">
+                                                <ContentPresenter />
+                                            </Border>
+                                            <ControlTemplate.Triggers>
+                                                <Trigger Property="IsMouseOver" Value="True">
+                                                    <Setter TargetName="b" Property="Background" Value="#FF272B31" />
+                                                </Trigger>
+                                                <Trigger Property="IsSelected" Value="True">
+                                                    <Setter TargetName="b" Property="Background" Value="{StaticResource AccentDim}" />
+                                                </Trigger>
+                                            </ControlTemplate.Triggers>
+                                        </ControlTemplate>
+                                    </Setter.Value>
+                                </Setter>
+                            </Style>
+                        </ListBox.ItemContainerStyle>
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel>
+                                    <TextBlock Text="{Binding Title}" Foreground="{StaticResource Text}" FontSize="12.5" TextTrimming="CharacterEllipsis" />
+                                    <TextBlock Text="{Binding Sub}" Style="{StaticResource Small}" Margin="0,3,0,0" TextTrimming="CharacterEllipsis" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </DockPanel>
+            </Border>
+
+            <Border Grid.Column="2" Style="{StaticResource Card}" Padding="16,14">
+                <DockPanel>
+                    <TextBlock x:Name="DetailTitle" DockPanel.Dock="Top" Style="{StaticResource H2}" />
+                    <TextBlock x:Name="DetailSub" DockPanel.Dock="Top" Style="{StaticResource Small}" Margin="0,6,0,0" TextWrapping="Wrap" />
+                    <TextBlock x:Name="EmptyHint" Text="左边选一个会话，看她还记得什么。"
+                               Style="{StaticResource Small}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    <ScrollViewer x:Name="DetailScroll" VerticalScrollBarVisibility="Auto" Margin="0,10,0,0" Visibility="Collapsed">
+                        <StackPanel>
+                            <TextBlock Text="她记的笔记" Style="{StaticResource Label}" Margin="0,0,0,6" />
+                            <StackPanel x:Name="NotesHost" />
+                            <TextBlock Text="最近的对话" Style="{StaticResource Label}" Margin="0,14,0,6" />
+                            <StackPanel x:Name="MessagesHost" />
+                        </StackPanel>
+                    </ScrollViewer>
+                </DockPanel>
+            </Border>
+        </Grid>
+
+        <TextBlock x:Name="StatusText" Grid.Row="4" Style="{StaticResource Small}" Margin="0,10,0,0" TextWrapping="Wrap" />
+    </Grid>
+</UserControl>
