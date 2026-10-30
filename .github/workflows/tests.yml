@@ -51,6 +51,19 @@ jobs:
           python -c "import sys, locale; print(sys.version); print('stdout=', sys.stdout.encoding, 'preferred=', locale.getpreferredencoding())"
           dotnet --version
 
+      # 临时诊断：桥接表情包发送在 CI 上全部返回 failed（本地不复现）。
+      # 把被 except 吞掉的异常打印出来，塞进一条 warning 注解（匿名可读）。
+      # 定位完成后这段会删掉。
+      - name: 诊断（临时）
+        if: always()
+        shell: pwsh
+        run: |
+          $out = (python scripts/ci-diag.py *>&1) -join "`n"
+          Write-Output $out
+          if ($out.Length -gt 3500) { $out = $out.Substring(0, 3500) }
+          $msg = $out -replace '%', '%25' -replace "`r", '' -replace "`n", '%0A'
+          Write-Output "::warning title=diag::$msg"
+
       # 后面每一步都加 if: always()，任何一步红了也把剩下的跑完，
       # 这样一次运行就能看到整条流水线的真实状态，而不是在第一个错处停下。
       - name: 分层依赖（谁可以 require 谁）
@@ -72,15 +85,13 @@ jobs:
       - name: Python 单元测试
         if: always()
         shell: pwsh
-        # 把输出存下来，失败时把关键几行打成 ::error 注解（注解在 check run 上
-        # 匿名可见，方便不给仓库权限也能看到失败原因）。
+        # 输出存下来，失败时把整段失败块转义进一条 ::error 注解，
+        # 没有仓库权限也能从 check run 的 annotations 里看到完整 traceback。
         run: |
           python -m unittest discover -s tests -p 'test_*.py' -v *> py-tests.log
           $code = $LASTEXITCODE
           Get-Content py-tests.log
           if ($code -ne 0) {
-            # 把失败块整段塞进一条注解（换行转义成 %0A），这样没有仓库权限也能
-            # 从 check run 的 annotations 里看到完整 traceback。
             $text = Get-Content -Raw -Encoding utf8 py-tests.log
             $idx = $text.IndexOf('=====================')
             $tail = if ($idx -ge 0) { $text.Substring($idx) } else { $text }
