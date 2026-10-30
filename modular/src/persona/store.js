@@ -27,21 +27,79 @@ function load(config) {
   }
 }
 
+/* ------------------------------------------------------------------ */
+/* 归属划分：这几个键以前存在 data/persona.json，但启动时 apply() 会用旧值   */
+/* 盖掉 config.json —— 用户在设置页改完、重启又变回去，看着就是「设置无效」。 */
+/* 现在它们只归 config.json；persona.json 只留人设本身。                   */
+/* ------------------------------------------------------------------ */
+const CONFIG_PATHS = {
+  privateMaxChars: 'chat.privateMaxChars',
+  groupMaxChars: 'chat.groupMaxChars',
+  maxBubbles: 'chat.maxBubbles',
+  links: 'links.enabled',
+  freeChat: 'group.freeChat',
+  historyTurns: 'chat.historyTurns',
+  groupHistoryTurns: 'chat.groupHistoryTurns',
+};
+
+function normalized(key, value) {
+  if (key === 'links' || key === 'freeChat') return Boolean(value);
+  if (key === 'mutedGroups') return value;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+/** config.json 里「明确写过这个键」没有（写过就以 config.json 为准，不再迁移） */
+function configHasPath(config, dotted) {
+  try {
+    const file = config.paths && config.paths.configFile;
+    if (!file) return false;
+    let cur = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')) || {};
+    for (const part of String(dotted).split('.')) {
+      if (cur === null || typeof cur !== 'object' || !Object.prototype.hasOwnProperty.call(cur, part)) return false;
+      cur = cur[part];
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function save(config, patch) {
   const file = fileFor(config);
+  const patchObj = patch || {};
+  // 把归属 config.json 的那几个键写过去（不再落进 persona.json）
+  const configPatch = {};
+  for (const [key, dotted] of Object.entries(CONFIG_PATHS)) {
+    if (patchObj[key] === undefined) continue;
+    const value = normalized(key, patchObj[key]);
+    if (value === undefined) continue;
+    configPatch[dotted] = value;
+  }
+  if (Object.keys(configPatch).length) {
+    try {
+      const { saveConfigPatch } = require('../infra/configPatch');
+      saveConfigPatch(config, configPatch);
+    } catch (err) {
+      // 写不了文件也要让本次生效，不然界面改了却毫无反应
+      for (const [dotted, value] of Object.entries(configPatch)) {
+        const parts = dotted.split('.');
+        let cur = config;
+        for (let i = 0; i < parts.length - 1; i += 1) {
+          if (!cur[parts[i]] || typeof cur[parts[i]] !== 'object') cur[parts[i]] = {};
+          cur = cur[parts[i]];
+        }
+        cur[parts[parts.length - 1]] = value;
+      }
+      if (config.__logger) config.__logger.warn('群聊/长度设置写入 config.json 失败，仅本次生效：' + err.message);
+    }
+  }
   // 以当前生效值为底，避免“只改了一半”把别的设置冲掉（也兼容没有写文件权限的环境）
   const base = {
     preset: config.persona && config.persona.stylePreset,
     text: config.persona && config.persona.styleText,
     emoji: config.persona && config.persona.emojiLevel,
-    privateMaxChars: config.chat && config.chat.privateMaxChars,
-    groupMaxChars: config.chat && config.chat.groupMaxChars,
-    maxBubbles: config.chat && config.chat.maxBubbles,
-    links: config.links ? config.links.enabled !== false : undefined,
-    freeChat: config.group ? Boolean(config.group.freeChat) : undefined,
     mutedGroups: config.group && Array.isArray(config.group.mutedGroups) ? config.group.mutedGroups : undefined,
-    historyTurns: config.chat ? config.chat.historyTurns : undefined,
-    groupHistoryTurns: config.chat ? config.chat.groupHistoryTurns : undefined,
     emotions: config.persona ? config.persona.emotions !== false : undefined,
     proactive: config.persona ? config.persona.proactive !== false : undefined,
     opinions: config.persona ? config.persona.opinions !== false : undefined,
@@ -56,8 +114,9 @@ function save(config, patch) {
     sourcePreset: config.persona ? config.persona.sourcePreset : undefined,
   };
   for (const k of Object.keys(base)) if (base[k] === undefined) delete base[k];
-  const patchObj = patch || {};
   const next = { ...base, ...load(config), ...patchObj };
+  // config 归属的键即使被写进 patch，也不再进 persona.json
+  for (const key of Object.keys(CONFIG_PATHS)) delete next[key];
   // patch 里明确给了空字符串的键，语义是「清空」，必须让 apply() 看到；
   // 以前一律「清掉空值」，导致 apply() 读不到这个键，旧值永远删不掉 ——
   // 表现就是：导入过一次人设预设后，自定义提示词永久生效，改性格/语气/外貌全都没反应。
@@ -82,6 +141,14 @@ function save(config, patch) {
     }
   }
   apply(config, forApply);
+  // 保存条数必须覆盖模型窗口及本轮输入/回复，否则面板设了 100 实际只剩 40
+  if (config.chat && config.memory) {
+    config.memory.maxMessages = Math.min(500, Math.max(
+      Number(config.memory.maxMessages) || 160,
+      Number(config.chat.historyTurns || 200) + 2,
+      Number(config.chat.groupHistoryTurns || 150) + 2,
+    ));
+  }
   return forApply;
 }
 
@@ -116,11 +183,32 @@ function clear(config) {
   if (file) {
     try { fs.unlinkSync(file); } catch { /* ignore */ }
   }
+  // 「恢复默认」也要把归 config.json 的那几项一起还原，否则面板显示已经重置、
+  // 实际长度/上下文还停在用户改过的值（以前这些都在 persona.json 里才会被一起清掉）。
+  const back = {};
+  for (const [key, dotted] of Object.entries(CONFIG_PATHS)) {
+    const value = normalized(key, DEFAULTS[key]);
+    if (value !== undefined) back[dotted] = value;
+  }
+  try {
+    const { saveConfigPatch } = require('../infra/configPatch');
+    saveConfigPatch(config, back);
+  } catch {
+    for (const [dotted, value] of Object.entries(back)) {
+      const parts = dotted.split('.');
+      let cur = config;
+      for (let i = 0; i < parts.length - 1; i += 1) {
+        if (!cur[parts[i]] || typeof cur[parts[i]] !== 'object') cur[parts[i]] = {};
+        cur = cur[parts[i]];
+      }
+      cur[parts[parts.length - 1]] = value;
+    }
+  }
   apply(config, { ...DEFAULTS });
   return {};
 }
 
-/** 把存档合并进 config（提示词 / 长度 / 能力开关都从这里读） */
+/** 把存档合并进 config（提示词 / 人设内容从这里读） */
 function apply(config, data) {
   data = data || {};
   if (!config.persona) config.persona = {};
@@ -128,26 +216,22 @@ function apply(config, data) {
   config.persona.styleText = data.text || '';
   config.persona.emojiLevel = data.emoji || '';
 
-  if (!config.chat) config.chat = {};
-  config.chat.privateMaxChars = Number(data.privateMaxChars) || 140;
-  config.chat.groupMaxChars = Number(data.groupMaxChars) || 70;
-  // 一次能发几条气泡：吵架预设要「一句话一条」，就把它调大
-  const mb = Number(data.maxBubbles);
-  config.chat.maxBubbles = mb > 0 ? Math.max(1, Math.min(8, mb)) : 2;
-
-  if (!config.links) config.links = {};
-  config.links.enabled = data.links === undefined ? true : Boolean(data.links);
-
   if (!config.group) config.group = {};
-  if (data.freeChat !== undefined) config.group.freeChat = Boolean(data.freeChat);
   config.group.mutedGroups = Array.isArray(data.mutedGroups) ? data.mutedGroups.slice() : [];
-  const ht = Number(data.historyTurns);
-  config.chat.historyTurns = ht > 0 ? Math.max(4, Math.min(400, ht)) : 200;
-  const ght = Number(data.groupHistoryTurns);
-  config.chat.groupHistoryTurns = ght > 0 ? Math.max(2, Math.min(300, ght)) : 150;
-  // 保存条数必须覆盖模型窗口及本轮输入/回复，避免面板设了 100 实际只剩 40。
-  if (!config.memory) config.memory = {};
-  config.memory.maxMessages = Math.min(500, Math.max(Number(config.memory.maxMessages) || 160, config.chat.historyTurns + 2, config.chat.groupHistoryTurns + 2));
+  // 归属 config.json 的键：老版本存过就搬一次（只搬 config.json 里没写过的），
+  // 之后就只认 config.json，绝不再用它盖掉用户在设置页选的值。
+  const legacy = {};
+  for (const [key, dotted] of Object.entries(CONFIG_PATHS)) {
+    if (data[key] === undefined || configHasPath(config, dotted)) continue;
+    const value = normalized(key, data[key]);
+    if (value !== undefined) legacy[dotted] = value;
+  }
+  if (Object.keys(legacy).length) {
+    try {
+      const { saveConfigPatch } = require('../infra/configPatch');
+      saveConfigPatch(config, legacy);
+    } catch { /* 写不了就按默认值跑 */ }
+  }
   config.persona.emotions = data.emotions !== false;
   // 主人被骂时她能不能还嘴（默认关；开了就允许毒舌互怼，但不许真脏字）
   if (data.masterRoast !== undefined) config.persona.masterRoast = Boolean(data.masterRoast);

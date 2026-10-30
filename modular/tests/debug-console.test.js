@@ -76,15 +76,17 @@ function groupMsg(app, chatId, text = '今天天气不错啊') {
   }).then((r) => r.json());
 }
 
-test('group.requireAt 真的管用：开=不@不回，关=不@也回', async () => {
+test('group.requireAt 真的管用：开=不@不回，关=按概率回', async () => {
   const app = await boot();
   try {
-    await patch(app, { 'group.requireAt': true, 'group.freeChat': false, 'group.maxRepliesPerHour': 1000 });
+    // 概率 0：没点名一律不接（插话开关开着也一样）
+    await patch(app, { 'group.requireAt': true, 'group.freeChat': true, 'group.freeChatChance': 0, 'group.maxRepliesPerHour': 1000 });
     const ignored = await groupMsg(app, 'grp_require_on');
     assert.equal(ignored.action, 'ignore', '开着 requireAt 时，没 @ 她不该回');
     assert.equal(ignored.reason, 'not_addressed');
 
-    await patch(app, { 'group.requireAt': false, 'group.freeChat': false, 'group.maxRepliesPerHour': 1000 });
+    // 关掉 requireAt + 概率 1：不 @ 也回（概率现在是唯一的闸门，不再是「每条都回」）
+    await patch(app, { 'group.requireAt': false, 'group.freeChat': false, 'group.freeChatChance': 1, 'group.maxRepliesPerHour': 1000 });
     const replied = await groupMsg(app, 'grp_require_off');
     assert.equal(replied.action, 'reply', '关掉 requireAt 后，不 @ 也应该回：' + JSON.stringify(replied).slice(0, 120));
     assert.ok(String(replied.reply || '').length > 0, '要真的有一句回复');
@@ -96,7 +98,7 @@ test('group.requireAt 真的管用：开=不@不回，关=不@也回', async () 
 test('group.maxRepliesPerHour 真的限流', async () => {
   const app = await boot();
   try {
-    await patch(app, { 'group.requireAt': false, 'group.maxRepliesPerHour': 1 });
+    await patch(app, { 'group.requireAt': false, 'group.freeChatChance': 1, 'group.maxRepliesPerHour': 1 });
     // 先确认配置真的落地了，避免把「保存没生效」误判成「限流坏了」
     await waitConfig(app, 'group.requireAt', false);
     await waitConfig(app, 'group.maxRepliesPerHour', 1);
@@ -133,8 +135,12 @@ test('桥接会热更新配置（调试台改完不用重启）', () => {
   // 关键开关必须在热更新里被重新赋值（global 声明）
   const fn = bridge.slice(bridge.indexOf('def reload_config'));
   const body = fn.slice(0, fn.indexOf('\n# 系统 / 公众号'));
-  for (const k of ['CARE_ENABLED', 'SHARE_ENABLED', 'GAME_TOKENS', 'KEYBOARD_FALLBACK', 'BACKGROUND_SEND']) {
+  for (const k of ['CARE_ENABLED', 'SHARE_ENABLED', 'KEYBOARD_FALLBACK', 'BACKGROUND_SEND']) {
     assert.match(body, new RegExp('global[^\\n]*' + k + '|' + k + ' = '), k + ' 要在热更新里刷新');
+  }
+  // 「打游戏就休息 / 离开回来打招呼 / 忙时排队」整组已删除，守住反向约束：别再加回来
+  for (const gone of ['GAME_TOKENS', 'AWAY_NOTICE', 'RETURN_NOTICE', 'QUEUED_MAX_AGE', 'QUEUED_MAX_CHATS']) {
+    assert.doesNotMatch(body, new RegExp(gone), gone + ' 已删除，不应再出现');
   }
   assert.match(body, /SYSTEM_SENDER_NAMES/, '忽略名单也要刷新');
 });

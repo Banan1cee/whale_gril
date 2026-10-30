@@ -115,10 +115,24 @@ async function applySettings(runtime, body) {
     patch.temperature = Math.max(0, Math.min(2, body.temperature));
   }
   if (body.group && typeof body.group === 'object') {
-    if (typeof body.group.requireAt === 'boolean') config.group.requireAt = body.group.requireAt;
-    if (typeof body.group.freeChat === 'boolean') config.group.freeChat = body.group.freeChat;
+    // 以前只改内存里的 config.group，没落盘 —— 重启就变回旧值（用户看到「设置无效」）。
+    // 统一走 config.json，和启动器设置页写的是同一份数据。
+    const groupPatch = {};
+    if (typeof body.group.requireAt === 'boolean') groupPatch['group.requireAt'] = body.group.requireAt;
+    if (typeof body.group.freeChat === 'boolean') groupPatch['group.freeChat'] = body.group.freeChat;
     if (Number.isFinite(body.group.freeChatChance)) {
-      config.group.freeChatChance = Math.max(0, Math.min(1, Number(body.group.freeChatChance)));
+      groupPatch['group.freeChatChance'] = Math.max(0, Math.min(1, Number(body.group.freeChatChance)));
+    }
+    if (Object.keys(groupPatch).length) {
+      try {
+        applyConfigPatch(runtime, groupPatch);
+      } catch (err) {
+        runtime.logger.warn('群聊规则写入 config.json 失败，仅本次生效：' + err.message);
+        for (const [dotted, value] of Object.entries(groupPatch)) {
+          const key = dotted.slice('group.'.length);
+          config.group[key] = value;
+        }
+      }
     }
   }
   saveSettings(config, patch);

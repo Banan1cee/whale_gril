@@ -1,5 +1,25 @@
 # 更新记录
 
+## 未发布（群聊三件套修复 + 桥接对齐）
+
+**设置页改了又变回去、概率调了没反应，这两个都修了；桥接那边也补齐。**
+
+- 修复：`{ group: { requireAt } }` 这种「整段对象」补丁以前会把整个 `group` 段覆盖写进
+  `config.json`，同一段里的 `freeChat` / `freeChatChance` / `cooldownSec` 一起被清回默认值。
+  现在只有 schema 认识的段才摊平成点号路径，`gateway.wechat.outboundHeaders` 这类真 JSON 字段原样保留
+- 修复：群聊开关和长度/上下文设置改完重启就变回去。根因是它们同时存在 `data/persona.json`，
+  启动时 `personaStore.apply()` 用旧值盖掉 `config.json`。现在这几项只归 `config.json`；
+  老文件里的值在 `config.json` 没写过时迁移一次，之后以 `config.json` 为准，「恢复默认」也会一起还原
+- 修复：网页设置的 `group.*` 以前只改内存不落盘，现在直接写 `config.json`
+- 改进：「必须 @ 她才回」关掉时也按「插话概率」抽，不再每条都回（以前直接放行，概率设置等于摆设）；
+  概率设 0 = 没点名一律不接
+- 改进：桥接删除「打游戏就休息 / 离开回来打招呼 / 忙时排队补发」：配置项、`away.json`、
+  `pending_replies`、`game_watch`/`flush_pending`/`notify_away` 全部移除；`rest` 字段保留但恒为 false
+- 新增：桥接接上消息汇总线程（`bridge/digest_watch.py`）：新窗口 → `GET /api/digest` → 复核开关与代际
+  → 发前 + 落键前两次 guard。找不到唯一联系人就 fail closed，不发
+- 其他：`config.example.json` 清掉上述废弃键；`scripts/prepare-sticker-runtime.py` 增加
+  `wechatauto/db.py` 补丁（密钥失败提示的元组解包崩溃），并已应用到便携运行时
+
 ## 未发布（同步上游 3.9 的模块化落点）
 
 **联网检索改成语义路由、消息汇总做成开关、删掉打扰性功能。**

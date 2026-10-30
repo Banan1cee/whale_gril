@@ -106,15 +106,16 @@ function computeTrigger(bot, { msg, atMe, clean, isGroup, state, nowMs, isMaster
     if (!recent && Number(state.lastReplyAt) > hourAgo) recent = 1;
     if (recent >= cap) return { wake: false, reason: 'hourly_cap' };
   }
-  // 「群里必须 @ 她才接话」关掉 = 群里不 @ 也会回。
-  // 这个开关以前在代码里根本没被读过（只在配置和状态接口里出现过），
-  // 所以用户在调试台怎么调都没反应 —— 现在它是真的闸门。
-  if (g.requireAt === false && !tooSoon) {
-    return { wake: true, reason: 'require_at_off' };
+  // 没点名她的时候有两种放行方式，都受同一个「插话概率」控制：
+  //   1. 「允许她自己插话」开着 → 按概率抽一句；
+  //   2. 「必须 @ 她才回」关掉 → 也是按概率抽，不是每条都回。
+  // 以前 case 2 直接 return wake:true，等于让概率设置完全失效（用户以为没保存）。
+  const interjectChance = clampInt(Number(g.freeChatChance) * 1000, 0, 1000, 60) / 1000;
+  const interject = !tooSoon && interjectChance > 0 && bot.rng() < interjectChance;
+  if (g.requireAt === false) {
+    return interject ? { wake: true, reason: 'free_chat' } : { wake: false, reason: 'not_addressed' };
   }
-  if (g.freeChat && bot.rng() < clampInt(g.freeChatChance * 1000, 0, 1000, 60) / 1000) {
-    if (!tooSoon) return { wake: true, reason: 'free_chat' };
-  }
+  if (g.freeChat && interject) return { wake: true, reason: 'free_chat' };
   return { wake: false, reason: clean.text ? 'not_addressed' : 'no_text' };
 }
 

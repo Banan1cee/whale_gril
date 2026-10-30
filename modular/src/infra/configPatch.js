@@ -147,9 +147,30 @@ function mergeConfigInPlace(target, src) {
   return target;
 }
 
+/**
+ * 把「整段对象」形式的补丁摊平成点号路径。
+ *
+ * 启动器人设页保存的是 `{ group: { requireAt: false } }`，以前直接被当成
+ * 「group = {requireAt:false}」整段覆盖写进 config.json —— 同一个段里的
+ * freeChat / freeChatChance / cooldownSec 全被抹掉，表现就是「改了一个，
+ * 别的群聊设置全失效」。这里只在「schema 认识这个段的子字段」时摊平，
+ * 其余（比如 gateway.wechat.outboundHeaders 这种真正的 JSON 字段）原样保留。
+ */
+function flattenPatch(patch, prefix = '', out = {}) {
+  for (const [key, value] of Object.entries(patch)) {
+    const dotted = prefix ? `${prefix}.${key}` : key;
+    const expandable = !Object.prototype.hasOwnProperty.call(configSchema.FIELDS, dotted)
+      && Object.keys(configSchema.FIELDS).some((field) => field.startsWith(dotted + '.'));
+    if (isPlainObject(value) && expandable) flattenPatch(value, dotted, out);
+    else out[dotted] = value;
+  }
+  return out;
+}
+
 /** 把网页提交的 { "persona.name": "新名字" } 写进 config.json 并立刻生效 */
 function applyConfigPatch(runtime, patch) {
   if (!isPlainObject(patch)) throw new Error('patch 要是 { 字段名: 新值 } 这样的对象');
+  patch = flattenPatch(patch);
   // 消息汇总：先校验再落盘。负数/NaN/极小间隔会导致推送死循环，绝不能写进文件。
   const digestPatch = { ...(isPlainObject(patch.digest) ? patch.digest : {}) };
   for (const [key, value] of Object.entries(patch)) {
@@ -251,6 +272,45 @@ function watchConfigFile(runtime) {
   }
 }
 
+/**
+ * 没有 runtime 的写入版：按当前 config 对象写 config.json，并原地生效。
+ * 给「人设调教 / 群聊开关」这类不经过 HTTP 的调用方用（以前它们只写 data/persona.json，
+ * 结果重启时被启动流程盖回旧值，用户看到的就是「设置无效」）。
+ */
+function saveConfigPatch(config, patch) {
+  if (!isPlainObject(config)) throw new Error('缺少 config 对象');
+  const file = config.paths && config.paths.configFile;
+  if (!file) throw new Error('找不到 config.json 路径');
+  patch = flattenPatch(patch || {});
+  const pending = [];
+  const errors = [];
+  for (const [dotted, value] of Object.entries(patch)) {
+    const next = coerceValue(config, dotted, value);
+    const spec = configSchema.FIELDS[dotted];
+    if (spec) {
+      const message = configSchema.checkValue(next, spec);
+      if (message) { errors.push(dotted + '：' + message); continue; }
+    }
+    pending.push([dotted, next]);
+  }
+  if (errors.length) throw Object.assign(new Error('配置没保存：' + errors.join('；')), { statusCode: 400 });
+  if (!pending.length) return [];
+  let raw = {};
+  try {
+    raw = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')) || {};
+  } catch {
+    raw = {};
+  }
+  for (const [dotted, next] of pending) {
+    setByPath(raw, dotted, next);
+    // 立刻改内存里的那份（bot / llm 拿的都是同一个 config 引用）
+    setByPath(config, dotted, next);
+  }
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(raw, null, 2) + '\n', 'utf8');
+  return pending.map(([dotted]) => dotted);
+}
+
 module.exports = {
   SETTINGS_SHADOW,
   SECRET_PATHS,
@@ -258,9 +318,11 @@ module.exports = {
   getByPath,
   setByPath,
   coerceValue,
+  flattenPatch,
   publicConfig,
   clearSettingsShadow,
   mergeConfigInPlace,
   applyConfigPatch,
+  saveConfigPatch,
   watchConfigFile,
 };

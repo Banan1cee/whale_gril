@@ -69,6 +69,10 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_PATH = os.path.join(ROOT, "config.json")
 LOG_FILE = os.path.join(ROOT, "data", "wechat-bridge-4x.log")
 
+# 消息汇总 worker：main() 里构造，config_watch 热更新时直接 configure 它。
+# 没起来时保持 None，reload_config() 可以安全地先跑。
+DIGEST_WORKER = None
+
 # 只回复这些会话（留空 = 全部会话都交给鲸鲸判断）
 # 例如 ["文件传输助手", "深海鱼塘"]
 ONLY_CHATS = []
@@ -166,11 +170,9 @@ try:
     if isinstance(_stale, (int, float)) and _stale > 0:
         STALE_AFTER = float(_stale)
     _wechat = _cfg.get("wechat") or {}
-    GAME_TOKENS = [str(x).lower() for x in (_wechat.get("gameWhitelist") or []) if str(x).strip()]
-    AWAY_NOTICE = bool(_wechat.get("awayNotice", True))
-    RETURN_NOTICE = bool(_wechat.get("returnNotice", True))
-    QUEUED_MAX_AGE = float(_wechat.get("queuedMaxAgeSec", 300))
-    QUEUED_MAX_CHATS = int(_wechat.get("queuedMaxChats", 2))
+    # 上游 3.9 起不再有「打游戏就休息 / 离开回来打招呼 / 忙时排队补发」：
+    # gameWhitelist / awayNotice / returnNotice / queuedMax* 这些键即使还留在
+    # 旧 config.json 里也不再读取（写权限不在这里，配置本身由前面那一步清理）。
     # 引用回复要额外走一遍「悬停消息 → 点回复 → 输入」，实测一条能慢好几秒；默认关
     QUOTE_REPLY = bool(_wechat.get("quoteReply", False))
     # UIA 彻底发不出去时，退到「Ctrl+F 搜索会话 → 粘贴 → 回车」的键盘通道（会抢前台）
@@ -304,7 +306,6 @@ def reload_config(path=None):
 
     返回是否真的重新加载了。
     """
-    global GAME_TOKENS, AWAY_NOTICE, RETURN_NOTICE, QUEUED_MAX_AGE, QUEUED_MAX_CHATS
     global QUOTE_REPLY, KEYBOARD_FALLBACK, BACKGROUND_SEND, LOW_BATTERY_PCT, GOODNIGHT_TEXT
     global BG_SEND, PIPELINE_WORKERS, PIPELINE_QUEUE_LIMIT
     global ACCOUNT_GUARD, WINDOW_HWND, STICKER_TEST_ON
@@ -324,12 +325,7 @@ def reload_config(path=None):
         STALE_AFTER = float(w.get("staleAfterSec") or STALE_AFTER or 4)
     except Exception:
         pass
-    GAME_TOKENS = [str(x).lower() for x in (w.get("gameWhitelist") or []) if str(x).strip()]
-    AWAY_NOTICE = bool(w.get("awayNotice", True))
-    RETURN_NOTICE = bool(w.get("returnNotice", True))
     try:
-        QUEUED_MAX_AGE = float(w.get("queuedMaxAgeSec", 300))
-        QUEUED_MAX_CHATS = int(w.get("queuedMaxChats", 2))
         LOW_BATTERY_PCT = float(w.get("lowBatteryPercent", 5))
     except Exception:
         pass
@@ -401,6 +397,13 @@ def reload_config(path=None):
     wxids = (((cfg.get("persona") or {}).get("master") or {}).get("wxids") or [])
     if wxids:
         MASTER_WXID = wxids[0]
+    # 消息汇总：开关/频率/收件人/账号一变就立刻生效（worker 自己也会每步读盘复核）。
+    worker = DIGEST_WORKER
+    if worker is not None:
+        try:
+            worker.configure(cfg)
+        except Exception as e:                  # noqa: BLE001
+            log("消息汇总配置热更新失败：", repr(e))
     return True
 
 
@@ -1335,11 +1338,7 @@ def main():
     dead_chats = set()
     fail_streak = {}
     self_wxid = db.wxid
-    pending_replies = {}
     SEND_STATE = {"active": False, "start": 0.0}
-    pending_lock = threading.Lock()
-    AWAY = {"on": False}
-    NOTIFIED = []
 
     # ---------- 多账号：把「读」和「发」钉在同一个号上 ----------
     # 微信 4.x 一个号一个进程，每个进程的主窗标题都叫「微信」。老逻辑按窗口面积挑，
@@ -1632,31 +1631,12 @@ def main():
             return False
         return True
 
-    def away_active():
-        """主人在微信里发了「我去玩了」→ 写 data/away.json，这里据此静默排队。"""
-        try:
-            p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "away.json")
-            with open(p, "r", encoding="utf-8") as f:
-                d = json.load(f)
-            return float(d.get("until") or 0) > time.time()
-        except Exception:
-            return False
-
-    def game_running():
-        if not GAME_TOKENS:
-            return False
-        try:
-            import psutil
-            for p in psutil.process_iter(["name"]):
-                n = (p.info.get("name") or "").lower()
-                if any(t in n for t in GAME_TOKENS):
-                    return True
-        except Exception:
-            pass
-        return False
-
     def foreground_is_fullscreen():
-        """前台是不是「真全屏」程序（全屏游戏、全屏视频）——这时别抢焦点，先把回复排着。
+        """前台是不是「真全屏」程序（全屏游戏、全屏视频）。
+
+        3.9 起「打游戏就休息/排队」的行为已经删掉，这个检测只剩一个用途：
+        主动发起的消息（主动分享、主动搭话、消息汇总、表情包）在全屏时先跳过，
+        免得抢焦点；被动回复不再看它。
 
         不能拿屏幕尺寸判断：Windows 上最大化窗口的 GetWindowRect 带 DWM 隐形边框，
         实测 2560x1440 的屏幕，最大化浏览器返回 rect=(-8,-8,2568,1448)，
@@ -1893,8 +1873,6 @@ def main():
              这样你在用电脑时最多看到它闪一下。
         把 wechat.backgroundSend 设成 false 就退回以前的「每次先抢前台、发完不管」。
         """
-        if game_running():
-            return False
         SEND_STATE["active"] = True
         SEND_STATE["start"] = time.time()
         snap = snapshot_win_state() if BACKGROUND_SEND else None
@@ -2588,7 +2566,7 @@ def main():
 
     def sticker_activity_allowed(username=""):
         try:
-            return not (AWAY["on"] or away_active() or game_running() or foreground_is_fullscreen()
+            return not (foreground_is_fullscreen()
                         or (username and (username in dead_chats or not group_is_alive(username))))
         except Exception:
             return False
@@ -2767,7 +2745,10 @@ def main():
                 log("表情包结果：", outcome["status"], outcome["error"])
         return outcome
 
-    def send_text(text, chat_display_name, chat_username="", force=False, quote_text=None):
+    def send_text(text, chat_display_name, chat_username="", force=False, quote_text=None,
+                  send_guard=None):
+        # force 仅为兼容旧调用方保留：3.9 起没有「离开/游戏排队」了，它不再改变发送行为。
+        # send_guard 供消息汇总等「定时主动发送」在真正落键前再复核一次权限/开关。
         nonlocal gui
         if chat_username and chat_username in dead_chats:
             log("跳过已失效的会话：", chat_display_name)
@@ -2776,22 +2757,21 @@ def main():
             dead_chats.add(chat_username)
             log("群里已经没有我了（被移出？），以后跳过：", chat_display_name)
             return False
-        if not force and (AWAY["on"] or away_active() or game_running() or foreground_is_fullscreen()):
-            with pending_lock:
-                pending_replies[chat_username or chat_display_name] = (text, chat_display_name, chat_username, time.time())
-            log("你在游戏/全屏程序里，回复先排队，等你退出再发：", chat_display_name)
-            return True
-        # 账号闸：认不出「哪个窗口是小号」就不发（放在排队判断之后，免得游戏里直接丢消息）
+        # 账号闸：认不出「哪个窗口是小号」就不发。其余安全检查保持原样。
         if not account_send_allowed("发送"):
             return False
         with send_lock:
             if not sticker_quarantine_allows(chat_username, chat_display_name):
                 return False
-            if not force and (AWAY["on"] or away_active() or game_running() or foreground_is_fullscreen()):
-                with pending_lock:
-                    pending_replies[chat_username or chat_display_name] = (text, chat_display_name, chat_username, time.time())
-                log("游戏/全屏中，先排队：", chat_display_name)
-                return True
+            if send_guard is not None:
+                # 定时主动发送的最后一道闸：在 send_lock 内、真正落键前复核。
+                try:
+                    allowed = bool(send_guard())
+                except Exception:
+                    allowed = False
+                if not allowed:
+                    log("发送取消：发送前复核未通过（消息汇总），这条不发：", chat_display_name)
+                    return False
             # ⓪ 零焦点通道：不依赖 WeChatGUI（构造它本身就会抢一次焦点），先试这条。
             #    见 bridge/bg_sender.py 与 docs/微信消息后台发送.md。
             #    失败才往下走会动窗口的旧通道。
@@ -2931,11 +2911,6 @@ def main():
             return False
         if chat_username and (chat_username in dead_chats or not group_is_alive(chat_username)):
             return False
-        if AWAY["on"] or away_active() or game_running() or foreground_is_fullscreen():
-            with pending_lock:
-                pending_replies[chat_username or chat_display_name] = (text, chat_display_name, chat_username, time.time())
-            log("你在游戏/全屏程序里，@ 回复先排队：", chat_display_name)
-            return True
         # 账号闸：@ 人要点开成员列表，窗口不对就会在别的号里 @ 别人
         if not account_send_allowed("@ 成员"):
             return False
@@ -3405,14 +3380,6 @@ def main():
             pass
         return out
 
-    def notify_away():
-        for u, name in recent_chats():
-            send_text("我先去休息一下，晚点回你～", name, u, force=True)
-            NOTIFIED.append((u, name))
-            time.sleep(0.3)
-        if NOTIFIED:
-            log("已通知最近的聊天：", "、".join(n for _, n in NOTIFIED))
-
     def share_watch():
         """每隔一段时间自己刷 B 站热门，挑一个没分享过的发到最近活跃的群/私聊。"""
         state_file = os.path.join(ROOT, "data", "share-state.json")
@@ -3430,7 +3397,7 @@ def main():
                 continue
             if time.time() - last < SHARE_EVERY * 60:
                 continue
-            if game_running() or away_active() or foreground_is_fullscreen():
+            if foreground_is_fullscreen():
                 continue
             target = recent_chats(limit=1, within=7200)
             if not target:
@@ -3498,7 +3465,7 @@ def main():
             time.sleep(60)
             if not CARE_ENABLED:
                 continue
-            if game_running() or away_active() or foreground_is_fullscreen():
+            if foreground_is_fullscreen():
                 continue
             st = load_state()
             last_ts = float(st.get("lastTs") or 0)
@@ -3588,44 +3555,6 @@ def main():
                         time.sleep(0.4)
                 except Exception as e:
                     log("发晚安失败：", repr(e))
-
-    def notify_back():
-        for u, name in list(NOTIFIED):
-            send_text("我回来啦，刚在打游戏", name, u, force=True)
-            time.sleep(0.3)
-        NOTIFIED.clear()
-
-    def game_watch():
-        while True:
-            time.sleep(4)
-            running = game_running()
-            if running and not AWAY["on"]:
-                AWAY["on"] = True
-                log("检测到游戏运行，进入休息模式（回复先排队）")
-                if AWAY_NOTICE and not game_running():
-                    try:
-                        notify_away()
-                    except Exception as e:
-                        log("休息通知失败：", repr(e))
-            elif not running and AWAY["on"]:
-                AWAY["on"] = False
-                log("游戏已退出，补发排队消息")
-                with pending_lock:
-                    items = list(pending_replies.values())
-                    pending_replies.clear()
-                now = time.time()
-                fresh = [x for x in items if now - x[3] <= QUEUED_MAX_AGE]
-                dropped = len(items) - len(fresh)
-                fresh = fresh[-QUEUED_MAX_CHATS:]
-                if dropped:
-                    log("排队里有 %d 条已经太旧（>%ds），不补发" % (dropped, int(QUEUED_MAX_AGE)))
-                for text, target, uname, _ts in fresh:
-                    send_text(text, target, uname, force=True)
-                if RETURN_NOTICE:
-                    try:
-                        notify_back()
-                    except Exception as e:
-                        log("回来通知失败：", repr(e))
 
     _UIA_READY = {"ts": 0.0, "ok": None, "msg": "", "res": None}
 
@@ -3728,9 +3657,6 @@ def main():
     def warmup():
         """启动后预热发送通道，避免第一条回复慢 5~10 秒。"""
         time.sleep(3)
-        if game_running():
-            log("游戏在运行，跳过发送通道预热")
-            return
         try:
             nonlocal gui
             ensure_uia_ready(force=True)
@@ -3776,22 +3702,6 @@ def main():
                 # 用 7 而不是 2：2 是「找不到数据库目录」这种优雅报错（不该被守护循环
                 # 无限重启），7 才是「我自己要重启」—— 启动脚本看到 7 就连着重启。
                 os._exit(7)
-
-    def flush_pending():
-        while True:
-            time.sleep(2)
-            if AWAY["on"] or away_active() or foreground_is_fullscreen():
-                continue
-            with pending_lock:
-                if not pending_replies:
-                    continue
-                items = list(pending_replies.values())
-                pending_replies.clear()
-            now = time.time()
-            fresh = [x for x in items if now - x[3] <= QUEUED_MAX_AGE][-QUEUED_MAX_CHATS:]
-            for text, target, uname, _ts in fresh:
-                log("补发排队消息 →", target)
-                send_text(text, target, uname, force=True)
 
     def listener_alive():
         """收消息的轮询线程是否还活着。"""
@@ -3841,9 +3751,9 @@ def main():
         gate_logged = False
         while True:
             try:
-                # 游戏在跑时桥接会跳过预热、进休息模式，这时 UIA 还没初始化，
-                # 不能当成「UIA 坏了」上报 —— 不然网页会误报「消息发不出去」。
-                resting = bool(game_running())
+                # 3.9 起没有「游戏休息模式」了；rest 字段保留但恒为 False，
+                # 前端/测试还在读它。
+                resting = False
                 # 不用等消息才去唤醒引擎：心跳每 20 秒问一次（库内部 30 秒节流、
                 # 会自动重新热激活），这样状态是真实的，也能顺手把假死的引擎救回来。
                 uia_now = None
@@ -3940,9 +3850,59 @@ def main():
             if reload_config():
                 log("配置已热更新（调试台改完即时生效，不用重启桥接）")
 
-    threading.Thread(target=flush_pending, daemon=True).start()
+    # ---------- 消息汇总（digest）接线 ----------
+    # 调度/重试/开关代际复核全在 bridge/digest_worker.py；这里只注入桥接现有能力。
+    def digest_resolve_recipient(wxid):
+        """主人 wxid → (canonical_wxid, 会话显示名)；解析不出唯一会话就返回 ''。"""
+        try:
+            # 复用表情包通道那套「唯一精确联系人」解析，不另写搜索逻辑。
+            canonical, _aliases = resolve_sticker_target(db, wxid, wxid)
+        except Exception:
+            return ''
+        if not canonical:
+            return ''
+        try:
+            return (canonical, display_name(canonical))
+        except Exception:
+            return ''
+
+    def digest_can_send():
+        """现在允许定时汇总发出去吗：窗口在 + 账号认得出 + 不是全屏打扰。"""
+        try:
+            return bool(wechat_window_alive()
+                        and account_send_allowed("消息汇总")
+                        and not foreground_is_fullscreen())
+        except Exception:
+            return False
+
+    def start_digest_worker():
+        global DIGEST_WORKER
+        try:
+            try:
+                from .digest_watch import DigestBridge, start_worker
+            except ImportError:
+                from digest_watch import DigestBridge, start_worker
+            bridge = DigestBridge(
+                read_config=read_config,
+                base_url=bot_url.rsplit("/webhook", 1)[0],
+                http_get=LOCAL_HTTP.get,
+                resolve_recipient=digest_resolve_recipient,
+                send_text=send_text,
+                can_send=digest_can_send,
+                account=str((cfg.get("wechat") or {}).get("account") or ""),
+                log=log,
+            )
+        except Exception as e:                 # noqa: BLE001
+            log("消息汇总未接线（不影响普通回复）：", repr(e))
+            return
+        DIGEST_WORKER = bridge.worker
+        try:
+            DIGEST_WORKER.configure(read_config())
+        except Exception:
+            pass
+        start_worker(bridge, log=log)
+
     threading.Thread(target=config_watch, daemon=True).start()
-    threading.Thread(target=game_watch, daemon=True).start()
     threading.Thread(target=warmup, daemon=True).start()
     threading.Thread(target=send_watchdog, daemon=True).start()
     threading.Thread(target=battery_watch, daemon=True).start()
@@ -3950,6 +3910,7 @@ def main():
     threading.Thread(target=care_watch, daemon=True).start()
     threading.Thread(target=bridge_heartbeat, daemon=True).start()
     threading.Thread(target=listener_watch, daemon=True).start()
+    start_digest_worker()
     log("已启动。鲸鲸地址：", bot_url)
 
     # 就绪标记：外部（守护脚本 / 自检）据此判断「进程在，但可能卡在初始化」
@@ -3971,6 +3932,11 @@ def main():
             time.sleep(1)
     except KeyboardInterrupt:
         log("正在退出…")
+        if DIGEST_WORKER is not None:
+            try:
+                DIGEST_WORKER.stop()
+            except Exception:
+                pass
         try:
             pipeline.close(wait=False)
         except Exception:

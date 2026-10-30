@@ -141,7 +141,9 @@ test('桥接会定时发心跳，网页才看得到「桥接在线 / UIA 不可�
   assert.match(bridge, /def bridge_heartbeat/);
   assert.match(bridge, /\/api\/bridge\/heartbeat/);
   assert.match(bridge, /UIA_CACHE\.get\("u"\)/);
-  assert.match(bridge, /"rest": resting/, '休息模式要单独上报，不能当成 UIA 坏了');
+  assert.match(bridge, /"rest": resting/, 'rest 字段还要继续上报（前端在读）');
+  assert.match(bridge, /resting = False/, '休息模式已删除，字段保留但恒为 false');
+  assert.doesNotMatch(bridge, /def game_running\(/, '「打游戏就休息」已删除');
   assert.match(bridge, /time\.sleep\(20\)/, '20 秒一次');
 });
 /* ---------------- 重置全部 = 恢复出厂 ---------------- */

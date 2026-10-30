@@ -54,6 +54,24 @@ def prepare(root):
     # Preserve the existing 10-minute warning throttle; it is not a recovery claim.
     ast.parse(text)
     access.write_text(text, encoding='utf-8', newline='\n')
+
+    database = package / 'db.py'
+    if database.is_file():
+        text = database.read_text(encoding='utf-8')
+        # 上游 bug：密钥失败提示先把 PID 收进 blocked，后面却按 (pid, ok, err) 三元组解包。
+        # 只要有一个 Weixin.exe 打不开（提权/另一个账号/受保护进程），可读的提示就变成
+        # 「TypeError: cannot unpack non-iterable int object」，直接把桥接搞崩。
+        text = text.replace('blocked = [p for p, ok, err in perms if not ok]',
+                            'blocked = [(p, err) for p, ok, err in perms if not ok]')
+        text = text.replace('for p, _, _ in blocked', 'for p, _ in blocked')
+        text = text.replace('for _, _, e in blocked', 'for _, e in blocked')
+        if 'blocked = [(p, err) for p, ok, err in perms if not ok]' not in text:
+            raise RuntimeError('unknown key-failure hint layout; do not guess a runtime patch')
+        if 'for p, _, _ in blocked' in text or 'for _, _, e in blocked' in text:
+            raise RuntimeError('key-failure hint still unpacks bare PIDs')
+        ast.parse(text)
+        database.write_text(text, encoding='utf-8', newline='\n')
+        return [driver, access, database]
     return [driver, access]
 
 
