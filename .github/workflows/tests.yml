@@ -1,4 +1,4 @@
-name: CI
+name: tests
 
 # 只跑测试与编译，不需要任何密钥、微信或网络：
 # 所有联网、发消息、看图、API Key 相关用例在 tests/ 里都是 mock 的。
@@ -12,40 +12,39 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: tests-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  checks:
+  test:
     name: 测试 / 分层 / 编译
     # 必须是 Windows：启动器是 WPF net10.0-windows，桥接是 Windows 语义的 Python。
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
-      - name: 取代码
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      # 不能用 20：node --test "tests/*.test.js" 的 glob 参数要 21+ 才会展开。
+      # 不能低于 22：npm test 里的 node --test "tests/*.test.js" 的 glob 要 21+ 才会展开。
       # 也不能开 setup-node 的 cache：项目零依赖，没有 lock 文件。
-      - name: 装 Node 24
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version: 24
 
-      - name: 装 Python 3.12
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
       - name: 分层依赖（谁可以 require 谁）
         run: node scripts/check-layers.js
 
-      # 必须排在 dotnet build 之前：编译会让 launcher/obj 出现记录本机路径的文件，
+      # 必须排在 dotnet build 之前：编译会让 launcher/obj 出现记录本机路径的文本文件，
       # 自检会把它当成「泄露个人信息」误报。
       - name: 发布自检
         run: node scripts/release-check.js
 
-      - name: Node 单元测试
+      - name: 单元测试（不需要装任何依赖）
+        # 注意：pwsh 不会展开引号里的通配符，所以走 npm test（内部是
+        # node --test "tests/*.test.js"，由 Node 自己展开），和本地执行完全一致。
         run: npm test
 
       - name: Python 单元测试
