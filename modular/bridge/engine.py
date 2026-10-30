@@ -57,6 +57,14 @@ from sticker_transport import (guarded_send as guarded_sticker_send, read_enable
                                alias_match as sticker_alias_match,
                                _is_blank as sticker_input_is_blank)
 
+try:                                    # UIA 自检/物化：挑真窗口 + 真判据
+    from bridge import uia_boot
+except Exception:                       # noqa: BLE001
+    try:
+        import uia_boot
+    except Exception:                   # noqa: BLE001
+        uia_boot = None
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_PATH = os.path.join(ROOT, "config.json")
 LOG_FILE = os.path.join(ROOT, "data", "wechat-bridge-4x.log")
@@ -1367,18 +1375,35 @@ def main():
         否则刚启动时子控件还是空的，读不到会话行。
         """
         import win32gui
+        import win32process
         from wechatauto.uia_driver import WeChatUIA
+        ensure_uia_ready()
         probe = WeChatUIA()
         out = []
         try:
             hwnds = list(probe._wechat_hwnds() or ())
         except Exception:                         # noqa: BLE001
             hwnds = []
+        # 只认「PID 里真的加载了 Weixin.dll」的窗口：微信更新/重启后旧句柄会被
+        # 回收，拿它去热激活只会得到「未找到 Weixin.dll」然后无限重试。
+        good = 0
+        if uia_boot is not None:
+            try:
+                _w = uia_boot.pick_window(int(ACCOUNT.get("hwnd") or 0))
+                if _w:
+                    good = int(_w["hwnd"])
+                    if int(ACCOUNT.get("hwnd") or 0) != good:
+                        ACCOUNT["hwnd"] = good
+                        log("微信主窗已重新定位：hwnd=%s pid=%s" % (good, _w.get("pid")))
+            except Exception:                     # noqa: BLE001
+                good = 0
         for h in hwnds:
             h = int(h)
             try:
                 cls = win32gui.GetClassName(h) or ""
                 title = (win32gui.GetWindowText(h) or "").strip()
+                if good and h != good:
+                    continue
             except Exception:                     # noqa: BLE001
                 cls, title = "", ""
             # 托盘消息窗/工具窗也带 Qt 类名，只有真主窗是 QWindowIcon 或 mmui::MainWindow
@@ -3599,7 +3624,55 @@ def main():
                     except Exception as e:
                         log("回来通知失败：", repr(e))
 
+    _UIA_READY = {"ts": 0.0, "ok": None, "msg": "", "res": None}
+
+    def ensure_uia_ready(force=False):
+        """挑「PID 里真有 Weixin.dll」的窗口并按真判据物化 UIA。
+
+        修的是这三件事：过期 hwnd 被当成微信主窗（日志里那个不存在的 PID）、
+        第三方库只看根窗口类名就判成功、以及版本表没有 4.2.0.9 时候选 RVA 试错。
+        结果缓存 30 秒，避免每次发送都扫一遍。
+        """
+        if uia_boot is None:
+            return _UIA_READY
+        now = time.time()
+        if not force and (now - _UIA_READY["ts"]) < 30:
+            return _UIA_READY
+        prefer = 0
+        try:
+            prefer = int(ACCOUNT.get("hwnd") or 0)
+        except Exception:
+            prefer = 0
+        try:
+            res = uia_boot.ensure(prefer_hwnd=prefer, log=log)
+        except Exception as e:                      # noqa: BLE001
+            res = {"ok": False, "reason": "exception: %r" % (e,)}
+        try:
+            msg = uia_boot.describe(res)
+        except Exception:
+            msg = "UIA 自检失败"
+        _UIA_READY.update({"ts": now, "ok": bool(res.get("ok")), "msg": msg, "res": res})
+        if res.get("ok"):
+            h = int(res.get("hwnd") or 0)
+            if h and h != prefer:
+                ACCOUNT["hwnd"] = h
+            log("发送通道预热：" + msg)
+        else:
+            log("发送通道预热：" + msg)
+        return _UIA_READY
+
     def explain_uia_failure():
+        """UIA 拿不到时把原因说清楚（先用 uia_boot 的真判据，再退老的分支分析）。"""
+        if uia_boot is not None:
+            try:
+                r = ensure_uia_ready(force=True)
+                if r.get("ok"):
+                    return
+            except Exception:                       # noqa: BLE001
+                pass
+        return _explain_uia_failure_detail()
+
+    def _explain_uia_failure_detail():
         """UIA 拿不到时把原因说清楚。
 
         「热激活 UIA 失败」有三种完全不同的原因，光看那一句没法修：
@@ -3657,6 +3730,7 @@ def main():
             return
         try:
             nonlocal gui
+            ensure_uia_ready(force=True)
             with gui_lock:
                 if gui is None:
                     gui = WeChatGUI()

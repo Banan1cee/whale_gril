@@ -1,11 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
-  <!-- asInvoker：界面不提权。桥接宿主（bridge-host.exe）才需要管理员，
-       这样拖拽上传不会被 UIPI 拦掉。 -->
+  <!-- requireAdministrator：微信是管理员运行的，桥接必须和它同级才能改 UIA gate 字节、
+       才能读它的进程。界面跟着一起提权，代价是每次启动弹一次 UAC；
+       拖拽上传由 ChangeWindowMessageFilterEx 放行，不会失效。 -->
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v2">
     <security>
       <requestedPrivileges xmlns="urn:schemas-microsoft-com:asm.v3">
-        <requestedExecutionLevel level="asInvoker" uiAccess="false" />
+        <requestedExecutionLevel level="requireAdministrator" uiAccess="false" />
       </requestedPrivileges>
     </security>
   </trustInfo>
