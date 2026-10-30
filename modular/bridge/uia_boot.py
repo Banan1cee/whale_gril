@@ -307,9 +307,9 @@ def restore_wechat(win: dict, log=None, wait: float = 15.0, hide_after: bool = F
             import win32con
             hwnd = win.get("hwnd") or hwnd
             if rect:
-                win32gui.SetWindowPos(hwnd, 0, rect[0], rect[1],
-                                      max(1, rect[2] - rect[0]), max(1, rect[3] - rect[1]),
-                                      win32con.SWP_NOACTIVATE | win32con.SWP_NOZORDER)
+                win32gui.SetWindowPos(hwnd, 0, rect[0], rect[1], 0, 0,
+                                      win32con.SWP_NOACTIVATE | win32con.SWP_NOZORDER |
+                                      win32con.SWP_NOSIZE)
             win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
             time.sleep(0.3)
             if tree_state(hwnd, timeout=0.6) != "ok":
@@ -481,13 +481,18 @@ def _keep_visible(win: dict, log=None) -> None:
         import win32con
         hwnd = int(win["hwnd"])
         rect = win32gui.GetWindowRect(hwnd)
-        w = max(320, rect[2] - rect[0])
-        h = max(240, rect[3] - rect[1])
         x, y = rect[0], rect[1]
+        # 只改位置和可见性，**绝不改尺寸**：实测改尺寸会让微信重建窗口、
+        # 控件树直接塌回空壳（这一条把发送测试坑了一整轮）。
         if x < -200 or y < -200 or rect[2] <= rect[0]:
             x, y = 120, 80
-        win32gui.SetWindowPos(hwnd, 0, x, y, w, h,
-                              win32con.SWP_NOZORDER | win32con.SWP_SHOWWINDOW)
+            win32gui.SetWindowPos(hwnd, 0, x, y, 0, 0,
+                                  win32con.SWP_NOZORDER | win32con.SWP_NOSIZE |
+                                  win32con.SWP_SHOWWINDOW)
+        else:
+            win32gui.SetWindowPos(hwnd, 0, x, y, 0, 0,
+                                  win32con.SWP_NOZORDER | win32con.SWP_NOSIZE |
+                                  win32con.SWP_SHOWWINDOW)
         win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
         try:
             win32gui.SetForegroundWindow(hwnd)
