@@ -43,6 +43,7 @@ import time
 _EXAMPLES_DIR = os.path.dirname(os.path.abspath(__file__))
 if _EXAMPLES_DIR not in sys.path:
     sys.path.insert(0, _EXAMPLES_DIR)
+from digest_worker import DigestWorker, guarded_text_once
 from sticker_transport import (guarded_send as guarded_sticker_send, read_enabled_config,
                                resolve_target as resolve_sticker_target, result as sticker_result,
                                WindowsDesktop, quarantined_input_value,
@@ -183,7 +184,7 @@ def reload_config(path=None):
     """把 config.json 重新读一遍，覆盖上面这些「启动时定型」的开关。
 
     为什么需要：调试台（/debug）改的是 config.json，但桥接以前只在启动时读一次，
-    用户在页面上关掉「主动分享」、改「忽略名单」、调「游戏白名单」……全都没反应，
+    用户在页面上关掉「主动分享」、改「忽略名单」……全都没反应，
     只能手动重启「启动微信桥接.bat」，表现出来就是「调了没用，还是默认」。
     现在 config.json 一变，5 秒内自动生效。
 
@@ -798,6 +799,23 @@ def ensure_ffmpeg_env():
     return False
 
 
+def explain_db_startup_failure(detail, log):
+    """读不到微信数据库密钥时，输出能照做的排查步骤。
+
+    注意主语：只说「设置」会有人以为是微信自己的设置。这里明确写成
+    先双击「启动鲸鱼娘.bat」，再点自动打开网页的右上角「⚙️ 设置 → 微信账号」。
+    """
+    log("读取微信数据库失败，桥接无法启动（下面的原因通常不用改代码就能解决）：")
+    for line in str(detail or "").strip().splitlines():
+        log("  " + line.strip())
+    log("按这个顺序排查：")
+    log("  ① 微信如果是以管理员身份运行的，「启动微信桥接.bat」也要右键 → 以管理员身份运行")
+    log("  ② 同时登着多个微信号：先双击「启动鲸鱼娘.bat」，")
+    log("     在自动打开的浏览器页面右上角点「⚙️ 设置」→「微信账号」，选当前正在登录的那个号")
+    log("  ③ 确认微信已经登录、主窗口没缩到托盘，再重新双击「启动微信桥接.bat」")
+    log("  ④ 微信刚更新过还是不行：把上面这段完整日志发给维护者")
+
+
 def main():
     boot("进入 main()")
     # 给网页「设置 → 微信账号」下拉用：只扫账号、不连消息，跑完就退出。
@@ -942,8 +960,9 @@ def main():
             log("")
             log("✗ 找不到微信账号 %r。" % acct)
             log("  这台机器上现有账号：%s" % ("、".join(acct_dirs) or "（一个都没有）"))
-            log("  去网页「设置 → 微信账号」里重新选一个，或把 config.json 的")
-            log("  wechat.account 改成上面某个名字（目录名 / wxid / 昵称都行，留空=自动选）。")
+            log("  去「鲸鲸」网页里重新选一个：双击「启动鲸鱼娘.bat」启动后，")
+            log("  在自动打开的浏览器页面右上角点「⚙️ 设置」→「微信账号」，选上面某个账号；")
+            log("  或者把 config.json 的 wechat.account 改成上面某个名字（目录名 / wxid / 昵称都行，留空=自动选）。")
             log("  这里直接停下，不会偷偷换成别的号。")
             return 2
         if hit != acct:
@@ -953,7 +972,7 @@ def main():
     elif len(acct_dirs) > 1:
         log("⚠️ 这台机器有 %d 个微信账号：%s" % (len(acct_dirs), "、".join(acct_dirs)))
         log("   没指定账号 → 按「最近活跃」自动选，可能选到大号。")
-        log("   去网页「设置 → 微信账号」里选一个（推荐：只选小号）。")
+        log("   去指定一个：双击「启动鲸鱼娘.bat」→ 浏览器页面右上角「⚙️ 设置」→「微信账号」（推荐：只选小号）。")
 
     # 打开微信数据库偶尔会「卡住不返回」（wechatauto-replica 内部去找微信进程/取密钥时挂住），
     # 表现就是「重启了但一直不监听」。这里给它 90 秒上限，超时明确报错退出。
@@ -1120,13 +1139,6 @@ def main():
         out = [x for x in dict.fromkeys(out) if x]
         alias_cache[key] = out
         return out
-
-    def chat_latest_seq(username):
-        try:
-            rows = db.get_messages(username, limit=1)
-            return rows[0].get("sort_seq") or 0 if rows else 0
-        except Exception:
-            return 0
 
     gui = None
     gui_lock = threading.Lock()
@@ -1411,7 +1423,7 @@ def main():
         return True
 
     def foreground_is_fullscreen():
-        """前台是不是「真全屏」程序（全屏游戏、全屏视频）——这时别抢焦点，先把回复排着。
+        """前台是不是「真全屏」程序（全屏游戏、全屏视频）——这时不要抢焦点。
 
         不能拿屏幕尺寸判断：Windows 上最大化窗口的 GetWindowRect 带 DWM 隐形边框，
         实测 2560x1440 的屏幕，最大化浏览器返回 rect=(-8,-8,2568,1448)，
@@ -1867,7 +1879,7 @@ def main():
         except Exception as e:                      # noqa: BLE001
             log("后台模式补丁没打上（不影响发送）：", repr(e))
 
-    def uia_send(text, who, username=""):
+    def uia_send(text, who, username="", send_guard=None, target_aliases=None):
         """优先用 UIA 发送：不依赖 OCR 找发送按钮，成功后返回 True。"""
         # 账号闸：先确认「要打字的这个窗口」就是配置指定的那个号，窗口换了就重认
         if not account_send_allowed("UIA"):
@@ -1894,15 +1906,16 @@ def main():
         if BACKGROUND_SEND:
             # 后台模式：禁止引擎自己恢复窗口/抢前台（真正的抢前台只在兜底那一步做）
             install_quiet_uia(u)
-        keys = aliases_for(username, who) if username else [who]
+        # Digest recipients only use freshly collision-checked canonical aliases.
+        keys = sorted(target_aliases) if target_aliases is not None else (aliases_for(username, who) if username else [who])
         try:
             cur = None
             try:
                 cur = u.current_chat()
             except Exception:
                 pass
-            hit_cur = (cur == who) or any(cur == k for k in keys if k)
-            if not hit_cur and username:
+            hit_cur = ((cur == who) if target_aliases is None else False) or any(cur == k for k in keys if k)
+            if not hit_cur and username and target_aliases is None:
                 hit_cur = bool(cur) and open_cache.get(username) == cur
             if not hit_cur:
                 if not u.open_chat(keys):
@@ -1918,6 +1931,29 @@ def main():
                         log("UIA 已切到会话：", open_cache[username])
                     except Exception:
                         pass
+            if send_guard is not None:
+                # No cached/open-chat guessing, nonempty draft, recovery, fallback
+                # or retry for private digest data. Recheck the epoch after navigation.
+                if u.current_chat() not in target_aliases:
+                    return False
+                hwnd = int(ACCOUNT.get("hwnd") or 0)
+                desktop = WindowsDesktop()
+
+                def valid_digest_input():
+                    return bool(ACCOUNT.get("verified") and int(ACCOUNT.get("hwnd") or 0) == hwnd
+                                and getattr(gui, "_uia", None) is u and u.current_chat() in target_aliases
+                                and desktop.foreground(hwnd))
+
+                def quarantine_digest(observed):
+                    entry = sticker_draft_quarantine.setdefault(username, {
+                        "hwnd": hwnd, "aliases": target_aliases, "draft_observed": False})
+                    if observed:
+                        entry["draft_observed"] = True
+
+                return guarded_text_once(
+                    u, text, gate=send_guard, valid=valid_digest_input,
+                    read_input=lambda: quarantined_input_value(gui, hwnd, target_aliases),
+                    focused=lambda control: desktop.focused(control, hwnd), quarantine=quarantine_digest)
             t_open = time.time()
             sent_ok = False
             try:
@@ -2105,8 +2141,8 @@ def main():
         log("键盘通道：按键发了，但数据库里没确认到（可能发到了别的会话），这条按失败处理")
         return False
 
-    # Protected by send_lock. Feature OFF must not erase a latent attachment
-    # draft: this guard protects ordinary text/@ sends too, without sending keys.
+    # Protected by send_lock. Feature OFF must not erase latent attachment or
+    # digest text drafts: ordinary text/@ sends are blocked too, without keys.
     sticker_draft_quarantine = {}
 
     def sticker_quarantine_allows(username, shown="", gui_locked=False):
@@ -2142,7 +2178,7 @@ def main():
             with gui_lock:
                 allowed = inspect()
         if not allowed:
-            log_throttled("uncertain-attachment-draft", "发送暂停：上次附件操作可能留有草稿；请手动清空目标输入框后重试。"
+            log_throttled("uncertain-attachment-draft", "发送暂停：上次发送操作可能留有草稿；请手动清空目标输入框后重试。"
                           "无法读取清空证据时，请手动清空后重启桥接。", ttl=60)
         return allowed
 
@@ -2415,8 +2451,11 @@ def main():
                 log("表情包结果：", outcome["status"], outcome["error"])
         return outcome
 
-    def send_text(text, chat_display_name, chat_username="", force=False, quote_text=None):
+    def send_text(text, chat_display_name, chat_username="", force=False, quote_text=None,
+                  send_guard=None, target_aliases=None):
         nonlocal gui
+        if send_guard is not None and not send_guard():
+            return False
         if chat_username and chat_username in dead_chats:
             log("跳过已失效的会话：", chat_display_name)
             return False
@@ -2428,6 +2467,8 @@ def main():
         if not account_send_allowed("发送"):
             return False
         with send_lock:
+            if send_guard is not None and not send_guard():
+                return False
             if not sticker_quarantine_allows(chat_username, chat_display_name):
                 return False
             with gui_lock:
@@ -2436,6 +2477,24 @@ def main():
                     gui = WeChatGUI()
             # 多账号：GUI 的坐标/OCR 目标也要对齐到钉住的账号窗口
             bind_gui_window(gui)
+            if send_guard is not None:
+                # One-shot digest path: never fall through to retries, blind OCR,
+                # keyboard fallback or force-send after a safety gate changes.
+                if not target_aliases or not ACCOUNT.get("verified") or not send_guard():
+                    return False
+                # with_window_on_top retries its callback, so do NOT use it for
+                # private one-shot digests. Restore focus/window state as usual.
+                snap = snapshot_win_state() if BACKGROUND_SEND else None
+                SEND_STATE.update(active=True, start=time.time())
+                try:
+                    if not send_guard():
+                        return False
+                    return bool(force_send_foreground(lambda: uia_send(
+                        text, chat_display_name, chat_username, send_guard, target_aliases)))
+                finally:
+                    if BACKGROUND_SEND:
+                        restore_win_state(snap)
+                    SEND_STATE["active"] = False
             # ⓪ 引用回复（引用对方那条消息）——比普通发送慢，失败自动回退
             if quote_text and QUOTE_REPLY:
                 try:
@@ -2981,9 +3040,15 @@ def main():
         except Exception as e:
             log("提交消息处理失败：", repr(e))
 
-    listener = Listener(db, interval=0.4)
-    listener.add_all(on_message)
-    listener.start()
+    try:
+        listener = Listener(db, interval=0.4)
+        listener.add_all(on_message)
+        listener.start()
+    except Exception as e:                     # noqa: BLE001
+        # 读不到数据库密钥时原来会甩一整段 Python traceback（甚至崩在
+        # 「无法读取微信进程内存」的提示代码里），用户完全看不懂。这里只输出能照做的话。
+        explain_db_startup_failure(e, log)
+        return 1
     def recent_chats(limit=2, within=1800):
         out = []
         try:
@@ -3050,9 +3115,7 @@ def main():
             if not video:
                 log("这次没挑到合适的视频")
                 continue
-            title = str(video.get("title") or "")[:60]
             link = str(video.get("url") or "")
-            topic = str(data.get("topic") or "").strip()
             comment = str(data.get("comment") or "").strip()
             if not comment:
                 comment = random.choice([
@@ -3233,71 +3296,37 @@ def main():
             ))
             log("    → 重启微信后立刻重试；仍失败说明该版本的保护变了，等库更新")
 
-    def digest_watch():
-        """定时把错过的消息汇总发给主人。
+    def digest_fetch(params):
+        response = LOCAL_HTTP.get(bot_url.rsplit("/webhook", 1)[0] + "/api/digest",
+                                  params=params, headers=sticker_headers, timeout=3 if params.get("check") else 15)
+        if response.status_code != 200:
+            raise ValueError("digest unavailable")
+        return response.json()
 
-        总开关是 config.json 的 features.digest：关掉 = 完全不工作（连接口都不会被调用，
-        服务端也会直接 404）。打开后按 digest.everyMinutes 分钟发一次，
-        频率改了 20 秒内自动生效，不用重启桥接。
-        """
-        last = time.time()
-        while True:
-            time.sleep(20)
-            try:
-                with open(CONFIG_PATH, "r", encoding="utf-8-sig") as fh:
-                    cfg = json.load(fh)
-            except Exception:
-                continue
-            if not _as_bool(((cfg.get("features") or {}).get("digest", False)), False):
-                last = time.time()          # 关着就一直顺延，打开时不会立刻补发一堆
-                continue
-            dig = cfg.get("digest") or {}
-            try:
-                every = float(dig.get("everyMinutes", 30))
-            except Exception:
-                every = 30.0
-            if every <= 0:
-                last = time.time()
-                continue
-            if time.time() - last < every * 60:
-                continue
-            if foreground_is_fullscreen():
-                continue
-            # 主人 wxid 没填时，用主人昵称在最近会话里找一次（很多人只填了名字）
-            target_wxid = MASTER_WXID
-            if not target_wxid:
-                try:
-                    names = set()
-                    with open(CONFIG_PATH, "r", encoding="utf-8-sig") as fh2:
-                        pcfg = json.load(fh2)
-                    for nm in ((pcfg.get("persona") or {}).get("master") or {}).get("names") or []:
-                        if str(nm).strip():
-                            names.add(str(nm).strip())
-                    if names:
-                        for u, nm in recent_chats():
-                            if nm in names:
-                                target_wxid = u
-                                break
-                except Exception:
-                    target_wxid = ""
-            if not target_wxid:
-                last = time.time()
-                continue
-            try:
-                base = bot_url.rsplit("/webhook", 1)[0]
-                r = LOCAL_HTTP.get(base + "/api/digest",
-                                   params={"since": int(last * 1000)}, timeout=30)
-                data = r.json()
-            except Exception as e:
-                log("拉取消息汇总失败：", repr(e))
-                continue
-            if data.get("count") and data.get("text"):
-                name = display_name(target_wxid) or "主人"
-                log("给主人发消息汇总：%d 条" % data["count"])
-                if send_text(data["text"], name, target_wxid, force=True):
-                    last = time.time()
-            else:
-                last = time.time()
+    def digest_recipient(username):
+        # Never infer a recipient from persona.master.names/recent_chats or use
+        # the first of several master IDs. Canonical contact and alias uniqueness
+        # must be provable afresh; otherwise private summaries stay on the server.
+        if username == me:
+            return None
+        canonical, safe_aliases = resolve_sticker_target(db, username, username)
+        if canonical != username or not safe_aliases:
+            return None
+        return canonical, safe_aliases
+
+    def digest_send(text, target, guard):
+        username, safe_aliases = target
+        shown = sorted(safe_aliases - {username})[0] if safe_aliases - {username} else username
+        return send_text(text, shown, username, send_guard=guard, target_aliases=safe_aliases)
+
+    digest_worker = DigestWorker(
+        read_config=read_config, fetch=digest_fetch, resolve_recipient=digest_recipient,
+        send=digest_send, can_send=lambda: not foreground_is_fullscreen(), account=ACCOUNT_WANTED)
+    digest_worker.configure(read_config())
+
+    def digest_watch():
+        """digest.enabled 总闸；everyMinutes 可热调。OFF 等配置事件，不采集/推送/轮询。"""
+        digest_worker.run()
 
     def warmup():
         """启动后预热发送通道，避免第一条回复慢 5~10 秒。"""
@@ -3397,46 +3426,38 @@ def main():
             try:
                 # 不用等消息才去唤醒引擎：心跳每 20 秒问一次（库内部 30 秒节流、
                 # 会自动重新热激活），这样状态是真实的，也能顺手把假死的引擎救回来。
-                # 「打游戏就进休息模式」已移除，这里始终唤醒引擎
-                resting = False
                 uia_now = None
-                if not resting:
-                    try:
-                        if not wechat_window_alive():
-                            # 微信主窗没了（进程更新/重启/被回收）。缓存引擎里那个窗口
-                            # 句柄已失效，再调 UIA 可能直接 0xC0000005，Python 拦不住。
-                            # 先把手里的引擎丢掉，等窗口回来再重建，别去碰它。
-                            with gui_lock:
-                                gui = None
-                                UIA_CACHE["u"] = None
-                            misses = 0
-                            uia_now = False
-                            if not gate_logged:
-                                log("[!] 微信主窗当前不存在（可能缩进托盘/被回收/自更新），已收起 UIA 引擎，等窗口回来再预热")
-                                gate_logged = True
+                try:
+                    if not wechat_window_alive():
+                        # Never touch a cached UIA engine after its HWND dies.
+                        with gui_lock:
+                            gui = None
+                            UIA_CACHE["u"] = None
+                        misses = 0
+                        uia_now = False
+                        if not gate_logged:
+                            log("[!] 微信主窗当前不存在（可能缩进托盘/被回收/自更新），已收起 UIA 引擎，等窗口回来再预热")
+                            gate_logged = True
+                    else:
+                        with gui_lock:
+                            _u = gui._get_uia() if gui is not None else None
+                        if _u is None:
+                            # Rebuild after repeated failures (e.g. startup in tray).
+                            misses += 1
+                            if misses >= 3:
+                                log("[!] UIA 连续 %d 次拿不到，重建窗口驱动再试…" % misses)
+                                with gui_lock:
+                                    gui = WeChatGUI()
+                                    _u = gui._get_uia()
+                                if _u is not None:
+                                    misses = 0
                         else:
-                            with gui_lock:
-                                _u = gui._get_uia() if gui is not None else None
-                            if _u is None:
-                                # 连续拿不到就重建窗口驱动。
-                                # 实测（3.3.2）：桥接启动那一刻微信正好在托盘里（主窗隐藏）时，
-                                # gui 会一直定位不到主窗；之后即使把微信拉出来也不会自愈，
-                                # 心跳永远报 uia:false。重建一次就好了。
-                                misses += 1
-                                if misses >= 3:
-                                    log("[!] UIA 连续 %d 次拿不到，重建窗口驱动再试…" % misses)
-                                    with gui_lock:
-                                        gui = WeChatGUI()
-                                        _u = gui._get_uia()
-                                    if _u is not None:
-                                        misses = 0
-                            else:
-                                misses = 0
-                                gate_logged = False
-                            UIA_CACHE["u"] = _u
-                            uia_now = _u is not None
-                    except Exception:
-                        uia_now = UIA_CACHE.get("u") is not None
+                            misses = 0
+                            gate_logged = False
+                        UIA_CACHE["u"] = _u
+                        uia_now = _u is not None
+                except Exception:
+                    uia_now = UIA_CACHE.get("u") is not None
                 payload = {
                     "platform": "wechat",
                     "uia": uia_now,
@@ -3465,7 +3486,7 @@ def main():
         """盯 config.json 的修改时间：调试台一保存就热更新，不用重启桥接。
 
         以前这些开关只在启动时读一次，用户在 /debug 里关掉「主动分享」、
-        改「忽略名单」、「游戏白名单」都没反应，只能重启桥接 —— 也就是
+        改「忽略名单」都没反应，只能重启桥接 —— 也就是
         「调了没用，还是默认」。
         """
         last = 0.0
@@ -3479,9 +3500,13 @@ def main():
                 mt = os.path.getmtime(CONFIG_PATH)
             except Exception:
                 continue
-            if mt <= last:
+            if mt == last:
                 continue
             last = mt
+            # Digest OFF invalidates in-flight work before unrelated reload logic
+            # (which may wait/restart for an account change). Its worker otherwise
+            # sleeps indefinitely while OFF instead of polling config/HTTP.
+            digest_worker.configure(read_config())
             if reload_config():
                 log("配置已热更新（调试台改完即时生效，不用重启桥接）")
 
@@ -3515,6 +3540,7 @@ def main():
             time.sleep(1)
     except KeyboardInterrupt:
         log("正在退出…")
+        digest_worker.stop()
         listener.stop()
     return 0
 

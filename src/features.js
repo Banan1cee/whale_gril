@@ -15,7 +15,7 @@ const REGISTRY = [
     key: 'stickers',
     path: 'features.stickers',
     label: '表情包（实验性）',
-    desc: '默认关闭。开启后可按五种情绪上传表情包；关闭立即取消未发送任务，不挑图、不带回包字段、不轮询，管理接口停用。实验发送只在已打开的目标微信会话前台校验通过时进行，不自动切会话。',
+    desc: '默认关闭。开启后可按傲娇、炸毛、其他三类上传表情包；关闭立即取消未发送任务，不挑图、不带回包字段、不轮询，管理接口停用。实验发送只在已打开的目标微信会话前台校验通过时进行，不自动切会话。',
     default: false,
     experimental: true,
   },
@@ -86,7 +86,7 @@ const REGISTRY = [
     key: 'digest',
     path: 'digest.enabled',
     label: '消息汇总（定时把错过的消息发给你）',
-    desc: '默认关闭。开启后每隔 digest.everyMinutes 分钟，把别人发来、她没接的消息合成一条发给你（最多列 10 个会话）。关掉=完全不采集、不推送，接口也停用。',
+    desc: '默认关闭。开启后按设定间隔将未接话的微信消息节选发给唯一明确的主人（需设置主人微信内部ID，不按昵称猜号）。关闭即清空本轮队列、不采集、不轮询、不推送；重新开启只收新消息。间隔在本行调整。',
     default: false,
   },
   {
@@ -136,6 +136,9 @@ function list(config) {
     value: isOn(config, f.key),
     default: f.default,
     experimental: Boolean(f.experimental),
+    ...(f.key === 'digest' ? { everyMinutes: Number.isInteger(Number(config?.digest?.everyMinutes))
+      && Number(config.digest.everyMinutes) >= 1 && Number(config.digest.everyMinutes) <= 1440
+      ? Number(config.digest.everyMinutes) : 30 } : {}),
   }));
 }
 

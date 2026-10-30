@@ -11,7 +11,7 @@
  */
 
 const SCHEMA_HINT = `只输出 JSON，不要解释、不要代码块围栏。格式：
-{"need":true,"query":"检索词（不超过 14 个字）","site":"bilibili|weibo|toutiao|"}
+{"need":true,"query":"简短检索词（保留完整专名和型号）","site":"bilibili|weibo|toutiao|"}
 或
 {"need":false}`;
 
@@ -55,8 +55,11 @@ function parseRoute(raw) {
   let obj;
   try { obj = JSON.parse(jsonText); } catch { return null; }
   if (!obj || typeof obj !== 'object') return null;
+  // 缺失/损坏的判断不是明确的“不查”，必须让调用方走规则兜底。
+  if (![true, false, 'true', 'false'].includes(obj.need)) return null;
   const need = obj.need === true || obj.need === 'true';
-  const query = String(obj.query || '').trim().slice(0, 40);
+  if (need && typeof obj.query !== 'string') return null;
+  const query = String(obj.query || '').trim().slice(0, 100);
   const site = ['bilibili', 'weibo', 'toutiao'].includes(String(obj.site || '').trim())
     ? String(obj.site).trim() : '';
   if (!need) return { need: false, query: '', site: '' };
@@ -67,7 +70,7 @@ function parseRoute(raw) {
 /**
  * @param {{ complete: Function }} llm
  * @param {string} text 用户这一句
- * @param {{history?: string[]}} [opts]
+ * @param {{history?: string[], timeoutMs?: number}} [opts]
  * @returns {Promise<{need:boolean,query:string,site:string,failed?:boolean}>}
  */
 async function route(llm, text, opts = {}) {
@@ -75,17 +78,32 @@ async function route(llm, text, opts = {}) {
   if (!said) return { need: false, query: '', site: '' };
   if (!llm || typeof llm.complete !== 'function') return { need: false, query: '', site: '', failed: true };
   const history = (opts.history || []).slice(-4).join('\n') || '（无）';
+  let timer;
+  const controller = new AbortController();
   try {
-    const raw = await llm.complete({
-      system: SYSTEM,
-      turns: [{ role: 'user', content: `最近的对话：\n${history}\n\n这句话：${said}` }],
-      maxTokens: 60,
-    });
+    // complete 自身可能重试多次；辅助路由不能拖住真正的回复。
+    const timeoutMs = Math.max(1, Number(opts.timeoutMs) || 2000);
+    const raw = await Promise.race([
+      Promise.resolve().then(() => llm.complete({
+        system: SYSTEM,
+        turns: [{ role: 'user', content: `最近的对话：\n${history}\n\n这句话：${said}` }],
+        maxTokens: 160,
+        signal: controller.signal,
+      })),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          controller.abort();
+          reject(new Error('route timeout'));
+        }, timeoutMs);
+      }),
+    ]);
     const parsed = parseRoute(raw);
     if (!parsed) return { need: false, query: '', site: '', failed: true };
     return parsed;
   } catch {
     return { need: false, query: '', site: '', failed: true };
+  } finally {
+    clearTimeout(timer);
   }
 }
 

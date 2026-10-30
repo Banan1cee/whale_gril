@@ -56,27 +56,6 @@ const MIME = {
 /* 小工具                                                              */
 /* ------------------------------------------------------------------ */
 
-function buildDigest(items) {
-  if (!items.length) return { ok: true, count: 0, text: '' };
-  const map = new Map();
-  for (const it of items) {
-    const key = (it.chatType === 'group' ? '群 ' : '私聊 ') + (it.chat || it.sender || '');
-    if (!map.has(key)) map.set(key, []);
-    map.get(key).push(it);
-  }
-  const lines = [`消息汇总（${items.length} 条）`];
-  let n = 0;
-  for (const [key, arr] of map) {
-    lines.push(`【${key}】${arr.length} 条`);
-    for (const it of arr.slice(-5)) {
-      lines.push(`- ${String(it.sender || '对方')}：${String(it.text || '').replace(/\s+/g, ' ').slice(0, 80)}`);
-    }
-    n += 1;
-    if (n >= 10) { lines.push('……还有更多会话未列出'); break; }
-  }
-  return { ok: true, count: items.length, text: lines.join('\n') };
-}
-
 function json(res, status, data) {
   const body = JSON.stringify(data);
   res.writeHead(status, {
@@ -235,6 +214,7 @@ function watchConfigFile(runtime) {
           JSON.parse(raw); // 先确认是合法 JSON，写坏了就别覆盖内存里的好配置
           mergeConfigInPlace(runtime.config, loadConfig({ root: runtime.config.root, env: runtime.config.env }));
           runtime.stickerService?.reconcile();
+          runtime.bot?.digestService?.reconcile();
           if (runtime.llm && typeof runtime.llm.reload === 'function') runtime.llm.reload();
           runtime.logger.info('config.json 已重新加载（改动已生效，不用重启）');
         } catch (err) {
@@ -389,6 +369,23 @@ function remoteAuthorized(req, runtime) {
 /** 把网页提交的 { "persona.name": "新名字" } 写进 config.json 并立刻生效 */
 function applyConfigPatch(runtime, patch) {
   if (!isPlainObject(patch)) throw new Error('patch 要是 { 字段名: 新值 } 这样的对象');
+  // Validate before any disk write: negative/NaN/tiny intervals must never cause a push loop.
+  const digestPatch = { ...(isPlainObject(patch.digest) ? patch.digest : {}) };
+  for (const [key, value] of Object.entries(patch)) {
+    if (key.startsWith('digest.')) digestPatch[key.slice(7)] = value;
+  }
+  for (const [key, max] of [['everyMinutes', 1440], ['maxItems', 120]]) {
+    if (Object.hasOwn(digestPatch, key)) {
+      const value = Number(digestPatch[key]);
+      if (!Number.isInteger(value) || value < 1 || value > max) {
+        throw new Error(key === 'everyMinutes' ? '消息汇总间隔必须为1～1440分钟的整数' : '消息汇总条数必须为1～120的整数');
+      }
+    }
+  }
+  if (Object.hasOwn(digestPatch, 'enabled') && typeof digestPatch.enabled !== 'boolean') {
+    throw new Error('消息汇总总开关必须是开启或关闭');
+  }
+  if (Object.hasOwn(patch, 'features.digest')) throw new Error('消息汇总总开关请使用 digest.enabled');
   const file = runtime.config.paths.configFile;
   let raw = {};
   try {
@@ -411,6 +408,7 @@ function applyConfigPatch(runtime, patch) {
   const cleared = clearSettingsShadow(runtime, changed);
   mergeConfigInPlace(runtime.config, loadConfig({ root: runtime.config.root, env: runtime.config.env }));
           runtime.stickerService?.reconcile();
+          runtime.bot?.digestService?.reconcile();
   if (runtime.llm && typeof runtime.llm.reload === 'function') runtime.llm.reload();
   runtime.logger.info(`调试台保存了设置：${changed.join('、')}${cleared.length ? `（同时清了 ${cleared.join('、')}，让改动真的生效）` : ''}`);
   return { changed, cleared };
@@ -1737,15 +1735,14 @@ function createHandler(runtime) {
 
 
       if (pathname === '/api/digest' && method === 'GET') {
-        // 总开关关掉 = 功能不存在（连接口都不给）
-        if (!features.isOn(runtime.config, 'digest')) {
-          return json(res, 404, { ok: false, error: '消息汇总未开启' });
-        }
         const q = new URL(req.url, 'http://localhost');
-        const since = Number(q.searchParams.get('since') || 0);
-        const cap = Number((runtime.config.digest || {}).maxItems) || 120;
-        const items = runtime.store.listDigest(since).slice(-cap);
-        return json(res, 200, buildDigest(items));
+        const result = runtime.bot.digestService.read({
+          since: q.searchParams.get('since') ?? 0,
+          until: q.searchParams.get('until') ?? undefined,
+          generation: q.searchParams.get('generation') || '',
+          check: q.searchParams.get('check') === '1',
+        });
+        return json(res, result.status, result.body);
       }
 
       if (pathname === '/api/persona' && method === 'GET') {

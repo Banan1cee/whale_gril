@@ -35,8 +35,11 @@ test('乱七八糟的输出不会让程序崩', () => {
   for (const raw of ['', '   ', '不用查', 'null', '{']) {
     assert.equal(parseRoute(raw), null, JSON.stringify(raw));
   }
-  // 「不是明确的 true」一律当作不需要联网，不会误触发搜索
-  assert.deepEqual(parseRoute('{"need":"maybe"}'), { need: false, query: '', site: '' });
+  // 损坏的判断不是明确的 false，必须交给关键词兜底。
+  for (const raw of ['{}', '{"need":"maybe"}', '{"need":null}', '{"need":0}', '{"need":true,"query":{}}']) {
+    assert.equal(parseRoute(raw), null, raw);
+  }
+  assert.deepEqual(parseRoute('{"need":"false"}'), { need: false, query: '', site: '' });
 });
 
 test('路由失败时返回 failed，调用方回退关键词', async () => {

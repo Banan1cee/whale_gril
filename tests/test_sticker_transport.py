@@ -741,6 +741,19 @@ class BridgeContractTest(unittest.TestCase):
             windows[104] = ('mmui::MainWindow', '微信')
             self.assertEqual(env['wechat_main_window_count'](), 2, '真的登了两个号才计为 2')
 
+    def test_db_startup_help_names_the_launcher_and_web_menu(self):
+        # 现场反馈：只写「设置」有人以为是微信自己的设置。
+        # 帮助步骤必须说清「启动鲸鱼娘.bat → 浏览器右上角 ⚙️ 设置 → 微信账号」。
+        lines = []
+        env = bridge_functions({'explain_db_startup_failure'}, {})
+        env['explain_db_startup_failure']('数据库无可用密钥: contact/contact.db', lines.append)
+        text = '\n'.join(lines)
+        self.assertIn('数据库无可用密钥', text, '要带上真正的原因')
+        for needle in ('启动鲸鱼娘.bat', '浏览器页面右上角', '⚙️ 设置', '微信账号',
+                       '启动微信桥接.bat', '以管理员身份运行'):
+            self.assertIn(needle, text, needle)
+        self.assertNotIn('网页「设置 → 微信账号」', text, '不能再用有歧义的写法')
+
     def test_entire_bridge_syntax_compiles_without_executing_it(self):
         compile(BRIDGE.read_text(encoding='utf-8'), str(BRIDGE), 'exec')
 
