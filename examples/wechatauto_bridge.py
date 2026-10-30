@@ -3233,6 +3233,72 @@ def main():
             ))
             log("    → 重启微信后立刻重试；仍失败说明该版本的保护变了，等库更新")
 
+    def digest_watch():
+        """定时把错过的消息汇总发给主人。
+
+        总开关是 config.json 的 features.digest：关掉 = 完全不工作（连接口都不会被调用，
+        服务端也会直接 404）。打开后按 digest.everyMinutes 分钟发一次，
+        频率改了 20 秒内自动生效，不用重启桥接。
+        """
+        last = time.time()
+        while True:
+            time.sleep(20)
+            try:
+                with open(CONFIG_PATH, "r", encoding="utf-8-sig") as fh:
+                    cfg = json.load(fh)
+            except Exception:
+                continue
+            if not _as_bool(((cfg.get("features") or {}).get("digest", False)), False):
+                last = time.time()          # 关着就一直顺延，打开时不会立刻补发一堆
+                continue
+            dig = cfg.get("digest") or {}
+            try:
+                every = float(dig.get("everyMinutes", 30))
+            except Exception:
+                every = 30.0
+            if every <= 0:
+                last = time.time()
+                continue
+            if time.time() - last < every * 60:
+                continue
+            if foreground_is_fullscreen():
+                continue
+            # 主人 wxid 没填时，用主人昵称在最近会话里找一次（很多人只填了名字）
+            target_wxid = MASTER_WXID
+            if not target_wxid:
+                try:
+                    names = set()
+                    with open(CONFIG_PATH, "r", encoding="utf-8-sig") as fh2:
+                        pcfg = json.load(fh2)
+                    for nm in ((pcfg.get("persona") or {}).get("master") or {}).get("names") or []:
+                        if str(nm).strip():
+                            names.add(str(nm).strip())
+                    if names:
+                        for u, nm in recent_chats():
+                            if nm in names:
+                                target_wxid = u
+                                break
+                except Exception:
+                    target_wxid = ""
+            if not target_wxid:
+                last = time.time()
+                continue
+            try:
+                base = bot_url.rsplit("/webhook", 1)[0]
+                r = LOCAL_HTTP.get(base + "/api/digest",
+                                   params={"since": int(last * 1000)}, timeout=30)
+                data = r.json()
+            except Exception as e:
+                log("拉取消息汇总失败：", repr(e))
+                continue
+            if data.get("count") and data.get("text"):
+                name = display_name(target_wxid) or "主人"
+                log("给主人发消息汇总：%d 条" % data["count"])
+                if send_text(data["text"], name, target_wxid, force=True):
+                    last = time.time()
+            else:
+                last = time.time()
+
     def warmup():
         """启动后预热发送通道，避免第一条回复慢 5~10 秒。"""
         time.sleep(3)
@@ -3426,6 +3492,7 @@ def main():
     threading.Thread(target=share_watch, daemon=True).start()
     threading.Thread(target=care_watch, daemon=True).start()
     threading.Thread(target=bridge_heartbeat, daemon=True).start()
+    threading.Thread(target=digest_watch, daemon=True).start()
     threading.Thread(target=listener_watch, daemon=True).start()
     log("已启动。鲸鲸地址：", bot_url)
 

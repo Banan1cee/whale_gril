@@ -56,6 +56,27 @@ const MIME = {
 /* 小工具                                                              */
 /* ------------------------------------------------------------------ */
 
+function buildDigest(items) {
+  if (!items.length) return { ok: true, count: 0, text: '' };
+  const map = new Map();
+  for (const it of items) {
+    const key = (it.chatType === 'group' ? '群 ' : '私聊 ') + (it.chat || it.sender || '');
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(it);
+  }
+  const lines = [`消息汇总（${items.length} 条）`];
+  let n = 0;
+  for (const [key, arr] of map) {
+    lines.push(`【${key}】${arr.length} 条`);
+    for (const it of arr.slice(-5)) {
+      lines.push(`- ${String(it.sender || '对方')}：${String(it.text || '').replace(/\s+/g, ' ').slice(0, 80)}`);
+    }
+    n += 1;
+    if (n >= 10) { lines.push('……还有更多会话未列出'); break; }
+  }
+  return { ok: true, count: items.length, text: lines.join('\n') };
+}
+
 function json(res, status, data) {
   const body = JSON.stringify(data);
   res.writeHead(status, {
@@ -1714,6 +1735,18 @@ function createHandler(runtime) {
         }
       }
 
+
+      if (pathname === '/api/digest' && method === 'GET') {
+        // 总开关关掉 = 功能不存在（连接口都不给）
+        if (!features.isOn(runtime.config, 'digest')) {
+          return json(res, 404, { ok: false, error: '消息汇总未开启' });
+        }
+        const q = new URL(req.url, 'http://localhost');
+        const since = Number(q.searchParams.get('since') || 0);
+        const cap = Number((runtime.config.digest || {}).maxItems) || 120;
+        const items = runtime.store.listDigest(since).slice(-cap);
+        return json(res, 200, buildDigest(items));
+      }
 
       if (pathname === '/api/persona' && method === 'GET') {
         return json(res, 200, {

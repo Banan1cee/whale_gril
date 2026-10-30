@@ -604,6 +604,19 @@ class Bot {
       return { action: 'reply', key, msg, atMe, canned, reason: 'roast' };
     }
 
+    // 消息汇总：只有总开关打开时才采集（关掉 = 完全不记录，和没这功能一样）
+    if (!isMaster && clean.text && features.isOn(this.config, 'digest')) {
+      try {
+        this.store.addDigest({
+          ts: nowMs,
+          chat: msg.chatTitle || session.title || (isGroup ? msg.chatId : ''),
+          chatType: msg.chatType,
+          sender: msg.senderName || '',
+          text: String(clean.text).slice(0, 300),
+        });
+      } catch { /* 采集失败不影响回复 */ }
+    }
+
 
 
     // 「没你事儿了，走吧」→ 回一句就退场，之后不再接

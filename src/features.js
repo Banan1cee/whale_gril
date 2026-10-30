@@ -83,6 +83,13 @@ const REGISTRY = [
     default: false,
   },
   {
+    key: 'digest',
+    path: 'digest.enabled',
+    label: '消息汇总（定时把错过的消息发给你）',
+    desc: '默认关闭。开启后每隔 digest.everyMinutes 分钟，把别人发来、她没接的消息合成一条发给你（最多列 10 个会话）。关掉=完全不采集、不推送，接口也停用。',
+    default: false,
+  },
+  {
     key: 'quoteReply',
     path: 'wechat.quoteReply',
     label: '引用回复（慢，默认关）',
