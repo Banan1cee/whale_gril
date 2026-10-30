@@ -1,0 +1,58 @@
+name: CI
+
+# 只跑测试与编译，不需要任何密钥、微信或网络：
+# 所有联网、发消息、看图、API Key 相关用例在 tests/ 里都是 mock 的。
+on:
+  push:
+    branches: [main, feature4]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: 测试 / 分层 / 编译
+    # 必须是 Windows：启动器是 WPF net10.0-windows，桥接是 Windows 语义的 Python。
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: 取代码
+        uses: actions/checkout@v4
+
+      # 不能用 20：node --test "tests/*.test.js" 的 glob 参数要 21+ 才会展开。
+      # 也不能开 setup-node 的 cache：项目零依赖，没有 lock 文件。
+      - name: 装 Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: 装 Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 分层依赖（谁可以 require 谁）
+        run: node scripts/check-layers.js
+
+      # 必须排在 dotnet build 之前：编译会让 launcher/obj 出现记录本机路径的文件，
+      # 自检会把它当成「泄露个人信息」误报。
+      - name: 发布自检
+        run: node scripts/release-check.js
+
+      - name: Node 单元测试
+        run: npm test
+
+      - name: Python 单元测试
+        run: python -m unittest discover -s tests -p 'test_*.py'
+
+      - name: 启动器编译
+        run: dotnet build launcher/WhaleLauncher.csproj -c Release --nologo
+
+      - name: 启动冒烟（--doctor）
+        run: node server.js --doctor
