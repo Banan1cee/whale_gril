@@ -118,10 +118,15 @@ runtime\python\python.exe -B tools\elev_uia_check.py
 | --- | --- |
 | 托盘态 | `tree = shell`，窗口 `vis=0` |
 | 执行 `Weixin.exe` | 1 秒内 `tree = ok` |
-| 立刻 `ShowWindow(SW_HIDE)` 收回托盘 | **`tree` 仍然是 ok**（隐藏不会让树塌） |
+| 显示出来并留在屏幕上（默认行为） | `tree = ok`，用户能直接看到微信 |
 
-所以桥接可以在用户完全无感的情况下拿到 UIA：唤起 → 建树 → 立刻收回。
-窗口位置/可见性在唤起前会被记下，收尾按原样恢复。
+所以策略是：**唤起 → 建树 → 保持显示**（`hide_after=False`，默认）。
+需要「建完树再缩回托盘」的场合可以传 `hide_after=True`；实测隐藏后树不会塌，
+但产品要求是「微信在托盘就把它显示出来，而且建完不能再缩回去」。
+
+另外：拉起 `Weixin.exe` 偶尔会多开一个实例留下登录小窗，
+`close_stray_login_windows()` 会按「标题微信 + 空壳 + 小于 480x520」三条同时满足才关掉，
+不会误杀第二个真账号。
 
 代码：`bridge/uia_boot.restore_wechat()`，由 `ensure()` 在树是空壳时自动调用；
 `engine.py` 的心跳线程在 `_u is None` 时会 `ensure_uia_ready(force=True)` 触发它。
