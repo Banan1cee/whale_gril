@@ -6,6 +6,7 @@ const personaStore = require('../persona/store');
 const { matchMaster, masterWarnings } = require('../core/master');
 const links = require('../adapters/links');
 const { recentSenders } = require('./status');
+const { noteText } = require('../memory/recall');
 
 function debugState(runtime) {
   const { config, llm, gateways, store } = runtime;
@@ -95,7 +96,7 @@ function debugSessions(runtime) {
       lastActiveAt: sess.lastActiveAt,
       messageCount: sess.messages.length,
       adminUntil: sess.state.adminUntil || 0,
-      profiles: Object.values(sess.profiles).map((p) => ({ uid: p.uid, name: p.name, nickname: p.nickname, notes: p.notes || [] })),
+      profiles: Object.values(sess.profiles).map((p) => ({ uid: p.uid, name: p.name, nickname: p.nickname, notes: (p.notes || []).map((n) => noteText(n)) })),
       messages: sess.messages.slice(-8).map((m) => ({ role: m.role, name: m.name, text: m.text, ts: m.ts })),
     });
   }

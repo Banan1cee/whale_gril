@@ -384,7 +384,7 @@ function stickerCapability(config, msg) {
   ].join('\n');
 }
 
-function buildSystem({ config, msg, profile, notes = [], now = new Date() }) {
+function buildSystem({ config, msg, profile, notes = [], noteReminders = [], sessionSummary = '', now = new Date() }) {
   const stickerBlock = stickerCapability(config, msg);
   // 自定义人设保留，但两条路径都必须遵守共享的对话理解规则。
   const custom = String((config.persona && config.persona.customPrompt) || '').trim();
@@ -618,6 +618,11 @@ function buildSystem({ config, msg, profile, notes = [], now = new Date() }) {
   const relation = [];
   if (profile && profile.count > 1) relation.push(`你们聊过 ${profile.count} 次`);
   if (notes.length) relation.push(`你记得关于 TA 的事：${notes.join('；')}`);
+  // 旧事回指：真人会顺口问一句「上次那事怎么样了」，而不是背记忆清单
+  if (sessionSummary) relation.push(`你们最近聊过的（摘要，心里有数就行，别复述）：${sessionSummary}`);
+  if (noteReminders.length) {
+    relation.push(`这些是以前聊过的，聊到相关话题时可以自然地问一句（别硬提、别播报、看不出相关就跳过）：${noteReminders.join('；')}`);
+  }
   if (relation.length) {
     lines.push('');
     lines.push('');
@@ -904,7 +909,9 @@ function splitBubbles(text, { maxChars = 120, maxBubbles = 2 } = {}) {
   const raw = String(text || '').replace(/\r/g, '').replace(/[ \t]+\n/g, '\n').trim();
   if (!raw) return [];
   const limit = Math.max(8, Number(maxChars) || 120);
-  const bubbles = Math.max(1, Number(maxBubbles) || 1);
+  const maxN = Math.max(1, Number(maxBubbles) || 1);
+  // 按内容长度决定真的拆几条：短回复别硬拆，长回复也别碎成一句一条。
+  const bubbles = Math.max(1, Math.min(maxN, Math.ceil(raw.length / Math.max(24, limit * 0.9))));
   if (raw.length <= limit) return [raw];
 
   const sentences = raw.match(/[^。！？!?～~…\n]+[。！？!?～~…\n]*/g) || [raw];

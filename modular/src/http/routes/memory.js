@@ -80,4 +80,16 @@ module.exports = function register(router) {
     };
     return json(res, 200, { ok: true, key, notes: sessions[mode], all: sessions, summary: storeSummary(runtime) });
   });
+
+  // ---- 网页当前会话的记忆 ----
+  router.get('/api/memory', (runtime, req, res, info) => {
+    const sessionId = sanitizeId(info.url.searchParams.get('sessionId') || 'default');
+    const mode = info.url.searchParams.get('mode') === 'group' ? 'group' : 'private';
+    const key = `web:${mode === 'group' ? 'g' : 'u'}:${sessionId}:${mode}`;
+    const sessions = {
+      private: runtime.store.listNotes(`web:u:${sessionId}:private`),
+      group: runtime.store.listNotes(`web:g:${sessionId}:group`),
+    };
+    return json(res, 200, { ok: true, key, notes: sessions[mode], all: sessions, summary: storeSummary(runtime) });
+  });
 };

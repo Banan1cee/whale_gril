@@ -112,7 +112,12 @@ function writeSnapshot(root, reason = 'manual') {
 
   const dir = backupDir(root);
   fs.mkdirSync(dir, { recursive: true });
-  const file = path.join(dir, `memory-${stampMs()}-${reason}.json`);
+  // 同一毫秒内连续备份两次会撞名（测试里踩到过）：撞了就加序号
+  const stampStr = stampMs();
+  let file = path.join(dir, `memory-${stampStr}-${reason}.json`);
+  for (let i = 1; fs.existsSync(file); i += 1) {
+    file = path.join(dir, `memory-${stampStr}-${reason}-${i}.json`);
+  }
   fs.writeFileSync(file, JSON.stringify(bundle, null, 2), 'utf8');
 
   // 只留最近 KEEP 份，别把盘塞满

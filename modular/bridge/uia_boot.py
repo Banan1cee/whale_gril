@@ -220,15 +220,15 @@ def tree_state(hwnd: int, timeout: float = 1.0, max_nodes: int = 1200) -> str:
 _LAST_RESTORE = [0.0]
 
 
-def restore_wechat(win: dict, log=None, wait: float = 15.0, hide_after: bool = False) -> bool:
+def restore_wechat(win: dict, log=None, wait: float = 15.0) -> bool:
     """微信缩在托盘时，主窗被隐藏、UI 子树被销毁，UIA 必然拿不到。
 
     单纯 ShowWindow / SetForegroundWindow / 点任务栏按钮都试过，都不重建子树；
     但**再拉起一次 Weixin.exe** 会走单实例转发，效果等同于用户点托盘图标：
     窗口恢复、Qt 重新建树。实测 4.2.0.9：1 秒内树就从 shell 变 ok。
 
-    hide_after=False（默认）：把窗口**留在屏幕上**，UIA 才有稳定的控件树，
-    用户也能直接看到微信。hide_after=True 才会建完树再收回去（树不会塌）。
+    建完树之后把窗口**留在屏幕上**（不缩回托盘）：这是使用方的要求，
+    也让 UIA 有稳定的控件树可读。
     """
     def say(msg):
         if callable(log):
@@ -269,15 +269,6 @@ def restore_wechat(win: dict, log=None, wait: float = 15.0, hide_after: bool = F
         say("UIA 自检：唤起微信失败：%r" % (e,))
         return False
 
-    # 记下原来的可见状态和位置：唤起来之后要尽量恢复原样，别把用户的屏幕占掉
-    was_visible, rect = True, None
-    try:
-        import win32gui
-        was_visible = bool(win32gui.IsWindowVisible(hwnd))
-        rect = win32gui.GetWindowRect(hwnd)
-    except Exception:
-        pass
-
     deadline = time.time() + max(1.0, wait)
     ok = False
     while time.time() < deadline:
@@ -294,34 +285,8 @@ def restore_wechat(win: dict, log=None, wait: float = 15.0, hide_after: bool = F
             log("UIA 自检：唤起了微信，但 %.0f 秒内控件树没出来" % wait)
         return False
 
-    if not hide_after:
-        # 需求：微信在托盘时要让它显示出来，并且建完树之后**不能再缩回托盘**
-        _keep_visible(win, log)
-        return True
-
-    # hide_after=True：建完树再收回托盘。
-    # 实测 4.2：隐藏之后控件树仍然在（不会塌），所以后续发送照样能用 UIA。
-    if not was_visible:
-        try:
-            import win32gui
-            import win32con
-            hwnd = win.get("hwnd") or hwnd
-            if rect:
-                win32gui.SetWindowPos(hwnd, 0, rect[0], rect[1], 0, 0,
-                                      win32con.SWP_NOACTIVATE | win32con.SWP_NOZORDER |
-                                      win32con.SWP_NOSIZE)
-            win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
-            time.sleep(0.3)
-            if tree_state(hwnd, timeout=0.6) != "ok":
-                # 万一这个版本隐藏就塌，退而求其次：摆到屏幕外，别挡人
-                win32gui.SetWindowPos(hwnd, 0, -3000, -3000,
-                                      max(1, rect[2] - rect[0]) if rect else 800,
-                                      max(1, rect[3] - rect[1]) if rect else 600,
-                                      win32con.SWP_SHOWWINDOW | win32con.SWP_NOACTIVATE)
-                if callable(log):
-                    log("UIA 自检：这个微信版本隐藏后控件树会塌，已把窗口放到屏幕外")
-        except Exception:
-            pass
+    # 需求：微信在托盘时要让它显示出来，而且建完树之后**不能再缩回托盘**
+    _keep_visible(win, log)
     return True
 
 

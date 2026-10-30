@@ -47,6 +47,15 @@ function createRuntime({ root = path.resolve(__dirname, '..'), env = process.env
     }
   } catch { /* 校验失败不影响启动 */ }
   const store = new Store({ file: config.paths.storeFile, limits: config.memory, logger });
+  // 启动时先「忘」一遍：太久没被想起、又不重要的记忆沉到归档，别一直占着检索位
+  try {
+    const swept = store.sweep();
+    if (swept.archived || swept.evicted) {
+      logger.info(`记忆清理：归档 ${swept.archived} 条、淘汰 ${swept.evicted} 条（归档共 ${store.archiveCount()} 条）`);
+    }
+  } catch (err) {
+    logger.warn('记忆清理失败（不影响使用）：' + ((err && err.message) || err));
+  }
   // 每次启动留一份记忆快照：换目录/重装/误点重置都能捞回来
   try {
     const snap = features.isOn(config, 'memorySnapshot') ? memoryBackup.writeSnapshot(root, 'startup') : null;

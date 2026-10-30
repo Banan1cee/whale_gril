@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media;
 
 namespace WhaleLauncher.Views
 {
@@ -196,6 +197,14 @@ namespace WhaleLauncher.Views
                 Margin = new Thickness(0, 0, 0, 4)
             });
         }
+
+
+        private static string JStr(JsonElement e, string name)
+            => e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String
+                ? (v.GetString() ?? "") : "";
+
+        private static JsonElement JProp(JsonElement e, string name)
+            => e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out var v) ? v : default;
 
         // ── 动作 ────────────────────────────────────────────────
         private async void OnReload(object sender, RoutedEventArgs e)
