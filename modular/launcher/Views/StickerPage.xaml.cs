@@ -19,6 +19,7 @@ namespace WhaleLauncher.Views
         private string _current = "";
         private bool _loading;
         private bool _loaded;
+        private bool _currentIsExtra;
 
         public StickerPage(RuntimeSupervisor sup)
         {
@@ -69,6 +70,7 @@ namespace WhaleLauncher.Views
 
             var pending = res.Long("pending");
             QueueInfo.Text = pending > 0 ? $"排队中 {pending} 张" : "队列空";
+            RenderJobs(res);
             StatusText.Text = $"共 {_emotions.Sum(x => CountOf(res, x.Key))} 张图。发送测试会排进队列，由桥接按「微信在前台」的时机真的发出去。";
             _loaded = true;
         }
@@ -84,6 +86,8 @@ namespace WhaleLauncher.Views
         private void BuildTabs()
         {
             Tabs.Children.Clear();
+            _currentIsExtra = _current.StartsWith("x:");
+            BtnDelCat.Visibility = _currentIsExtra ? Visibility.Visible : Visibility.Collapsed;
             foreach (var (key, label) in _emotions)
             {
                 var btn = new Button
@@ -194,6 +198,85 @@ namespace WhaleLauncher.Views
 
             border.Child = grid;
             return border;
+        }
+
+
+        private void RenderJobs(ApiResult res)
+        {
+            JobsHost.Children.Clear();
+            var arr = res.Prop("jobs");
+            if (arr.ValueKind != JsonValueKind.Array) return;
+            var shown = 0;
+            foreach (var j in arr.EnumerateArray())
+            {
+                var status = S(j, "status");
+                var chat = S(j, "chat");
+                var file = S(j, "filename");
+                var err = S(j, "error");
+                var when = status switch
+                {
+                    "sent" or "done" => "已发出",
+                    "failed" => "失败",
+                    "claimed" or "sending" => "正在发",
+                    "reserved" or "queued" or "pending" => "排队中",
+                    "expired" => "过期",
+                    _ => status
+                };
+                var line = new TextBlock
+                {
+                    Text = $"{when} · {chat} · {file}" + (string.IsNullOrEmpty(err) ? "" : "（" + err + "）"),
+                    Style = (Style)FindResource("Small"),
+                    TextWrapping = TextWrapping.Wrap,
+                    Margin = new Thickness(0, 1, 0, 0)
+                };
+                JobsHost.Children.Add(line);
+                shown++;
+                if (shown >= 6) break;
+            }
+            if (shown == 0) return;
+            JobsHost.Children.Insert(0, new TextBlock
+            {
+                Text = "真实消息测试（最近几条）",
+                Style = (Style)FindResource("Label"),
+                Margin = new Thickness(0, 0, 0, 3)
+            });
+        }
+
+        private async void OnAddCategory(object sender, RoutedEventArgs e)
+        {
+            var label = (TxtNewCat.Text ?? "").Trim();
+            if (label.Length == 0)
+            {
+                StatusText.Text = "先写一个分类名，比如「猫猫」。文件夹会用同一个名字建出来。";
+                return;
+            }
+            var res = await Api.Post(_sup.Url, "/api/stickers/category",
+                "{\"action\":\"add\",\"label\":\"" + Api.Esc(label) + "\"}");
+            StatusText.Text = res.Ok ? "已新增分类：" + label : "新增失败：" + (res.Error.Length > 0 ? res.Error : res.Raw);
+            if (res.Ok)
+            {
+                TxtNewCat.Text = "";
+                _current = "x:" + label;
+                await LoadAsync();
+            }
+        }
+
+        private async void OnDeleteCategory(object sender, RoutedEventArgs e)
+        {
+            if (!_current.StartsWith("x:")) return;
+            var label = _current.Substring(2);
+            var confirm = MessageBox.Show(
+                "从列表里移除分类「" + label + "」？\n\n文件夹和里面的图片都会保留，随时可以再加回来。",
+                "表情包分类", MessageBoxButton.OKCancel, MessageBoxImage.Question);
+            if (confirm != MessageBoxResult.OK) return;
+            var res = await Api.Post(_sup.Url, "/api/stickers/category",
+                "{\"action\":\"remove\",\"label\":\"" + Api.Esc(label) + "\"}");
+            StatusText.Text = res.Ok ? "已移除分类：" + label : "移除失败：" + (res.Error.Length > 0 ? res.Error : res.Raw);
+            if (res.Ok)
+            {
+                _current = "";
+                await LoadAsync();
+            }
         }
 
         // ── 动作 ────────────────────────────────────────────────

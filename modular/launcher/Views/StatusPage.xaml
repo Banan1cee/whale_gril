@@ -121,7 +121,6 @@
             <Button Content="重启桥接" Style="{StaticResource Ghost}" Click="OnRestartBridge" />
             <Button Content="导出诊断包" Style="{StaticResource Ghost}" Margin="8,0,0,0" Click="OnExportDiag" />
             <Button Content="打开数据目录" Style="{StaticResource Ghost}" Margin="8,0,0,0" Click="OnOpenData" />
-            <Button Content="打开网页控制台" Style="{StaticResource Ghost}" Margin="8,0,0,0" Click="OnOpenConsole" />
         </StackPanel>
     </Grid>
 </UserControl>

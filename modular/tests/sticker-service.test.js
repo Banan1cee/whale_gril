@@ -44,7 +44,7 @@ test('上传拒绝伪装/超限/路径穿越/未知情绪；无有效批次不�
     ['other', [{ name: 'a.gif', data: Buffer.from('not image').toString('base64') }]],
     ['other', [{ name: 'a.gif', data: '####' }]],
     ['other', [{ name: 'a.gif', data: Buffer.alloc(stickers.MAX_FILE_BYTES + 1).toString('base64') }]],
-    ['other', new Array(6).fill({ name: 'a.gif', data: GIF.toString('base64') })],
+    ['other', new Array(stickers.MAX_UPLOAD_FILES + 1).fill({ name: 'a.gif', data: GIF.toString('base64') })],
     ['other', [{ name: 'ok.gif', data: GIF.toString('base64') }, { name: 'bad.exe', data: '' }]],
   ]) assert.throws(() => stickers.upload(cfg, root, emotion, files));
   assert.equal(fs.existsSync(path.join(root, 'data/stickers')), false);

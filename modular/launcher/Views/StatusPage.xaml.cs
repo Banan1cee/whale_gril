@@ -197,7 +197,6 @@ namespace WhaleLauncher.Views
 
         private void OnOpenData(object sender, RoutedEventArgs e) => Open(Path.Combine(AppContext.BaseDirectory, "data"));
 
-        private void OnOpenConsole(object sender, RoutedEventArgs e) => Open(_sup.Url);
 
         private void Open(string target)
         {

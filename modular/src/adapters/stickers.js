@@ -16,13 +16,31 @@ const FOLDERS = Object.freeze({
   angry: ['炸毛', 'angry'],
   other: ['其他', 'other', '开心', 'happy', '嫌弃', 'meh', '敷衍', 'bored', '通用'],
 });
+const EXTRA_PREFIX = 'x:';
+
+/** 自定义分类的标签是否合法：不能带路径分隔符/控制字符，长度 1~20 */
+function cleanCategoryLabel(value) {
+  const label = String(value == null ? '' : value).trim()
+    .replace(/[\\/:*?"<>|\x00-\x1f]/g, '')
+    .slice(0, 20);
+  return label === '.' || label === '..' ? '' : label;
+}
+
+/** 自定义分类 key：内置三类之外的用户分类统一用 x:<标签> */
+function extraKey(label) {
+  const clean = cleanCategoryLabel(label);
+  return clean ? EXTRA_PREFIX + clean : '';
+}
+
 function normalizeEmotion(value) {
-  return typeof value === 'string' && Object.hasOwn(ALIASES, value) ? ALIASES[value] : '';
+  if (typeof value !== 'string') return '';
+  if (value.startsWith(EXTRA_PREFIX)) return extraKey(value.slice(EXTRA_PREFIX.length));
+  return Object.hasOwn(ALIASES, value) ? ALIASES[value] : '';
 }
 const EXTS = ['.gif', '.png', '.jpg', '.jpeg', '.webp'];
-const MAX_FILE_BYTES = 4 * 1024 * 1024;
-const MAX_UPLOAD_FILES = 5;
-const MAX_FILES = 500;
+const MAX_FILE_BYTES = 64 * 1024 * 1024;   // 只防内存炸，不是业务限制
+const MAX_UPLOAD_FILES = 50;
+const MAX_FILES = 5000;
 const RULES = [
   ['angry', /(傻逼|蠢货|废物|垃圾|滚|你妈|妈的|弱智|脑残|智障|去死|闭嘴|别烦|走开|胖|肥|笨|丑|菜鸡|菜鸟)/],
   ['cute', /(乖|宝贝|抱抱|摸摸|喜欢你|想你|对不起|抱歉|好啦|别气)/],
@@ -31,6 +49,17 @@ const RULES = [
 ];
 function fail(message, statusCode = 400) { return Object.assign(new Error(message), { statusCode }); }
 function hasEmotion(value) { return Boolean(normalizeEmotion(value)); }
+
+/** 这个分类真的存在吗（内置三类恒存在；自定义分类要查配置） */
+function hasCategory(config, emotion) {
+  const key = normalizeEmotion(emotion);
+  if (!key) return false;
+  if (!key.startsWith(EXTRA_PREFIX)) return true;
+  const label = key.slice(EXTRA_PREFIX.length);
+  return readExtraCategories(config, config.root).some((c) => c.label === label);
+}
+
+
 function stickerDir(config, root) {
   return path.resolve(root || process.cwd(), String(config?.sticker?.dir || 'data/stickers'));
 }
@@ -80,6 +109,10 @@ function listImages(dir, { recursive = true, root = dir, depth = 0, result = [] 
 function categoryImages(dir, emotion) {
   const key = normalizeEmotion(emotion);
   if (!key) return [];
+  if (key.startsWith(EXTRA_PREFIX)) {
+    // 自定义分类：目录名就是标签，不递归（用户自己往里复制/拖文件）
+    return listImages(path.join(dir, key.slice(EXTRA_PREFIX.length)), { root: dir, recursive: false });
+  }
   const files = FOLDERS[key].flatMap((name) => listImages(path.join(dir, name), { root: dir, recursive: false }));
   if (key === 'other') files.push(...listImages(dir, { root: dir, recursive: false }));
   return [...new Set(files)].sort((a, b) => a.localeCompare(b));
@@ -156,6 +189,42 @@ function migrateLegacy(config, root) {
   }
   return report;
 }
+
+// 自定义分类存 data/sticker-categories.json（不进 config：那个文件是给表单用的，
+// 数组里放对象会被 coerceValue 转成 "[object Object]"）。
+const CATEGORY_FILE = 'sticker-categories.json';
+
+function categoryFile(config, root) {
+  const base = path.dirname(stickerDir(config, root));   // data/
+  return path.join(base, CATEGORY_FILE);
+}
+
+function readExtraCategories(config, root) {
+  try {
+    const raw = JSON.parse(fs.readFileSync(categoryFile(config, root), 'utf8'));
+    if (!Array.isArray(raw)) return [];
+    return raw
+      .map((c) => ({ label: cleanCategoryLabel(c && c.label), chance: Number(c && c.chance) }))
+      .filter((c) => c.label)
+      .map((c) => ({ label: c.label, chance: Number.isFinite(c.chance) ? Math.max(0, Math.min(1, c.chance)) : 0.25 }));
+  } catch {
+    return [];
+  }
+}
+
+function writeExtraCategories(config, root, list) {
+  const clean = (Array.isArray(list) ? list : [])
+    .map((c) => ({ label: cleanCategoryLabel(c && c.label), chance: Number(c && c.chance) }))
+    .filter((c) => c.label)
+    .map((c) => ({ label: c.label, chance: Number.isFinite(c.chance) ? Math.max(0, Math.min(1, c.chance)) : 0.25 }));
+  const file = categoryFile(config, root);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = file + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(clean, null, 2) + '\n', 'utf8');
+  fs.renameSync(tmp, file);
+  return clean;
+}
+
 function isOn(config) { return features.isOn(config, 'stickers'); }
 function detectEmotion(text, hour = new Date().getHours()) {
   for (const [emotion, re] of RULES) if (re.test(String(text || ''))) return emotion;
@@ -164,6 +233,12 @@ function detectEmotion(text, hour = new Date().getHours()) {
 function chanceFor(config, emotion) {
   const cfg = config?.sticker || {};
   const key = normalizeEmotion(emotion);
+  if (key.startsWith(EXTRA_PREFIX)) {
+    const label = key.slice(EXTRA_PREFIX.length);
+    const found = readExtraCategories(config, config.root).find((c) => c.label === label);
+    const n = Number(found && found.chance);
+    return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 0.25;
+  }
   const raw = cfg.chances?.[key] ?? cfg.genericChance ?? 0.25;
   const n = Number(raw);
   return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 0;
@@ -225,17 +300,17 @@ function imageType(bytes) {
 function upload(config, root, emotion, files) {
   if (!isOn(config)) throw fail('表情包功能未开启', 404);
   if (!hasEmotion(emotion)) throw fail('请选择有效的情绪');
-  if (!Array.isArray(files) || files.length < 1 || files.length > MAX_UPLOAD_FILES) throw fail('每次请上传 1～5 张图片');
+  if (!Array.isArray(files) || files.length < 1 || files.length > MAX_UPLOAD_FILES) throw fail('一次上传数量不合法');
   const validated = files.map((item) => {
     const name = String(item?.name || '');
     if (!name || /[\\/:\x00-\x1f]/.test(name) || name === '.' || name === '..') throw fail('图片文件名无效');
     let ext = path.extname(name).toLowerCase();
     if (!EXTS.includes(ext)) throw fail('只支持 GIF、PNG、JPG、WebP 图片');
     const data = item?.data;
-    if (typeof data !== 'string' || data.length > Math.ceil(MAX_FILE_BYTES / 3) * 4) throw fail('单张图片不能超过 4 MB', 413);
+    if (typeof data !== 'string' || data.length > Math.ceil(MAX_FILE_BYTES / 3) * 4) throw fail('单张图片太大（上限 64 MB）', 413);
     if (!data.length || data.length % 4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(data)) throw fail('图片编码无效');
     const bytes = Buffer.from(data, 'base64');
-    if (!bytes.length || bytes.length > MAX_FILE_BYTES) throw fail('单张图片不能超过 4 MB', 413);
+    if (!bytes.length || bytes.length > MAX_FILE_BYTES) throw fail('单张图片太大（上限 64 MB）', 413);
     if (bytes.toString('base64') !== data) throw fail('图片编码无效');
     const type = imageType(bytes);
     if (!type || (ext === '.jpeg' ? '.jpg' : ext) !== type) throw fail('图片内容与格式不匹配或图片已损坏');
@@ -246,7 +321,9 @@ function upload(config, root, emotion, files) {
   });
   const dir = stickerDir(config, root);
   const key = normalizeEmotion(emotion);
-  const target = path.join(dir, EMOTIONS[key]);
+  const target = key.startsWith(EXTRA_PREFIX)
+    ? path.join(dir, key.slice(EXTRA_PREFIX.length))
+    : path.join(dir, EMOTIONS[key]);
   // Refuse redirects, including pre-existing category junctions. Never overwrite a user's file.
   for (const candidate of [dir, target]) {
     if (fs.existsSync(candidate) && fs.lstatSync(candidate).isSymbolicLink()) throw fail('表情包目录不能是链接或目录联接');
@@ -264,6 +341,6 @@ function upload(config, root, emotion, files) {
   }
   return uploaded;
 }
-module.exports = { EMOTIONS, EMOTION_LABELS, normalizeEmotion, GENERIC, EXTS, MAX_FILE_BYTES, MAX_UPLOAD_FILES,
+module.exports = { EMOTIONS, EMOTION_LABELS, EXTRA_PREFIX, cleanCategoryLabel, extraKey, hasCategory, readExtraCategories, writeExtraCategories, categoryFile, normalizeEmotion, GENERIC, EXTS, MAX_FILE_BYTES, MAX_UPLOAD_FILES,
   hasEmotion, resolveImage, safeDirectory, migrateLegacy, stickerDir, regularFile, listImages, categoryImages, imagesFor, anyImages, isOn,
   detectEmotion, chanceFor, choose, pick, isStickerRequest, strongEmotion, randomPool, imageType, upload };

@@ -7,9 +7,30 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media;
 
 namespace WhaleLauncher.Views
 {
+    /// <summary>一个可编辑的配置项。启动器是唯一界面，所以这里就是「全部设置」的清单。</summary>
+    public sealed class FieldSpec
+    {
+        public string Path;
+        public string Label;
+        public string Kind = "text";      // bool / num / text / secret / select / multiline
+        public string Hint = "";
+        public double Min = double.NaN;
+        public double Max = double.NaN;
+        public string[] Options;
+        public bool IsInt = true;
+    }
+
+    public sealed class SectionSpec
+    {
+        public string Title;
+        public string Note = "";
+        public List<FieldSpec> Fields = new List<FieldSpec>();
+    }
+
     public sealed class ProviderItem
     {
         public string Key { get; set; }
@@ -20,17 +41,468 @@ namespace WhaleLauncher.Views
     public partial class SettingsPage : UserControl, IRefreshable
     {
         private readonly RuntimeSupervisor _sup;
+        private readonly Dictionary<string, Action<JsonElement>> _loaders = new Dictionary<string, Action<JsonElement>>();
+        private Action<JsonElement, Dictionary<string, JsonElement>> _loadModel;
+        private Action<JsonElement> _loadVision;
+        private Action<JsonElement> _loadAbout;
+        private Dictionary<string, JsonElement> _providers;
         private bool _loading;
-        private string _webhook = "";
         private DateTime _lastLoad = DateTime.MinValue;
+        private string _configFile = "";
+        private string _dataDir = "";
 
         public SettingsPage(RuntimeSupervisor sup)
         {
             InitializeComponent();
             _sup = sup;
+            BuildOnce();
             Loaded += async (_, __) => { MainScroll.ScrollToTop(); await RefreshAsync(); };
         }
 
+        // ── 全部设置清单（启动器是唯一界面）────────────────────────
+        private static List<SectionSpec> Specs() => new List<SectionSpec>
+        {
+            new SectionSpec { Title = "聊天与气泡", Note = "决定她一次说多少、分几条说。", Fields =
+            {
+                new FieldSpec { Path = "chat.privateMaxChars", Label = "私聊每条最多几个字", Kind = "num", Min = 40, Max = 800 },
+                new FieldSpec { Path = "chat.groupMaxChars", Label = "群聊每条最多几个字", Kind = "num", Min = 20, Max = 300 },
+                new FieldSpec { Path = "chat.maxBubbles", Label = "最多分几条消息", Kind = "num", Min = 1, Max = 8, Hint = "长回复才拆，短句仍然一条" },
+                new FieldSpec { Path = "chat.historyTurns", Label = "私聊带几轮历史", Kind = "num", Min = 4, Max = 400 },
+                new FieldSpec { Path = "chat.groupHistoryTurns", Label = "群聊带几轮历史", Kind = "num", Min = 2, Max = 300 },
+                new FieldSpec { Path = "chat.discussionMaxChars", Label = "认真讨论时最多几个字", Kind = "num", Min = 80, Max = 1200 },
+                new FieldSpec { Path = "chat.emojiChance", Label = "颜文字概率", Kind = "num", Min = 0, Max = 1, IsInt = false },
+            }},
+            new SectionSpec { Title = "群聊", Fields =
+            {
+                new FieldSpec { Path = "group.requireAt", Label = "必须 @ 她才回", Kind = "bool" },
+                new FieldSpec { Path = "group.freeChat", Label = "允许她自己插话", Kind = "bool" },
+                new FieldSpec { Path = "group.freeChatChance", Label = "插话概率", Kind = "num", Min = 0, Max = 1, IsInt = false },
+                new FieldSpec { Path = "group.cooldownSec", Label = "两次回复冷却(秒)", Kind = "num", Min = 0, Max = 3600 },
+                new FieldSpec { Path = "group.maxRepliesPerHour", Label = "每小时最多回几条", Kind = "num", Min = 1, Max = 200 },
+            }},
+            new SectionSpec { Title = "主动搭话", Fields =
+            {
+                new FieldSpec { Path = "care.enabled", Label = "没聊时她主动来一句", Kind = "bool" },
+                new FieldSpec { Path = "care.onlyMaster", Label = "只找主人", Kind = "bool" },
+                new FieldSpec { Path = "care.allowGroups", Label = "允许在群里主动", Kind = "bool" },
+                new FieldSpec { Path = "care.allowOthers", Label = "允许主动找别人", Kind = "bool" },
+                new FieldSpec { Path = "care.everyMinutes", Label = "平均间隔(分钟)", Kind = "num", Min = 5, Max = 1440 },
+                new FieldSpec { Path = "care.jitterMinutes", Label = "间隔浮动(分钟)", Kind = "num", Min = 0, Max = 180 },
+                new FieldSpec { Path = "care.maxPerDay", Label = "每天最多几次", Kind = "num", Min = 0, Max = 50 },
+                new FieldSpec { Path = "care.quietAfterMinutes", Label = "刚聊过先跳过(分钟)", Kind = "num", Min = 0, Max = 240 },
+                new FieldSpec { Path = "care.windows", Label = "允许的时间段", Kind = "multiline", Hint = "每行一个，如 09:00-12:00；留空 = 全天" },
+            }},
+            new SectionSpec { Title = "记忆", Note = "检索、整理、遗忘都在这。", Fields =
+            {
+                new FieldSpec { Path = "memory.maxSessions", Label = "最多记几个会话", Kind = "num", Min = 1, Max = 10000 },
+                new FieldSpec { Path = "memory.maxMessages", Label = "每个会话留多少条消息", Kind = "num", Min = 2, Max = 800 },
+                new FieldSpec { Path = "memory.maxNotesPerUser", Label = "每人留几条记忆", Kind = "num", Min = 1, Max = 50 },
+                new FieldSpec { Path = "memory.digest", Label = "自动整理(摘要+抽事实)", Kind = "bool", Hint = "攒够一批消息调一次模型" },
+                new FieldSpec { Path = "memory.digestEvery", Label = "攒多少条整理一次", Kind = "num", Min = 4, Max = 100 },
+                new FieldSpec { Path = "memory.semantic", Label = "语义检索(让模型挑记忆)", Kind = "bool", Hint = "关掉只按字面挑，快但会漏" },
+                new FieldSpec { Path = "memory.semanticMinCandidates", Label = "候选几条才走语义", Kind = "num", Min = 2, Max = 10 },
+            }},
+            new SectionSpec { Title = "表情包", Fields =
+            {
+                new FieldSpec { Path = "sticker.dir", Label = "表情包目录", Kind = "text", Hint = "相对路径，分类是它下面的文件夹" },
+                new FieldSpec { Path = "sticker.testChat", Label = "测试发送到哪个会话", Kind = "text" },
+                new FieldSpec { Path = "sticker.chances.cute", Label = "傲娇概率", Kind = "num", Min = 0, Max = 1, IsInt = false },
+                new FieldSpec { Path = "sticker.chances.angry", Label = "炸毛概率", Kind = "num", Min = 0, Max = 1, IsInt = false },
+                new FieldSpec { Path = "sticker.chances.other", Label = "其他概率", Kind = "num", Min = 0, Max = 1, IsInt = false },
+            }},
+            new SectionSpec { Title = "微信与通道", Fields =
+            {
+                new FieldSpec { Path = "wechat.account", Label = "固定用哪个号（留空 = 按最近活跃）", Kind = "text" },
+                new FieldSpec { Path = "wechat.accountGuard", Label = "双开时钉死账号", Kind = "bool" },
+                new FieldSpec { Path = "wechat.quoteReply", Label = "引用回复（慢）", Kind = "bool" },
+                new FieldSpec { Path = "wechat.bgSend.enabled", Label = "零焦点后台发送", Kind = "bool" },
+                new FieldSpec { Path = "wechat.bgSend.charMode", Label = "打字编码", Kind = "select", Options = new[] { "auto", "utf16", "gbk" }, Hint = "auto = 按微信版本自动（4.2+ 用 UTF-16 码元）" },
+                new FieldSpec { Path = "wechat.bgSend.charGapMs", Label = "每个码元间隔(毫秒)", Kind = "num", Min = 20, Max = 80 },
+                new FieldSpec { Path = "wechat.bgSend.fallbackToForeground", Label = "后台失败时回前台发", Kind = "bool" },
+                new FieldSpec { Path = "wechat.bgSend.unhideWindow", Label = "微信在托盘时自动打开窗口", Kind = "bool" },
+            }},
+            new SectionSpec { Title = "联网与分享", Fields =
+            {
+                new FieldSpec { Path = "websearch.enabled", Label = "联网搜索", Kind = "bool" },
+                new FieldSpec { Path = "websearch.city", Label = "搜索城市", Kind = "text" },
+                new FieldSpec { Path = "websearch.timeoutMs", Label = "搜索超时(毫秒)", Kind = "num", Min = 1000, Max = 30000 },
+                new FieldSpec { Path = "links.enabled", Label = "解析聊天里的链接", Kind = "bool" },
+                new FieldSpec { Path = "links.timeoutMs", Label = "链接超时(毫秒)", Kind = "num", Min = 1000, Max = 30000 },
+                new FieldSpec { Path = "links.cacheMinutes", Label = "链接缓存(分钟)", Kind = "num", Min = 0, Max = 1440 },
+                new FieldSpec { Path = "share.enabled", Label = "定时分享(B站)", Kind = "bool" },
+                new FieldSpec { Path = "share.everyMinutes", Label = "分享间隔(分钟)", Kind = "num", Min = 5, Max = 1440 },
+                new FieldSpec { Path = "share.sources", Label = "分享来源", Kind = "text", Hint = "多个用逗号分隔，例如 bilibili" },
+            }},
+            new SectionSpec { Title = "管理员与语音", Fields =
+            {
+                new FieldSpec { Path = "admin.spell", Label = "管理员口令", Kind = "text", Hint = "在微信里发这句获得权限；留空 = 关闭" },
+                new FieldSpec { Path = "admin.minutes", Label = "权限有效期(分钟)", Kind = "num", Min = 1, Max = 1440 },
+                new FieldSpec { Path = "admin.allowAll", Label = "谁发都给权限", Kind = "bool" },
+                new FieldSpec { Path = "voice.enabled", Label = "语音回复", Kind = "bool" },
+                new FieldSpec { Path = "voice.apiKey", Label = "语音接口 Key", Kind = "secret", Hint = "留空表示不改" },
+                new FieldSpec { Path = "voice.baseUrl", Label = "语音接口地址", Kind = "text" },
+                new FieldSpec { Path = "voice.model", Label = "语音模型", Kind = "text" },
+            }},
+            new SectionSpec { Title = "网关", Note = "给别的客户端接入用；桥接自己用的是这套，一般不用改。", Fields =
+            {
+                new FieldSpec { Path = "gateway.wechat.enabled", Label = "微信网关", Kind = "bool" },
+                new FieldSpec { Path = "gateway.wechat.inboundToken", Label = "微信 token", Kind = "secret", Hint = "留空表示不改" },
+                new FieldSpec { Path = "gateway.wechat.outboundUrl", Label = "微信出站地址", Kind = "text" },
+                new FieldSpec { Path = "gateway.douyin.enabled", Label = "抖音网关", Kind = "bool" },
+                new FieldSpec { Path = "gateway.douyin.inboundToken", Label = "抖音 token", Kind = "secret", Hint = "留空表示不改" },
+            }},
+            new SectionSpec { Title = "高级", Fields =
+            {
+                new FieldSpec { Path = "server.port", Label = "本机端口", Kind = "num", Min = 1024, Max = 65535, Hint = "改完重启生效" },
+                new FieldSpec { Path = "log.level", Label = "日志级别", Kind = "select", Options = new[] { "info", "debug" } },
+                new FieldSpec { Path = "storage.mediaKeepDays", Label = "媒体缓存保留几天", Kind = "num", Min = 0, Max = 90 },
+                new FieldSpec { Path = "storage.mediaMaxMB", Label = "媒体缓存上限(MB)", Kind = "num", Min = 0, Max = 10000 },
+            }},
+        };
+
+        private void BuildOnce()
+        {
+            SectionsHost.Children.Clear();
+            SectionsHost.Children.Add(BuildModelSection());
+            SectionsHost.Children.Add(BuildVisionSection());
+            foreach (var spec in Specs()) SectionsHost.Children.Add(BuildSection(spec));
+            SectionsHost.Children.Add(BuildAboutSection());
+        }
+
+        // ── 卡片与行 ────────────────────────────────────────────
+        private Border Card(string title, string note, out StackPanel body)
+        {
+            var border = new Border
+            {
+                Style = (Style)FindResource("Card"),
+                Padding = new Thickness(16, 14, 16, 14),
+                Margin = new Thickness(0, 0, 0, 12)
+            };
+            var stack = new StackPanel();
+            stack.Children.Add(new TextBlock { Text = title, Style = (Style)FindResource("H2") });
+            if (!string.IsNullOrEmpty(note))
+                stack.Children.Add(new TextBlock { Text = note, Style = (Style)FindResource("Small"), Margin = new Thickness(0, 6, 0, 0), TextWrapping = TextWrapping.Wrap });
+            body = new StackPanel { Margin = new Thickness(0, 10, 0, 0) };
+            stack.Children.Add(body);
+            border.Child = stack;
+            return border;
+        }
+
+        private Grid Row(string label, FrameworkElement control, string hint)
+        {
+            var grid = new Grid { Margin = new Thickness(0, 0, 0, 8) };
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(210) });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            grid.Children.Add(new TextBlock
+            {
+                Text = label,
+                Style = (Style)FindResource("Label"),
+                VerticalAlignment = VerticalAlignment.Center,
+                TextWrapping = TextWrapping.Wrap
+            });
+            var right = new StackPanel();
+            right.Children.Add(control);
+            if (!string.IsNullOrEmpty(hint))
+                right.Children.Add(new TextBlock { Text = hint, Style = (Style)FindResource("Small"), Margin = new Thickness(0, 3, 0, 0), TextWrapping = TextWrapping.Wrap });
+            Grid.SetColumn(right, 1);
+            grid.Children.Add(right);
+            return grid;
+        }
+
+        private Border BuildSection(SectionSpec spec)
+        {
+            var card = Card(spec.Title, spec.Note, out var body);
+            foreach (var f in spec.Fields) body.Children.Add(BuildField(f));
+            return card;
+        }
+
+        // ── 单个字段 ────────────────────────────────────────────
+        private FrameworkElement BuildField(FieldSpec f)
+        {
+            switch (f.Kind)
+            {
+                case "bool":
+                {
+                    var chk = new CheckBox { VerticalAlignment = VerticalAlignment.Center };
+                    chk.Click += async (s, e) =>
+                    {
+                        if (_loading) return;
+                        await PatchAsync(f.Path, ((CheckBox)s).IsChecked == true ? "true" : "false");
+                    };
+                    _loaders[f.Path] = v => { _loading = true; chk.IsChecked = v.ValueKind == JsonValueKind.True; _loading = false; };
+                    return Row(f.Label, chk, f.Hint);
+                }
+                case "select":
+                {
+                    var cmb = new ComboBox { Height = 26, ItemsSource = f.Options, MinWidth = 140, HorizontalAlignment = HorizontalAlignment.Left };
+                    cmb.SelectionChanged += async (s, e) =>
+                    {
+                        if (_loading || cmb.SelectedItem == null) return;
+                        await PatchAsync(f.Path, "\"" + Api.Esc((string)cmb.SelectedItem) + "\"");
+                    };
+                    _loaders[f.Path] = v =>
+                    {
+                        _loading = true;
+                        cmb.SelectedItem = v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+                        _loading = false;
+                    };
+                    return Row(f.Label, cmb, f.Hint);
+                }
+                case "secret":
+                {
+                    var pwd = new PasswordBox();
+                    pwd.LostFocus += async (s, e) =>
+                    {
+                        if (_loading || pwd.Password.Length == 0) return;
+                        await PatchAsync(f.Path, "\"" + Api.Esc(pwd.Password.Trim()) + "\"");
+                        pwd.Password = "";
+                        StatusText.Text = f.Label + " 已保存。";
+                    };
+                    return Row(f.Label, pwd, f.Hint);
+                }
+                case "multiline":
+                {
+                    var box = new TextBox { AcceptsReturn = true, MinHeight = 56, TextWrapping = TextWrapping.Wrap, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+                    box.LostFocus += async (s, e) =>
+                    {
+                        if (_loading) return;
+                        var lines = (box.Text ?? "").Split('\n').Select(x => x.Trim()).Where(x => x.Length > 0).ToArray();
+                        await PatchAsync(f.Path, "[" + string.Join(",", lines.Select(p => "\"" + Api.Esc(p) + "\"")) + "]");
+                    };
+                    _loaders[f.Path] = v =>
+                    {
+                        _loading = true;
+                        box.Text = v.ValueKind == JsonValueKind.Array
+                            ? string.Join("\n", v.EnumerateArray().Select(x => x.ToString()))
+                            : (v.ValueKind == JsonValueKind.String ? (v.GetString() ?? "") : "");
+                        _loading = false;
+                    };
+                    return Row(f.Label, box, f.Hint);
+                }
+                case "num":
+                {
+                    var box = new TextBox { Width = 120, HorizontalAlignment = HorizontalAlignment.Left };
+                    box.LostFocus += async (s, e) =>
+                    {
+                        if (_loading) return;
+                        if (!double.TryParse((box.Text ?? "").Trim(), out var n))
+                        {
+                            StatusText.Text = f.Label + "：要填数字";
+                            return;
+                        }
+                        if (!double.IsNaN(f.Min)) n = Math.Max(f.Min, n);
+                        if (!double.IsNaN(f.Max)) n = Math.Min(f.Max, n);
+                        if (f.IsInt) { n = Math.Round(n); box.Text = n.ToString(); }
+                        await PatchAsync(f.Path, f.IsInt ? n.ToString() : n.ToString("0.###"));
+                    };
+                    _loaders[f.Path] = v =>
+                    {
+                        _loading = true;
+                        box.Text = v.ValueKind == JsonValueKind.Number
+                            ? (f.IsInt ? Math.Round(v.GetDouble()).ToString() : v.GetDouble().ToString("0.###"))
+                            : "";
+                        _loading = false;
+                    };
+                    return Row(f.Label, box, f.Hint);
+                }
+                default:
+                {
+                    var box = new TextBox();
+                    box.LostFocus += async (s, e) =>
+                    {
+                        if (_loading) return;
+                        if (f.Path == "share.sources")
+                        {
+                            var parts = (box.Text ?? "").Split(new[] { ',', '，' }, StringSplitOptions.RemoveEmptyEntries)
+                                .Select(x => x.Trim()).Where(x => x.Length > 0).ToArray();
+                            await PatchAsync(f.Path, "[" + string.Join(",", parts.Select(p => "\"" + Api.Esc(p) + "\"")) + "]");
+                        }
+                        else
+                        {
+                            await PatchAsync(f.Path, "\"" + Api.Esc((box.Text ?? "").Trim()) + "\"");
+                        }
+                    };
+                    _loaders[f.Path] = v =>
+                    {
+                        _loading = true;
+                        box.Text = v.ValueKind == JsonValueKind.String ? (v.GetString() ?? "")
+                            : (v.ValueKind == JsonValueKind.Array ? string.Join(",", v.EnumerateArray().Select(x => x.ToString())) : "");
+                        _loading = false;
+                    };
+                    return Row(f.Label, box, f.Hint);
+                }
+            }
+        }
+
+        private async Task PatchAsync(string path, string jsonLiteral)
+        {
+            var body = "{\"patch\":{\"" + Api.Esc(path) + "\":" + jsonLiteral + "}}";
+            var res = await Api.Post(_sup.Url, "/api/config", body);
+            StatusText.Text = res.Ok
+                ? path + " 已保存 " + DateTime.Now.ToString("HH:mm:ss")
+                : path + " 保存失败：" + (res.Error.Length > 0 ? res.Error : res.Raw);
+        }
+
+        // ── 模型 / 看图 / 关于 ───────────────────────────────────
+        private Border BuildModelSection()
+        {
+            var card = Card("模型与 Key", "选哪家模型、用哪把钥匙。", out var body);
+            var items = new List<ProviderItem>();
+            var cmb = new ComboBox { Height = 28, DisplayMemberPath = "Label", MinWidth = 320, HorizontalAlignment = HorizontalAlignment.Left };
+            var baseUrl = new TextBox();
+            var model = new TextBox();
+            var key = new PasswordBox();
+            var mock = new CheckBox();
+            var owner = new TextBox();
+            var result = new TextBlock { Style = (Style)FindResource("Small"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 0) };
+
+            cmb.SelectionChanged += (s, e) =>
+            {
+                if (_loading || !(cmb.SelectedItem is ProviderItem p)) return;
+                if (_providers != null && _providers.TryGetValue(p.Key, out var pv))
+                {
+                    baseUrl.Text = GetStr(pv, "baseUrl");
+                    model.Text = GetStr(pv, "model");
+                }
+            };
+
+            body.Children.Add(Row("模型服务", cmb, ""));
+            body.Children.Add(Row("接口地址", baseUrl, ""));
+            body.Children.Add(Row("模型名", model, ""));
+            body.Children.Add(Row("API Key", key, "留空表示不改；已存的这里不会显示"));
+            body.Children.Add(Row("演示模式", mock, "不连模型，用内置台词"));
+            body.Children.Add(Row("她怎么叫你", owner, ""));
+
+            var buttons = new WrapPanel { Margin = new Thickness(0, 10, 0, 0) };
+            var save = new Button { Content = "保存", Style = (Style)FindResource("Primary") };
+            var test = new Button { Content = "测试连通", Style = (Style)FindResource("Ghost"), Margin = new Thickness(8, 0, 0, 0) };
+            buttons.Children.Add(save);
+            buttons.Children.Add(test);
+            body.Children.Add(buttons);
+            body.Children.Add(result);
+
+            save.Click += async (s, e) =>
+            {
+                var prov = (cmb.SelectedItem as ProviderItem)?.Key ?? "";
+                var json = "{"
+                    + "\"provider\":\"" + Api.Esc(prov) + "\","
+                    + "\"baseUrl\":\"" + Api.Esc(baseUrl.Text.Trim()) + "\","
+                    + "\"model\":\"" + Api.Esc(model.Text.Trim()) + "\","
+                    + "\"mock\":" + (mock.IsChecked == true ? "true" : "false")
+                    + (key.Password.Length > 0 ? ",\"apiKey\":\"" + Api.Esc(key.Password.Trim()) + "\"" : "")
+                    + "}";
+                var res = await Api.Post(_sup.Url, "/api/settings", json);
+                if (!res.Ok) { result.Text = "保存失败：" + (res.Error.Length > 0 ? res.Error : res.Raw); return; }
+                if (owner.Text.Trim().Length > 0)
+                    await Api.Post(_sup.Url, "/api/settings", "{\"userName\":\"" + Api.Esc(owner.Text.Trim()) + "\"}");
+                key.Password = "";
+                result.Text = "已保存。";
+            };
+            test.Click += async (s, e) =>
+            {
+                result.Text = "正在测…";
+                var res = await Api.Post(_sup.Url, "/api/settings/test", "{}");
+                result.Text = res.Ok ? "连通正常。" : "测试没通过：" + (res.Error.Length > 0 ? res.Error : res.Raw);
+            };
+
+            _loadModel = (set, provs) =>
+            {
+                _providers = provs;
+                _loading = true;
+                items.Clear();
+                foreach (var kv in provs)
+                    items.Add(new ProviderItem { Key = kv.Key, Label = GetStr(kv.Value, "label") + "（" + kv.Key + "）" });
+                cmb.ItemsSource = null;
+                cmb.ItemsSource = items;
+                var cur = GetStr(set, "provider");
+                cmb.SelectedItem = items.FirstOrDefault(x => x.Key == cur);
+                baseUrl.Text = GetStr(set, "baseUrl");
+                model.Text = GetStr(set, "model");
+                mock.IsChecked = set.ValueKind == JsonValueKind.Object && set.TryGetProperty("mock", out var m) && m.ValueKind == JsonValueKind.True;
+                owner.Text = GetStr(set, "userName");
+                _loading = false;
+            };
+            return card;
+        }
+
+        private Border BuildVisionSection()
+        {
+            var card = Card("看图（视觉模型）", "给智谱 GLM-4V 的 Key，她才能看图片。", out var body);
+            var hint = new TextBlock { Style = (Style)FindResource("Small"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) };
+            var pwd = new PasswordBox();
+            body.Children.Add(hint);
+            body.Children.Add(Row("看图 Key", pwd, "留空表示不改"));
+            var buttons = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
+            var save = new Button { Content = "保存看图 Key", Style = (Style)FindResource("Ghost") };
+            var test = new Button { Content = "测一下", Style = (Style)FindResource("Ghost"), Margin = new Thickness(8, 0, 0, 0) };
+            var result = new TextBlock { Style = (Style)FindResource("Small"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 0) };
+            buttons.Children.Add(save);
+            buttons.Children.Add(test);
+            body.Children.Add(buttons);
+            body.Children.Add(result);
+
+            save.Click += async (s, e) =>
+            {
+                if (pwd.Password.Trim().Length == 0) { result.Text = "留空就不改。"; return; }
+                var res = await Api.Post(_sup.Url, "/api/settings", "{\"visionApiKey\":\"" + Api.Esc(pwd.Password.Trim()) + "\"}");
+                result.Text = res.Ok ? "看图 Key 已保存。" : "保存失败：" + (res.Error.Length > 0 ? res.Error : res.Raw);
+                if (res.Ok) pwd.Password = "";
+            };
+            test.Click += async (s, e) =>
+            {
+                result.Text = "正在测…";
+                var res = await Api.Post(_sup.Url, "/api/vision/test", "{}");
+                result.Text = res.Ok ? "看图通了，它说：" + res.Str("sample") : "没通：" + (res.Error.Length > 0 ? res.Error : res.Raw);
+            };
+
+            _loadVision = (set) =>
+            {
+                var v = set.ValueKind == JsonValueKind.Object && set.TryGetProperty("vision", out var vv) ? vv : default;
+                if (v.ValueKind == JsonValueKind.Object)
+                {
+                    var configured = v.TryGetProperty("configured", out var c) && c.ValueKind == JsonValueKind.True;
+                    var masked = v.TryGetProperty("keyMasked", out var km) && km.ValueKind == JsonValueKind.String ? km.GetString() : "";
+                    hint.Text = configured ? "已配置：" + masked : "没配置。填一把智谱 GLM-4V 的 Key。";
+                }
+            };
+            return card;
+        }
+
+        private Border BuildAboutSection()
+        {
+            var card = Card("路径", "", out var body);
+            var text = new TextBlock { Style = (Style)FindResource("Small"), TextWrapping = TextWrapping.Wrap };
+            body.Children.Add(text);
+            var buttons = new WrapPanel { Margin = new Thickness(0, 10, 0, 0) };
+            void Add(string label, Func<string> path)
+            {
+                var b = new Button { Content = label, Style = (Style)FindResource("Ghost"), Margin = new Thickness(0, 0, 8, 0) };
+                b.Click += (s, e) => Open(path());
+                buttons.Children.Add(b);
+            }
+            Add("打开数据目录", () => string.IsNullOrEmpty(_dataDir) ? Path.Combine(AppContext.BaseDirectory, "data") : _dataDir);
+            Add("打开配置文件", () => string.IsNullOrEmpty(_configFile) ? Path.Combine(AppContext.BaseDirectory, "config.json") : _configFile);
+            Add("打开表情包目录", () => Path.Combine(AppContext.BaseDirectory, "data", "stickers"));
+            body.Children.Add(buttons);
+            _loadAbout = cfg =>
+            {
+                _configFile = GetStr(cfg, "configFile");
+                _dataDir = GetStr(cfg, "dataDir");
+                text.Text = "配置文件：" + _configFile + "\n数据目录：" + _dataDir;
+            };
+            return card;
+        }
+
+        private void Open(string target)
+        {
+            try
+            {
+                if (!string.IsNullOrEmpty(target)) Process.Start(new ProcessStartInfo(target) { UseShellExecute = true });
+            }
+            catch (Exception ex) { StatusText.Text = "打开失败：" + ex.Message; }
+        }
+
+        // ── 读写 ────────────────────────────────────────────────
         public async Task RefreshAsync()
         {
             if (!_sup.NodeRunning)
@@ -38,235 +510,60 @@ namespace WhaleLauncher.Views
                 KernelHint.Text = "内核没起，设置读不到也存不了。点顶栏 ⏻ 启动。";
                 return;
             }
-            KernelHint.Text = "配置改动立即写回 config.json / settings.json";
-            if ((DateTime.Now - _lastLoad).TotalSeconds < 8) return;
+            KernelHint.Text = "改完立即写回 config.json（密钥留空表示不改）";
+            if ((DateTime.Now - _lastLoad).TotalSeconds < 5) return;
             _lastLoad = DateTime.Now;
-            await LoadAsync();
+            await LoadConfigAsync();
         }
 
-        private async Task LoadAsync()
+        private async Task LoadConfigAsync()
         {
-            var set = await Api.Get(_sup.Url, "/api/settings");
-            if (set.Ok) _lastSet = set;
-            if (set.Ok)
-            {
-                _loading = true;
-                try
-                {
-                    var items = new List<ProviderItem>();
-                    var provs = set.Prop("providers");
-                    if (provs.ValueKind == JsonValueKind.Object)
-                    {
-                        foreach (var p in provs.EnumerateObject())
-                        {
-                            var label = p.Value.TryGetProperty("label", out var lb) && lb.ValueKind == JsonValueKind.String
-                                ? lb.GetString() : p.Name;
-                            items.Add(new ProviderItem { Key = p.Name, Label = $"{label}（{p.Name}）" });
-                        }
-                    }
-                    CmbProvider.ItemsSource = items;
-                    var cur = set.Str("provider");
-                    CmbProvider.SelectedItem = items.FirstOrDefault(x => x.Key == cur);
-
-                    TxtBaseUrl.Text = set.Str("baseUrl");
-                    TxtModel.Text = set.Str("model");
-                    TxtKey.Password = "";
-                    ChkMock.IsChecked = set.Bool("mock");
-
-                    var hasKey = set.Bool("hasKey");
-                    ModelNow.Text = $"{set.Str("providerLabel")} · {set.Str("model")} · {set.Str("baseUrl")}" +
-                                    (hasKey ? $" · Key {set.Str("keyMasked")}" : " · 还没填 Key");
-                    TxtKey.ToolTip = hasKey ? "已存 " + set.Str("keyMasked") + "，留空表示不改" : "没填过 Key";
-
-                    var v = set.Prop("vision");
-                    if (v.ValueKind == JsonValueKind.Object)
-                    {
-                        var configured = v.TryGetProperty("configured", out var c) && c.ValueKind == JsonValueKind.True;
-                        var masked = v.TryGetProperty("keyMasked", out var km) && km.ValueKind == JsonValueKind.String ? km.GetString() : "";
-                        var model = v.TryGetProperty("model", out var md) && md.ValueKind == JsonValueKind.String ? md.GetString() : "";
-                        VisionNow.Text = configured ? $"已配置 · {model} · {masked}" : "没配置。填一把智谱 GLM-4V 的 Key 才能看图。";
-                    }
-                }
-                finally { _loading = false; }
-            }
-
             var cfg = await Api.Get(_sup.Url, "/api/config");
-            if (cfg.Ok && cfg.Prop("config").ValueKind == JsonValueKind.Object)
-            {
-                var c = cfg.Prop("config");
-                _loading = true;
-                try
-                {
-                    if (c.TryGetProperty("websearch", out var ws) && ws.ValueKind == JsonValueKind.Object)
-                    {
-                        ChkSearch.IsChecked = BoolOf(ws, "enabled");
-                        TxtCity.Text = StrOf(ws, "city");
-                    }
-                    if (c.TryGetProperty("links", out var lk) && lk.ValueKind == JsonValueKind.Object)
-                        ChkLinks.IsChecked = BoolOf(lk, "enabled");
-                    if (c.TryGetProperty("log", out var lg) && lg.ValueKind == JsonValueKind.Object)
-                    {
-                        var lvl = StrOf(lg, "level");
-                        CmbLog.SelectedIndex = lvl == "debug" ? 1 : 0;
-                    }
-                    if (c.TryGetProperty("share", out var sh) && sh.ValueKind == JsonValueKind.Object)
-                    {
-                        ChkShare.IsChecked = BoolOf(sh, "enabled");
-                        var mins = sh.TryGetProperty("everyMinutes", out var em) && em.ValueKind == JsonValueKind.Number ? em.GetInt32() : 120;
-                        TxtShareMin.Text = mins.ToString();
-                    }
-
-                    var port = _sup.Port;
-                    if (c.TryGetProperty("gateway", out var gw) && gw.ValueKind == JsonValueKind.Object)
-                    {
-                        var lines = new List<string>();
-                        foreach (var p in gw.EnumerateObject())
-                        {
-                            var path = $"/webhook/{p.Name}";
-                            var enabled = p.Value.ValueKind == JsonValueKind.Object && BoolOf(p.Value, "enabled");
-                            lines.Add($"{path}   {(enabled ? "已启用" : "未启用")}");
-                            if (p.Name == "wechat") _webhook = $"http://127.0.0.1:{port}{path}";
-                        }
-                        GatewayInfo.Text = $"本机地址：http://127.0.0.1:{port}\n" + string.Join("\n", lines) +
-                                           "\n\n给别的客户端接入时才需要；桥接自己用的是这一套，不用改。";
-                    }
-
-                    var version = "v4.0.0-alpha";
-                    var pkg = Path.Combine(AppContext.BaseDirectory, "package.json");
-                    if (File.Exists(pkg))
-                    {
-                        var m = System.Text.RegularExpressions.Regex.Match(File.ReadAllText(pkg), "\"version\"\\s*:\\s*\"([^\"]+)\"");
-                        if (m.Success) version = "v" + m.Groups[1].Value;
-                    }
-                    AboutInfo.Text = $"鲸鲸 {version} · 启动器 4.0\n配置文件：{set.Str("configFile")}\n数据目录：{set.Str("dataDir")}";
-                }
-                finally { _loading = false; }
-            }
-        }
-
-        private static bool BoolOf(JsonElement e, string n)
-            => e.TryGetProperty(n, out var v) && v.ValueKind == JsonValueKind.True;
-
-        private static string StrOf(JsonElement e, string n)
-            => e.TryGetProperty(n, out var v) && v.ValueKind == JsonValueKind.String ? (v.GetString() ?? "") : "";
-
-        // ── 动作 ────────────────────────────────────────────────
-        private void OnProviderChanged(object sender, SelectionChangedEventArgs e)
-        {
-            if (_loading) return;
-            if (CmbProvider.SelectedItem is ProviderItem p)
-            {
-                // 只是先填进输入框，点保存才写盘
-                var set = _lastSet;
-                if (set != null && set.Prop("providers").ValueKind == JsonValueKind.Object &&
-                    set.Prop("providers").TryGetProperty(p.Key, out var pv))
-                {
-                    TxtBaseUrl.Text = StrOf(pv, "baseUrl");
-                    TxtModel.Text = StrOf(pv, "model");
-                    ModelResult.Text = "已切到 " + p.Label + " 的预设值，点「保存」才写盘。";
-                }
-            }
-        }
-
-        private ApiResult _lastSet;
-
-        private async void OnSaveModel(object sender, RoutedEventArgs e)
-        {
-            var provider = (CmbProvider.SelectedItem as ProviderItem)?.Key ?? "";
-            var json = "{" +
-                       $"\"provider\":\"{Api.Esc(provider)}\"," +
-                       $"\"baseUrl\":\"{Api.Esc(TxtBaseUrl.Text.Trim())}\"," +
-                       $"\"model\":\"{Api.Esc(TxtModel.Text.Trim())}\"," +
-                       $"\"mock\":{(ChkMock.IsChecked == true ? "true" : "false")}";
-            if (TxtKey.Password.Length > 0) json += $",\"apiKey\":\"{Api.Esc(TxtKey.Password.Trim())}\"";
-            json += "}";
-            var res = await Api.Post(_sup.Url, "/api/settings", json);
-            ModelResult.Text = res.Ok ? "已保存。" + Summarize(res) : "保存失败：" + (res.Error.Length > 0 ? res.Error : res.Raw);
-            if (res.Ok) { TxtKey.Password = ""; _lastLoad = DateTime.MinValue; await RefreshAsync(); }
-        }
-
-        private async void OnTestModel(object sender, RoutedEventArgs e)
-        {
-            ModelResult.Text = "正在测…（可能要几秒）";
-            var res = await Api.Post(_sup.Url, "/api/settings/test", "{}");
-            if (!res.Ok)
-            {
-                ModelResult.Text = "测试没通过：" + (res.Error.Length > 0 ? res.Error : res.Raw);
-                return;
-            }
-            var probe = res.Prop("probe");
-            var ms = probe.ValueKind == JsonValueKind.Object && probe.TryGetProperty("ms", out var m) && m.ValueKind == JsonValueKind.Number ? m.GetInt64() : 0;
-            var model = probe.ValueKind == JsonValueKind.Object && probe.TryGetProperty("model", out var md) && md.ValueKind == JsonValueKind.String ? md.GetString() : "";
-            ModelResult.Text = $"连通正常 · {model} · {ms} ms";
-        }
-
-        private static string Summarize(ApiResult res)
-        {
-            var s = res.Prop("settings");
-            if (s.ValueKind != JsonValueKind.Object) return "";
-            return $"{StrOf(s, "providerLabel")} · {StrOf(s, "model")}" +
-                   (BoolOf(s, "mock") ? " · 演示模式" : "");
-        }
-
-        private async void OnSaveVision(object sender, RoutedEventArgs e)
-        {
-            if (TxtVisionKey.Password.Trim().Length == 0)
-            {
-                VisionResult.Text = "留空就不改。要存新 Key 请先填进去。";
-                return;
-            }
-            var res = await Api.Post(_sup.Url, "/api/settings",
-                $"{{\"visionApiKey\":\"{Api.Esc(TxtVisionKey.Password.Trim())}\"}}");
-            VisionResult.Text = res.Ok ? "看图 Key 已保存。" : "保存失败：" + (res.Error.Length > 0 ? res.Error : res.Raw);
-            if (res.Ok) { TxtVisionKey.Password = ""; _lastLoad = DateTime.MinValue; await RefreshAsync(); }
-        }
-
-        private async void OnTestVision(object sender, RoutedEventArgs e)
-        {
-            VisionResult.Text = "正在测…（拿一张内置小图问颜色）";
-            var res = await Api.Post(_sup.Url, "/api/vision/test", "{}");
-            VisionResult.Text = res.Ok ? "看图通了，它说：" + res.Str("sample") : "没通：" + (res.Error.Length > 0 ? res.Error : res.Raw);
-        }
-
-        private async void OnSaveMisc(object sender, RoutedEventArgs e)
-        {
-            var minutes = int.TryParse(TxtShareMin.Text.Trim(), out var m) ? Math.Max(5, m) : 120;
-            var json = "{\"patch\":{" +
-                       $"\"websearch\":{{\"enabled\":{(ChkSearch.IsChecked == true ? "true" : "false")},\"city\":\"{Api.Esc(TxtCity.Text.Trim())}\"}}," +
-                       $"\"links\":{{\"enabled\":{(ChkLinks.IsChecked == true ? "true" : "false")}}}," +
-                       $"\"log\":{{\"level\":\"{(CmbLog.SelectedIndex == 1 ? "debug" : "info")}\"}}," +
-                       $"\"share\":{{\"enabled\":{(ChkShare.IsChecked == true ? "true" : "false")},\"everyMinutes\":{minutes}}}" +
-                       "}}";
-            var res = await Api.Post(_sup.Url, "/api/config", json);
-            MiscResult.Text = res.Ok ? "已保存。日志级别改动立即生效。" : "保存失败：" + (res.Error.Length > 0 ? res.Error : res.Raw);
-        }
-
-        private void OnCopyWebhook(object sender, RoutedEventArgs e)
-        {
+            if (!cfg.Ok) return;
+            var settings = await Api.Get(_sup.Url, "/api/settings");
+            var config = cfg.Prop("config");
+            _loading = true;
             try
             {
-                Clipboard.SetText(string.IsNullOrEmpty(_webhook) ? $"http://127.0.0.1:{_sup.Port}/webhook/wechat" : _webhook);
-                GatewayInfo.Text += "\n（已复制到剪贴板）";
+                foreach (var kv in _loaders)
+                    kv.Value(GetPath(config, kv.Key));
             }
-            catch (Exception ex)
+            finally { _loading = false; }
+
+            if (settings.Ok)
             {
-                GatewayInfo.Text += "\n复制失败：" + ex.Message;
+                var provs = new Dictionary<string, JsonElement>();
+                var p = settings.Prop("providers");
+                if (p.ValueKind == JsonValueKind.Object)
+                    foreach (var it in p.EnumerateObject()) provs[it.Name] = it.Value;
+                _loadModel?.Invoke(settings.Root, provs);
+                _loadVision?.Invoke(settings.Root);
             }
+            _loadAbout?.Invoke(cfg.Root);
+
+            var ver = "4.0";
+            var pkg = Path.Combine(AppContext.BaseDirectory, "package.json");
+            if (File.Exists(pkg))
+            {
+                var m = System.Text.RegularExpressions.Regex.Match(File.ReadAllText(pkg), "\"version\"\\s*:\\s*\"([^\"]+)\"");
+                if (m.Success) ver = m.Groups[1].Value;
+            }
+            AboutText.Text = "鲸鲸 " + ver + " · 启动器 4.0";
         }
 
-        private void OnOpenGatewayDoc(object sender, RoutedEventArgs e)
-            => Open(Path.Combine(AppContext.BaseDirectory, "docs", "GATEWAY.md"));
-
-        private void OnOpenConsole(object sender, RoutedEventArgs e) => Open(_sup.Url);
-
-        private void OnOpenData(object sender, RoutedEventArgs e) => Open(Path.Combine(AppContext.BaseDirectory, "data"));
-
-        private void OnOpenConfig(object sender, RoutedEventArgs e) => Open(Path.Combine(AppContext.BaseDirectory, "config.json"));
-
-        private void Open(string target)
+        private static JsonElement GetPath(JsonElement root, string dotted)
         {
-            try { Process.Start(new ProcessStartInfo(target) { UseShellExecute = true }); }
-            catch (Exception ex) { ModelResult.Text = "打开失败：" + ex.Message; }
+            var cur = root;
+            foreach (var part in dotted.Split('.'))
+            {
+                if (cur.ValueKind != JsonValueKind.Object || !cur.TryGetProperty(part, out var next)) return default;
+                cur = next;
+            }
+            return cur;
         }
+
+        private static string GetStr(JsonElement e, string name)
+            => e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String
+                ? (v.GetString() ?? "") : "";
     }
 }

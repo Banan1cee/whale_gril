@@ -114,13 +114,20 @@ class StickerService {
   status() {
     this.requireEnabled();
     const dir = stickers.stickerDir(this.config, this.config.root);
-    const emotions = Object.keys(stickers.EMOTIONS).map((key) => {
+    const list = (key, label, extra) => {
       const items = stickers.categoryImages(dir, key).map((file) => ({
         name: path.basename(file), id: path.relative(dir, file).split(path.sep).join('/'),
       }));
-      return { key, label: stickers.EMOTIONS[key], files: items.map((item) => item.name), items,
+      return { key, label, extra: Boolean(extra), files: items.map((item) => item.name), items,
         count: items.length, chance: stickers.chanceFor(this.config, key) };
-    });
+    };
+    const emotions = Object.keys(stickers.EMOTIONS).map((key) => list(key, stickers.EMOTIONS[key], false));
+    for (const cat of stickers.readExtraCategories(this.config, this.config.root)) {
+      const label = stickers.cleanCategoryLabel(cat && cat.label);
+      const key = stickers.extraKey(label);
+      if (!key) continue;
+      emotions.push(list(key, label, true));
+    }
     return { ok: true, enabled: true, generation: this.generation, dir, migration: this.migration,
       testChat: this.config.sticker?.testChat || '文件传输助手', emotions,
       pending: [...this.jobs.values()].filter((j) => ACTIVE.has(j.status)).length,
