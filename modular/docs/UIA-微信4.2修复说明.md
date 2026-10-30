@@ -61,3 +61,35 @@ runtime\python\python.exe -B -c "import sys;sys.path.insert(0,'.');from bridge i
 :: 提权跑一遍完整启动并落盘结果（会弹一次 UAC）
 runtime\python\python.exe -B tools\elev_uia_check.py
 ```
+
+---
+
+## 追加：冷启动实测记录（2026-10-30，微信 4.2.0.9）
+
+上一版把「找到正确 gate RVA」写成了结论，**这是错的**。补做冷启动实验后：
+
+| 实验 | 结果 |
+| --- | --- |
+| 重启微信后立刻看控件树 | `shell`（只有空壳，没有 `mmui::ChatSessionList`） |
+| 等 60 秒，期间完全不碰 UIA | 仍是 `shell` |
+| 再持续查询 60 秒（相当于挂着客户端） | 仍是 `shell` |
+| `SetForegroundWindow` 把窗口拉到前台，等 8 秒 | 仍是 `shell` |
+| 写 `Weixin.dll+0xB4F7C08` 为 1（**该处原值本来就是 1**），等 8 秒 | 仍是 `shell` |
+| `SPI_SETSCREENREADER`：普通权限 / 管理员，三种参数写法 | `ret=0`，读回始终 0 —— 这个 API 在当前 Windows 上改不动 |
+| 两分钟后随便再查一次 | **`ok`** |
+
+结论：
+
+1. `0xB4F7C08` **不是** 4.2.0.9 的 gate —— 它默认就是 1，写它没有任何作用。
+   `~/.wechatauto/gate_cache.json` 里那条 `verified` 记录不可信。
+2. `SPI_SETSCREENREADER` 在本机（提权后也一样）改不动，不能当兜底。
+3. 控件树**会在启动一两分钟后自己出现**，触发条件还没确认（候选：用户点了一下微信、
+   来了新消息触发重绘、微信自己的定时器）。但至少在出现之前，「拉前台 / 写字节 /
+   持续查询」都无法提前催出来。
+
+因此现在的正确做法不是「找 RVA」，而是：**别在启动那一刻一锤定音**。
+桥接已经有每 20 秒复查 UIA 的线程，树一旦出现就会切回 UIA；
+真正要修的是「首次判定失败后，把整场会话钉死在 OCR」这条路径。
+
+待确认：控件树自动出现的触发条件。验证方法见 `tools/uia_cold_experiment.py`
+（两段式：纯等 / 持续查询）与 `tools/elev_spi_test.py`（提权测 SPI）。
