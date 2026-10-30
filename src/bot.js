@@ -23,6 +23,7 @@ const { matchMaster } = require('./master');
 const links = require('./links');
 const stickers = require('./stickers');
 const websearch = require('./websearch');
+const searchRouter = require('./searchRouter');
 const { LlmError } = require('./llm');
 const { saveSettings } = require('./config');
 const personaStore = require('./personaStore');
@@ -803,10 +804,31 @@ class Bot {
       ].join('|'),
       'i'
     );
-    if (webOn && clean.text && searchPattern.test(clean.text)) {
+    // 现场问题：只按关键词触发，词库里没有的说法就永远不联网
+    // （「B站的热搜是什么」里的「热搜」虽然命中，但取的是头条榜，答非所问）。
+    // 这里补一条「问句形态」触发：只要是在问事实（是什么/多少/哪/怎么样…），
+    // 且不是纯闲聊、不是问观点，就联网查。
+    const ASK_FACT_RE = /(是什么|是谁|多少|几号|几点|怎么样|怎么|为什么|哪一?[个些张条]|哪个|有没有|是不是|能不能|会不会|可不可以|排行|排名|热搜|热榜|热门|最新|出到|第几)/;
+    const CHITCHAT_RE = /^(在吗|在不在|你好|嗨|hi|哈喽|早安|晚安|睡了|吃饭了吗|吃了吗|你在干嘛|在干啥|干啥呢|干嘛呢)/i;
+    const OPINION_RE = /(你觉得|你认为|你看|你怎么看|该不该|要不要|喜不喜欢|喜欢吗|讨厌|爱我吗|想我了吗)/;
+    const looksLikeFactQuestion = ASK_FACT_RE.test(clean.text || '')
+      && !CHITCHAT_RE.test(String(clean.text || '').trim())
+      && !OPINION_RE.test(clean.text || '');
+    // 主判断交给模型（语义），关键词只在模型不可用时兜底。
+    // 这样「小蓝鲸是什么梗」这种词库里没有的说法也会查，
+    // 而「你觉得呢」「在吗」不会被误触发。
+    let route = { need: false, query: '', site: '', failed: true };
+    if (webOn && clean.text) {
+      try {
+        route = await searchRouter.route(this.llm, clean.text, { history: this.recentHeard({ msg }) || [] });
+      } catch { route = { need: false, query: '', site: '', failed: true }; }
+    }
+    const keywordFallback = route.failed && (searchPattern.test(clean.text) || looksLikeFactQuestion);
+    const shouldSearch = webOn && clean.text && (route.need || keywordFallback);
+    if (shouldSearch) {
       try {
         const isWeather = /(天气|下雨|下雪|气温|多少度|冷不冷|热不热|台风|雾霾|空气)/.test(clean.text);
-        let q = String(clean.text)
+        let q = String(route.need && route.query ? route.query : clean.text)
           .replace(/^(帮我|请|你)?(查一下|查查|搜一下|搜搜|搜索)/, '')
           .replace(/(是什么|有什么|有哪些|怎么回事|怎么样|吗|呢|啊|呀|？|\?)/g, ' ')
           .replace(/\s+/g, ' ')
@@ -845,8 +867,19 @@ class Bot {
         // 时效性问题交给 dropStaleResults 按日期过滤，别机械加年份。
         const timeSensitive = /(最新|现在|今年|目前|当前|出到几|第几代|什么型号|哪个版本|刚出|新出)/.test(clean.text || q);
         if (q && !isWeather && !/\d{4}/.test(q) && !timeSensitive) q += ' ' + now.getFullYear();
-        if (/(新闻|热点|热搜|发生了什么|大事件|头条)/.test(clean.text)) {
-          webText = await websearch.hotNewsText(8);
+        if (route.site === 'bilibili' || route.site === 'weibo'
+            || /(新闻|热点|热搜|热榜|发生了什么|大事件|头条)/.test(clean.text)) {
+          // 「B站的热搜」以前拿的是头条榜，所以她答不出 B 站的内容。
+          const timeout = Number(webCfg.timeoutMs) || 8000;
+          const siteHint = route.site || '';
+          if (siteHint === 'bilibili' || /(b站|B站|哔哩|bilibili)/i.test(clean.text)) {
+            webText = await websearch.bilibiliHotText(10, timeout);
+            if (webText) this.logger && this.logger.info('热榜来源：B站');
+          } else if (siteHint === 'weibo' || /(微博|weibo)/i.test(clean.text)) {
+            webText = await websearch.weiboHotText(10, timeout);
+            if (webText) this.logger && this.logger.info('热榜来源：微博');
+          }
+          if (!webText) webText = await websearch.hotNewsText(8);
         }
         if (!webText) {
           webText = await websearch.searchText(q || String(clean.text).slice(0, 40), {
