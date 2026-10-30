@@ -20,6 +20,8 @@
 from __future__ import annotations
 
 import ctypes
+import os
+import subprocess
 import time
 from ctypes import wintypes
 from typing import Dict, List, Optional, Tuple
@@ -213,6 +215,108 @@ def tree_state(hwnd: int, timeout: float = 1.0, max_nodes: int = 1200) -> str:
     return "shell"
 
 
+
+# ── 让微信把窗口"正常打开" ──────────────────────────────────────────
+_LAST_RESTORE = [0.0]
+
+
+def restore_wechat(win: dict, log=None, wait: float = 15.0) -> bool:
+    """微信缩在托盘时，主窗被隐藏、UI 子树被销毁，UIA 必然拿不到。
+
+    单纯 ShowWindow / SetForegroundWindow / 点任务栏按钮都试过，都不重建子树；
+    但**再拉起一次 Weixin.exe** 会走单实例转发，效果等同于用户点托盘图标：
+    窗口恢复、Qt 重新建树。实测 4.2.0.9：1 秒内树就从 shell 变 ok，
+    而且窗口留在屏幕外时树照样能用（不会打扰用户）。
+    """
+    def say(msg):
+        if callable(log):
+            try:
+                log(msg)
+            except Exception:
+                pass
+
+    if not win:
+        return False
+
+    hwnd = win["hwnd"]
+    # 15 秒内只唤起一次：两次 ensure 并发时重复拉起会被微信忽略，反而拖慢
+    now = time.time()
+    if now - _LAST_RESTORE[0] < 15:
+        deadline = now + 2.0
+        while time.time() < deadline:
+            if tree_state(hwnd, timeout=0.5) == "ok":
+                return True
+            time.sleep(0.3)
+        return False
+    _LAST_RESTORE[0] = now
+
+    try:
+        import psutil
+        exe = None
+        try:
+            exe = psutil.Process(int(win["pid"])).exe()
+        except Exception:
+            exe = None
+        if not exe or not os.path.exists(exe):
+            say("UIA 自检：找不到 Weixin.exe 路径，没法自动打开微信窗口")
+            return False
+
+        say("UIA 自检：微信窗口是隐藏的（托盘态），自动唤起一次让它重建控件树…")
+        subprocess.Popen([exe], cwd=os.path.dirname(exe), close_fds=True)
+    except Exception as e:                      # noqa: BLE001
+        say("UIA 自检：唤起微信失败：%r" % (e,))
+        return False
+
+    # 记下原来的可见状态和位置：唤起来之后要尽量恢复原样，别把用户的屏幕占掉
+    was_visible, rect = True, None
+    try:
+        import win32gui
+        was_visible = bool(win32gui.IsWindowVisible(hwnd))
+        rect = win32gui.GetWindowRect(hwnd)
+    except Exception:
+        pass
+
+    deadline = time.time() + max(1.0, wait)
+    ok = False
+    while time.time() < deadline:
+        # 唤起之后微信可能换了新窗口（旧句柄留着但没树），所以每轮重新挑一次
+        w2 = pick_window()
+        if w2 and tree_state(w2["hwnd"], timeout=0.5) == "ok":
+            win.update(w2)
+            hwnd = w2["hwnd"]
+            ok = True
+            break
+        time.sleep(0.4)
+    if not ok:
+        if callable(log):
+            log("UIA 自检：唤起了微信，但 %.0f 秒内控件树没出来" % wait)
+        return False
+
+    # 唤起来会把窗口摆出来；用户本来就没开窗的话，这里再收回去。
+    # 实测 4.2：隐藏之后控件树仍然在（不会塌），所以后续发送照样能用 UIA。
+    if not was_visible:
+        try:
+            import win32gui
+            import win32con
+            hwnd = win.get("hwnd") or hwnd
+            if rect:
+                win32gui.SetWindowPos(hwnd, 0, rect[0], rect[1],
+                                      max(1, rect[2] - rect[0]), max(1, rect[3] - rect[1]),
+                                      win32con.SWP_NOACTIVATE | win32con.SWP_NOZORDER)
+            win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
+            time.sleep(0.3)
+            if tree_state(hwnd, timeout=0.6) != "ok":
+                # 万一这个版本隐藏就塌，退而求其次：摆到屏幕外，别挡人
+                win32gui.SetWindowPos(hwnd, 0, -3000, -3000,
+                                      max(1, rect[2] - rect[0]) if rect else 800,
+                                      max(1, rect[3] - rect[1]) if rect else 600,
+                                      win32con.SWP_SHOWWINDOW | win32con.SWP_NOACTIVATE)
+                if callable(log):
+                    log("UIA 自检：这个微信版本隐藏后控件树会塌，已把窗口放到屏幕外")
+        except Exception:
+            pass
+    return True
+
 # ── 物化 ───────────────────────────────────────────────────────────
 def _open_process(pid: int):
     k32 = ctypes.windll.kernel32
@@ -308,6 +412,12 @@ def ensure(prefer_hwnd: int = 0, log=None, max_candidates: int = 6,
         return {"ok": True, "reason": "already", "hwnd": hwnd, "pid": pid,
                 "version": version, "tree": state}
 
+    # 4.2 上最常见的情形：窗口缩在托盘里，UI 子树被销毁 → 先让它正常打开一次
+    if restore_wechat(win, log=log):
+        say(f"UIA 自检：微信 {version} 窗口已唤起，控件树重建成功")
+        return {"ok": True, "reason": "restored", "hwnd": hwnd, "pid": pid,
+                "version": version, "tree": "ok"}
+
     handle, err = _open_process(pid)
     if not handle:
         say(f"UIA 自检：打不开 Weixin.exe PID {pid}（WinError {err}）"
@@ -350,6 +460,13 @@ def ensure(prefer_hwnd: int = 0, log=None, max_candidates: int = 6,
                         "version": version, "rva": rva, "tree": "ok"}
             if wrote:
                 _write_byte(handle, addr, current)   # 不对就还原，别留副作用
+        # 唤起/写字节都可能慢一拍：最后再挑一次窗口确认一遍，别急着判死
+        w2 = pick_window()
+        if w2 and tree_state(w2["hwnd"], timeout=1.0) == "ok":
+            win.update(w2)
+            say(f"UIA 自检：延迟生效，微信 {version} 控件树已就绪")
+            return {"ok": True, "reason": "restored", "hwnd": w2["hwnd"], "pid": w2["pid"],
+                    "version": version, "tree": "ok"}
         say(f"UIA 自检：微信 {version} 试了 {len(rvas[:max_candidates])} 个候选 RVA，"
             f"树仍是空壳（候选：{[hex(x) for x in rvas[:max_candidates]]}）")
         return {"ok": False, "reason": "not_materialized", "hwnd": hwnd, "pid": pid,
@@ -374,6 +491,8 @@ def describe(res: dict) -> str:
     if res.get("ok"):
         if res.get("reason") == "already":
             return "UIA 可用（树本来就在）"
+        if res.get("reason") == "restored":
+            return f"UIA 可用（微信窗口原本在托盘里，已自动唤起并重建控件树，{res.get('version')}）"
         return f"UIA 可用（已物化，微信 {res.get('version')}，RVA {hex(res.get('rva') or 0)}）"
     reason = res.get("reason")
     if reason == "no_window":

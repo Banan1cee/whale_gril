@@ -3862,12 +3862,21 @@ def main():
                             with gui_lock:
                                 _u = gui._get_uia() if gui is not None else None
                             if _u is None:
-                                # 连续拿不到就重建窗口驱动。
-                                # 实测（3.3.2）：桥接启动那一刻微信正好在托盘里（主窗隐藏）时，
-                                # gui 会一直定位不到主窗；之后即使把微信拉出来也不会自愈，
-                                # 心跳永远报 uia:false。重建一次就好了。
-                                misses += 1
-                                if misses >= 3:
+                                # 微信缩在托盘时它的 UI 子树被销毁，UIA 必然拿不到。
+                                # 先让 uia_boot 把窗口"正常打开"一次（等同用户点托盘图标，
+                                # 只是最后一次单实例转发）；它建完树会自动把窗口收回托盘，
+                                # 用户看不见，但控件树留着，后续发送就能走 UIA。
+                                _ready = ensure_uia_ready(force=True)
+                                if _ready.get("ok"):
+                                    with gui_lock:
+                                        gui = WeChatGUI()
+                                        _u = gui._get_uia()
+                                    if _u is not None:
+                                        misses = 0
+                                        gate_logged = False
+                                if _u is None:
+                                    misses += 1
+                                if _u is None and misses >= 3:
                                     log("[!] UIA 连续 %d 次拿不到，重建窗口驱动再试…" % misses)
                                     with gui_lock:
                                         gui = WeChatGUI()
