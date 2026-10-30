@@ -97,6 +97,13 @@ const REGISTRY = [
     default: false,
   },
   {
+    key: 'digest',
+    path: 'digest.enabled',
+    label: '消息汇总（定时把错过的消息发给你）',
+    desc: '默认关闭。开启后按设定间隔将未接话的微信消息节选发给唯一明确的主人（需设置主人微信内部ID，不按昵称猜号）。关闭即清空本轮队列、不采集、不轮询、不推送；重新开启只收新消息。间隔在本行调整。',
+    default: false,
+  },
+  {
     key: 'quoteReply',
     path: 'wechat.quoteReply',
     label: '引用回复（慢，默认关）',
@@ -143,6 +150,12 @@ function list(config) {
     value: isOn(config, f.key),
     default: f.default,
     experimental: Boolean(f.experimental),
+    // 汇总间隔跟着开关一起下发，控制台在开关那一行直接改
+    ...(f.key === 'digest' ? {
+      everyMinutes: Number.isInteger(Number(config?.digest?.everyMinutes))
+        && Number(config.digest.everyMinutes) >= 1 && Number(config.digest.everyMinutes) <= 1440
+        ? Number(config.digest.everyMinutes) : 30,
+    } : {}),
   }));
 }
 

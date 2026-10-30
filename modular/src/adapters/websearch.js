@@ -9,24 +9,67 @@ const https = require('node:https');
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36';
 
-function getText(url, timeoutMs = 8000) {
-  return new Promise((resolve, reject) => {
-    const req = https.get(
-      url,
-      { headers: { 'User-Agent': UA, 'Accept-Language': 'zh-CN,zh;q=0.9', Accept: 'text/html,*/*' } },
-      (res) => {
+function getText(url, timeoutMs = 8000, extraHeaders = null) {
+  const deadline = Date.now() + Math.max(1, Number(timeoutMs) || 8000);
+  const visit = (target, redirects = 0) => new Promise((resolve, reject) => {
+    let req;
+    let response;
+    let settled = false;
+    const finish = (err, body) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (err) reject(err); else resolve(body);
+    };
+    // socket timeout 只是“空闲超时”，滴流响应/重定向也必须受同一个总时限约束。
+    const timer = setTimeout(() => {
+      const err = new Error('search deadline exceeded');
+      finish(err);
+      if (response) response.destroy();
+      if (req) req.destroy(err);
+    }, Math.max(1, deadline - Date.now()));
+    try {
+      if (Date.now() >= deadline) return finish(new Error('search deadline exceeded'));
+      req = https.get(target, {
+        headers: { 'User-Agent': UA, 'Accept-Language': 'zh-CN,zh;q=0.9', Accept: 'text/html,*/*', ...(extraHeaders || {}) },
+      }, (res) => {
+        response = res;
+        res.on('error', (err) => finish(err));
         if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-          res.resume();
-          return getText(new URL(res.headers.location, url).toString(), timeoutMs).then(resolve, reject);
+          // 不等待跳转页的响应体，否则坏站点可留下永远不结束的连接。
+          res.destroy();
+          if (redirects >= 5) return finish(new Error('too many redirects'));
+          let next;
+          try { next = new URL(res.headers.location, target); } catch (err) { return finish(err); }
+          if (next.protocol !== 'https:') return finish(new Error('unsupported redirect protocol'));
+          // 保留微博等来源必需的请求头，不为每次跳转重置时限。
+          clearTimeout(timer);
+          visit(next.toString(), redirects + 1).then((body) => finish(null, body), finish);
+          return;
         }
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+          res.destroy();
+          return finish(new Error('HTTP ' + res.statusCode));
+        }
+        res.on('aborted', () => finish(new Error('response aborted')));
+        res.on('close', () => { if (!res.complete) finish(new Error('response closed early')); });
         const chunks = [];
-        res.on('data', (c) => chunks.push(c));
-        res.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
-      }
-    );
-    req.setTimeout(timeoutMs, () => req.destroy(new Error('timeout')));
-    req.on('error', reject);
+        let size = 0;
+        res.on('data', (c) => {
+          size += c.length;
+          if (size > 2 * 1024 * 1024) {
+            finish(new Error('response too large'));
+            res.destroy();
+            return;
+          }
+          chunks.push(c);
+        });
+        res.on('end', () => finish(null, Buffer.concat(chunks).toString('utf8')));
+      });
+      req.on('error', (err) => finish(err));
+    } catch (err) { finish(err); }
   });
+  return visit(url);
 }
 
 function getJson(url, timeoutMs = 8000) {
@@ -127,12 +170,14 @@ const BRAND_HINTS = [
   { test: /(苹果|apple)[^。！？]{0,6}(手机|机器|机型|型号|出到|几代|第几|新机)|(手机|机器|机型|型号|出到|几代|第几|新机)[^。！？]{0,6}(苹果|apple)/i,
     from: /苹果手机|苹果|apple/gi, to: 'iPhone' },
   { test: /(苹果|apple)[^。！？]{0,6}(电脑|笔记本|mac)|(电脑|笔记本|mac)[^。！？]{0,6}(苹果|apple)/i,
-    from: /苹果电脑|苹果笔记本|苹果|apple|macbook/gi, to: 'Mac' },
+    from: /苹果电脑|苹果笔记本|苹果|apple/gi, to: 'Mac' },
 ];
 
 /** 只改检索式，不改变原句语义。 */
 function expandBrand(text) {
   let out = String(text || '');
+  // 已给出产品名时不能把 iPad/MacBook/Watch 所属的苹果改成 iPhone。
+  if (/\b(?:iphone|ipad|mac(?:book)?|watch|airpods)\b/i.test(out)) return out;
   for (const rule of BRAND_HINTS) {
     if (!rule.test.test(out)) continue;
     const replaced = out.replace(rule.from, rule.to).replace(/\s+/g, ' ').trim();
@@ -193,18 +238,12 @@ function cleanQuery(query) {
   let text = String(query || '')
     .replace(/^\s*(帮我|请|你|麻烦)?\s*(查一下|查查|查一查|查|搜一下|搜搜|搜|找一下|找|看看)/, ' ')
     .replace(STOP_WORDS, ' ')
-    .replace(/[，。！？、,.!?]/g, ' ')
+    .replace(/[，。！？、!?]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
   text = expandBrand(text) || text;
-  // 「苹果最新的机器是什么」清洗后会剩「iPhone 机器是」这种别扭短语，
-  // 搜出来还是百科页。收敛成「iPhone 最新机型」这类能出硬货的检索式。
+  // 不把整个查询收敛成“最新机型”：这会丢掉 iPhone 16 Pro / MacBook M4 等指定型号。
   text = text.replace(/\s*(是|有|在|了)\s*$/g, '').replace(/\s+/g, ' ').trim();
-  if (/iphone/i.test(text) && /(机器|机型|型号|出到|几代|第几|最新|新机|发布)/.test(text)) {
-    text = 'iPhone 最新机型';
-  } else if (/\bmac\b/i.test(text) && /(机器|机型|型号|最新|笔记本|发布)/.test(text)) {
-    text = 'Mac 最新机型';
-  }
   // 「多少钱 / 什么价」问的是价格：保留这个意图，否则只会搜到官网首页。
   if (/(多少钱|什么价|价格|报价)/.test(String(query || '')) && !/价格|报价|行情/.test(text)) {
     text = (text + ' 价格').trim();
@@ -213,41 +252,47 @@ function cleanQuery(query) {
 }
 
 async function search(query, { limit = 5, timeoutMs = 8000 } = {}) {
-  const q = String(query || '').trim().slice(0, 100);
-  if (!q) return [];
+  const rawQuery = String(query || '').trim();
+  if (!rawQuery) return [];
+  const siteFilter = (rawQuery.match(/\bsite:[a-z0-9.-]+/i) || [''])[0];
+  // 先截正文再附加站点，长专名不能把末尾的平台约束截没了。
+  const q = siteFilter
+    ? rawQuery.replace(siteFilter, '').trim().slice(0, 100) + ' ' + siteFilter
+    : rawQuery.slice(0, 100);
+  const deadline = Date.now() + Math.max(1, Number(timeoutMs) || 8000);
   const ask = async (term) => {
+    if (siteFilter && !term.toLowerCase().includes(siteFilter.toLowerCase())) term += ' ' + siteFilter;
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return [];
     const url = 'https://cn.bing.com/search?q=' + encodeURIComponent(term) + '&setlang=zh-CN&count=10';
-    return parseBing(await getText(url, timeoutMs));
+    // 每次纠错独立失败，不能因补搜失败丢掉前面已经拿到的有效资料。
+    try { return keepRelevant(q, parseBing(await getText(url, remaining))); } catch { return []; }
   };
-  try {
-    const first = keepRelevant(q, await ask(q));
-    // 产品类问句（「苹果最新的机器是什么」）Bing 只给官网首页，首页摘要里没有型号。
-    // 官方「机型比较」页的摘要会直接列出当前阵容（实测含 iPhone 18 Pro / iPhone Duo），
-    // 所以这类问题优先补一次站内检索。
-    const wantsLineup = /(苹果|iphone|mac|macbook)[^。！？]{0,8}(最新|机器|机型|型号|出到|几代|第几|新机|发布)|(最新|机器|机型|型号|出到|几代|第几|新机|发布)[^。！？]{0,8}(苹果|iphone|mac)/i.test(q);
-    const lineup = /(电脑|笔记本|mac(book)?)/i.test(q)
-      ? 'site:apple.com.cn Mac 机型'
-      : 'site:apple.com.cn iPhone 机型';
-    if (wantsLineup) {
-      const official = keepRelevant(q, await ask(lineup));
-      // 官方机型页信息最硬（摘要里直接列当前阵容），排在前面，避免被官网首页挤掉。
-      const merged0 = [...official, ...first].filter((item, i, all) => all.findIndex((x) => x.url === item.url) === i);
-      if (merged0.length >= 2) return dropStaleResults(q, merged0).slice(0, limit);
-    }
-    if (first.length >= 2) return dropStaleResults(q, first).slice(0, limit);
-    // 结果跑题或太少：归一化检索式、词块各重搜一次（纠错，不是重试）。
-    const attempts = [...new Set([cleanQuery(q), queryTokens(q).join(' ')])
-      .filter((term) => term && term !== q)].slice(0, 2);
-    const extra = [];
-    for (const term of attempts) {
-      extra.push(...keepRelevant(q, await ask(term)));
-      if (extra.length >= 2) break;
-    }
-    const merged = [...first, ...extra].filter((item, i, all) => all.findIndex((x) => x.url === item.url) === i);
-    return dropStaleResults(q, merged).slice(0, limit);
-  } catch {
-    return [];
+  const first = await ask(q);
+  // 泛问当前产品阵容时可补官方站点；这只是额外检索，摘要仍须作为外部资料核实。
+  const wantsLineup = /(苹果|iphone|mac|macbook)[^。！？]{0,8}(最新|机器|机型|型号|出到|几代|第几|新机|发布)|(最新|机器|机型|型号|出到|几代|第几|新机|发布)[^。！？]{0,8}(苹果|iphone|mac)/i.test(q);
+  const lineup = /(电脑|笔记本|mac(book)?)/i.test(q)
+    ? 'site:apple.com.cn Mac 机型'
+    : 'site:apple.com.cn iPhone 机型';
+  // 指定了型号时不改成整个品牌的当前阵容。
+  const namedModel = /(?:iphone\s*\d|macbook|\b[ma]\d|ipad|watch|airpods)/i.test(q);
+  if (wantsLineup && !namedModel && !siteFilter) {
+    const official = await ask(lineup);
+    // 即使只补到一条，也必须留到后面的合并结果里。
+    const merged0 = [...official, ...first].filter((item, i, all) => all.findIndex((x) => x.url === item.url) === i);
+    first.splice(0, first.length, ...merged0);
   }
+  if (first.length >= 2) return dropStaleResults(q, first).slice(0, limit);
+  // 结果跑题或太少：归一化检索式、词块各重搜一次（纠错，不是重试）。
+  const attempts = [...new Set([cleanQuery(q), queryTokens(q).join(' ')])]
+    .filter((term) => term && term !== q).slice(0, 2);
+  const extra = [];
+  for (const term of attempts) {
+    extra.push(...await ask(term));
+    if (extra.length >= 2) break;
+  }
+  const merged = [...first, ...extra].filter((item, i, all) => all.findIndex((x) => x.url === item.url) === i);
+  return dropStaleResults(q, merged).slice(0, limit);
 }
 
 async function searchText(query, opts = {}) {
@@ -274,8 +319,8 @@ async function hotNews(limit = 10, timeoutMs = 8000) {
   }
 }
 
-async function hotNewsText(limit = 8) {
-  const list = await hotNews(limit);
+async function hotNewsText(limit = 8, timeoutMs = 8000) {
+  const list = await hotNews(limit, timeoutMs);
   if (!list.length) return '';
   return list.map((x, i) => `${i + 1}. ${x.title}`).join('\n');
 }
@@ -301,6 +346,44 @@ const WMO = {
 function wmoText(code) {
   const n = Number(code);
   return WMO[n] || (Number.isFinite(n) ? '天气代码' + n : '未知');
+}
+
+/** B站热搜（官方接口，不需要 Key） */
+async function bilibiliHot(limit = 10, timeoutMs = 8000) {
+  try {
+    const raw = await getText('https://api.bilibili.com/x/web-interface/search/square?limit=10', timeoutMs);
+    const data = JSON.parse(raw);
+    const list = (data && data.data && data.data.trending && data.data.trending.list) || [];
+    return list.slice(0, limit)
+      .map((item) => String(item.show_name || item.keyword || '').trim())
+      .filter(Boolean);
+  } catch { return []; }
+}
+
+/** 微博热搜（公开热搜榜，不需要登录） */
+async function weiboHot(limit = 10, timeoutMs = 8000) {
+  try {
+    const raw = await getText('https://weibo.com/ajax/side/hotSearch', timeoutMs,
+      { Referer: 'https://weibo.com/', 'X-Requested-With': 'XMLHttpRequest' });
+    const data = JSON.parse(raw);
+    const list = (data && data.data && data.data.realtime) || [];
+    return list.slice(0, limit)
+      .map((item) => String(item.word || item.note || '').trim())
+      .filter(Boolean);
+  } catch { return []; }
+}
+
+function hotListText(title, list) {
+  if (!list.length) return '';
+  return '【' + title + '】\n' + list.map((x, i) => (i + 1) + '. ' + x).join('\n');
+}
+
+async function bilibiliHotText(limit = 10, timeoutMs = 8000) {
+  return hotListText('B站热搜（实时）', await bilibiliHot(limit, timeoutMs));
+}
+
+async function weiboHotText(limit = 10, timeoutMs = 8000) {
+  return hotListText('微博热搜（实时）', await weiboHot(limit, timeoutMs));
 }
 
 /** 按本机公网 IP 猜城市（没配 city 时用；拿不到就返回空，不影响别的） */
@@ -345,9 +428,10 @@ async function geocodeCity(city, timeoutMs = 8000) {
 
 /** 当前天气 + 今明两天（返回给模型看的一段中文） */
 async function weatherText(city, opts = {}) {
-  const timeoutMs = Number(opts.timeoutMs) || 8000;
+  const timeoutMs = Math.max(1, Number(opts.timeoutMs) || 8000);
+  const deadline = Date.now() + timeoutMs;
   const place = await geocodeCity(city, timeoutMs);
-  if (!place) return '';
+  if (!place || Date.now() >= deadline) return '';
   const url =
     'https://api.open-meteo.com/v1/forecast?latitude=' + place.latitude +
     '&longitude=' + place.longitude +
@@ -356,7 +440,7 @@ async function weatherText(city, opts = {}) {
     '&timezone=' + encodeURIComponent(place.timezone) +
     '&forecast_days=2';
   try {
-    const j = await getJson(url, timeoutMs);
+    const j = await getJson(url, Math.max(1, deadline - Date.now()));
     const cur = j.current || {};
     const d = j.daily || {};
     const day = (i) => ({
@@ -402,6 +486,10 @@ module.exports = {
   parseBing,
   hotNews,
   hotNewsText,
+  bilibiliHot,
+  bilibiliHotText,
+  weiboHot,
+  weiboHotText,
   geocodeCity,
   ipCity,
   weatherText,

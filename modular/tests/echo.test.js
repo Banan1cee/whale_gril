@@ -23,6 +23,9 @@ function makeBot({ replies }) {
     model: 'qwen-plus',
     reload() {},
     async complete({ system }) {
+      // 「检索路由器」会先问一次要不要联网；这里不是联网场景，直接答不查，
+      // 别把路由调用当成一次回复，占掉回复队列。
+      if (/检索路由器/.test(system)) return '{"need":false}';
       calls.push(system);
       const next = replies.shift();
       return next === undefined ? '我也不知道' : next;

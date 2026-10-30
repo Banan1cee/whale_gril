@@ -121,6 +121,12 @@ namespace WhaleLauncher.Views
                 new FieldSpec { Path = "wechat.bgSend.fallbackToForeground", Label = "后台失败时回前台发", Kind = "bool" },
                 new FieldSpec { Path = "wechat.bgSend.unhideWindow", Label = "微信在托盘时自动打开窗口", Kind = "bool" },
             }},
+            new SectionSpec { Title = "消息汇总", Note = "把“她没接话”的微信消息定时发给你。和“记忆整理”不是一回事。", Fields =
+            {
+                new FieldSpec { Path = "digest.enabled", Label = "开启消息汇总", Kind = "bool", Hint = "关 = 不采集、不推送，接口 404" },
+                new FieldSpec { Path = "digest.everyMinutes", Label = "每隔多少分钟", Kind = "num", Min = 1, Max = 1440 },
+                new FieldSpec { Path = "digest.maxItems", Label = "一次最多带几条", Kind = "num", Min = 1, Max = 120, Hint = "超出留到下一次" },
+            }},
             new SectionSpec { Title = "联网与分享", Fields =
             {
                 new FieldSpec { Path = "websearch.enabled", Label = "联网搜索", Kind = "bool" },

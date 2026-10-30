@@ -29,19 +29,8 @@ const persona = require('../../persona');
 function cannedReply(bot, { msg, text, isGroup, isMaster, atMe, state, nowMs, key }) {
   const ask = String(text || '').trim();
 
-  // 群成员名录
-  if (isGroup && /(群里|群)?.{0,4}(都有谁|有谁|成员|谁最活跃)/.test(ask)) {
-    const people = new Map();
-    for (const m of bot.store.messages(key, 200)) {
-      if (m.role === 'assistant' || !m.name) continue;
-      people.set(m.name, (people.get(m.name) || 0) + 1);
-    }
-    const top = [...people.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
-    const canned = top.length
-      ? '群里常说话的就这些：' + top.map(([n, c]) => `${n}(${c})`).join('、')
-      : '群里还没人说话';
-    return { action: 'reply', key, msg, atMe, canned, reason: 'member_list' };
-  }
+  // 群成员发言次数排名已按用户要求删除：不再统计任何人说了几句，
+  // 「群里都有谁 / 谁最活跃」交给模型正常回答。
 
   // 查自己的微信号（只告诉主人）
   if (/我(的)?微信(号)?(是)?(多少|啥|什么)/.test(ask)) {
@@ -107,25 +96,8 @@ function cannedReply(bot, { msg, text, isGroup, isMaster, atMe, state, nowMs, ke
     };
   }
 
-  // 主人手动进入「休息模式」：回复先排队，等你回来
-  if (isMaster && /^(?:我去玩了|去玩(?:了)?|我去打游戏(?:了)?|休息一下)$/.test(ask)) {
-    try {
-      const fs = require('node:fs');
-      const path = require('node:path');
-      fs.writeFileSync(path.join(bot.config.paths.dataDir, 'away.json'), JSON.stringify({ until: Date.now() + 3 * 3600 * 1000, at: Date.now() }), 'utf8');
-    } catch { /* ignore */ }
-    bot.logger && bot.logger.info('[away] 主人去玩了，进入休息模式');
-    return { action: 'command', commandType: 'away', key, msg, atMe: true, reason: 'away', text: '好，去玩吧，我先歇会儿，等你回来再聊～' };
-  }
-  if (isMaster && /^(?:我回来了|回来了|玩完了)$/.test(ask)) {
-    try {
-      const fs = require('node:fs');
-      const path = require('node:path');
-      fs.unlinkSync(path.join(bot.config.paths.dataDir, 'away.json'));
-    } catch { /* ignore */ }
-    bot.logger && bot.logger.info('[away] 主人回来了，恢复回复');
-    return { action: 'command', commandType: 'away_back', key, msg, atMe: true, reason: 'away', text: '欢迎回来～刚才的消息我慢慢补上。' };
-  }
+  // 「休息模式」（我去玩了 / 我回来了 / away.json 排队补发）已按用户要求整段删除：
+  // 桥接不再因游戏或离开而暂停发送，也不再排队补发。
 
   return null;
 }

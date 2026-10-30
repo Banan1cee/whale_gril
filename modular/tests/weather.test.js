@@ -85,15 +85,28 @@ test('天气代码翻译表覆盖主要天气', () => {
   assert.match(wmoText(12345), /12345/, '没见过的代码也要给个能看的说法');
 });
 
-test('没配城市时会按 IP 猜，且猜不到也不报错', () => {
+test('没配城市时按 IP 猜，失败可恢复且成功缓存（离线 transport fixture）', async (t) => {
   const { ipCity } = require('../src/adapters/websearch');
-  assert.equal(typeof ipCity, 'function', 'ipCity 要导出');
-  // 纯逻辑检查：即使网络不通也必须 resolve 成字符串，不能抛
-  const p = ipCity(1500);
-  assert.ok(p && typeof p.then === 'function', 'ipCity 返回 Promise');
-  return p.then((c) => {
-    assert.equal(typeof c, 'string', '拿不到也要返回空字符串，不能 undefined');
+  const { EventEmitter } = require('node:events');
+  const https = require('node:https');
+  let requests = 0;
+  t.mock.method(https, 'get', (url, opts, callback) => {
+    const req = new EventEmitter();
+    const attempt = ++requests;
+    queueMicrotask(() => {
+      if (attempt === 1) return req.emit('error', new Error('offline fixture'));
+      const res = new EventEmitter();
+      Object.assign(res, { statusCode: 200, headers: {}, complete: true });
+      callback(res);
+      res.emit('data', Buffer.from('{"city":"Beijing"}'));
+      res.emit('end');
+    });
+    return req;
   });
+  assert.equal(await ipCity(100), '');
+  assert.equal(await ipCity(100), 'Beijing');
+  assert.equal(await ipCity(100), 'Beijing');
+  assert.equal(requests, 2, '成功结果缓存，失败不缓存');
 });
 
 /**

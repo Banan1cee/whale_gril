@@ -156,6 +156,12 @@
       "outboundHeaders": {}
     }
   },
+  "digest": {
+    "_说明": "消息汇总：总开关仅为 digest.enabled（默认关），开后每隔 everyMinutes 分钟（1～1440整数）把微信里未接话的普通消息节选发给主人。只向 persona.master.wxids 中唯一明确的主人发送，不按昵称猜号；没填或填多个则不推送。关闭即清空本轮队列、不采集、不轮询、不推送，接口404；重新打开只收新消息。maxItems为每次最多1～120条，文本会限长。注意：和 memory.digest（整理记忆）不是一回事。",
+    "enabled": false,
+    "everyMinutes": 30,
+    "maxItems": 120
+  },
   "websearch": {
     "_说明": "问天气/新闻等实时问题时联网现搜。city 填你所在的城市（比如「上海」），问她天气时才准；留空就按她收到的原话搜（可能搜到别的城市）。enabled=false 关闭所有联网",
     "enabled": true,

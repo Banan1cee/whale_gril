@@ -259,12 +259,6 @@ const META = {
   'wechat.account': ['固定用哪个微信号（双开必填）', '填账号目录名 / wxid / 微信昵称都行；留空 = 按「最近活跃」自动选，双开时可能选到大号。改完桥接会自动重启。一般直接在主页「设置 → 微信账号」里点选，不用手填'],
   'wechat.accountGuard': ['认不出是哪个号就不发', '默认开。微信双开时，认不出「哪个窗口是所选的号」就拦下不发，避免从大号说话；本机只登一个号时它不起作用'],
   'wechat.staleAfterSec': ['多久没消息算「去忙了」（秒）', ''],
-  'wechat.gameWhitelist': ['在打这些游戏时先不打扰', '一行一个进程名，比如 valorant'],
-  'wechat.awayNotice': ['离开时说一声', ''],
-  'wechat.returnNotice': ['回来时打个招呼', ''],
-  'wechat.queuedMaxAgeSec': ['忙时消息最多排队多久（秒）', '超过就丢掉'],
-  'wechat.queuedMaxChats': ['最多同时排几个会话', ''],
-  'wechat.digestMinutes': ['回来时把错过的消息合并成摘要', '0 = 不合并'],
   'wechat.quoteReply': ['回复时引用原消息', ''],
   'wechat.backgroundSend': ['后台发送（不抢前台）', '开着：微信最小化、被别的窗口挡住也能发，电脑照常用；关掉：每次发送先把微信拉到前台（会打断你正在干的事）'],
   'wechat.lowBatteryPercent': ['电量低于几 % 说晚安', '0 = 不管电量'],
@@ -329,6 +323,10 @@ const META = {
   'features.groupAddressGuard': ['群聊分清说话对象', ''],
   'features.fightQuoteCheck': ['还嘴前核对对方原话', ''],
   'features.mediaCleanup': ['自动清理媒体缓存', ''],
+  'features.digest': ['消息汇总（定时把错过的消息发给你）', '关掉 = 完全不采集、不推送'],
+  'digest.enabled': ['消息汇总总开关（等同功能开关里那项）', '关掉 = 完全不采集、不推送'],
+  'digest.everyMinutes': ['消息汇总间隔（分钟）', '只在总开关打开时生效，比如 30'],
+  'digest.maxItems': ['一次最多带多少条消息', '默认 120'],
   'features.memorySnapshot': ['自动备份记忆', ''],
   storage: ['存储与清理', '只清理过期的媒体缓存，不清理聊天记忆'],
   'storage.mediaKeepDays': ['媒体缓存保留天数', ''],
@@ -355,7 +353,7 @@ const SECRET = new Set(['deepseek.apiKey', 'vision.apiKey', 'voice.apiKey', 'gat
 const JSON_FIELDS = new Set(['gateway.wechat.outboundHeaders', 'gateway.douyin.outboundHeaders']);
 const SKIP_TOP = new Set(['paths', 'env', 'root', 'configExists']);
 
-const ORDER = ['provider', 'server', 'log', 'deepseek', 'persona', 'chat', 'group', 'wechat', 'sticker', 'websearch', 'links', 'share', 'care', 'memory', 'features', 'storage', 'admin', 'vision', 'voice', 'gateway'];
+const ORDER = ['provider', 'server', 'log', 'deepseek', 'persona', 'chat', 'group', 'wechat', 'digest', 'sticker', 'websearch', 'links', 'share', 'care', 'memory', 'features', 'storage', 'admin', 'vision', 'voice', 'gateway'];
 const SECTION_TITLES = {
   server: '服务 / 网页（改地址、端口要重启）',
   log: '日志',
@@ -364,6 +362,7 @@ const SECTION_TITLES = {
   chat: '聊天',
   group: '群聊',
   wechat: '微信桥接（桥接进程要重启才读新值）',
+  digest: '消息汇总（总开关关掉就完全不存在）',
   links: '链接阅读',
   share: '主动分享',
   care: '主动找你聊天（时间窗 / 频率）',
@@ -428,7 +427,7 @@ function fieldsHtml(obj, prefix) {
   for (const [k, v] of Object.entries(obj)) {
     if (k.startsWith('_')) continue;
     const path = prefix ? prefix + '.' + k : k;
-    if (['features.stickers', 'sticker.enabled', 'sticker.maxSide', 'sticker.chances', 'sticker.genericChance', 'sticker.onlyGroup', 'sticker.cooldownMinutes'].includes(path)) continue; // 总闸只在顶部，隐藏旧版无效选项。
+    if (['wechat.gameWhitelist', 'wechat.awayNotice', 'wechat.returnNotice', 'wechat.queuedMaxAgeSec', 'wechat.queuedMaxChats', 'wechat.digestMinutes', 'features.digest', 'digest.enabled', 'features.stickers', 'sticker.enabled', 'sticker.maxSide', 'sticker.chances', 'sticker.genericChance', 'sticker.onlyGroup', 'sticker.cooldownMinutes'].includes(path)) continue; // 总闸只在顶部，隐藏旧版无效选项。
     if (isPlainObject(v) && !JSON_FIELDS.has(path)) subs.push(subHtml(path, v));
     else flat.push(fieldHtml(path, v));
   }
@@ -1008,9 +1007,47 @@ async function loadFeatures() {
           alert('保存失败：' + stickerMessage(e));
         } finally {
           box.disabled = false;
+          for (const control of (box.digestControls || [])) control.disabled = !box.checked;
         }
       });
       td2.appendChild(box);
+      if (f.key === 'digest') {
+        const controls = document.createElement('div');
+        const caption = document.createElement('label');
+        caption.textContent = '每隔（分钟） ';
+        const minutes = document.createElement('input');
+        minutes.type = 'number'; minutes.min = '1'; minutes.max = '1440'; minutes.step = '1';
+        minutes.value = String(f.everyMinutes || 30); minutes.style.width = '76px';
+        minutes.disabled = !box.checked;
+        const save = document.createElement('button'); save.textContent = '保存间隔';
+        save.type = 'button'; save.disabled = !box.checked;
+        box.digestControls = [minutes, save];
+        const hint = document.createElement('span'); hint.className = 'muted';
+        box.addEventListener('change', () => {
+          minutes.disabled = !box.checked; save.disabled = !box.checked;
+        });
+        save.addEventListener('click', async () => {
+          const value = Number(minutes.value);
+          if (!Number.isInteger(value) || value < 1 || value > 1440) {
+            hint.textContent = '请输入1～1440分钟的整数'; return;
+          }
+          save.disabled = true;
+          try {
+            const response = await fetch('/api/config', { method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ patch: { 'digest.everyMinutes': value } }) });
+            const result = await response.json();
+            if (!response.ok || !result.ok) throw new Error(result.error || '保存失败');
+            hint.textContent = '已保存，无需重启';
+            // Keep advanced form consistent; avoid its stale value overwriting the saved interval.
+            const field = document.querySelector('[data-path="digest.everyMinutes"]');
+            if (field) { field.value = String(value); ORIG['digest.everyMinutes'] = value; }
+          } catch (e) { hint.textContent = '保存失败，请重试'; }
+          finally { save.disabled = !box.checked; }
+        });
+        caption.appendChild(minutes); controls.appendChild(caption);
+        controls.appendChild(save); controls.appendChild(hint); td1.appendChild(controls);
+      }
       tr.appendChild(td1);
       tr.appendChild(td2);
       host.appendChild(tr);

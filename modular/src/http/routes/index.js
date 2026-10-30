@@ -17,6 +17,7 @@ const modules = [
   require('./chat'),
   require('./bridge'),
   require('./stickers'),
+  require('./digest'),
 ];
 
 /** 组装路由表：每个领域一个文件，server 只负责启动。 */

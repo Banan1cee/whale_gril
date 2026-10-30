@@ -7,7 +7,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-function harness({ enabled = true, jobs = [], deferFileRead = false, deferRatesSave = false } = {}) {
+function harness({ enabled = true, jobs = [], deferFileRead = false, deferRatesSave = false, digest = null } = {}) {
   const ids = new Map();
   class Element {
     constructor(tagName = 'div') {
@@ -47,8 +47,12 @@ function harness({ enabled = true, jobs = [], deferFileRead = false, deferRatesS
     const body = options.body ? JSON.parse(options.body) : null;
     calls.push({ url, method: options.method || 'GET', body });
     let data;
-    if (url === '/api/features' && options.method === 'POST') { enabled = body.value; data = { ok: true, value: enabled }; }
-    else if (url === '/api/features') data = { ok: true, features: [{ key: 'stickers', value: enabled }] };
+    if (url === '/api/features' && options.method === 'POST') {
+      if (body.key === 'digest') digest = body.value; else enabled = body.value;
+      data = { ok: true, value: body.value };
+    }
+    else if (url === '/api/features') data = { ok: true, features: [{ key: 'stickers', value: enabled },
+      ...(digest == null ? [] : [{ key: 'digest', label: '消息汇总', desc: '默认关闭', value: digest, everyMinutes: 30 }])] };
     else if (url === '/api/stickers/status') data = enabled ? status : { ok: false };
     else if (url === '/api/stickers/test') data = { ok: true, queued: { id: 'job-1', status: 'queued' } };
     else if (url === '/api/stickers/upload') data = { ok: true, uploaded: body.files.map((file) => ({ name: file.name, emotion: body.emotion })) };
@@ -83,7 +87,7 @@ function harness({ enabled = true, jobs = [], deferFileRead = false, deferRatesS
     }
   }
   const mockWindow = new Element('window');
-  const context = vm.createContext({ document: { getElementById: (id) => ids.get(id), createElement: (tag) => new Element(tag), querySelectorAll: () => [] },
+  const context = vm.createContext({ document: { getElementById: (id) => ids.get(id), createElement: (tag) => new Element(tag), querySelectorAll: () => [], querySelector: () => null },
     window: mockWindow, fetch, FileReader, setInterval: (fn) => { intervals.set(++timerId, fn); return timerId; }, clearInterval: (id) => intervals.delete(id),
     alert() { throw new Error('No delivery alerts should be used'); }, confirm: () => true, console });
   let script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
@@ -108,6 +112,37 @@ test('sticker UI binds once; refresh never sends and one click creates one queue
   assert.equal(h.calls.filter((call) => call.url === '/api/stickers/test').length, 1);
   assert.match(h.ids.get('stkTestResult').textContent, /不代表已发送或送达/);
   assert.equal(h.intervals.size, 1);
+});
+
+test('digest toggle and interval share one feature row; OFF disables frequency; saving never sends', async () => {
+  const h = harness({ digest: false });
+  await h.run('loadFeatures()');
+  const row = h.ids.get('tFeatures').children[0];
+  const box = row.children[1].children[0];
+  const controls = row.children[0].children[2];
+  const minutes = controls.children[0].children[0];
+  const save = controls.children[1];
+  assert.equal(box.dataset.key, 'digest');
+  assert.equal(minutes.disabled, true);
+  assert.equal(save.disabled, true);
+  box.checked = true; await box.dispatch('change');
+  assert.equal(minutes.disabled, false);
+  minutes.value = '0'; await save.click();
+  assert.equal(h.calls.filter((c) => c.url === '/api/config' && c.method === 'POST').length, 0);
+  minutes.value = '12'; await save.click();
+  const call = h.calls.find((c) => c.url === '/api/config' && c.method === 'POST');
+  assert.deepEqual(call.body, { patch: { 'digest.everyMinutes': 12 } });
+  assert.equal(h.calls.some((c) => /webhook|stickers\/test|api\/digest/.test(c.url)), false);
+  box.checked = false; await box.dispatch('change');
+  assert.equal(minutes.disabled, true);
+});
+
+test('deleted game/queue settings stay hidden even if legacy user config retains them', () => {
+  const h = harness();
+  const html = h.run("fieldsHtml({ gameWhitelist:['game'], awayNotice:true, returnNotice:true, queuedMaxChats:2, queuedMaxAgeSec:300, digestMinutes:30, accountGuard:true }, 'wechat')");
+  assert.doesNotMatch(html, /gameWhitelist|awayNotice|returnNotice|queuedMaxChats|queuedMaxAgeSec|digestMinutes/);
+  assert.match(html, /accountGuard/);
+  assert.equal(h.run("fieldsHtml({enabled:false}, 'digest')").includes('data-path="digest.enabled"'), false);
 });
 
 test('generic config form cannot expose a second experimental master switch', () => {

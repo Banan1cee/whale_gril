@@ -150,6 +150,25 @@ function mergeConfigInPlace(target, src) {
 /** 把网页提交的 { "persona.name": "新名字" } 写进 config.json 并立刻生效 */
 function applyConfigPatch(runtime, patch) {
   if (!isPlainObject(patch)) throw new Error('patch 要是 { 字段名: 新值 } 这样的对象');
+  // 消息汇总：先校验再落盘。负数/NaN/极小间隔会导致推送死循环，绝不能写进文件。
+  const digestPatch = { ...(isPlainObject(patch.digest) ? patch.digest : {}) };
+  for (const [key, value] of Object.entries(patch)) {
+    if (key.startsWith('digest.')) digestPatch[key.slice('digest.'.length)] = value;
+  }
+  for (const [key, max] of [['everyMinutes', 1440], ['maxItems', 120]]) {
+    if (Object.hasOwn(digestPatch, key)) {
+      const value = Number(digestPatch[key]);
+      if (!Number.isInteger(value) || value < 1 || value > max) {
+        throw Object.assign(new Error(key === 'everyMinutes' ? '消息汇总间隔必须为1～1440分钟的整数' : '消息汇总条数必须为1～120的整数'), { statusCode: 400 });
+      }
+    }
+  }
+  if (Object.hasOwn(digestPatch, 'enabled') && typeof digestPatch.enabled !== 'boolean') {
+    throw Object.assign(new Error('消息汇总总开关必须是开启或关闭'), { statusCode: 400 });
+  }
+  if (Object.hasOwn(patch, 'features.digest')) {
+    throw Object.assign(new Error('消息汇总总开关请使用 digest.enabled'), { statusCode: 400 });
+  }
   const file = runtime.config.paths.configFile;
   let raw = {};
   try {
@@ -188,6 +207,7 @@ function applyConfigPatch(runtime, patch) {
   const cleared = clearSettingsShadow(runtime, changed);
   mergeConfigInPlace(runtime.config, loadConfig({ root: runtime.config.root, env: runtime.config.env }));
   runtime.stickerService?.reconcile();
+  runtime.bot?.digestService?.reconcile();
   if (runtime.llm && typeof runtime.llm.reload === 'function') runtime.llm.reload();
   runtime.logger.info(`调试台保存了设置：${changed.join('、')}${cleared.length ? `（同时清了 ${cleared.join('、')}，让改动真的生效）` : ''}`);
   return { changed, cleared };
@@ -209,6 +229,7 @@ function watchConfigFile(runtime) {
           JSON.parse(raw); // 先确认是合法 JSON，写坏了就别覆盖内存里的好配置
           mergeConfigInPlace(runtime.config, loadConfig({ root: runtime.config.root, env: runtime.config.env }));
           runtime.stickerService?.reconcile();
+          runtime.bot?.digestService?.reconcile();
           if (runtime.llm && typeof runtime.llm.reload === 'function') runtime.llm.reload();
           runtime.logger.info('config.json 已重新加载（改动已生效，不用重启）');
         } catch (err) {
