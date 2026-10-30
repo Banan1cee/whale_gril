@@ -137,6 +137,12 @@
       "outboundHeaders": {}
     }
   },
+  "digest": {
+    "_说明": "消息汇总：每隔 everyMinutes 分钟把别人发来、她没接的消息合成一条发给主人。总开关在 features.digest（默认关）。关掉 = 完全不采集、不推送，接口也 404",
+    "enabled": false,
+    "everyMinutes": 30,
+    "maxItems": 120
+  },
   "websearch": {
     "_说明": "问天气/新闻等实时问题时联网现搜。city 填你所在的城市（比如「上海」），问她天气时才准；留空就按她收到的原话搜（可能搜到别的城市）。enabled=false 关闭所有联网",
     "enabled": true,

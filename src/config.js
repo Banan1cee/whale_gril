@@ -136,6 +136,7 @@ const DEFAULT_CONFIG = {
   // 联网：问天气/新闻这类实时问题时现搜。city 用来把「今天天气怎么样」补成「上海 天气」，
   // 搜到的结果准得多；留空就按对方原话搜（也能用，但经常搜到别的城市）。
   websearch: { enabled: true, city: '', timeoutMs: 8000 },
+  digest: { enabled: false, everyMinutes: 30, maxItems: 120 },
   // 别人发链接时，读一下标题/摘要/文章正文（视频只读得到文案）
   links: { enabled: true, timeoutMs: 6000, cacheMinutes: 60 },
   // 魔咒：主人私聊/群里输入这段数字后，获得一段时间的「管理员权限」

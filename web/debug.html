@@ -318,6 +318,10 @@ const META = {
   'features.groupAddressGuard': ['群聊分清说话对象', ''],
   'features.fightQuoteCheck': ['还嘴前核对对方原话', ''],
   'features.mediaCleanup': ['自动清理媒体缓存', ''],
+  'features.digest': ['消息汇总（定时把错过的消息发给你）', '关掉 = 完全不采集、不推送'],
+  'digest.enabled': ['消息汇总总开关（等同功能开关里那项）', '关掉 = 完全不采集、不推送'],
+  'digest.everyMinutes': ['消息汇总间隔（分钟）', '只在总开关打开时生效，比如 30'],
+  'digest.maxItems': ['一次最多带多少条消息', '默认 120'],
   'features.memorySnapshot': ['自动备份记忆', ''],
   storage: ['存储与清理', '只清理过期的媒体缓存，不清理聊天记忆'],
   'storage.mediaKeepDays': ['媒体缓存保留天数', ''],
@@ -335,7 +339,7 @@ const SECRET = new Set(['deepseek.apiKey', 'vision.apiKey', 'voice.apiKey', 'gat
 const JSON_FIELDS = new Set(['gateway.wechat.outboundHeaders', 'gateway.douyin.outboundHeaders']);
 const SKIP_TOP = new Set(['paths', 'env', 'root', 'configExists']);
 
-const ORDER = ['provider', 'server', 'log', 'deepseek', 'persona', 'chat', 'group', 'wechat', 'sticker', 'websearch', 'links', 'share', 'care', 'memory', 'features', 'storage', 'admin', 'vision', 'voice', 'gateway'];
+const ORDER = ['provider', 'server', 'log', 'deepseek', 'persona', 'chat', 'group', 'wechat', 'digest', 'sticker', 'websearch', 'links', 'share', 'care', 'memory', 'features', 'storage', 'admin', 'vision', 'voice', 'gateway'];
 const SECTION_TITLES = {
   server: '服务 / 网页（改地址、端口要重启）',
   log: '日志',
@@ -344,6 +348,7 @@ const SECTION_TITLES = {
   chat: '聊天',
   group: '群聊',
   wechat: '微信桥接（桥接进程要重启才读新值）',
+  digest: '消息汇总（总开关关掉就完全不存在）',
   links: '链接阅读',
   share: '主动分享',
   care: '主动找你聊天（时间窗 / 频率）',
