@@ -32,3 +32,4 @@ scripts/node-path.local
 # 桥接 OCR 的临时截图
 wechatauto_ocr_tmp.png
 
+.obsidian/
