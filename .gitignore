@@ -33,3 +33,8 @@ scripts/node-path.local
 wechatauto_ocr_tmp.png
 
 .obsidian/
+# 4.0 构建产物
+WhaleLauncher.exe
+launcher/bin/
+launcher/obj/
+launcher/publish/
