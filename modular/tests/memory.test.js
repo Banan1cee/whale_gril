@@ -28,14 +28,22 @@ test('写入/读取消息并保持顺序', () => {
   fs.rmSync(dir, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
 });
 
-test('消息数量有上限，超出后丢弃最旧的', () => {
+test('消息数量有上限：已被摘要覆盖的才删，未摘要的留到硬上限', () => {
   const { store, dir } = tempStore({ maxMessages: 4 });
+  // 1) 没有任何摘要覆盖时：不删未整理的对话，最多涨到 2 倍上限（硬上限）
   for (let i = 0; i < 10; i++) {
     store.appendMessage('k', { role: 'user', name: 'u', text: 'm' + i });
   }
-  const msgs = store.messages('k', 100);
-  assert.equal(msgs.length, 4);
-  assert.equal(msgs[3].text, 'm9');
+  let msgs = store.messages('k', 100);
+  assert.equal(msgs.length, 8, '硬上限 = maxMessages × 2');
+  assert.equal(msgs[msgs.length - 1].text, 'm9');
+
+  // 2) 有摘要覆盖之后：超出的部分从「已摘要」的一头删，保到上限
+  store.setSummary('k', '这段的摘要', { upto: 8 });
+  store.appendMessage('k', { role: 'user', name: 'u', text: 'm10' });
+  msgs = store.messages('k', 100);
+  assert.equal(msgs.length, 4, '删掉已摘要的旧消息，回到 maxMessages');
+  assert.equal(msgs[msgs.length - 1].text, 'm10');
   store.close();
   fs.rmSync(dir, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
 });

@@ -199,7 +199,7 @@ const DEFAULT_CONFIG = {
     maxRepliesPerHour: 1000,
     muteDefaultMinutes: 30,
   },
-  memory: { maxSessions: 200, maxMessages: 400, maxNotesPerUser: 6 },
+  memory: { maxSessions: 200, maxMessages: 400, maxNotesPerUser: 6, digestEvery: 12, digest: true, semantic: true, semanticMinCandidates: 3 },
   // 微信桥接：account = 固定用哪个微信号（微信双开时必填）。网页「设置 → 微信账号」会直接写这里，
   // 一般不用手改；留空 = 按「最近活跃」自动选（双开时可能选到大号）。
   wechat: {
@@ -216,6 +216,8 @@ const DEFAULT_CONFIG = {
       fallbackToForeground: true,
       stripUnencodable: true,
       unhideWindow: true,
+      // WM_CHAR 编码：auto = 按微信版本自动（4.2+ 用 UTF-16 码元，老版本用 GBK 字节）
+      charMode: 'auto',
     },
     // 消息调度：同一会话串行、跨会话并发。workers=1 等于旧的全串行行为。
     pipelineWorkers: 4,

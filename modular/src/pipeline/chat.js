@@ -18,6 +18,10 @@
  * }
  */
 const persona = require('../persona');
+const recall = require('../memory/recall');
+const _digestInFlight = new Set();
+const memoryDigest = require('../memory/digest');
+const memorySemantic = require('../memory/semantic');
 const features = require('../infra/features');
 const { matchMaster } = require('../core/master');
 const links = require('../adapters/links');
@@ -501,7 +505,43 @@ class Bot {
     msg.discussion = discussion;
 
     // 6) 组装提示词
-    const notes = (profile.notes || []).slice(0, this.config.memory.maxNotesPerUser);
+    // 按这句话挑最该被想起的几条（不再把全部便签一股脑塞进去）。
+    // 挑中的会记一次「刚提过」，避免她接下来几条反复念同一件事。
+    const noteLimit = Math.max(3, Number(this.config.memory.maxNotesPerUser) || 6);
+    // 先按字面/同义词多取几条当候选，再让模型判断相关性（关掉开关就直接用字面结果）
+    let pickedNotes = recall.pickNotes(profile.notes, clean.text, {
+      now: nowMs,
+      limit: Math.max(noteLimit + 2, 8),
+    });
+    // 候选太少时不值得多一次模型调用（只有一两条直接给它）
+    const minCand = Math.max(2, Number(this.config.memory.semanticMinCandidates) || 3);
+    if (features.isOn(this.config, 'memorySemantic')) {
+      // 字面没命中的记忆进不了候选（比如记忆写「要去体检」、对方问「医院」），
+      // 所以语义检索这一层直接给它较大的一批：最多 10 条，让模型自己挑。
+      const all = (profile.notes || [])
+        .map((n) => recall.normalizeNote(n, nowMs))
+        .filter(Boolean)
+        .slice(0, memorySemantic.MAX_CANDIDATES);
+      const candidates = all.length > pickedNotes.length ? all : pickedNotes;
+      if (candidates.length >= minCand) {
+        const keep = await memorySemantic.rerank(this.llm, clean.text, candidates, {
+          limit: noteLimit,
+          logger: this.logger,
+        });
+        pickedNotes = Array.isArray(keep)
+          ? keep.map((i) => candidates[i]).filter(Boolean)
+          : candidates.slice(0, noteLimit);
+      }
+    }
+    const notes = pickedNotes.map((n) => n.text);
+    // 一天以上的「承诺 / 近况」可以在合适的时候被顺口提起
+    const noteReminders = pickedNotes
+      .filter((n) => (n.kind === 'promise' || n.kind === 'recent') && nowMs - n.createdAt > recall.DAY)
+      .slice(0, 2)
+      .map((n) => n.text);
+    if (notes.length && msg.senderId) {
+      this.store.touchNotes(key, msg.senderId, notes, nowMs);
+    }
     // 群里用微信昵称区分说话人，避免用户改 profile.nickname 造成冒名；私聊仍沿用自报昵称。
     const displayName = isGroup ? (msg.senderName || profile.nickname) : (profile.nickname || msg.senderName);
     // 刚写入的当前消息是 history 的最后一条，先去掉，由 buildTurns 统一拼一次
@@ -581,6 +621,8 @@ class Bot {
       msg: { ...msg, senderName: displayName, chatTitle: msg.chatTitle || session.title, isMaster, atMe, addressedToBot: Boolean(atMe || msg.replyToBot), mentionedNames, groupParticipants, linkText, discussion, model: this.llm.model, provider: this.llm.providerLabel, groupStyleText, webText, fight, fightDirty, fightOnMaster },
       profile,
       notes,
+      noteReminders,
+      sessionSummary: (session && session.summary) || '',
       now,
     });
     const turns = this.buildTurns(msg, hasText ? history.slice(0, -1) : history);
@@ -923,7 +965,10 @@ class Bot {
       }
       case 'remember': {
         if (!command.arg) return finish('记住什么呀？说「记住：你爱吃辣」这样，人家才记得住 (｡•̀ᴗ-)✧');
-        const notes = this.store.addNote(key, msg.senderId, command.arg);
+        const kind = /答应|明天|后天|下周|要记着|别忘|提醒/.test(command.arg)
+          ? 'promise'
+          : (/不喜欢|讨厌|别|怕|雷/.test(command.arg) ? 'taboo' : 'fact');
+        const notes = this.store.addNote(key, msg.senderId, command.arg, { kind });
         return finish(`记住啦：${command.arg}。本鲸的记忆有 ${notes.length} 格，还够用~`);
       }
       case 'forget': {
@@ -1258,6 +1303,8 @@ class Bot {
     const atMatch = finalText.match(/^@\s*([^\s，,：:！!？?。]+)/);
     const mention = (decision.msg && decision.msg.fightTarget && decision.msg.fightTarget.name)
       || (atMatch ? atMatch[1] : '');
+    // 攒够一批消息就让后台整理记忆（摘要 + 抽事实），不阻塞这条回复
+    this.maybeDigest(decision.key, (decision.msg && decision.msg.senderId) || '');
     return {
       action: 'reply',
       reply: finalText,
@@ -1266,6 +1313,20 @@ class Bot {
       reason: decision.reason,
       mock: decision.mock,
     };
+  }
+
+  /** 记忆整理：攒够一批消息就压摘要 + 抽事实，异步跑，失败不影响聊天 */
+  maybeDigest(key, uid) {
+    if (!this.llm || this.llm.isMock) return;
+    if (!features.isOn(this.config, 'memoryDigest')) return;
+    if (_digestInFlight.has(key)) return;
+    _digestInFlight.add(key);
+    const every = Number(this.config.memory && this.config.memory.digestEvery) || 12;
+    Promise.resolve()
+      .then(() => memoryDigest.digest(this.store, this.llm, key, { uid, logger: this.logger, every }))
+      .then((done) => { if (done) this.store.sweep(); })
+      .catch(() => null)
+      .then(() => _digestInFlight.delete(key));
   }
 
   /** 切换 API Key 后调用 */

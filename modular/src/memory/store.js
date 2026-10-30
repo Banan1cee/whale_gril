@@ -15,6 +15,8 @@
  */
 const fs = require('node:fs');
 const path = require('node:path');
+const recall = require('./recall');
+const forget = require('./forget');
 
 const SAVE_DEBOUNCE_MS = 800;
 /** 日志文件超过这么大就压回快照（避免无限增长） */
@@ -94,6 +96,10 @@ function readStoreFile(file) {
   return base;
 }
 
+function newId() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+
 class Store {
   constructor({ file, limits = {}, logger = null }) {
     this.file = file;
@@ -107,6 +113,8 @@ class Store {
     this.dirty = false;
     this.saveTimer = null;
     this.journalFile = file + '.journal';
+    this.archiveFile = path.join(path.dirname(file), 'memory-archive.json');
+    this.archive = this._loadArchive();
     this.dirtyKeys = new Set();
     this.digestDirty = false;
     this.fullDirty = false;
@@ -263,7 +271,17 @@ class Store {
     if (message.error) entry.error = true;
     sess.messages.push(entry);
     if (sess.messages.length > this.limits.maxMessages) {
-      sess.messages.splice(0, sess.messages.length - this.limits.maxMessages);
+      // 只删已经被摘要覆盖的那部分：未摘要的宁可先留着，等整理时压进摘要。
+      // 硬上限 2 倍，防止一直没整理（演示模式/关掉整理）把内存撑爆。
+      const upto = Number(sess.summaryUpto) || 0;
+      const overflow = sess.messages.length - this.limits.maxMessages;
+      const droppable = Math.min(upto, overflow, Math.max(0, sess.messages.length - this.limits.maxMessages));
+      if (droppable > 0) {
+        sess.messages.splice(0, droppable);
+        sess.summaryUpto = Math.max(0, upto - droppable);
+      }
+      const hard = this.limits.maxMessages * 2;
+      if (sess.messages.length > hard) sess.messages.splice(0, sess.messages.length - hard);
     }
     sess.lastActiveAt = entry.ts;
     if (entry.role === 'user') {
@@ -317,17 +335,150 @@ class Store {
     return p.nickname || p.name || fallback;
   }
 
-  addNote(key, uid, note) {
+  _loadArchive() {
+    try {
+      const raw = JSON.parse(fs.readFileSync(this.archiveFile, 'utf8'));
+      return Array.isArray(raw) ? raw : [];
+    } catch {
+      return [];
+    }
+  }
+
+  _saveArchive() {
+    try {
+      fs.mkdirSync(path.dirname(this.archiveFile), { recursive: true });
+      fs.writeFileSync(this.archiveFile, JSON.stringify(this.archive, null, 2), 'utf8');
+    } catch (err) {
+      if (this.logger) this.logger.warn('归档写盘失败：' + ((err && err.message) || err));
+    }
+  }
+
+  /** 把记忆沉到归档（不是删除，还能翻出来 / 导出） */
+  _archivePush(entries) {
+    if (!entries || !entries.length) return { archived: 0, purged: 0 };
+    const now = Date.now();
+    for (const e of entries) this.archive.push({ ...e, id: newId(), archivedAt: now });
+    const { kept, dropped } = forget.trimArchive(this.archive, 3000);
+    this.archive = kept;
+    this._saveArchive();
+    return { archived: entries.length, purged: dropped.length };
+  }
+
+  /** 归档里有多少条（记忆页要显示「已忘掉多少」） */
+  archiveCount() {
+    return this.archive.length;
+  }
+
+
+  /**
+   * 定期「忘」一遍：
+   *  - 太旧、很久没被想起、又不是承诺/雷区的记忆 → 沉到归档（不再进提示词）
+   *  - 池子超上限 → 淘汰分数最低的
+   * 返回 { archived, evicted, purged }
+   */
+  sweep(now = Date.now(), opts = {}) {
+    let archived = 0;
+    let evicted = 0;
+    let purged = 0;
+    for (const [key, sess] of this.sessions) {
+      let touched = false;
+      for (const p of Object.values(sess.profiles || {})) {
+        if (!Array.isArray(p.notes) || !p.notes.length) continue;
+        const keep = [];
+        const move = [];
+        for (const n of p.notes) {
+          if (forget.shouldArchive(n, now, opts)) move.push(n);
+          else keep.push(n);
+        }
+        if (move.length) {
+          p.notes = keep;
+          touched = true;
+          archived += move.length;
+          purged += this._archivePush(move.map((n) => ({ key, uid: p.uid, note: n, reason: 'archive' }))).purged;
+        }
+        if (p.notes.length > this.limits.maxNotesPerUser) {
+          const idx = new Set(forget.pickEvictions(p.notes, this.limits.maxNotesPerUser, now));
+          const gone = p.notes.filter((_, i) => idx.has(i));
+          p.notes = p.notes.filter((_, i) => !idx.has(i));
+          touched = true;
+          evicted += gone.length;
+          purged += this._archivePush(gone.map((n) => ({ key, uid: p.uid, note: n, reason: 'evict' }))).purged;
+        }
+      }
+      if (touched) this.markDirty(key);
+    }
+    if (archived || evicted || purged) {
+      if (this.logger) this.logger.info(`记忆清理：归档 ${archived}、淘汰 ${evicted}、归档文件顶掉 ${purged}`);
+    }
+    return { archived, evicted, purged };
+  }
+
+  /**
+   * 写入一条记忆。note 可以是字符串（老调用方），也可以是
+   * {text, kind, importance} —— kind 取值 fact/preference/promise/recent/taboo。
+   */
+  addNote(key, uid, note, meta = {}) {
     const p = this.profile(key, uid);
-    const text = trimText(note, 60);
+    const raw = typeof note === 'string' ? { text: note } : (note || {});
+    const text = trimText(raw.text, 60);
     if (!text) return p.notes;
-    const dup = p.notes.some((n) => n.includes(text) || text.includes(n));
+    const fresh = recall.normalizeNote({ ...raw, text, ...meta }, Date.now());
+    if (!fresh) return p.notes;
+    const dup = p.notes.some((n) => {
+      const t = recall.noteText(n);
+      return t.includes(text) || text.includes(t);
+    });
     if (!dup) {
-      p.notes.push(text);
+      // 同一件事的不同说法（「他爱吃辣」/「他爱吃火锅」）合成一条，别白占名额
+      const idx = recall.findSimilar(p.notes, text, 0.85);
+      if (idx >= 0) {
+        const old = p.notes[idx];
+        const oldText = recall.noteText(old);
+        const merged = oldText.length >= text.length ? oldText : text;
+        p.notes[idx] = {
+          ...(typeof old === 'object' ? old : { createdAt: Date.now() }),
+          text: merged,
+          kind: fresh.kind === 'fact' ? (typeof old === 'object' && old.kind) || fresh.kind : fresh.kind,
+          importance: Math.max(Number(old.importance) || 1, fresh.importance),
+        };
+        this.markDirty(key);
+        return p.notes;
+      }
+      p.notes.push(fresh);
       if (p.notes.length > this.limits.maxNotesPerUser) {
-        p.notes.splice(0, p.notes.length - this.limits.maxNotesPerUser);
+        // 按分数淘汰（承诺/雷区有保护），不是按时间淘汰最老的
+        const idx = new Set(forget.pickEvictions(p.notes, this.limits.maxNotesPerUser, Date.now()));
+        const gone = p.notes.filter((_, i) => idx.has(i));
+        p.notes = p.notes.filter((_, i) => !idx.has(i));
+        if (gone.length) {
+          this._archivePush(gone.map((n) => ({ key, uid: p.uid, note: n, reason: 'evict' })));
+        }
       }
     }
+    this.markDirty(key);
+    return p.notes;
+  }
+
+  /** 滚动摘要：记下「你们最近聊了什么」，并记住整理到第几条消息 */
+  setSummary(key, text, meta = {}) {
+    const sess = this.ensureSession(key);
+    sess.summary = trimText(text, 800);
+    sess.summaryAt = Date.now();
+    sess.summaryUpto = Number(meta.upto) || (sess.messages || []).length;
+    this.markDirty(key);
+    return sess.summary;
+  }
+
+  /** 这些记忆刚被用上：记下时间，下次别急着复读 */
+  touchNotes(key, uid, texts, now = Date.now()) {
+    const p = this.profile(key, uid);
+    const set = new Set((texts || []).map((t) => recall.noteText(t)).filter(Boolean));
+    if (!set.size) return p.notes;
+    p.notes = p.notes.map((n) => {
+      const t = recall.noteText(n);
+      if (!set.has(t) || typeof n === 'string') return n;
+      return { ...n, lastMentionedAt: now, mentions: (Number(n.mentions) || 0) + 1 };
+    });
     this.markDirty(key);
     return p.notes;
   }
@@ -339,7 +490,10 @@ class Store {
     if (!raw) {
       p.notes = [];
     } else {
-      p.notes = p.notes.filter((n) => !n.includes(raw) && !raw.includes(n));
+      p.notes = p.notes.filter((n) => {
+        const t = recall.noteText(n);
+        return !t.includes(raw) && !raw.includes(t);
+      });
     }
     this.markDirty(key);
     return { removed: before - p.notes.length, notes: p.notes };
@@ -349,7 +503,7 @@ class Store {
     const sess = this.ensureSession(key);
     return Object.values(sess.profiles)
       .filter((p) => p.notes.length > 0)
-      .map((p) => ({ uid: p.uid, name: p.name, notes: p.notes.slice() }));
+      .map((p) => ({ uid: p.uid, name: p.name, notes: p.notes.map((n) => recall.noteText(n)) }));
   }
 
   setMuted(key, ms) {

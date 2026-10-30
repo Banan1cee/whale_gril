@@ -125,7 +125,12 @@ test('UIA 连续拿不到会重建窗口驱动（微信在托盘里启动也能�
   assert.match(body, /misses/, '要有连续失败计数');
   assert.match(body, /重建窗口驱动/, '要给出日志，别静默');
   assert.match(body, /gui = WeChatGUI\(\)/, '重建要真的 new 一个');
-  assert.ok(body.indexOf('misses >= 3') < body.indexOf('gui = WeChatGUI()'), '先攒够失败次数再重建');
+  // 4.2 起：先让 uia_boot 把托盘里的微信窗口叫醒（ensure_uia_ready），
+  // 叫醒成功就立刻重建；叫不醒再走「连续 3 次」的老兜底。
+  assert.match(body, /ensure_uia_ready\(force=True\)/, '要先尝试叫醒微信窗口');
+  assert.ok(body.indexOf('ensure_uia_ready(force=True)') < body.indexOf('misses >= 3'),
+    '先叫醒，再攒失败次数兜底');
+  assert.match(body, /misses >= 3/, '老兜底不能丢');
 });
 /**
  * 键盘兜底是「Ctrl+F 搜索 → 回车 → 粘贴正文 → 回车」，中间不确认打开的是谁。

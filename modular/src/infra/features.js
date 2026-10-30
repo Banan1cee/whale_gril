@@ -20,6 +20,20 @@ const REGISTRY = [
     experimental: true,
   },
   {
+    key: 'memorySemantic',
+    path: 'memory.semantic',
+    label: '语义检索（让模型挑记忆）',
+    desc: '默认开。回复前把 6~10 条候选记忆和对方这句话一起给模型，让它判断哪几条真的有关，只留相关的。关掉=只按字面重合挑，快但会漏（比如「医院挂号」想不起「明天体检」）。',
+    default: true,
+  },
+  {
+    key: 'memoryDigest',
+    path: 'memory.digest',
+    label: '自动整理记忆（摘要 + 抽事实）',
+    desc: '默认开。每攒够 12 条新消息，用一次模型把这段对话压成摘要，并顺便抽出 1~3 条关于对方的事实。关掉=回到「只有手动记住才写记忆」，可省一点 token。',
+    default: true,
+  },
+  {
     key: 'groupAddressGuard',
     path: 'features.groupAddressGuard',
     label: '群里先分清「你」在说谁',

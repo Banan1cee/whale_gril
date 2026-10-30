@@ -413,8 +413,26 @@ class WeChatSender:
             time.sleep(char_gap)
         return True
 
-    def type_text(self, text, char_gap=0.04, strip_unencodable=True):
-        """编码 + 打字。返回 `(ok, skipped_chars)`。"""
+    def type_units(self, units, char_gap=0.04):
+        """逐个投递 UTF-16 码元（微信 4.2+ 的 WM_CHAR 语义）。"""
+        self._post(WM_SETFOCUS, 0, 0)
+        time.sleep(0.10)
+        for u in units:
+            self._post(WM_CHAR, u, 1)
+            time.sleep(char_gap)
+        return True
+
+    def type_text(self, text, char_gap=0.04, strip_unencodable=True, mode="gbk"):
+        """编码 + 打字。返回 `(ok, skipped_chars)`。
+
+        mode: 'utf16'（微信 4.2+）或 'gbk'（老版本）。'auto' 交给调用方先探测。
+        """
+        if mode == "utf16":
+            units = encode_utf16(text)
+            if not units:
+                return False, []
+            self.type_units(units, char_gap)
+            return True, []
         payload, skipped = encode_gbk(text, strip_unencodable)
         if payload is None:
             return False, skipped
@@ -427,6 +445,81 @@ class WeChatSender:
             self._post(WM_KILLFOCUS, 0, 0)
         except Exception:
             pass
+
+
+def encode_utf16(text):
+    """把文本编成 UTF-16LE 的 16 位码元序列（每个码元一个 WM_CHAR）。
+
+    微信 4.2 起 `WM_CHAR` 的 wParam 不再当 GBK 字节解释，而是当**字符码**：
+    发 GBK 字节会被当成 Latin-1 单字，于是「鲸鲸」变成「¾¨¾¨」。
+    所以 4.2+ 必须按 UTF-16 码元发；emoji（代理对）也靠这个自然覆盖。
+    """
+    data = str(text or "").encode("utf-16-le", "surrogatepass")
+    return [int.from_bytes(data[i:i + 2], "little") for i in range(0, len(data), 2)]
+
+
+def _version_tuple(text):
+    nums = [int(x) for x in str(text or "").replace("-", ".").split(".") if x.isdigit()]
+    return tuple(nums) if len(nums) >= 2 else ()
+
+
+def detect_char_mode(hwnd=0):
+    """按微信版本决定用哪种编码：4.2+ 用 UTF-16 码元，老版本仍然用 GBK 字节。
+
+    版本号不一定在 exe 所在目录（4.2 的启动器在 Weixin\\Weixin.exe，
+    真正的版本目录在 Weixin\\4.2.0.9\\ 下），所以按这个顺序找：
+      1. 进程里加载的 Weixin.dll 所在目录；
+      2. exe 目录本身能解析出版本号就用它；
+      3. exe 旁边带 Weixin.dll 的子目录，取最高的版本。
+    都读不到就退回 GBK（老行为），宁可保持原状也不乱换。
+    """
+    try:
+        import os as _os
+        import psutil
+        import win32process
+        h = int(hwnd or 0) or find_hwnd()
+        if not h:
+            return "gbk"
+        _, pid = win32process.GetWindowThreadProcessId(h)
+        exe = ""
+        try:
+            exe = psutil.Process(pid).exe() or ""
+        except Exception:
+            exe = ""
+
+        candidates = []
+        # 1) 已加载的 Weixin.dll
+        try:
+            from wechatauto.accessibility import AccessibilityGate
+            mod = AccessibilityGate._weixin_dll_module(pid)
+            if mod and mod[2]:
+                candidates.append(_os.path.basename(_os.path.dirname(mod[2])))
+        except Exception:
+            pass
+        # 2) exe 目录名
+        if exe:
+            candidates.append(_os.path.basename(_os.path.dirname(exe)))
+        # 3) exe 旁边的版本目录
+        if exe:
+            root = _os.path.dirname(exe)
+            try:
+                for name in _os.listdir(root):
+                    sub = _os.path.join(root, name)
+                    if _os.path.isdir(sub) and _os.path.exists(_os.path.join(sub, "Weixin.dll")):
+                        candidates.append(name)
+            except Exception:
+                pass
+
+        best = ()
+        for c in candidates:
+            v = _version_tuple(c)
+            if v > best:
+                best = v
+        if best and best >= (4, 2):
+            return "utf16"
+    except Exception:
+        return "gbk"
+    return "gbk"
 
 
 def encode_gbk(text, strip_unencodable=True):
@@ -693,8 +786,11 @@ def open_chat(sender, aliases, timeout=6.0, log=None):
 
 
 # ---------------------------------------------------------------- 组合：发一条
+_MODE_LOGGED = set()
+
+
 def send(text, chat=None, hwnd=0, log=None, char_gap=0.04,
-         strip_unencodable=True, verify=True, unhide=True):
+         strip_unencodable=True, verify=True, unhide=True, char_mode="auto"):
     """一步发完：物化 → 切会话 → 伪焦点打字 → 点发送 → 回读确认。
 
     返回 `(ok, reason)`。`reason` 是稳定枚举：
@@ -752,8 +848,17 @@ def send(text, chat=None, hwnd=0, log=None, char_gap=0.04,
         if info["value"]:
             return False, "input_not_empty"
 
+        mode = char_mode
+        if mode in (None, "", "auto"):
+            mode = detect_char_mode(hwnd)
+        if mode not in _MODE_LOGGED:
+            _MODE_LOGGED.add(mode)
+            log("后台通道：打字编码 = %s（%s）" % (
+                mode,
+                "UTF-16 码元，微信 4.2+" if mode == "utf16"
+                else "GBK 字节，微信 4.1 及以前；4.2 上中文会变乱码，请检查版本探测"))
         ok, skipped = sender.type_text(text, char_gap=char_gap,
-                                       strip_unencodable=strip_unencodable)
+                                       strip_unencodable=strip_unencodable, mode=mode)
         if not ok:
             return False, "gbk_unsupported"
         if skipped:

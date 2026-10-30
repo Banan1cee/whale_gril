@@ -133,12 +133,14 @@ def _parse_bg_send(wechat_cfg):
         "strip": _as_bool(raw.get("stripUnencodable", True), True),
         # 微信缩在托盘里（窗口隐藏）时，用「显示但不激活」把它拉出来 —— 不抢前台
         "unhide": _as_bool(raw.get("unhideWindow", True), True),
+        # WM_CHAR 的编码语义：auto = 按微信版本自动（4.2+ 用 UTF-16 码元）
+        "charMode": str(raw.get("charMode") or "auto").lower(),
     }
 
 
 # 零焦点发送通道的默认值：config 读失败时也能工作（这个通道失败会自动退回旧通道，
 # 所以默认开着是安全的）。
-BG_SEND = {"enabled": True, "charGap": 0.04, "verify": True,
+BG_SEND = {"enabled": True, "charGap": 0.04, "verify": True, "charMode": "auto",
            "fallback": True, "strip": True, "unhide": True}
 
 # 消息调度：同一个会话串行、跨会话并发。workers=1 就等于旧行为（全部串行）。
@@ -963,7 +965,8 @@ def _bg_cli(argv=None):
                                  char_gap=BG_SEND["charGap"],
                                  strip_unencodable=BG_SEND["strip"],
                                  verify=BG_SEND["verify"],
-                                 unhide=BG_SEND["unhide"])
+                                 unhide=BG_SEND["unhide"],
+                                 char_mode=BG_SEND.get("charMode") or "auto")
         log("发送 = %s（%s）" % (ok, why))
         return 0 if ok else 1
 
