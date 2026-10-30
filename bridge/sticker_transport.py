@@ -96,36 +96,43 @@ def validate_path(path, root, image_check=None):
 
     Returns a fingerprint for revalidation before paste. Paths/errors are never
     echoed to the result (a job can originate in an untrusted webhook response).
+
+    注意：不能要求「abspath 必须等于 realpath」。Windows 的 8.3 短名
+    （C:\\Users\\RUNNER~1\\...）和 junction 都会让两者不同，而它们本身不是链接；
+    以前按这个相等性判断，导致 TEMP 带短名的机器上一张表情包也发不出去。
+    链接/重解析点改由下面的 lstat 逐级检查负责。
     """
     root = os.path.abspath(os.fspath(root))
     candidate = os.path.abspath(os.fspath(path))
     real_root, real_file = os.path.realpath(root), os.path.realpath(candidate)
-    if (os.path.normcase(root) != os.path.normcase(real_root)
-            or os.path.normcase(candidate) != os.path.normcase(real_file)
-            or os.path.commonpath([real_root, real_file]) != real_root
-            or real_file == real_root):
+    try:
+        inside = os.path.commonpath([real_root, real_file]) == real_root
+    except ValueError:                     # 不同盘符：commonpath 直接抛
+        inside = False
+    if not inside or real_file == real_root:
         raise ValueError('sticker path is outside the approved directory or uses a link')
-    cursor = candidate
-    while True:
-        info = os.lstat(cursor)
-        if (stat.S_ISLNK(info.st_mode)
-                or getattr(info, 'st_file_attributes', 0) & 0x400):
-            raise ValueError('sticker links/reparse points are not allowed')
-        parent = os.path.dirname(cursor)
-        if parent == cursor:
-            break
-        cursor = parent
-    info = os.stat(candidate)
-    extension = os.path.splitext(candidate)[1].lower()
+    for start in {candidate, real_file}:
+        cursor = start
+        while True:
+            info = os.lstat(cursor)
+            if (stat.S_ISLNK(info.st_mode)
+                    or getattr(info, 'st_file_attributes', 0) & 0x400):
+                raise ValueError('sticker links/reparse points are not allowed')
+            parent = os.path.dirname(cursor)
+            if parent == cursor:
+                break
+            cursor = parent
+    info = os.stat(real_file)
+    extension = os.path.splitext(real_file)[1].lower()
     if not stat.S_ISREG(info.st_mode) or not 0 < info.st_size <= MAX_BYTES or extension not in IMAGE_TYPES:
         raise ValueError('sticker must be an approved image of at most 4 MiB')
-    (image_check or _verify_image)(candidate, IMAGE_TYPES[extension])
-    with open(candidate, 'rb') as stream:
+    (image_check or _verify_image)(real_file, IMAGE_TYPES[extension])
+    with open(real_file, 'rb') as stream:
         digest = hashlib.sha256(stream.read(MAX_BYTES + 1)).hexdigest()
-    after = os.stat(candidate)
+    after = os.stat(real_file)
     if (info.st_size, info.st_mtime_ns, info.st_ino) != (after.st_size, after.st_mtime_ns, after.st_ino):
         raise ValueError('sticker changed while validating')
-    return candidate, (after.st_size, after.st_mtime_ns, after.st_ino, digest)
+    return real_file, (after.st_size, after.st_mtime_ns, after.st_ino, digest)
 
 
 def _contacts(db, key):

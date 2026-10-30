@@ -51,19 +51,6 @@ jobs:
           python -c "import sys, locale; print(sys.version); print('stdout=', sys.stdout.encoding, 'preferred=', locale.getpreferredencoding())"
           dotnet --version
 
-      # 临时诊断：桥接表情包发送在 CI 上全部返回 failed（本地不复现）。
-      # 把被 except 吞掉的异常打印出来，塞进一条 warning 注解（匿名可读）。
-      # 定位完成后这段会删掉。
-      - name: 诊断（临时）
-        if: always()
-        shell: pwsh
-        run: |
-          $out = (python scripts/ci-diag.py *>&1) -join "`n"
-          Write-Output $out
-          if ($out.Length -gt 3500) { $out = $out.Substring(0, 3500) }
-          $msg = $out -replace '%', '%25' -replace "`r", '' -replace "`n", '%0A'
-          Write-Output "::warning title=diag::$msg"
-
       # 后面每一步都加 if: always()，任何一步红了也把剩下的跑完，
       # 这样一次运行就能看到整条流水线的真实状态，而不是在第一个错处停下。
       - name: 分层依赖（谁可以 require 谁）
