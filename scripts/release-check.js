@@ -149,6 +149,10 @@ try {
 //    所以做成硬检查：命中就不许出包。
 try {
   const SKIP_DIRS = new Set(['node_modules', '.git', 'data', 'runtime', 'backup', '__pycache__', 'wechatauto_db', 'wechatauto_logs']);
+  // 构建产物也要跳过：launcher/obj 里的 FileListAbsolute.txt 记着本机的绝对路径，
+  // 不跳过的话「刚编译完再跑自检」必然误报成泄露个人信息（.gitignore 里已有这些目录，
+  // 这里按相对路径前缀对齐，避免把别处的普通 bin/obj 一并跳过）。
+  const SKIP_PREFIX = ['launcher/bin/', 'launcher/obj/', 'launcher/publish/', 'dist/', 'release/', '.venv/', 'venv/'];
   const SKIP_FILES = /(^|\/)(config\.json|settings\.json|.*\.log|.*\.bak.*|.*\.zip)$/;
   const walk = (dir) => {
     const out = [];
@@ -156,7 +160,7 @@ try {
       const full = path.join(dir, ent.name);
       const rel = path.relative(root, full).split(path.sep).join('/');
       if (ent.isDirectory()) {
-        if (SKIP_DIRS.has(ent.name)) continue;
+        if (SKIP_DIRS.has(ent.name) || SKIP_PREFIX.some((p) => rel.startsWith(p))) continue;
         out.push(...walk(full));
       } else if (!SKIP_FILES.test(rel)) {
         out.push(rel);
