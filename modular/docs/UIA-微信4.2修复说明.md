@@ -93,3 +93,41 @@ runtime\python\python.exe -B tools\elev_uia_check.py
 
 待确认：控件树自动出现的触发条件。验证方法见 `tools/uia_cold_experiment.py`
 （两段式：纯等 / 持续查询）与 `tools/elev_spi_test.py`（提权测 SPI）。
+
+---
+
+## 最终结论（推翻上面「追加」一节）
+
+上面那节的实验全部作废——那些时刻微信停在**登录页 / 托盘态**，本来就没有 UI 子树。
+
+### 真正的根因
+
+微信 4.2 **隐藏到托盘时会把这个窗口的 UI 子树销毁**：主窗句柄还在，但 `GetChildren()` 返回 0，
+`mmui::ChatSessionList` 自然不存在。所以：
+
+- 不是「更新换了激活方式」，也不是「需要管理员」；
+- 是「窗口没显示 → 没有控件树」；
+- 旧代码把这种状态当成「UIA 坏了」，重试 7 次后整场退回 OCR。
+
+### 修法：自动「唤起微信一次」，再收回托盘
+
+单纯 `ShowWindow` / `SetForegroundWindow` / 点任务栏按钮都**不会**重建子树；
+但**再执行一次 `Weixin.exe`** 会走微信的单实例转发，效果等同用户点托盘图标：
+
+| 步骤 | 实测（4.2.0.9） |
+| --- | --- |
+| 托盘态 | `tree = shell`，窗口 `vis=0` |
+| 执行 `Weixin.exe` | 1 秒内 `tree = ok` |
+| 立刻 `ShowWindow(SW_HIDE)` 收回托盘 | **`tree` 仍然是 ok**（隐藏不会让树塌） |
+
+所以桥接可以在用户完全无感的情况下拿到 UIA：唤起 → 建树 → 立刻收回。
+窗口位置/可见性在唤起前会被记下，收尾按原样恢复。
+
+代码：`bridge/uia_boot.restore_wechat()`，由 `ensure()` 在树是空壳时自动调用；
+`engine.py` 的心跳线程在 `_u is None` 时会 `ensure_uia_ready(force=True)` 触发它。
+
+### 已知瑕疵
+
+桥接进程内轮询有时 15 秒内看不到树（同为托盘场景，独立进程跑同样的代码却 1 秒就成功），
+原因未定；此时后续 `WeChatGUI()` 自身的唤醒路径会把 UIA 救回来，日志最终仍是
+「发送通道预热完成（UIA 可用…）」。`ensure()` 末尾已加一次「延迟生效」复查。
