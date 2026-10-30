@@ -75,5 +75,44 @@ class RuntimeSourceTest(unittest.TestCase):
             (pkg / 'accessibility.py').write_text(ACCESS, encoding='utf-8')
             with self.assertRaises(RuntimeError): mod.prepare(tmp)
 
+    def test_key_failure_hint_no_longer_crashes_on_unreadable_wechat_process(self):
+        """Upstream 提示代码把 PID 列表当三元组解包，导致桥接启动直接 TypeError。"""
+        db = '''def hint(perms):
+    blocked = [p for p, ok, err in perms if not ok]
+    if blocked:
+        print("[wechatauto]  >> 部分微信进程无法读取内存 (PID %s，错误码 %s)："
+              "请用管理员身份运行 Python"
+              % (", ".join(str(p) for p, _, _ in blocked),
+                 ", ".join(str(e) for _, _, e in blocked)))
+'''
+        with tempfile.TemporaryDirectory() as tmp:
+            pkg = Path(tmp) / 'runtime/python/Lib/site-packages/wechatauto'; pkg.mkdir(parents=True)
+            (pkg / 'uia_driver.py').write_text(DRIVER, encoding='utf-8')
+            (pkg / 'accessibility.py').write_text(ACCESS, encoding='utf-8')
+            target = pkg / 'db.py'; target.write_text(db, encoding='utf-8')
+            mod.prepare(tmp)
+            text = target.read_text(encoding='utf-8')
+            self.assertIn('blocked = [(p, err) for p, ok, err in perms if not ok]', text)
+            self.assertNotIn('for p, _, _ in blocked', text)
+            scope = {}
+            exec(compile(text, '<mock db>', 'exec'), scope)
+            before = target.read_bytes()
+            mod.prepare(tmp)          # idempotent
+            self.assertEqual(before, target.read_bytes())
+            import contextlib, io
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                scope['hint']([(111, True, 0), (222, False, 5)])
+            self.assertIn('PID 222', out.getvalue())
+            self.assertIn('错误码 5', out.getvalue())
+
+    def test_unknown_key_hint_layout_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pkg = Path(tmp) / 'runtime/python/Lib/site-packages/wechatauto'; pkg.mkdir(parents=True)
+            (pkg / 'uia_driver.py').write_text(DRIVER, encoding='utf-8')
+            (pkg / 'accessibility.py').write_text(ACCESS, encoding='utf-8')
+            (pkg / 'db.py').write_text('def something_else():\n    return 1\n', encoding='utf-8')
+            with self.assertRaises(RuntimeError): mod.prepare(tmp)
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

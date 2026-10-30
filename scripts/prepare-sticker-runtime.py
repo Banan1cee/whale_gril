@@ -54,6 +54,26 @@ def prepare(root):
     # Preserve the existing 10-minute warning throttle; it is not a recovery claim.
     ast.parse(text)
     access.write_text(text, encoding='utf-8', newline='\n')
+
+    database = package / 'db.py'
+    if database.is_file():
+        text = database.read_text(encoding='utf-8')
+        # Upstream bug: the key-failure hint collects bare PIDs into `blocked`,
+        # then unpacks them as (pid, ok, err) triples. Any Weixin.exe process we
+        # cannot OpenProcess (WeChat elevated, different account, protected
+        # process) therefore turns a readable hint into
+        # "TypeError: cannot unpack non-iterable int object" and kills the bridge.
+        text = text.replace('blocked = [p for p, ok, err in perms if not ok]',
+                            'blocked = [(p, err) for p, ok, err in perms if not ok]')
+        text = text.replace('for p, _, _ in blocked', 'for p, _ in blocked')
+        text = text.replace('for _, _, e in blocked', 'for _, e in blocked')
+        if 'blocked = [(p, err) for p, ok, err in perms if not ok]' not in text:
+            raise RuntimeError('unknown key-failure hint layout; do not guess a runtime patch')
+        if 'for p, _, _ in blocked' in text or 'for _, _, e in blocked' in text:
+            raise RuntimeError('key-failure hint still unpacks bare PIDs')
+        ast.parse(text)
+        database.write_text(text, encoding='utf-8', newline='\n')
+        return [driver, access, database]
     return [driver, access]
 
 
