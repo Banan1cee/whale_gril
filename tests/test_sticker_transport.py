@@ -367,6 +367,30 @@ class TransportTest(unittest.TestCase):
         self.assertEqual(self.send()['status'], 'failed')
         self.assertEqual(self.keys, [])
 
+    def test_short_name_root_is_accepted_like_any_normal_path(self):
+        # 现场真凶（CI 上每张表情包都发不出去）：Windows 的 8.3 短名路径
+        # C:\Users\RUNNER~1\... 经 realpath 展开成 C:\Users\runneradmin\...，
+        # 旧代码要求「abspath 必须等于 realpath」，于是合法路径被判成链接。
+        # 短名不是链接，只有真正的软链接/重解析点才该拒绝。
+        short_root = self.directory
+        long_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(long_dir.cleanup)
+        long_file = str(Path(long_dir.name) / 'test.png')
+        Path(long_file).write_bytes(Path(self.path).read_bytes())
+        mapping = {short_root: long_dir.name, self.path: long_file}
+        realpath = os.path.realpath
+
+        def fake_realpath(value):
+            key = os.path.abspath(os.fspath(value))
+            return mapping.get(key, realpath(key))
+
+        with patch.object(transport.os.path, 'realpath', side_effect=fake_realpath):
+            self.assertEqual(self.send()['status'], 'confirmed')
+            approved, fingerprint = transport.validate_path(
+                self.path, short_root, lambda path, expected: None)
+        self.assertEqual(approved, long_file, '应当返回展开后的真实路径供剪贴板使用')
+        self.assertEqual(fingerprint[0], Path(long_file).stat().st_size)
+
     def test_image_decoder_failure_never_pastes(self):
         def reject(path, expected):
             raise ValueError('invalid image')
