@@ -565,20 +565,9 @@ class Bot {
       return { action: 'ignore', key, msg, reason: 'addressed_to_other' };
     }
 
-    // 助手小功能：群成员名录 / 查自己的号 / 同意被损 / 主人点名吐槽
+    // 助手小功能：查自己的号 / 同意被损 / 主人点名吐槽
+    // （「群里常说话的就这些」那种发言次数排名已按用户要求删除，不再统计发言人次数）
     const ask = String(clean.text || '').trim();
-    if (isGroup && /(群里|群)?.{0,4}(都有谁|有谁|成员|谁最活跃)/.test(ask)) {
-      const people = new Map();
-      for (const m of this.store.messages(key, 200)) {
-        if (m.role === 'assistant' || !m.name) continue;
-        people.set(m.name, (people.get(m.name) || 0) + 1);
-      }
-      const top = [...people.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
-      const canned = top.length
-        ? '群里常说话的就这些：' + top.map(([n, c]) => `${n}(${c})`).join('、')
-        : '群里还没人说话';
-      return { action: 'reply', key, msg, atMe, canned, reason: 'member_list' };
-    }
     if (/我(的)?微信(号)?(是)?(多少|啥|什么)/.test(ask)) {
       const canned = isMaster ? `你的微信号是 ${msg.senderId || '未知'}` : '这个不告诉你';
       return { action: 'reply', key, msg, atMe, canned, reason: 'self_wxid' };
