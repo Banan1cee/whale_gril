@@ -1,4 +1,4 @@
-﻿# 运行时数据：包含 API Key、聊天记录、人设、词库、日志、微信数据库快照，绝不入库
+# 运行时数据：包含 API Key、聊天记录、人设、词库、日志、微信数据库快照，绝不入库
 data/
 config.json
 wechatauto_logs/
@@ -33,8 +33,8 @@ scripts/node-path.local
 wechatauto_ocr_tmp.png
 
 .obsidian/
-# 4.0 构建产物
-WhaleLauncher.exe
+# 4.0 构建产物：启动器成品要入库，下载即用
+# （launcher/bin、launcher/obj 是中间产物，含本机绝对路径，不入库）
 launcher/bin/
 launcher/obj/
-launcher/publish/
+launcher/publish/*.pdb
