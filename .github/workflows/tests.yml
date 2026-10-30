@@ -79,13 +79,14 @@ jobs:
           $code = $LASTEXITCODE
           Get-Content py-tests.log
           if ($code -ne 0) {
-            $bad = Select-String -Path py-tests.log -Pattern 'FAIL:|ERROR:|Traceback|AssertionError|ModuleNotFound|UnicodeDecode' |
-              Select-Object -First 8
-            foreach ($b in $bad) {
-              $line = ($b.Line -replace '%', '%25' -replace '\r?\n', ' ').Trim()
-              if ($line.Length -gt 300) { $line = $line.Substring(0, 300) }
-              Write-Output "::error title=python::$line"
-            }
+            # 把失败块整段塞进一条注解（换行转义成 %0A），这样没有仓库权限也能
+            # 从 check run 的 annotations 里看到完整 traceback。
+            $text = Get-Content -Raw -Encoding utf8 py-tests.log
+            $idx = $text.IndexOf('=====================')
+            $tail = if ($idx -ge 0) { $text.Substring($idx) } else { $text }
+            if ($tail.Length -gt 3800) { $tail = $tail.Substring(0, 3800) }
+            $msg = $tail -replace '%', '%25' -replace "`r", '' -replace "`n", '%0A'
+            Write-Output "::error title=python-failures::$msg"
             exit $code
           }
 
