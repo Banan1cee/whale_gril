@@ -10,13 +10,15 @@
  *     messages: [{ role: 'user'|'assistant', name, uid, text, ts, msgId, error? }],
  *     profiles: { [uid]: { uid, name, firstSeenAt, lastSeenAt, count, notes: [] } },
  *     state: { mutedUntil, lastReplyAt, consecutiveReplies, replyTimes: [] },
- *     seenIds: [最近去重用的消息 id]
+ *     seenIds: [最近去重用的消息 id],
+ *     events: [{ ts, type, detail, status }]  // 外部动作账本，只回读给模型
  *   }
  */
 const fs = require('node:fs');
 const path = require('node:path');
 const recall = require('./recall');
 const forget = require('./forget');
+const actionEvents = require('../core/events');
 
 const SAVE_DEBOUNCE_MS = 800;
 /** 日志文件超过这么大就压回快照（避免无限增长） */
@@ -177,6 +179,8 @@ class Store {
         replyTimes: Array.isArray(sess.state?.replyTimes) ? sess.state.replyTimes.slice(-200) : [],
       },
       seenIds: Array.isArray(sess.seenIds) ? sess.seenIds.slice(-200) : [],
+      // 外部动作账本（发表情包 / 交给桥接 / 读链接 / 联网）：只给模型回读，不进聊天记录
+      events: Array.isArray(sess.events) ? sess.events.filter((e) => e && e.type && e.detail).slice(-60) : [],
     };
   }
 
@@ -303,6 +307,48 @@ class Store {
     return sess.messages.slice(-limit);
   }
 
+  /**
+   * 记一条外部动作（发表情包 / 交给桥接 / 读链接 / 联网）。
+   * 这些不是聊天内容，不进 messages、不参与复读检测，只给模型下一轮回读。
+   * 不认识的类型直接丢掉，避免往提示词里写垃圾。
+   */
+  appendEvent(key, event) {
+    if (!key) return null;
+    const entry = actionEvents.clampEvent(event, Date.now());
+    if (!entry) return null;
+    const sess = this.ensureSession(key);
+    if (!Array.isArray(sess.events)) sess.events = [];
+    const last = sess.events[sess.events.length - 1];
+    // 同一类型同一结果连续重复（比如一次转发多条）就合并，别把提示词塞满
+    if (last && last.type === entry.type && last.status === entry.status && last.detail === entry.detail
+      && entry.ts - last.ts < 5000) return last;
+    sess.events.push(entry);
+    if (sess.events.length > 60) sess.events = sess.events.slice(-60);
+    this.markDirty(key);
+    return entry;
+  }
+
+  events(key, limit = 12) {
+    const sess = this.ensureSession(key);
+    return (sess.events || []).slice(-limit);
+  }
+
+  /** 回执到了就改写原来那条（排队 → 已确认），别让一次发送占两条记录 */
+  updateEvent(key, ts, patch = {}) {
+    if (!key || !ts) return null;
+    const sess = this.ensureSession(key);
+    const list = sess.events || [];
+    for (let i = list.length - 1; i >= 0; i -= 1) {
+      if (list[i].ts !== ts) continue;
+      const next = actionEvents.clampEvent({ ...list[i], ...patch, ts }, list[i].ts);
+      if (!next) return null;
+      list[i] = next;
+      this.markDirty(key);
+      return next;
+    }
+    return null;
+  }
+
   profile(key, uid, name) {
     const sess = this.ensureSession(key);
     const id = String(uid || 'anonymous').slice(0, 100);
@@ -320,8 +366,7 @@ class Store {
     return p;
   }
 
-  /** 用户指定的称呼（「叫我小海」），优先级高于群昵称 */
-  setNickname(key, uid, nickname) {
+  /** 用户指定的称呼（「叫我小海」），优先级高于群昵称 */  setNickname(key, uid, nickname) {
     const p = this.profile(key, uid);
     p.nickname = trimText(nickname, 60);
     this.markDirty(key);
