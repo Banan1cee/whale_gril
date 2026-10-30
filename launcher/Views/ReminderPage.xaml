@@ -1,0 +1,114 @@
+<UserControl x:Class="WhaleLauncher.Views.ReminderPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Background="{StaticResource Bg}">
+    <Grid Margin="20,16,20,14">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <DockPanel Grid.Row="0" LastChildFill="False">
+            <TextBlock DockPanel.Dock="Left" Text="提醒" Style="{StaticResource H1}" VerticalAlignment="Center" />
+            <Button x:Name="BtnRefresh" DockPanel.Dock="Right" Content="⟳ 刷新"
+                    Style="{StaticResource Ghost}" HorizontalAlignment="Right" Click="OnRefresh" />
+        </DockPanel>
+
+        <TextBlock Grid.Row="1" x:Name="HintText"
+                   Text="到点自动发；发送失败 5 分钟后重试一次；过期的不再补发"
+                   Style="{StaticResource Small}" Margin="0,6,0,10" TextWrapping="Wrap" />
+
+        <!-- 提醒规则：字段语义和「主动搭话」一致，但这是提醒自己的配置 -->
+        <Border Grid.Row="2" Style="{StaticResource Card}" Padding="12" Margin="0,0,0,12">
+            <StackPanel>
+                <TextBlock Text="提醒规则" Style="{StaticResource H2}" Margin="0,0,0,6" />
+                <TextBlock Text="和主动搭话同一套规则语义，但配置独立：当日次数用完、或刚聊过（按下面设置）就不发，也不会推迟补发。提醒不限制时间段 —— 你定几点就几点发。"
+                           Style="{StaticResource Small}" TextWrapping="Wrap" Margin="0,0,0,10" />
+
+                <CheckBox x:Name="ChkEnabled" Content="开启提醒" Margin="0,0,0,8" />
+
+                <Grid Margin="0,0,0,8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Margin="0,0,10,0">
+                        <TextBlock Text="每天最多提醒几次（0 = 不限）" Style="{StaticResource Small}" Margin="0,0,0,4" />
+                        <TextBox x:Name="TxtMaxPerDay" Width="120" HorizontalAlignment="Left" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1">
+                        <TextBlock Text="刚聊过先跳过（分钟，0 = 不跳过）" Style="{StaticResource Small}" Margin="0,0,0,4" />
+                        <TextBox x:Name="TxtQuiet" Width="120" HorizontalAlignment="Left" />
+                    </StackPanel>
+                </Grid>
+
+                <DockPanel LastChildFill="False">
+                    <Button x:Name="BtnSaveRules" Content="保存规则" Style="{StaticResource Primary}"
+                            Click="OnSaveRules" DockPanel.Dock="Left" />
+                    <TextBlock x:Name="RulesStatus" Style="{StaticResource Small}" Margin="10,0,0,0"
+                               VerticalAlignment="Center" TextWrapping="Wrap" DockPanel.Dock="Left" />
+                </DockPanel>
+            </StackPanel>
+        </Border>
+
+        <Border Grid.Row="3" Style="{StaticResource Card}" Padding="10">
+            <Grid>
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                    <ItemsControl x:Name="ReminderList">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border Background="#FF20242A" BorderBrush="{StaticResource Line}"
+                                        BorderThickness="1" CornerRadius="6" Padding="10,8" Margin="0,0,0,8">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" MinWidth="78" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+
+                                        <StackPanel VerticalAlignment="Top">
+                                            <TextBlock Text="{Binding Time}" Foreground="{StaticResource Text}"
+                                                       FontSize="13" FontWeight="SemiBold" />
+                                            <TextBlock Text="{Binding Status}" Foreground="{Binding StatusBrush}"
+                                                       FontSize="11" Margin="0,4,0,0" />
+                                        </StackPanel>
+
+                                        <StackPanel Grid.Column="1" Margin="12,0,10,0">
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="{Binding Name}" Foreground="{StaticResource Text}"
+                                                           FontSize="12" FontWeight="SemiBold"
+                                                           TextTrimming="CharacterEllipsis" />
+                                                <TextBlock Text="{Binding Wxid}" Style="{StaticResource Small}"
+                                                           Margin="8,0,0,0" VerticalAlignment="Center"
+                                                           TextTrimming="CharacterEllipsis" />
+                                            </StackPanel>
+                                            <TextBlock Text="{Binding Text}" Foreground="{StaticResource Muted}"
+                                                       FontSize="12" TextWrapping="Wrap" Margin="0,4,0,0" />
+                                            <TextBlock Text="{Binding Error}" Foreground="{StaticResource Bad}"
+                                                       FontSize="11" TextWrapping="Wrap" Margin="0,4,0,0"
+                                                       Visibility="{Binding ErrorVisibility}" />
+                                        </StackPanel>
+
+                                        <Button Grid.Column="2" Content="删除" Style="{StaticResource Ghost}"
+                                                Tag="{Binding Id}" Click="OnCancelReminder"
+                                                VerticalAlignment="Center" />
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+
+                <TextBlock x:Name="EmptyText" Text="还没有提醒" Style="{StaticResource Small}"
+                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                           TextAlignment="Center" TextWrapping="Wrap" Margin="24" />
+            </Grid>
+        </Border>
+
+        <TextBlock Grid.Row="4" x:Name="StatusText" Style="{StaticResource Small}" Margin="0,8,0,0"
+                   TextWrapping="Wrap" />
+    </Grid>
+</UserControl>
