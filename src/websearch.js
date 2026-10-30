@@ -9,11 +9,11 @@ const https = require('node:https');
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36';
 
-function getText(url, timeoutMs = 8000) {
+function getText(url, timeoutMs = 8000, extraHeaders = null) {
   return new Promise((resolve, reject) => {
     const req = https.get(
       url,
-      { headers: { 'User-Agent': UA, 'Accept-Language': 'zh-CN,zh;q=0.9', Accept: 'text/html,*/*' } },
+      { headers: { 'User-Agent': UA, 'Accept-Language': 'zh-CN,zh;q=0.9', Accept: 'text/html,*/*', ...(extraHeaders || {}) } },
       (res) => {
         if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
           res.resume();
@@ -303,6 +303,44 @@ function wmoText(code) {
   return WMO[n] || (Number.isFinite(n) ? '天气代码' + n : '未知');
 }
 
+/** B站热搜（官方接口，不需要 Key） */
+async function bilibiliHot(limit = 10, timeoutMs = 8000) {
+  try {
+    const raw = await getText('https://api.bilibili.com/x/web-interface/search/square?limit=10', timeoutMs);
+    const data = JSON.parse(raw);
+    const list = (data && data.data && data.data.trending && data.data.trending.list) || [];
+    return list.slice(0, limit)
+      .map((item) => String(item.show_name || item.keyword || '').trim())
+      .filter(Boolean);
+  } catch { return []; }
+}
+
+/** 微博热搜（公开热搜榜，不需要登录） */
+async function weiboHot(limit = 10, timeoutMs = 8000) {
+  try {
+    const raw = await getText('https://weibo.com/ajax/side/hotSearch', timeoutMs,
+      { Referer: 'https://weibo.com/', 'X-Requested-With': 'XMLHttpRequest' });
+    const data = JSON.parse(raw);
+    const list = (data && data.data && data.data.realtime) || [];
+    return list.slice(0, limit)
+      .map((item) => String(item.word || item.note || '').trim())
+      .filter(Boolean);
+  } catch { return []; }
+}
+
+function hotListText(title, list) {
+  if (!list.length) return '';
+  return '【' + title + '】\n' + list.map((x, i) => (i + 1) + '. ' + x).join('\n');
+}
+
+async function bilibiliHotText(limit = 10, timeoutMs = 8000) {
+  return hotListText('B站热搜（实时）', await bilibiliHot(limit, timeoutMs));
+}
+
+async function weiboHotText(limit = 10, timeoutMs = 8000) {
+  return hotListText('微博热搜（实时）', await weiboHot(limit, timeoutMs));
+}
+
 /** 按本机公网 IP 猜城市（没配 city 时用；拿不到就返回空，不影响别的） */
 let _ipCity = { value: '', at: 0 };
 async function ipCity(timeoutMs = 6000) {
@@ -402,6 +440,10 @@ module.exports = {
   parseBing,
   hotNews,
   hotNewsText,
+  bilibiliHot,
+  bilibiliHotText,
+  weiboHot,
+  weiboHotText,
   geocodeCity,
   ipCity,
   weatherText,

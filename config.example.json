@@ -102,19 +102,12 @@
     "allowOthers": false
   },
   "wechat": {
-    "_说明": "微信桥接（examples/wechatauto_bridge.py）的参数。桥接是独立进程，backgroundSend=不抢前台直接发送（默认 true，实测微信最小化/被遮挡也能发，电脑可照常用；设 false 则每次先把微信拉到前台）。改完这里要重启「启动微信桥接.bat」才生效。account=固定用哪个微信号（微信双开/多账号时一定要选，填账号目录名 / wxid / 昵称都行；留空=自动选「最近活跃」，可能选到另一个号）——一般不用手填，在网页「设置 → 微信账号」里点一下就行；accountGuard=认不出哪个窗口是所选账号时宁可不发（默认 true）；windowHwnd=手动钉微信主窗句柄（调试用，0=自动）；staleAfterSec=多久没新消息就当她去忙了；gameWhitelist=检测到这些游戏进程就先不打扰；ignoreSenders=这些会话永不回复；quoteReply=是否引用原消息回复；dbDir=微信文件保存位置（留空会自动找：先看正在运行的微信打开了哪些文件，再扫各个盘根目录；找不到时把微信「设置→文件管理」里的路径填这里）",
+    "_说明": "微信桥接（examples/wechatauto_bridge.py）的参数。桥接是独立进程，backgroundSend=不抢前台直接发送（默认 true，实测微信最小化/被遮挡也能发，电脑可照常用；设 false 则每次先把微信拉到前台）。改完这里要重启「启动微信桥接.bat」才生效。account=固定用哪个微信号（微信双开/多账号时一定要选，填账号目录名 / wxid / 昵称都行；留空=自动选「最近活跃」，可能选到另一个号）——一般不用手填，在网页「设置 → 微信账号」里点一下就行；accountGuard=认不出哪个窗口是所选账号时宁可不发（默认 true）；windowHwnd=手动钉微信主窗句柄（调试用，0=自动）；staleAfterSec=多久没新消息就当她去忙了；ignoreSenders=这些会话永不回复；quoteReply=是否引用原消息回复；dbDir=微信文件保存位置（留空会自动找：先看正在运行的微信打开了哪些文件，再扫各个盘根目录；找不到时把微信「设置→文件管理」里的路径填这里）",
     "dbDir": "",
     "account": "",
     "accountGuard": true,
     "windowHwnd": 0,
     "staleAfterSec": 120,
-    "gameWhitelist": [
-      "valorant"
-    ],
-    "awayNotice": false,
-    "returnNotice": false,
-    "queuedMaxAgeSec": 300,
-    "queuedMaxChats": 2,
     "quoteReply": false,
     "keyboardFallback": true,
     "backgroundSend": true,

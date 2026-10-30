@@ -131,8 +131,13 @@ test('桥接会热更新配置（调试台改完不用重启）', () => {
   // 关键开关必须在热更新里被重新赋值（global 声明）
   const fn = bridge.slice(bridge.indexOf('def reload_config'));
   const body = fn.slice(0, fn.indexOf('\n# 系统 / 公众号'));
-  for (const k of ['CARE_ENABLED', 'SHARE_ENABLED', 'GAME_TOKENS', 'KEYBOARD_FALLBACK', 'BACKGROUND_SEND']) {
+  for (const k of ['CARE_ENABLED', 'SHARE_ENABLED', 'KEYBOARD_FALLBACK', 'BACKGROUND_SEND']) {
     assert.match(body, new RegExp('global[^\\n]*' + k + '|' + k + ' = '), k + ' 要在热更新里刷新');
+  }
+  // 「打游戏就休息 / 离开回来打招呼 / 忙时排队」已按用户要求整组删除，
+  // 这里守住反向约束：别再把这些开关加回来。
+  for (const gone of ['GAME_TOKENS', 'AWAY_NOTICE', 'RETURN_NOTICE', 'QUEUED_MAX_AGE', 'QUEUED_MAX_CHATS']) {
+    assert.doesNotMatch(body, new RegExp(gone), gone + ' 已删除，不应再出现');
   }
   assert.match(body, /SYSTEM_SENDER_NAMES/, '忽略名单也要刷新');
 });
