@@ -99,7 +99,7 @@ const PROVIDERS = {
 
 const DEFAULT_CONFIG = {
   provider: 'deepseek',
-  server: { host: '127.0.0.1', port: 8787, openBrowser: true },
+  server: { host: '127.0.0.1', port: 8787, openBrowser: false },  // 界面只有启动器，不再自动弹浏览器
   deepseek: {
     provider: 'deepseek',
     apiKey: '',
@@ -147,6 +147,8 @@ const DEFAULT_CONFIG = {
     // 三类：傲娇 / 炸毛 / 其他。普通聊天只用「其他」，不跨分类兜底。
     chances: { cute: 0.25, angry: 0.25, other: 0.25 },
     genericChance: 0.25,    // 兼容旧配置，三分类界面统一修改 chances.other
+    // 自定义分类存在 data/sticker-categories.json（不进 config，避免被表单转成字符串）
+
     testChat: '文件传输助手', // 控制台「发送测试表情包」默认发到哪
   },
   // 图片理解：默认智谱 GLM-4V-Flash（免费）

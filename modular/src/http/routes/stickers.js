@@ -99,6 +99,61 @@ module.exports = function register(router) {
       })();
     }
 
+
+    // ---- 自定义分类：加 / 改名 / 删（内置三类不能动）----
+    if (pathname === '/api/stickers/category' && method === 'POST') {
+      return (async () => {
+        const body = await readBody(req);
+        service.requireEnabled();
+        const action = String((body && body.action) || 'add').toLowerCase();
+        const label = stickers.cleanCategoryLabel(body && body.label);
+        if (!label) return json(res, 400, { ok: false, error: '分类名不能为空，也不能带 / \\ : * ? " < > |' });
+        if (Object.values(stickers.EMOTIONS).includes(label)) {
+          return json(res, 400, { ok: false, error: '内置分类已经有「' + label + '」了' });
+        }
+        const extra = stickers.readExtraCategories(config, config.root);
+        const dir = stickers.stickerDir(config, config.root);
+        const at = extra.findIndex((c) => c && stickers.cleanCategoryLabel(c.label) === label);
+        const nextLabel = stickers.cleanCategoryLabel(body && body.newLabel);
+
+        if (action === 'add') {
+          if (at >= 0) return json(res, 400, { ok: false, error: '已经有这个分类了' });
+          stickers.safeDirectory(path.join(dir, label));
+          extra.push({ label, chance: 0.25 });
+          stickers.writeExtraCategories(config, config.root, extra);
+          logger.info('表情包新增分类：' + label);
+          return json(res, 200, { ok: true, label, emotions: service.status().emotions });
+        }
+        if (action === 'remove') {
+          if (at < 0) return json(res, 404, { ok: false, error: '没有这个分类' });
+          extra.splice(at, 1);
+          stickers.writeExtraCategories(config, config.root, extra);
+          logger.info('表情包删除分类：' + label + '（文件夹保留，图片没删）');
+          return json(res, 200, { ok: true, emotions: service.status().emotions });
+        }
+        if (action === 'rename') {
+          if (at < 0) return json(res, 404, { ok: false, error: '没有这个分类' });
+          if (!nextLabel || nextLabel === label) return json(res, 400, { ok: false, error: '新名字不合法' });
+          if (extra.some((c) => c && stickers.cleanCategoryLabel(c.label) === nextLabel)
+              || Object.values(stickers.EMOTIONS).includes(nextLabel)) {
+            return json(res, 400, { ok: false, error: '已经有这个分类了' });
+          }
+          try {
+            const from = path.join(dir, label);
+            const to = path.join(dir, nextLabel);
+            if (fs.existsSync(from) && !fs.existsSync(to)) fs.renameSync(from, to);
+          } catch (err) {
+            return json(res, 500, { ok: false, error: '改文件夹名失败：' + ((err && err.message) || err) });
+          }
+          extra[at] = { ...extra[at], label: nextLabel };
+          stickers.writeExtraCategories(config, config.root, extra);
+          logger.info('表情包分类改名：' + label + ' → ' + nextLabel);
+          return json(res, 200, { ok: true, emotions: service.status().emotions });
+        }
+        return json(res, 400, { ok: false, error: '不认识的 action：' + action });
+      })();
+    }
+
     if (pathname === '/api/stickers/upload' && method === 'POST') {
       return (async () => {
         const body = await readBody(req, 29 * 1024 * 1024);

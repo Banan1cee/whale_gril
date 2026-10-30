@@ -6,115 +6,23 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <DockPanel Grid.Row="0" LastChildFill="False" Margin="0,0,0,12">
+        <DockPanel Grid.Row="0" LastChildFill="False" Margin="0,0,0,10">
             <TextBlock DockPanel.Dock="Left" Text="设置" Style="{StaticResource H1}" VerticalAlignment="Center" />
-            <TextBlock DockPanel.Dock="Right" x:Name="KernelHint" Style="{StaticResource Small}"
+            <TextBlock x:Name="KernelHint" DockPanel.Dock="Right" Style="{StaticResource Small}"
                        HorizontalAlignment="Right" VerticalAlignment="Center" />
         </DockPanel>
 
         <ScrollViewer x:Name="MainScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-            <StackPanel Margin="0,0,10,0">
-
-                <!-- 模型 -->
-                <Border Style="{StaticResource Card}" Padding="16,14" Margin="0,0,0,12">
-                    <StackPanel>
-                        <TextBlock Text="模型与 Key" Style="{StaticResource H2}" />
-                        <TextBlock x:Name="ModelNow" Style="{StaticResource Small}" Margin="0,6,0,0" />
-                        <Grid Margin="0,12,0,0">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="110" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
-                            </Grid.RowDefinitions>
-                            <TextBlock Text="模型服务" Style="{StaticResource Label}" VerticalAlignment="Center" />
-                            <ComboBox x:Name="CmbProvider" Grid.Column="1" Height="28" SelectionChanged="OnProviderChanged" />
-                            <TextBlock Grid.Row="1" Text="接口地址" Style="{StaticResource Label}" VerticalAlignment="Center" Margin="0,8,0,0" />
-                            <TextBox x:Name="TxtBaseUrl" Grid.Row="1" Grid.Column="1" Margin="0,8,0,0" />
-                            <TextBlock Grid.Row="2" Text="模型名" Style="{StaticResource Label}" VerticalAlignment="Center" Margin="0,8,0,0" />
-                            <TextBox x:Name="TxtModel" Grid.Row="2" Grid.Column="1" Margin="0,8,0,0" />
-                            <TextBlock Grid.Row="3" Text="API Key" Style="{StaticResource Label}" VerticalAlignment="Center" Margin="0,8,0,0" />
-                            <PasswordBox x:Name="TxtKey" Grid.Row="3" Grid.Column="1" Margin="0,8,0,0" />
-                        </Grid>
-                        <WrapPanel Margin="0,12,0,0">
-                            <Button Content="保存" Style="{StaticResource Primary}" Click="OnSaveModel" />
-                            <Button Content="测试连通" Style="{StaticResource Ghost}" Margin="8,0,0,0" Click="OnTestModel" />
-                            <CheckBox x:Name="ChkMock" Content="演示模式（不连模型）" Margin="18,0,0,0" VerticalAlignment="Center" />
-                        </WrapPanel>
-                        <TextBlock x:Name="ModelResult" Style="{StaticResource Small}" Margin="0,10,0,0" TextWrapping="Wrap" />
-                    </StackPanel>
-                </Border>
-
-                <!-- 看图 -->
-                <Border Style="{StaticResource Card}" Padding="16,14" Margin="0,0,0,12">
-                    <StackPanel>
-                        <TextBlock Text="看图（视觉模型）" Style="{StaticResource H2}" />
-                        <TextBlock x:Name="VisionNow" Style="{StaticResource Small}" Margin="0,6,0,0" />
-                        <PasswordBox x:Name="TxtVisionKey" Margin="0,10,0,0" />
-                        <WrapPanel Margin="0,10,0,0">
-                            <Button Content="保存看图 Key" Style="{StaticResource Ghost}" Click="OnSaveVision" />
-                            <Button Content="测一下" Style="{StaticResource Ghost}" Margin="8,0,0,0" Click="OnTestVision" />
-                        </WrapPanel>
-                        <TextBlock x:Name="VisionResult" Style="{StaticResource Small}" Margin="0,10,0,0" TextWrapping="Wrap" />
-                    </StackPanel>
-                </Border>
-
-                <!-- 联网 / 日志 -->
-                <Border Style="{StaticResource Card}" Padding="16,14" Margin="0,0,0,12">
-                    <StackPanel>
-                        <TextBlock Text="联网与日志" Style="{StaticResource H2}" />
-                        <WrapPanel Margin="0,12,0,0">
-                            <CheckBox x:Name="ChkSearch" Content="联网搜索" VerticalAlignment="Center" />
-                            <TextBox x:Name="TxtCity" Width="120" Margin="12,0,0,0" ToolTip="搜索时带的城市，例如 杭州" />
-                            <CheckBox x:Name="ChkLinks" Content="链接解析" Margin="20,0,0,0" VerticalAlignment="Center" />
-                            <TextBlock Text="日志级别" Style="{StaticResource Label}" Margin="20,0,8,0" VerticalAlignment="Center" />
-                            <ComboBox x:Name="CmbLog" Width="110" Height="26">
-                                <ComboBoxItem Content="info" />
-                                <ComboBoxItem Content="debug" />
-                            </ComboBox>
-                        </WrapPanel>
-                        <WrapPanel Margin="0,12,0,0">
-                            <Button Content="保存这几项" Style="{StaticResource Ghost}" Click="OnSaveMisc" />
-                            <CheckBox x:Name="ChkShare" Content="定时分享（B 站）" Margin="18,0,0,0" VerticalAlignment="Center" />
-                            <TextBox x:Name="TxtShareMin" Width="70" Margin="10,0,0,0" ToolTip="每多少分钟一次" />
-                            <TextBlock Text="分钟一次" Style="{StaticResource Label}" Margin="6,0,0,0" VerticalAlignment="Center" />
-                        </WrapPanel>
-                        <TextBlock x:Name="MiscResult" Style="{StaticResource Small}" Margin="0,10,0,0" TextWrapping="Wrap" />
-                    </StackPanel>
-                </Border>
-
-                <!-- 网关 -->
-                <Border Style="{StaticResource Card}" Padding="16,14" Margin="0,0,0,12">
-                    <StackPanel>
-                        <TextBlock Text="网关（给别的客户端用）" Style="{StaticResource H2}" />
-                        <TextBlock x:Name="GatewayInfo" Style="{StaticResource Small}" Margin="0,8,0,0" TextWrapping="Wrap" />
-                        <WrapPanel Margin="0,10,0,0">
-                            <Button Content="复制 webhook 地址" Style="{StaticResource Ghost}" Click="OnCopyWebhook" />
-                            <Button Content="打开设置说明" Style="{StaticResource Ghost}" Margin="8,0,0,0" Click="OnOpenGatewayDoc" />
-                        </WrapPanel>
-                    </StackPanel>
-                </Border>
-
-                <!-- 关于 -->
-                <Border Style="{StaticResource Card}" Padding="16,14">
-                    <StackPanel>
-                        <TextBlock Text="关于" Style="{StaticResource H2}" />
-                        <TextBlock x:Name="AboutInfo" Style="{StaticResource Small}" Margin="0,8,0,0" TextWrapping="Wrap" />
-                        <WrapPanel Margin="0,10,0,0">
-                            <Button Content="打开网页控制台" Style="{StaticResource Ghost}" Click="OnOpenConsole" />
-                            <Button Content="打开数据目录" Style="{StaticResource Ghost}" Margin="8,0,0,0" Click="OnOpenData" />
-                            <Button Content="打开配置文件" Style="{StaticResource Ghost}" Margin="8,0,0,0" Click="OnOpenConfig" />
-                        </WrapPanel>
-                    </StackPanel>
-                </Border>
-
-            </StackPanel>
+            <StackPanel x:Name="SectionsHost" Margin="0,0,10,0" />
         </ScrollViewer>
+
+        <DockPanel Grid.Row="2" Margin="0,8,0,0" LastChildFill="False">
+            <TextBlock x:Name="StatusText" DockPanel.Dock="Left" Style="{StaticResource Small}" VerticalAlignment="Center" />
+            <TextBlock x:Name="AboutText" DockPanel.Dock="Right" Style="{StaticResource Small}"
+                       VerticalAlignment="Center" HorizontalAlignment="Right" />
+        </DockPanel>
     </Grid>
 </UserControl>
