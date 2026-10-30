@@ -26,6 +26,8 @@ const features = require('../infra/features');
 const { matchMaster } = require('../core/master');
 const links = require('../adapters/links');
 const websearch = require('../adapters/websearch');
+const searchRouter = require('../adapters/searchRouter');
+const { DigestService } = require('../services/digestService');
 const { LlmError } = require('../llm/client');
 const { saveSettings } = require('../infra/config');
 const personaStore = require('../persona/store');
@@ -51,6 +53,9 @@ class Bot {
     this.logger = logger;
     this.now = now;
     this.rng = rng;
+    // 消息汇总（把错过的消息推给主人）：内存态队列，开关关着不采集。
+    // 注意跟 memory/digest.js（整理记忆）不是一个东西。
+    this.digestService = new DigestService(config, { now: () => this.now().getTime() });
     this.mockChunkDelayMs = mockChunkDelayMs;
     this.linkReader = linkReader || ((url) => links.describeLink(url, { timeoutMs: (config.links && config.links.timeoutMs) || 6000 }));
     this.startedAt = Date.now();
@@ -122,6 +127,19 @@ class Bot {
    * 判断并准备好这次回复（不调用模型）。返回 decision。
    */
   async decide(rawMsg) {
+    const digestOn = this.digestService.reconcile();
+    const digestGeneration = this.digestService.generation;
+    const decision = await this._decide(rawMsg);
+    // 只收「错过」的普通微信消息：命令、重复、系统通知、被静默、已经回过的都不收。
+    const missed = new Set(['addressed_to_other', 'not_addressed', 'silent', 'engaged_side_chatter', 'hourly_cap', 'cooldown']);
+    if (digestOn && this.digestService.reconcile() && this.digestService.generation === digestGeneration
+      && decision.action === 'ignore' && missed.has(decision.reason)) {
+      this.digestService.collect(decision.msg);
+    }
+    return decision;
+  }
+
+  async _decide(rawMsg) {
     const msg = this.normalize(rawMsg);
     // 网页/管理员动态改窗口后，存储限额也要跟上；不会恢复之前已被丢弃的记录。
     if (this.store.limits) this.store.limits.maxMessages = Math.min(800, Math.max(this.store.limits.maxMessages, Number(this.config.chat.historyTurns || 200) + 2, Number(this.config.chat.groupHistoryTurns || 150) + 2));
@@ -431,6 +449,9 @@ class Bot {
     let webText = '';
     const webCfg = this.config.websearch || {};
     const webOn = webCfg.enabled !== false;
+    // 路由、定位、天气/热榜及补搜共享预算，不能每一步重新等一个完整超时。
+    const webDeadline = Date.now() + Math.max(1, Number(webCfg.timeoutMs) || 8000);
+    const webRemaining = () => Math.max(0, webDeadline - Date.now());
     // 注意：以前只认「查一下/最新/多少钱」这类词。用户问「苹果出到几了」「现在几代」这种
     // 口语问题时匹配不上，她就拿训练数据里的旧型号回答（实测把 iPhone 18 说成 16）。
     const searchPattern = new RegExp(
@@ -442,15 +463,36 @@ class Bot {
       ].join('|'),
       'i'
     );
-    if (webOn && clean.text && searchPattern.test(clean.text)) {
+    // 只按关键词触发，词库里没有的说法就永远不联网（「B站的热搜是什么」命中「热搜」，
+    // 但取的是头条榜，答非所问）。补一条「问句形态」兜底：在问事实、不是闲聊、不是问观点。
+    const ASK_FACT_RE = /(是什么|是谁|多少|几号|几点|怎么样|怎么|为什么|哪一?[个些张条]|哪个|有没有|是不是|能不能|会不会|可不可以|排行|排名|热搜|热榜|热门|最新|出到|第几)/;
+    const CHITCHAT_RE = /^(在吗|在不在|你好|嗨|hi|哈喽|早安|晚安|睡了|吃饭了吗|吃了吗|你在干嘛|在干啥|干啥呢|干嘛呢)/i;
+    const OPINION_RE = /(你觉得|你认为|你看|你怎么看|该不该|要不要|喜不喜欢|喜欢吗|讨厌|爱我吗|想我了吗)/;
+    const looksLikeFactQuestion = ASK_FACT_RE.test(clean.text || '')
+      && !CHITCHAT_RE.test(String(clean.text || '').trim())
+      && !OPINION_RE.test(clean.text || '');
+    // 主判断交给模型（语义），关键词只在模型不可用时兜底：
+    // 「小蓝鲸是什么梗」这种词库里没有的说法也会查，「你觉得呢」「在吗」不会被误触发。
+    let route = { need: false, query: '', site: '', failed: true };
+    if (webOn && clean.text) {
+      try {
+        route = await searchRouter.route(this.llm, clean.text, {
+          history: this.recentHeard({ msg, key }).filter((line) => line !== clean.text),
+          timeoutMs: Math.min(2000, Math.max(1, webRemaining())),
+        });
+      } catch { route = { need: false, query: '', site: '', failed: true }; }
+    }
+    const keywordFallback = route.failed && (searchPattern.test(clean.text || '') || looksLikeFactQuestion);
+    const shouldSearch = webOn && Boolean(clean.text) && (route.need || keywordFallback);
+    if (shouldSearch) {
       try {
         const isWeather = /(天气|下雨|下雪|气温|多少度|冷不冷|热不热|台风|雾霾|空气)/.test(clean.text);
-        let q = String(clean.text)
-          .replace(/^(帮我|请|你)?(查一下|查查|搜一下|搜搜|搜索)/, '')
-          .replace(/(是什么|有什么|有哪些|怎么回事|怎么样|吗|呢|啊|呀|？|\?)/g, ' ')
-          .replace(/\s+/g, ' ')
-          .trim()
-          .slice(0, 40);
+        // 模型给出的检索式已清洗；别再全局删除「吗/呢」等字符，可能属于专名。
+        let q = String(route.need && route.query ? route.query : clean.text).trim().slice(0, 100);
+        const site = /(b站|哔哩哔哩|bilibili)/i.test(clean.text) ? 'bilibili'
+          : /(微博|weibo)/i.test(clean.text) ? 'weibo'
+            : /(今日头条|头条)/.test(clean.text) ? 'toutiao' : route.site;
+        const siteDomain = { bilibili: 'bilibili.com', weibo: 'weibo.com', toutiao: 'toutiao.com' }[site];
         if (isWeather) {
           // 天气走专门的接口（open-meteo）：Bing 摘要常常只有「多云」没温度，还爱串城市。
           // 对方话里没提城市就用配置里的 city；都没配就退回搜索引擎。
@@ -460,16 +502,14 @@ class Bot {
           const hit = String(clean.text).match(hasCity);
           if (hit) weatherCity = hit[0].replace(/市$/, '');
           if (!weatherCity && city) weatherCity = city;
-          if (!weatherCity) {
+          if (!weatherCity && webRemaining() > 0) {
             // 话里没说、配置也没填 → 按本机公网 IP 猜一下（否则会搜到随机城市，
             // 比如人在石家庄却答「龙岗今天晴」）。
-            try { weatherCity = await websearch.ipCity(Number(webCfg.timeoutMs) || 6000); } catch { /* 忽略 */ }
+            try { weatherCity = await websearch.ipCity(webRemaining()); } catch { /* 忽略 */ }
           }
-          if (weatherCity) {
+          if (weatherCity && webRemaining() > 0) {
             try {
-              webText = await websearch.weatherText(weatherCity, {
-                timeoutMs: Number(webCfg.timeoutMs) || 8000,
-              });
+              webText = await websearch.weatherText(weatherCity, { timeoutMs: webRemaining() });
               if (webText && this.logger) {
                 this.logger.info('天气查询：' + weatherCity);
               }
@@ -480,17 +520,27 @@ class Bot {
             else if (!/天气/.test(q)) q = q + ' 天气';
           }
         }
-        // 实测：「苹果现在出到几了」加 2026 后，新文章(4/4)反而被官方首页挤掉(2/4)；
-        // 时效性问题交给 dropStaleResults 按日期过滤，别机械加年份。
-        const timeSensitive = /(最新|现在|今年|目前|当前|出到几|第几代|什么型号|哪个版本|刚出|新出)/.test(clean.text || q);
-        if (q && !isWeather && !/\d{4}/.test(q) && !timeSensitive) q += ' ' + now.getFullYear();
-        if (/(新闻|热点|热搜|发生了什么|大事件|头条)/.test(clean.text)) {
-          webText = await websearch.hotNewsText(8);
+        // 只有在问榜单/泛新闻时才取热榜；指定平台不等于要求该平台热搜。
+        // 实测：「苹果现在出到几了」加 2026 后，新文章反而被官方首页挤掉，时效性交给 dropStaleResults。
+        const wantsHotList = /(热搜|热榜|热点榜|排行榜|热门榜)/.test(clean.text)
+          || /^(?:今天|今日|现在|最新)?(?:有)?(?:什么)?(?:新闻|热点|大事件|头条)(?:是什么|有哪些|发生了什么|[?？])?$/.test(clean.text)
+          || /^(?:今天|今日|最近)?发生了什么[?？]?$/.test(clean.text);
+        if (!webText && wantsHotList && webRemaining() > 0) {
+          try {
+            if (site === 'bilibili') {
+              webText = await websearch.bilibiliHotText(10, webRemaining());
+            } else if (site === 'weibo') {
+              webText = await websearch.weiboHotText(10, webRemaining());
+            } else {
+              webText = await websearch.hotNewsText(8, webRemaining());
+            }
+          } catch { /* 同平台搜索兜底，不拿头条榜冒充 B站/微博榜 */ }
         }
-        if (!webText) {
-          webText = await websearch.searchText(q || String(clean.text).slice(0, 40), {
+        if (!webText && webRemaining() > 0) {
+          if (siteDomain) q = q + ' site:' + siteDomain;
+          webText = await websearch.searchText(q || String(clean.text).slice(0, 100), {
             limit: 4,
-            timeoutMs: Number(webCfg.timeoutMs) || 8000,
+            timeoutMs: webRemaining(),
           });
         }
         if (webText) this.logger && this.logger.info('联网搜索：' + String(clean.text).slice(0, 30));
@@ -507,6 +557,8 @@ class Bot {
     // msg 上从没挂过 webText，于是 persona 里那段「【刚联网搜到的资料】」永远是空——
     // 表现就是「问她天气她不知道」，明明日志里已经搜到了。
     msg.webText = webText;
+    // 空结果也要传递真实状态；不能让模型把「尝试过」说成「已查到」。
+    msg.webSearchStatus = shouldSearch ? (webText ? 'ok' : 'empty') : '';
     // 现场问题：日志有「联网搜索」，回复却说「我记的是旧的」——光看日志分不清
     // 资料到底有没有进提示词。这里把注入长度也记下来，一眼能对上。
     if (webText && this.logger) this.logger.info('联网资料已注入提示词：' + String(webText).length + ' 字');

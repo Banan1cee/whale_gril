@@ -30,6 +30,8 @@ async function boot(configPatch = {}) {
   // 出厂 gateway.wechat.enabled 是 false（要用户自己开），测试里显式打开
   const base = {
     server: { port: 0, openBrowser: false },
+    // 这些测试验的是群聊/配置闸门，不该依赖第三方天气接口通不通
+    websearch: { enabled: false },
     gateway: { wechat: { enabled: true, inboundToken: 'change-me-wechat' } },
   };
   fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ ...base, ...configPatch }));

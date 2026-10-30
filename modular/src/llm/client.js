@@ -45,8 +45,20 @@ function friendlyForStatus(status, detail = '') {
   return FRIENDLY.default;
 }
 
-function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
+function sleep(ms, signal) {
+  return new Promise((resolve, reject) => {
+    const done = (err) => {
+      clearTimeout(timer);
+      if (signal) signal.removeEventListener('abort', abort);
+      if (err) reject(err); else resolve();
+    };
+    const abort = () => done(new LlmError('aborted', { code: 'aborted' }));
+    const timer = setTimeout(() => done(), ms);
+    if (signal) {
+      if (signal.aborted) abort();
+      else signal.addEventListener('abort', abort, { once: true });
+    }
+  });
 }
 
 /**
@@ -262,11 +274,10 @@ class DeepSeekClient {
         );
       });
       if (signal) {
-        if (signal.aborted) {
-          req.destroy(new LlmError('aborted', { code: 'aborted' }));
-        } else {
-          signal.addEventListener('abort', () => req.destroy(new LlmError('aborted', { code: 'aborted' })), { once: true });
-        }
+        const abort = () => req.destroy(new LlmError('aborted', { code: 'aborted' }));
+        if (signal.aborted) abort();
+        else signal.addEventListener('abort', abort, { once: true });
+        req.once('close', () => signal.removeEventListener('abort', abort));
       }
       req.end(body);
     });
@@ -311,27 +322,40 @@ class DeepSeekClient {
     return this._post(altUrl, { body, headers, signal });
   }
 
-  async _readAll(res) {
+  async _readAll(res, { signal } = {}) {
     return new Promise((resolve, reject) => {
       const chunks = [];
+      const finish = (err, value) => {
+        if (signal) signal.removeEventListener('abort', abort);
+        if (err) reject(err); else resolve(value);
+      };
+      const abort = () => {
+        finish(new LlmError('aborted', { code: 'aborted' }));
+        res.destroy();
+      };
       res.on('data', (c) => {
         chunks.push(c);
         if (chunks.reduce((n, b) => n + b.length, 0) > 1024 * 1024) {
+          finish(new LlmError(FRIENDLY.default, { code: 'too_large', detail: 'response too large' }));
           res.destroy();
-          reject(new LlmError(FRIENDLY.default, { code: 'too_large', detail: 'response too large' }));
         }
       });
-      res.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+      res.on('end', () => finish(null, Buffer.concat(chunks).toString('utf8')));
       res.on('error', (err) =>
-        reject(new LlmError(FRIENDLY.network, { code: 'network', detail: 'response error: ' + err.message, retryable: true }))
+        finish(new LlmError(FRIENDLY.network, { code: 'network', detail: 'response error: ' + err.message, retryable: true }))
       );
+      res.on('aborted', () => finish(new LlmError(FRIENDLY.network, { code: 'network', retryable: true })));
+      if (signal) {
+        if (signal.aborted) abort();
+        else signal.addEventListener('abort', abort, { once: true });
+      }
     });
   }
 
-  async _errorFrom(res) {
+  async _errorFrom(res, opts = {}) {
     let text = '';
     try {
-      text = await this._readAll(res);
+      text = await this._readAll(res, opts);
     } catch {
       /* ignore */
     }
@@ -351,17 +375,18 @@ class DeepSeekClient {
   }
 
   /** 非流式，返回完整文本 */
-  async complete({ system, turns, maxTokens }) {
+  async complete({ system, turns, maxTokens, signal }) {
     let lastErr = null;
     let sawDegenerate = false;
     for (let attempt = 0; attempt < 3; attempt++) {
       // 第一次用用户配的参数；发现跑飞或撞长度上限后，用更稳的参数再要一遍
       const safe = attempt > 0;
       try {
+        if (signal && signal.aborted) throw new LlmError('aborted', { code: 'aborted' });
         const payload = this.buildPayload({ system, turns, stream: false, maxTokens, safe });
-        const { res } = await this._open(payload, { stream: false });
-        if (res.statusCode !== 200) throw await this._errorFrom(res);
-        const raw = await this._readAll(res);
+        const { res } = await this._open(payload, { stream: false, signal });
+        if (res.statusCode !== 200) throw await this._errorFrom(res, { signal });
+        const raw = await this._readAll(res, { signal });
         let json;
         try {
           json = JSON.parse(raw);
@@ -387,6 +412,7 @@ class DeepSeekClient {
           );
         return truncated ? cutToSentence(text) : text;
       } catch (err) {
+        if (signal && signal.aborted) throw new LlmError('aborted', { code: 'aborted' });
         lastErr = err;
         const llmErr = err instanceof LlmError ? err : new LlmError(FRIENDLY.default, { detail: String(err && err.message) });
         if (!llmErr.retryable || attempt === 2 || llmErr.code === 'aborted') {
@@ -394,7 +420,7 @@ class DeepSeekClient {
           if (sawDegenerate && llmErr.retryable) break;
           throw llmErr;
         }
-        await sleep(700);
+        await sleep(700, signal);
       }
     }
     if (lastErr) throw lastErr;
