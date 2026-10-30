@@ -96,7 +96,8 @@ function createRuntime({ root = path.resolve(__dirname, '..'), env = process.env
   runtime.llm = new DeepSeekClient({ config, logger });
   runtime.bot = new Bot({ config, store, llm: runtime.llm, logger });
   // 表情包任务队列：内存态，重启不重放（避免把上一条没发出去的表情再补发一次）
-  runtime.stickerService = new StickerService(config);
+  // store 用来记动作账：发了哪张、桥接确认没确认，下一轮提示词才看得见
+  runtime.stickerService = new StickerService(config, { store });
   runtime.bot.stickerService = runtime.stickerService;
   runtime.gateways = createGateways({ config, bot: runtime.bot, logger });
   watchConfigFile(runtime);

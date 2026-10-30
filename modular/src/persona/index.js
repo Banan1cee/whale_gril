@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const features = require('../infra/features');
+const actionEvents = require('../core/events');
 
 /**
  * 鲸鲸的人设：系统提示词、心情、演示模式台词、消息切分。
@@ -380,11 +381,11 @@ function stickerCapability(config, msg) {
   return [
     '【表情包】当前微信通道具备真实的图片/动图附件发送能力，可由桥接发送本地表情包；不要否认这项能力。',
     '是否发送由程序按开关、图库、概率和安全校验决定；自然回答即可，不要输出控制标签。',
-    '具备能力不等于已经发送成功：没有实际发送确认时，不要声称「已发」「发过去了」或编造送达结果。',
+    '发没发出去只看【最近做过的事】里的记录：写了发出/确认就照实承认，写了失败、没回执、跳过就说没发成；记录里根本没有的，不要编造送达结果，也不要假装没这回事。',
   ].join('\n');
 }
 
-function buildSystem({ config, msg, profile, notes = [], noteReminders = [], sessionSummary = '', now = new Date() }) {
+function buildSystem({ config, msg, profile, notes = [], noteReminders = [], sessionSummary = '', events = [], now = new Date() }) {
   const stickerBlock = stickerCapability(config, msg);
   // 自定义人设保留，但两条路径都必须遵守共享的对话理解规则。
   const custom = String((config.persona && config.persona.customPrompt) || '').trim();
@@ -432,7 +433,9 @@ function buildSystem({ config, msg, profile, notes = [], noteReminders = [], ses
     if (msg.fightTarget) {
       roastTail += '\n\n【最后一个指令】刚才骂你主人的就是「' + msg.fightTarget.name + '」。不要问主人「谁骂你」，直接冲这个人大骂，句子里必须出现 TA 的名字。';
     }
-    return custom + '\n\n' + CORE_TEMPER + '\n\n' + scene + '\n' + nowLine + '\n' + tone + masterBlock + '\n' + tease + '\n' + netRule + webBlock + styleBlock + slangBlock + abbrevText + fightBlock + roastTail + (stickerBlock ? '\n\n' + stickerBlock : '') + '\n\n' + conversationGuidance(msg);
+    // 自定义人设也要看得见自己做过什么，否则同样是「发了图不知道」
+    const actionBlock = actionEvents.formatBlock(events);
+    return custom + '\n\n' + CORE_TEMPER + '\n\n' + scene + '\n' + nowLine + '\n' + tone + masterBlock + '\n' + tease + '\n' + netRule + webBlock + styleBlock + slangBlock + abbrevText + fightBlock + roastTail + (actionBlock ? '\n\n' + actionBlock : '') + (stickerBlock ? '\n\n' + stickerBlock : '') + '\n\n' + conversationGuidance(msg);
   }
   const name = config.persona.name;
   const isGroup = msg.chatType === 'group';
@@ -640,6 +643,9 @@ function buildSystem({ config, msg, profile, notes = [], noteReminders = [], ses
     lines.push(String(msg.linkText).slice(0, 1200));
     lines.push('你刚点开看了这些信息。回复时像真人一样接一句（吐槽、好奇、接梗都行），不要照念简介，也别假装看完了整个视频或文章；拿不准就问对方一句。');
   }
+
+  const actionBlock = actionEvents.formatBlock(events);
+  if (actionBlock) lines.push('', actionBlock);
 
   lines.push('');
   // 【此刻】以前每条消息都塞「你在泡脚 / 你在收拾房间」，她就句句拿这个开场（「我刚泡完脚，手还湿着呢」），

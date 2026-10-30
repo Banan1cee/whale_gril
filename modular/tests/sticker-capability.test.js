@@ -23,13 +23,15 @@ function build(customPrompt, enabled, ...platformArg) {
 
 for (const [label, customPrompt] of [['默认', ''], ['自定义', '你是审计测试角色，保持原有身份。']]) {
   for (const enabled of [true, 'true', 'on', 1]) {
-    test(`${label}微信开启 ${JSON.stringify(enabled)} 时有真实能力且不伪造送达`, () => {
+    test(`${label}微信开启 ${JSON.stringify(enabled)} 时有真实能力且按回执说话`, () => {
       const prompt = build(customPrompt, enabled);
       assert.equal(prompt.split('【表情包】').length - 1, 1);
       assert.match(prompt, /当前微信通道具备真实的图片\/动图附件发送能力/);
       assert.match(prompt, /不要否认这项能力/);
       assert.match(prompt, /是否发送由程序按开关、图库、概率和安全校验决定/);
-      assert.match(prompt, /没有实际发送确认时，不要声称「已发」「发过去了」或编造送达结果/);
+      // 现在不靠「一律不许提」堵嘴，而是让它按【最近做过的事】里的真实记录说
+      assert.match(prompt, /发没发出去只看【最近做过的事】里的记录/);
+      assert.match(prompt, /不要编造送达结果/);
       assert.match(prompt, /不要输出控制标签/);
       assert.doesNotMatch(prompt, /就直接发一张|发完接着正常说话/);
       assert.match(prompt, /审计测试角色/);
@@ -52,6 +54,6 @@ for (const [label, customPrompt] of [['默认', ''], ['自定义', '你是审计
 }
 
 test('默认和自定义路径注入同一份能力说明', () => {
-  const block = (prompt) => prompt.match(/【表情包】[^]*?编造送达结果。/)[0];
+  const block = (prompt) => prompt.match(/【表情包】[^]*?假装没这回事。/)[0];
   assert.equal(block(build('', true)), block(build('保留自定义角色。', true)));
 });

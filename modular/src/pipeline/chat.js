@@ -160,9 +160,16 @@ class Bot {
           const info = await this.linkReader(urls[0]);
           linkText = links.formatForPrompt(info);
           this.logger && this.logger.info(`读取链接：${urls[0]} → ${info && info.ok ? 'ok' : (info && info.error) || 'failed'}`);
+          const title = String((info && (info.title || info.site)) || '').slice(0, 60);
+          this.store.appendEvent(key, {
+            type: 'link',
+            detail: title ? `${urls[0].slice(0, 80)} → ${title}` : urls[0].slice(0, 120),
+            status: info && info.ok ? 'ok' : 'failed',
+          });
         } catch (err) {
           linkText = `对方发了一个链接（${urls[0]}），但读取失败。`;
           this.logger && this.logger.warn('读取链接失败：' + (err && err.message));
+          this.store.appendEvent(key, { type: 'link', detail: urls[0].slice(0, 120), status: 'failed' });
         }
       }
     }
@@ -487,6 +494,13 @@ class Bot {
           });
         }
         if (webText) this.logger && this.logger.info('联网搜索：' + String(clean.text).slice(0, 30));
+        // 联网结果只在这一轮的提示词里出现一次，下一轮就没了；
+        // 记一条账，她才能回答「你刚才查的什么」「查到了吗」。
+        this.store.appendEvent(key, {
+          type: 'web',
+          detail: String(clean.text || '').slice(0, 60),
+          status: webText ? 'ok' : 'empty',
+        });
       } catch { /* ignore */ }
     }
     // 搜到的东西必须真的送进提示词。以前只赋给局部变量、写了个日志就完事，
@@ -623,6 +637,9 @@ class Bot {
       notes,
       noteReminders,
       sessionSummary: (session && session.summary) || '',
+      // 外部动作账本：她做过什么（发表情包、交给桥接、读链接、联网），
+      // 不塞进去她就永远不知道自己的副作用，只能编。
+      events: this.store.events(key, 12),
       now,
     });
     const turns = this.buildTurns(msg, hasText ? history.slice(0, -1) : history);

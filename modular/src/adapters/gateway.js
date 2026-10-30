@@ -178,6 +178,21 @@ class Gateway {
       senderName: msg.senderName,
       local,
     });
+    // 文字回执：发成功的她自己能从聊天记录里看见，不用记账；
+    // 只有「根本没到微信」和「发失败」记下来，否则下一轮她会以为消息已经发出去了。
+    try {
+      const store = this.bot && this.bot.store;
+      const failed = out && out.ok === false;
+      const stranded = out && out.dryRun && !out.local;
+      if (store && (failed || stranded)) {
+        const key = result.key || (typeof this.bot.sessionKey === 'function' ? this.bot.sessionKey(msg) : '');
+        store.appendEvent(key, {
+          type: 'send',
+          detail: `${(result.bubbles || [result.reply]).length} 条：${String(result.reply).slice(0, 40)}`,
+          status: failed ? 'failed' : 'blocked',
+        });
+      }
+    } catch { /* 记账失败不影响发送 */ }
     // 表情包（实验性）：总闸关着返回 null，桥接就看不到这个字段
     let sticker = null;
     try {

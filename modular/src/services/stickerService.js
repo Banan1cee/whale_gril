@@ -9,10 +9,12 @@ function fail(message, statusCode = 400) { return Object.assign(new Error(messag
 
 /** Ephemeral, one-shot delivery jobs. Never replay a persisted queue after restart. */
 class StickerService {
-  constructor(config, { now = Date.now, rng = Math.random } = {}) {
+  constructor(config, { now = Date.now, rng = Math.random, store = null } = {}) {
     this.config = config;
     this.now = now;
     this.rng = rng;
+    // 动作账本：把「发了哪张、成没成」写回会话，模型下一轮才知道自己干过什么
+    this.store = store || null;
     this.enabled = false;
     this.generation = '';
     this.jobs = new Map();
@@ -30,6 +32,7 @@ class StickerService {
       if (!enabled) for (const job of this.jobs.values()) {
         if (ACTIVE.has(job.status)) {
           job.status = 'cancelled'; job.error = '总开关已关闭，任务已取消';
+          this._note(job, 'cancelled');
         }
       }
     }
@@ -39,6 +42,7 @@ class StickerService {
       if (ACTIVE.has(job.status) && this.now() - job.at > 90 * 1000) {
         job.status = job.status === 'sending' ? 'unconfirmed' : 'cancelled';
         job.error = '任务超时，未自动重试';
+        this._note(job, job.status);
       }
     }
     if (enabled) {
@@ -62,6 +66,21 @@ class StickerService {
     this.jobs.set(job.id, job);
     return { ...job };
   }
+  /** 记一条动作账：模型看不见「发出去了」这件事，只能靠这里回读 */
+  _note(job, status) {
+    if (!this.store || !job || !job.sessionKey) return;
+    const name = job.path ? path.basename(job.path) : '';
+    // 用中文分类名，别把 cute/x:猫猫 这种内部 key 写进提示词
+    const label = stickers.EMOTIONS[job.emotion] || String(job.emotion || '').replace(/^x:/, '');
+    const detail = [label, name].filter(Boolean).join('/') || '表情包';
+    try {
+      // 回执到了就改写排队那条，一次发送只占一行
+      if (job.eventTs && typeof this.store.updateEvent === 'function'
+        && this.store.updateEvent(job.sessionKey, job.eventTs, { status })) return;
+      const entry = this.store.appendEvent(job.sessionKey, { type: 'sticker', detail, status });
+      if (entry) job.eventTs = entry.ts;
+    } catch { /* 记账失败不影响发送 */ }
+  }
   plan(msg, text, request = '') {
     if (!this.reconcile() || msg?.platform !== 'wechat' || !msg.chatId) return null;
     const key = `wechat:${msg.chatId}`;
@@ -71,7 +90,12 @@ class StickerService {
     const hit = stickers.pick({ config: this.config, root: this.config.root, key, text, request,
       recent: this.recent.get(key) || [], rng: this.rng });
     if (!hit) return null;
-    return this.add(hit, msg.chatTitle || msg.chatId, msg.chatId, key, 'reserved');
+    const added = this.add(hit, msg.chatTitle || msg.chatId, msg.chatId, key, 'reserved');
+    const job = this.jobs.get(added.id);
+    // 会话 key 和聊天记录一致（wechat:u:/wechat:g:），ack 回来才写得到同一段上下文
+    if (job) job.sessionKey = `wechat:${msg.chatType === 'group' ? 'g' : 'u'}:${String(msg.chatId).slice(0, 120)}`;
+    this._note(job, 'queued');
+    return { ...added };
   }
   enqueue(emotion, chat) {
     this.requireEnabled();
@@ -109,6 +133,7 @@ class StickerService {
     if (job.key && ['confirmed', 'unconfirmed'].includes(status)) {
       this.recent.set(job.key, [...(this.recent.get(job.key) || []), job.path].slice(-10));
     }
+    this._note(job, status);
     return { ...job };
   }
   status() {
