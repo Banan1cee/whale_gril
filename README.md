@@ -139,7 +139,6 @@ untime\ffmpeg\bin 等）；**没有 ffmpeg 就看不了图**，日志里会写�
 - **回怼有底线**：不碰性、不咒对方家人死、不搞地域性别疾病歧视、不威胁线下现实；主人被骂豁免，不会反打主人
 - **小助手**：问「群里都有谁」列活跃成员；主人私聊问「我微信多少」回自己的号；说「可以损我」授权后，主人才可以点名让他被损三句
 - **听得懂语音**：别人发语音会先转成文字再正常接话（`config.json` 的 `voice`，默认 qwen3-asr-flash）；她自己只发文字，不发语音条
-- **主动分享**：每 2 小时刷 B 站，按群聊热点或鲸鱼娘相关视频挑一个发到群里，附一句自己的吐槽
 - **联网**：新闻热榜、Bing 搜索、链接正文抓取；提示词自带当前时间，不会活在 2024 年
 - **群管理**：禁言群、解禁、改模型、切语气、清记忆、低电量自动发晚安
 - **一键终止所有**：`一键终止.bat`，服务、桥接、守护全部停掉并写暂停标记
@@ -330,7 +329,6 @@ cp config.example.json config.json
 | `group.requireAt` | 群里是否必须先 @ 才回 |
 | `group.engagedMinutes` | 被叫到后继续接话的分钟数 |
 | `group.cooldownSec` | 群回复冷却（0 = 不冷却） |
-| `share.everyMinutes` | 主动分享 B 站视频的间隔（分钟） |
 | `wechat.lowBatteryPercent` | 电量低于多少自动发晚安 |
 | `gateway.wechat.inboundToken` | 桥接与服务器共享的 token，务必改掉 |
 
@@ -349,7 +347,7 @@ whale-girl/                  # 所有代码直接在仓库根目录（没有二�
 │  ├─ memory/                # 会话存储、记忆整理、遗忘、检索
 │  ├─ llm/                   # OpenAI 兼容客户端（含取消/重试）
 │  ├─ adapters/              # 网关、链接、B站、联网搜索、看图、表情包
-│  ├─ services/              # 业务服务：care、digest、reminders、contacts、stickers
+│  ├─ services/              # 业务服务：care、reminders、contacts、stickers
 │  ├─ http/                  # HTTP 基础设施 + 按领域拆分的路由
 │  └─ infra/                 # 配置、日志、功能开关、配置热更新与校验
 ├─ bridge/                   # Python 微信桥接（python -m bridge）
