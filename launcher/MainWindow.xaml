@@ -52,7 +52,7 @@
 
                     <Border Background="{DynamicResource Surface3}" CornerRadius="6" Padding="7,3"
                             Margin="9,0,0,0" VerticalAlignment="Center">
-                        <TextBlock x:Name="VersionText" Text="v4.0.0" Foreground="{DynamicResource Muted}"
+                        <TextBlock x:Name="VersionText" Text="v4.0-alpha" Foreground="{DynamicResource Muted}"
                                    FontSize="10" FontWeight="SemiBold" />
                     </Border>
 
@@ -147,7 +147,7 @@
                     <!-- 关于：整个界面的左下角（版本 + 数据目录入口都在这附近，不再占设置一页） -->
                     <StackPanel DockPanel.Dock="Bottom" Margin="12,10,0,0">
                         <Border Height="1" Background="{DynamicResource Line}" Margin="0,0,0,8" />
-                        <TextBlock x:Name="NavVersion" Text="v4.0.0" Style="{StaticResource Small}" />
+                        <TextBlock x:Name="NavVersion" Text="v4.0-alpha" Style="{StaticResource Small}" />
                         <TextBlock x:Name="NavAboutHint" Text="鲸鲸 · 启动器" Style="{StaticResource Small}"
                                    Foreground="{DynamicResource Dim}" Margin="0,2,0,0" />
                     </StackPanel>

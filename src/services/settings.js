@@ -123,6 +123,11 @@ async function applySettings(runtime, body) {
     if (Number.isFinite(body.group.freeChatChance)) {
       groupPatch['group.freeChatChance'] = Math.max(0, Math.min(1, Number(body.group.freeChatChance)));
     }
+    // GET /api/settings 会把 cooldownSec 一起返回；写入侧漏了它的话，调用方
+    // 「保存成功但值不变」，和当年「改了没反应」是同一类坑。
+    if (Number.isFinite(Number(body.group.cooldownSec))) {
+      groupPatch['group.cooldownSec'] = Math.max(0, Math.min(3600, Math.round(Number(body.group.cooldownSec))));
+    }
     if (Object.keys(groupPatch).length) {
       try {
         applyConfigPatch(runtime, groupPatch);

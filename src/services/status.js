@@ -82,6 +82,30 @@ function recentSenders(store, limit = 8) {
   return [...seen.values()].sort((a, b) => b.ts - a.ts).slice(0, limit);
 }
 
+/**
+ * 最近消息（跨会话，按时间倒序）：给启动器状态页的「最近动态」用。
+ * 只读内存里的会话快照，不碰磁盘；正文截断，避免把长消息整段塞给界面。
+ */
+function recentMessages(store, limit = 10) {
+  const out = [];
+  if (!store || !store.sessions) return out;
+  for (const sess of store.sessions.values()) {
+    for (const m of sess.messages || []) {
+      const text = String(m.text || '').trim();
+      if (!text) continue;
+      out.push({
+        ts: Number(m.ts || 0),
+        who: String(m.name || (m.role === 'assistant' ? '鲸鲸' : '对方')),
+        text: text.slice(0, 200),
+        role: m.role || 'user',
+        chatType: sess.chatType || 'private',
+        platform: sess.platform || '',
+      });
+    }
+  }
+  return out.sort((a, b) => b.ts - a.ts).slice(0, Math.max(1, limit));
+}
+
 /* ---------------- 消息汇总 ---------------- */
 
 function replyChannelLabel(config) {
@@ -90,4 +114,4 @@ function replyChannelLabel(config) {
   return '本地桥接（要另开一个「启动微信桥接.bat」窗口，回复才发得出去）';
 }
 
-module.exports = { storeSummary, statusPayload, recentSenders, replyChannelLabel, budgetSnapshot };
+module.exports = { storeSummary, statusPayload, recentSenders, recentMessages, replyChannelLabel, budgetSnapshot };

@@ -134,11 +134,22 @@ function careDue(config, { lastSentTs = 0, sentToday = 0, now = Date.now() } = {
       reason: 'out_of_window',
       now: formatMinutes(minutesOfDay),
       windows: windows.map((w) => w.raw),
+      sentToday: Number(sentToday),
+      maxPerDay: care.maxPerDay,
+      gapMinutes: null,
+      waitMinutes: null,
     };
   }
 
   if (care.maxPerDay > 0 && Number(sentToday) >= care.maxPerDay) {
-    return { due: false, reason: 'daily_cap', sentToday: Number(sentToday), maxPerDay: care.maxPerDay };
+    return {
+      due: false,
+      reason: 'daily_cap',
+      sentToday: Number(sentToday),
+      maxPerDay: care.maxPerDay,
+      gapMinutes: null,
+      waitMinutes: null,
+    };
   }
 
   // 抖动只用来「打散节奏」，不能盖过用户明确设的间隔：
@@ -154,10 +165,20 @@ function careDue(config, { lastSentTs = 0, sentToday = 0, now = Date.now() } = {
       reason: 'too_soon',
       waitMinutes: Math.max(1, Math.ceil((gapMs - elapsed) / 60000)),
       gapMinutes,
+      sentToday: Number(sentToday),
+      maxPerDay: care.maxPerDay,
     };
   }
 
-  return { due: true, reason: 'ok', gapMinutes, now: formatMinutes(minutesOfDay) };
+  return {
+    due: true,
+    reason: 'ok',
+    gapMinutes,
+    now: formatMinutes(minutesOfDay),
+    sentToday: Number(sentToday),
+    maxPerDay: care.maxPerDay,
+    waitMinutes: null,
+  };
 }
 
 /** 演示模式 / 模型挂了时候的兜底台词（她主动开口的那几种） */

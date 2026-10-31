@@ -127,6 +127,25 @@ test('提示词带上时间和称呼，且明确禁止暴露 AI 身份', () => {
   assert.match(user, /今天加班/, '要带上最近的聊天上下文');
 });
 
+test('careDue 各分支都带 sentToday / maxPerDay（状态页与桥接要用）', () => {
+  const now = new Date(2026, 0, 1, 3, 0, 0).getTime(); // 凌晨 3 点，落在窗口外
+  const closed = care.careDue(
+    { care: { enabled: true, windows: ['09:00-18:00'], everyMinutes: 60, jitterMinutes: 0, maxPerDay: 7 } },
+    { sentToday: 2, now },
+  );
+  assert.equal(closed.reason, 'out_of_window');
+  assert.equal(closed.sentToday, 2);
+  assert.equal(closed.maxPerDay, 7);
+
+  const soon = care.careDue(
+    { care: { enabled: true, windows: ['00:00-24:00'], everyMinutes: 90, jitterMinutes: 0, maxPerDay: 7 } },
+    { lastSentTs: now - 60 * 1000, sentToday: 2, now },
+  );
+  assert.equal(soon.reason, 'too_soon');
+  assert.equal(soon.sentToday, 2);
+  assert.equal(soon.maxPerDay, 7);
+});
+
 /* ---------------- 服务端 + 桥接接线 ---------------- */
 
 async function boot(configPatch = {}) {

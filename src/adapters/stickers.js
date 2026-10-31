@@ -67,6 +67,25 @@ function isInside(root, file) {
   const rel = path.relative(root, file);
   return rel !== '' && !path.isAbsolute(rel) && rel !== '..' && !rel.startsWith('..' + path.sep);
 }
+/**
+ * 这个路径是否经由链接/目录联接（reparse point）指向别处。
+ *
+ * 只靠 `lstat().isSymbolicLink()` 不够：Windows 的 junction 在某些 Node 版本 /
+ * 环境下会返回 false（reparse tag 0xa0000003 但不标记为 symlink）。用 realpath
+ * 和字面路径比对，能同时覆盖符号链接与目录联接；解析失败按可疑处理。
+ */
+function linkedPath(file) {
+  try {
+    const literal = path.resolve(file);
+    // Windows junction 在部分 Node 版本里 isSymbolicLink() 为 false、JS 版 realpath
+    // 也原样返回；只有 native realpath 会真正解析到目标。
+    const resolve = fs.realpathSync.native || fs.realpathSync;
+    const real = resolve(file);
+    return literal.toLowerCase() !== real.toLowerCase();
+  } catch {
+    return true;
+  }
+}
 function regularFile(file, root) {
   try {
     if (!isInside(root, file)) return false;
@@ -79,9 +98,11 @@ function regularFile(file, root) {
       const stat = fs.lstatSync(cur);
       if (stat.isSymbolicLink() || !stat.isDirectory()) return false;
     }
+    cur = absolute;
     for (const part of path.relative(root, file).split(path.sep)) {
       cur = path.join(cur, part);
       if (fs.lstatSync(cur).isSymbolicLink()) return false;
+      if (linkedPath(cur)) return false;
     }
     const stat = fs.statSync(file);
     return stat.isFile() && stat.size > 0 && stat.size <= MAX_FILE_BYTES;
@@ -91,7 +112,7 @@ function listImages(dir, { recursive = true, root = dir, depth = 0, result = [] 
   if (depth > 3 || result.length >= MAX_FILES) return result;
   let entries;
   try {
-    if (fs.lstatSync(dir).isSymbolicLink()) return result;
+    if (fs.lstatSync(dir).isSymbolicLink() || linkedPath(dir)) return result;
     entries = fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
   } catch { return result; }
   for (const ent of entries) {
@@ -135,7 +156,9 @@ function safeDirectory(dir) {
     cur = path.join(cur, part);
     if (fs.existsSync(cur)) {
       const stat = fs.lstatSync(cur);
-      if (stat.isSymbolicLink() || !stat.isDirectory()) throw fail('表情包目录不能是链接、目录联接或普通文件');
+      if (stat.isSymbolicLink() || !stat.isDirectory() || linkedPath(cur)) {
+        throw fail('表情包目录不能是链接、目录联接或普通文件');
+      }
     } else fs.mkdirSync(cur);
   }
   return absolute;

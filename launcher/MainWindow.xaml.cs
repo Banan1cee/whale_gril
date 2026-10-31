@@ -50,7 +50,7 @@ namespace WhaleLauncher
             var dir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
             _sup = new RuntimeSupervisor(dir);
 
-            var ver = "v4.0.0-alpha";
+            var ver = "v4.0-alpha";
             try
             {
                 var vp = Path.Combine(dir, "package.json");
