@@ -18,7 +18,7 @@ const stickers = require('../../adapters/stickers');
 const { json, readBody, MIME } = require('../protocol');
 const { isLoopbackRequest } = require('../security');
 
-const BRIDGE_ONLY = new Set(['/api/stickers/pending', '/api/stickers/claim', '/api/stickers/ack']);
+const BRIDGE_ONLY = new Set(['/api/stickers/gate', '/api/stickers/pending', '/api/stickers/claim', '/api/stickers/ack']);
 
 function stickerPath(config, emotion, name) {
   const dir = stickers.stickerDir(config, config.root);
@@ -48,6 +48,10 @@ module.exports = function register(router) {
       }
     }
 
+    if (pathname === '/api/stickers/gate' && method === 'GET') {
+      return json(res, 200, service.gate(info.url.searchParams.get('id') || ''));
+    }
+
     if (pathname === '/api/stickers/status' && method === 'GET') return json(res, 200, service.status());
 
     // 控制台缩略图：只回传表情包目录里的真图，不能读任意文件
@@ -57,7 +61,9 @@ module.exports = function register(router) {
       if (!hit) return json(res, 404, { ok: false, error: '找不到这张表情包' });
       const type = MIME[path.extname(hit.file).toLowerCase()] || 'application/octet-stream';
       res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-store' });
-      return fs.createReadStream(hit.file).pipe(res);
+      const stream = fs.createReadStream(hit.file);
+      stream.on('error', () => { if (!res.destroyed) res.destroy(); });
+      return stream.pipe(res);
     }
 
     if (pathname === '/api/stickers/delete' && method === 'POST') {
@@ -156,7 +162,7 @@ module.exports = function register(router) {
 
     if (pathname === '/api/stickers/upload' && method === 'POST') {
       return (async () => {
-        const body = await readBody(req, 29 * 1024 * 1024);
+        const body = await readBody(req, Math.ceil(stickers.MAX_FILE_BYTES * 4 / 3) + 1024 * 1024);
         // 上传大文件期间开关可能被关掉
         service.requireEnabled();
         if (generation !== service.generation) {

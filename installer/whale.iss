@@ -18,7 +18,7 @@ AppId={{7C1E2A54-9B3D-4E88-9A21-5D6F0C4B1A77}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppPublisher=鲸鲸
-DefaultDirName={localappdata}\Programs\鲸鲸
+DefaultDirName={localappdata}\Programs\WhaleGirl
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
@@ -40,8 +40,9 @@ Name: "chinese"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加任务："
 
 [Files]
+Source: "..\launcher\publish\WhaleLauncher.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; \
-    Excludes: ".git\*,.gitignore,.github\*,data\*,config.json,tests\*,docs\*,tools\*,scripts\*,installer\*,web\*,launcher\*,wechatauto_db\*,wechatauto_logs\*,runtime\wheelhouse\*,runtime\.temp\*,runtime\.uv-cache\*,runtime\manifest.json,*.log,*.zip,*.patch,*.bat,README*,*.md,requirements.txt"
+    Excludes: "WhaleLauncher.exe,.tools\*,artifacts\*,.git\*,.gitignore,.github\*,data\*,config.json,tests\*,docs\*,tools\*,scripts\*,installer\*,web\*,launcher\*,wechatauto_db\*,wechatauto_logs\*,runtime\wheelhouse\*,runtime\.temp\*,runtime\.uv-cache\*,runtime\manifest.json,*.log,*.zip,*.patch,*.bat,README*,*.md,requirements.txt"
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"
@@ -53,4 +54,4 @@ Filename: "{app}\{#AppExe}"; Description: "启动{#AppName}"; Flags: nowait post
 [UninstallDelete]
 ; 安装目录内的 data 属于用户数据：卸载时保留，只清运行时垃圾
 Type: filesandordirs; Name: "{app}\data\media-cache"
-Type: filesandordirs; Name: "{app}\data\backups"
+; 用户备份默认保留，重装时仍可恢复。

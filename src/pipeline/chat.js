@@ -85,8 +85,10 @@ class Bot {
     if (/^(?:取消|删除|清空)(?:所有|全部)?提醒[。.!！~～]*$/.test(text)) {
       const pending = service.pendingFor(msg.chatId);
       if (!pending.length) return { action: 'reply', key, msg, atMe, canned: '这个会话没有待发的提醒。', reason: 'reminder_cancel' };
-      for (const item of pending) service.cancel(item.id);
-      return { action: 'reply', key, msg, atMe, canned: `好，取消了 ${pending.length} 条提醒。`, reason: 'reminder_cancel' };
+      let cancelled = 0;
+      for (const item of pending) if (service.cancel(item.id).ok) cancelled += 1;
+      const sending = pending.length - cancelled;
+      return { action: 'reply', key, msg, atMe, canned: `取消了 ${cancelled} 条提醒。${sending ? `另有 ${sending} 条正在发送，无法保证撤回，请等待发送结果。` : ''}`, reason: 'reminder_cancel' };
     }
     if (/^(?:提醒列表|我的提醒|有哪些提醒)[。.!！~～?？]*$/.test(text)) {
       const pending = service.pendingFor(msg.chatId);

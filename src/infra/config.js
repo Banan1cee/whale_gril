@@ -234,7 +234,9 @@ const DEFAULT_CONFIG = {
     ignoreSenders: [],
   },
   gateway: {
-    wechat: { enabled: false, inboundToken: 'change-me-wechat', outboundUrl: '', outboundHeaders: {} },
+    // 默认开：本地桥接就是走这个 webhook，关掉等于微信收发全停。
+    // 启动器设置页已不再暴露这一组，改只能改 config.json。
+    wechat: { enabled: true, inboundToken: 'change-me-wechat', outboundUrl: '', outboundHeaders: {} },
     douyin: { enabled: false, inboundToken: 'change-me-douyin', outboundUrl: '', outboundHeaders: {} },
   },
   log: { level: 'info', fileLevel: 'debug' },
@@ -414,17 +416,24 @@ function saveSettings(cfg, patch) {
   // patch 里显式带的 keys 也要合进来，否则一次 saveSettings 就把别的服务商的 Key 丢了，
   // 切换备用服务商时找不到能用的 Key
   const keys = { ...(current.keys || {}) };
+  const previousProvider = String(current.provider || cfg.provider || (cfg.deepseek || {}).provider || 'deepseek');
+  const previousKey = Object.prototype.hasOwnProperty.call(current, 'apiKey') ? current.apiKey :
+    (cfg.llm || {}).apiKey || (previousProvider === 'deepseek' ? (cfg.deepseek || {}).apiKey || (cfg.env || {}).DEEPSEEK_API_KEY : '') || '';
+  if (previousKey && !keys[previousProvider]) keys[previousProvider] = previousKey;
   for (const [name, value] of Object.entries((patch && patch.keys) || {})) {
     if (name && value) keys[name] = String(value).trim();
   }
-  const providerName = String(next.provider || current.provider || '').trim();
-  if (patch && patch.apiKey) {
-    next.apiKey = String(patch.apiKey).trim();
-    if (providerName) keys[providerName] = next.apiKey;
-  } else if (providerName && providerName !== String(current.provider || '').trim()) {
+  const providerName = String(next.provider || previousProvider).trim();
+  if (patch && Object.prototype.hasOwnProperty.call(patch, 'apiKey')) {
+    next.apiKey = String(patch.apiKey || '').trim();
+    if (providerName) {
+      if (next.apiKey) keys[providerName] = next.apiKey;
+      else delete keys[providerName];
+    }
+  } else if (providerName && providerName !== previousProvider) {
     next.apiKey = keys[providerName] || '';
   }
-  if (Object.keys(keys).length) next.keys = keys;
+  next.keys = keys;
   fs.mkdirSync(cfg.paths.dataDir, { recursive: true });
   fs.writeFileSync(cfg.paths.settingsFile, JSON.stringify(next, null, 2), 'utf8');
   return next;
@@ -440,7 +449,13 @@ function resolveRuntime(cfg) {
   const provider = String(settings.provider || cfg.provider || legacy.provider || 'deepseek');
   const preset = PROVIDERS[provider] || PROVIDERS.custom;
   const envKey = (cfg.env && cfg.env.DEEPSEEK_API_KEY) || '';
-  const apiKey = (settings.apiKey || llmCfg.apiKey || legacy.apiKey || envKey || '').trim();
+  // 显式清空不能回退到另一服务的配置密钥。
+  const configuredProvider = String(cfg.provider || legacy.provider || 'deepseek');
+  const apiKey = String(Object.prototype.hasOwnProperty.call(settings, 'apiKey')
+    ? settings.apiKey
+    : (settings.keys && settings.keys[provider]) ||
+      (provider === configuredProvider ? llmCfg.apiKey : '') ||
+      (provider === 'deepseek' ? legacy.apiKey || envKey : '') || '').trim();
   // 只有 provider 确实是 deepseek 时，才沿用 deepseek 段里的地址/模型
   const legacyRelevant = provider === 'deepseek';
   const baseUrl = String(

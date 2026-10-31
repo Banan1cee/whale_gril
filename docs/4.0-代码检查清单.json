@@ -1,0 +1,610 @@
+{
+  "base": "main@3d71ae6",
+  "scope": "自有代码文件清单；静态检查不等同于逐行实机验证",
+  "files": [
+    {
+      "file": "src/app.js",
+      "lines": 152
+    },
+    {
+      "file": "src/adapters/bilibili.js",
+      "lines": 183
+    },
+    {
+      "file": "src/adapters/gateway.js",
+      "lines": 320
+    },
+    {
+      "file": "src/adapters/links.js",
+      "lines": 288
+    },
+    {
+      "file": "src/adapters/mediaCache.js",
+      "lines": 84
+    },
+    {
+      "file": "src/adapters/searchRouter.js",
+      "lines": 110
+    },
+    {
+      "file": "src/adapters/stickers.js",
+      "lines": 346
+    },
+    {
+      "file": "src/adapters/vision.js",
+      "lines": 209
+    },
+    {
+      "file": "src/adapters/websearch.js",
+      "lines": 497
+    },
+    {
+      "file": "src/core/commands.js",
+      "lines": 58
+    },
+    {
+      "file": "src/core/context.js",
+      "lines": 133
+    },
+    {
+      "file": "src/core/echo.js",
+      "lines": 28
+    },
+    {
+      "file": "src/core/events.js",
+      "lines": 98
+    },
+    {
+      "file": "src/core/identity.js",
+      "lines": 36
+    },
+    {
+      "file": "src/core/master.js",
+      "lines": 88
+    },
+    {
+      "file": "src/core/mentions.js",
+      "lines": 28
+    },
+    {
+      "file": "src/core/reminder.js",
+      "lines": 232
+    },
+    {
+      "file": "src/core/text.js",
+      "lines": 53
+    },
+    {
+      "file": "src/core/trigger.js",
+      "lines": 127
+    },
+    {
+      "file": "src/http/protocol.js",
+      "lines": 91
+    },
+    {
+      "file": "src/http/router.js",
+      "lines": 88
+    },
+    {
+      "file": "src/http/security.js",
+      "lines": 103
+    },
+    {
+      "file": "src/http/static.js",
+      "lines": 35
+    },
+    {
+      "file": "src/http/util.js",
+      "lines": 14
+    },
+    {
+      "file": "src/infra/config.js",
+      "lines": 533
+    },
+    {
+      "file": "src/infra/configPatch.js",
+      "lines": 308
+    },
+    {
+      "file": "src/infra/configSchema.js",
+      "lines": 171
+    },
+    {
+      "file": "src/infra/features.js",
+      "lines": 159
+    },
+    {
+      "file": "src/infra/logger.js",
+      "lines": 60
+    },
+    {
+      "file": "src/infra/ownerName.js",
+      "lines": 38
+    },
+    {
+      "file": "src/llm/client.js",
+      "lines": 583
+    },
+    {
+      "file": "src/memory/backup.js",
+      "lines": 281
+    },
+    {
+      "file": "src/memory/budget.js",
+      "lines": 83
+    },
+    {
+      "file": "src/memory/chatStore.js",
+      "lines": 652
+    },
+    {
+      "file": "src/memory/compression.js",
+      "lines": 282
+    },
+    {
+      "file": "src/memory/constants.js",
+      "lines": 72
+    },
+    {
+      "file": "src/memory/episode.js",
+      "lines": 273
+    },
+    {
+      "file": "src/memory/extractor.js",
+      "lines": 291
+    },
+    {
+      "file": "src/memory/format.js",
+      "lines": 83
+    },
+    {
+      "file": "src/memory/hash.js",
+      "lines": 26
+    },
+    {
+      "file": "src/memory/migrate.js",
+      "lines": 260
+    },
+    {
+      "file": "src/memory/personCard.js",
+      "lines": 519
+    },
+    {
+      "file": "src/memory/retrieval.js",
+      "lines": 140
+    },
+    {
+      "file": "src/memory/store.js",
+      "lines": 755
+    },
+    {
+      "file": "src/memory/tokens.js",
+      "lines": 65
+    },
+    {
+      "file": "src/persona/index.js",
+      "lines": 1042
+    },
+    {
+      "file": "src/persona/presets.js",
+      "lines": 90
+    },
+    {
+      "file": "src/persona/store.js",
+      "lines": 278
+    },
+    {
+      "file": "src/persona/tokenCheck.js",
+      "lines": 103
+    },
+    {
+      "file": "src/pipeline/chat.js",
+      "lines": 1503
+    },
+    {
+      "file": "src/services/care.js",
+      "lines": 377
+    },
+    {
+      "file": "src/services/careChat.js",
+      "lines": 44
+    },
+    {
+      "file": "src/services/chat.js",
+      "lines": 108
+    },
+    {
+      "file": "src/services/contacts.js",
+      "lines": 131
+    },
+    {
+      "file": "src/services/debug.js",
+      "lines": 157
+    },
+    {
+      "file": "src/services/persona.js",
+      "lines": 76
+    },
+    {
+      "file": "src/services/reminderService.js",
+      "lines": 346
+    },
+    {
+      "file": "src/services/settings.js",
+      "lines": 172
+    },
+    {
+      "file": "src/services/status.js",
+      "lines": 93
+    },
+    {
+      "file": "src/services/stickerService.js",
+      "lines": 173
+    },
+    {
+      "file": "src/services/wechat.js",
+      "lines": 178
+    },
+    {
+      "file": "src/http/routes/bridge.js",
+      "lines": 49
+    },
+    {
+      "file": "src/http/routes/care.js",
+      "lines": 55
+    },
+    {
+      "file": "src/http/routes/chat.js",
+      "lines": 40
+    },
+    {
+      "file": "src/http/routes/config.js",
+      "lines": 36
+    },
+    {
+      "file": "src/http/routes/debug.js",
+      "lines": 15
+    },
+    {
+      "file": "src/http/routes/features.js",
+      "lines": 27
+    },
+    {
+      "file": "src/http/routes/index.js",
+      "lines": 28
+    },
+    {
+      "file": "src/http/routes/persona.js",
+      "lines": 80
+    },
+    {
+      "file": "src/http/routes/reminders.js",
+      "lines": 74
+    },
+    {
+      "file": "src/http/routes/settings.js",
+      "lines": 31
+    },
+    {
+      "file": "src/http/routes/status.js",
+      "lines": 22
+    },
+    {
+      "file": "src/http/routes/stickers.js",
+      "lines": 211
+    },
+    {
+      "file": "src/http/routes/vision.js",
+      "lines": 42
+    },
+    {
+      "file": "src/http/routes/wechat.js",
+      "lines": 70
+    },
+    {
+      "file": "src/pipeline/stages/canned.js",
+      "lines": 105
+    },
+    {
+      "file": "bridge/bg_sender.py",
+      "lines": 968
+    },
+    {
+      "file": "bridge/contacts_sync.py",
+      "lines": 78
+    },
+    {
+      "file": "bridge/engine.py",
+      "lines": 3961
+    },
+    {
+      "file": "bridge/msg_pipeline.py",
+      "lines": 198
+    },
+    {
+      "file": "bridge/reminder_watch.py",
+      "lines": 82
+    },
+    {
+      "file": "bridge/sticker_transport.py",
+      "lines": 516
+    },
+    {
+      "file": "bridge/uia_boot.py",
+      "lines": 601
+    },
+    {
+      "file": "bridge/__init__.py",
+      "lines": 11
+    },
+    {
+      "file": "bridge/__main__.py",
+      "lines": 21
+    },
+    {
+      "file": "examples/media_fallback.py",
+      "lines": 294
+    },
+    {
+      "file": "examples/uia_compat.py",
+      "lines": 644
+    },
+    {
+      "file": "examples/uia_selftest.py",
+      "lines": 460
+    },
+    {
+      "file": "examples/wechatauto_bridge.py",
+      "lines": 21
+    },
+    {
+      "file": "examples/wechat_bg.py",
+      "lines": 55
+    },
+    {
+      "file": "scripts/bg-selftest.py",
+      "lines": 108
+    },
+    {
+      "file": "scripts/bridge-pipeline-selftest.py",
+      "lines": 214
+    },
+    {
+      "file": "scripts/bridge_loop.bat",
+      "lines": 69
+    },
+    {
+      "file": "scripts/build-release.ps1",
+      "lines": 109
+    },
+    {
+      "file": "scripts/build-runtime.ps1",
+      "lines": 191
+    },
+    {
+      "file": "scripts/bump-version.js",
+      "lines": 67
+    },
+    {
+      "file": "scripts/check-layers.js",
+      "lines": 104
+    },
+    {
+      "file": "scripts/ci-local.ps1",
+      "lines": 85
+    },
+    {
+      "file": "scripts/deploy.ps1",
+      "lines": 80
+    },
+    {
+      "file": "scripts/factory-reset.ps1",
+      "lines": 161
+    },
+    {
+      "file": "scripts/fix-python-il.bat",
+      "lines": 64
+    },
+    {
+      "file": "scripts/make_intro.py",
+      "lines": 319
+    },
+    {
+      "file": "scripts/memory-tool.js",
+      "lines": 118
+    },
+    {
+      "file": "scripts/migrate-data.ps1",
+      "lines": 15
+    },
+    {
+      "file": "scripts/mock-gateway.js",
+      "lines": 151
+    },
+    {
+      "file": "scripts/prepare-sticker-runtime.py",
+      "lines": 80
+    },
+    {
+      "file": "scripts/release-check.js",
+      "lines": 215
+    },
+    {
+      "file": "scripts/setup-runtime.ps1",
+      "lines": 86
+    },
+    {
+      "file": "scripts/smoke.ps1",
+      "lines": 165
+    },
+    {
+      "file": "scripts/start.ps1",
+      "lines": 168
+    },
+    {
+      "file": "scripts/stop-all.ps1",
+      "lines": 137
+    },
+    {
+      "file": "scripts/test-launcher.ps1",
+      "lines": 14
+    },
+    {
+      "file": "scripts/update.ps1",
+      "lines": 1398
+    },
+    {
+      "file": "scripts/voice-selftest.py",
+      "lines": 96
+    },
+    {
+      "file": "tools/dev_kill.py",
+      "lines": 39
+    },
+    {
+      "file": "tools/elev_uia_check.py",
+      "lines": 80
+    },
+    {
+      "file": "tools/uia-check.py",
+      "lines": 47
+    },
+    {
+      "file": "tools/uia-diag.py",
+      "lines": 154
+    },
+    {
+      "file": "tools/uia_probe.py",
+      "lines": 102
+    },
+    {
+      "file": "launcher/Api.cs",
+      "lines": 100
+    },
+    {
+      "file": "launcher/App.xaml",
+      "lines": 441
+    },
+    {
+      "file": "launcher/App.xaml.cs",
+      "lines": 58
+    },
+    {
+      "file": "launcher/Appearance.cs",
+      "lines": 218
+    },
+    {
+      "file": "launcher/IRefreshable.cs",
+      "lines": 10
+    },
+    {
+      "file": "launcher/MainWindow.xaml",
+      "lines": 185
+    },
+    {
+      "file": "launcher/MainWindow.xaml.cs",
+      "lines": 332
+    },
+    {
+      "file": "launcher/RuntimeSupervisor.cs",
+      "lines": 517
+    },
+    {
+      "file": "launcher/Views/BridgePage.xaml",
+      "lines": 155
+    },
+    {
+      "file": "launcher/Views/BridgePage.xaml.cs",
+      "lines": 375
+    },
+    {
+      "file": "launcher/Views/ContactPicker.xaml",
+      "lines": 108
+    },
+    {
+      "file": "launcher/Views/ContactPicker.xaml.cs",
+      "lines": 248
+    },
+    {
+      "file": "launcher/Views/DiagPage.xaml",
+      "lines": 124
+    },
+    {
+      "file": "launcher/Views/DiagPage.xaml.cs",
+      "lines": 388
+    },
+    {
+      "file": "launcher/Views/PersonaPage.xaml",
+      "lines": 206
+    },
+    {
+      "file": "launcher/Views/PersonaPage.xaml.cs",
+      "lines": 331
+    },
+    {
+      "file": "launcher/Views/PlaceholderPage.xaml",
+      "lines": 23
+    },
+    {
+      "file": "launcher/Views/PlaceholderPage.xaml.cs",
+      "lines": 15
+    },
+    {
+      "file": "launcher/Views/ReminderPage.xaml",
+      "lines": 173
+    },
+    {
+      "file": "launcher/Views/ReminderPage.xaml.cs",
+      "lines": 343
+    },
+    {
+      "file": "launcher/Views/SettingsPage.xaml",
+      "lines": 80
+    },
+    {
+      "file": "launcher/Views/SettingsPage.xaml.cs",
+      "lines": 1002
+    },
+    {
+      "file": "launcher/Views/StatusPage.xaml",
+      "lines": 126
+    },
+    {
+      "file": "launcher/Views/StatusPage.xaml.cs",
+      "lines": 260
+    },
+    {
+      "file": "launcher/Views/StickerPage.xaml",
+      "lines": 74
+    },
+    {
+      "file": "launcher/Views/StickerPage.xaml.cs",
+      "lines": 445
+    },
+    {
+      "file": "web/debug.html",
+      "lines": 1220
+    },
+    {
+      "file": "web/index.html",
+      "lines": 204
+    },
+    {
+      "file": "web/persona.html",
+      "lines": 363
+    },
+    {
+      "file": "web/assets/app.js",
+      "lines": 1071
+    },
+    {
+      "file": "web/assets/style.css",
+      "lines": 618
+    },
+    {
+      "file": "installer/whale.iss",
+      "lines": 57
+    }
+  ]
+}

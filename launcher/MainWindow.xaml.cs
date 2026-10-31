@@ -29,6 +29,7 @@ namespace WhaleLauncher
         private readonly DispatcherTimer _timer;
         private readonly Dictionary<string, UserControl> _pages = new Dictionary<string, UserControl>();
         private bool _busy;
+        private bool _refreshing;
         private Snapshot _last;
 
         private static readonly NavEntry[] NavKeys =
@@ -218,7 +219,7 @@ namespace WhaleLauncher
                 {
                     BtnToggle.IsEnabled = false;
                     _sup.Say("— 停止中 —");
-                    await _sup.StopAllAsync();
+                    await Task.Run(() => _sup.StopAll());
                     await Task.Delay(200);
                 }
                 else
@@ -226,8 +227,7 @@ namespace WhaleLauncher
                     BtnToggle.IsEnabled = false;
                     _sup.Say("— 启动中 —");
                     _sup.StartNode();
-                    await Task.Delay(1200);   // 等内核监听端口，再拉桥接
-                    _sup.StartBridge();
+                    if (await _sup.WaitForNodeAsync()) _sup.StartBridge();
                 }
             }
             finally
@@ -246,11 +246,10 @@ namespace WhaleLauncher
             {
                 BtnRestart.IsEnabled = false;
                 _sup.Say("— 重启中 —");
-                await _sup.StopAllAsync();
+                await Task.Run(() => _sup.StopAll());
                 await Task.Delay(600);
                 _sup.StartNode();
-                await Task.Delay(1200);
-                _sup.StartBridge();
+                if (await _sup.WaitForNodeAsync()) _sup.StartBridge();
             }
             finally
             {
@@ -278,12 +277,14 @@ namespace WhaleLauncher
         // ── 刷新 ────────────────────────────────────────────────
         private async Task RefreshAsync()
         {
+            if (_refreshing) return;
+            _refreshing = true;
             try
             {
                 var s = await _sup.ProbeAsync();
                 _last = s;
 
-                DotNode.Fill = s.NodeUp ? (Brush)FindResource("Ok") : (Brush)FindResource("Idle");
+                DotNode.Fill = s.NodeReady ? (Brush)FindResource("Ok") : (Brush)FindResource(s.NodeUp ? "Warn" : "Idle");
                 DotBridge.Fill = s.BrOnline ? (Brush)FindResource("Ok")
                     : (s.NodeUp ? (Brush)FindResource("Warn") : (Brush)FindResource("Idle"));
                 DotWechat.Fill = s.BrOnline && s.BrAccountOk ? (Brush)FindResource("Ok")
@@ -305,7 +306,7 @@ namespace WhaleLauncher
                     if (s.BrOnline) parts.Add(s.BrLastSeenSec >= 0 ? $"桥接 {s.BrLastSeenSec} 秒前心跳" : "桥接在线");
                     else parts.Add("桥接离线");
                 }
-                if (s.NodeUp && !s.HasKey) parts.Add("还没填 Key");
+                if (s.NodeUp && s.NeedsKey && !s.HasKey) parts.Add("还没填 Key");
                 if (s.StFailed > 0) parts.Add($"发送失败 {s.StFailed}");
                 parts.Add("端口 " + s.Port);
                 StatusLine.Text = string.Join(" · ", parts);
@@ -316,6 +317,7 @@ namespace WhaleLauncher
             {
                 StatusLine.Text = "刷新状态出错：" + ex.Message;
             }
+            finally { _refreshing = false; }
         }
 
         private static string Uptime(long sec)

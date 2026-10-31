@@ -12,7 +12,7 @@ import re
 import stat
 import time
 
-MAX_BYTES = 4 * 1024 * 1024
+MAX_BYTES = 64 * 1024 * 1024
 IMAGE_TYPES = {'.gif': 'GIF', '.png': 'PNG', '.jpg': 'JPEG', '.jpeg': 'JPEG', '.webp': 'WEBP'}
 MEDIA_TYPES = {'图片', '表情', '动画表情'}
 

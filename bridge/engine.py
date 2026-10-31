@@ -50,6 +50,7 @@ import time
 _EXAMPLES_DIR = os.path.dirname(os.path.abspath(__file__))
 if _EXAMPLES_DIR not in sys.path:
     sys.path.insert(0, _EXAMPLES_DIR)
+from reminder_watch import start_reminder_watch
 from sticker_transport import (guarded_send as guarded_sticker_send, read_enabled_config,
                                resolve_target as resolve_sticker_target, result as sticker_result,
                                WindowsDesktop, quarantined_input_value,
@@ -736,7 +737,7 @@ MAX_REPLIES_PER_MIN = 8
 BRIDGE_LOCK_PORT = 47821
 
 # —— 语音识别（语音消息 → 文字）——
-# 默认用阿里云百炼的 qwen3-asr-flash；Key 依次取 voice.apiKey → data/settings.json → deepseek.apiKey
+# 默认用阿里云百炼的 qwen3-asr-flash；只使用语音专用或目标服务商的 Key。
 VOICE_ENABLED = True
 VOICE_BASE_URL = "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
 VOICE_MODEL = "qwen3-asr-flash"
@@ -747,35 +748,38 @@ VOICE_SAMPLE_RATE = 16000
 
 
 def _resolve_voice_key(cfg):
-    """语音 Key 的查找链：voice.apiKey → settings.voiceApiKey → settings.apiKey → config.deepseek.apiKey。
-
-    以前只回退到 settings.apiKey，配置文件里写的 deepseek.apiKey 永远用不上（注释承诺了却没实现）；
-    而且 reload_config 不刷新语音 Key，网页里换 Key 必须重启桥接才生效。
-    """
+    """优先语音专用 Key；通用 Key 仅允许发往同一服务商的地址。"""
+    from urllib.parse import urlsplit
     vo = (cfg.get("voice") or {}) if isinstance(cfg, dict) else {}
     key = str(vo.get("apiKey") or "").strip()
     if key:
         return key
+    def origin(value):
+        try:
+            u = urlsplit(str(value or ""))
+            return (u.scheme.lower(), (u.hostname or "").lower(), u.port or (443 if u.scheme == "https" else 80))
+        except Exception:
+            return None
+    destination = origin(vo.get("baseUrl") or VOICE_BASE_URL)
+    host = destination[1] if destination else ""
     try:
         with open(os.path.join(ROOT, "data", "settings.json"), "r", encoding="utf-8-sig") as sf:
             st = json.load(sf)
-        for name in ("voiceApiKey", "apiKey"):
-            v = str(st.get(name) or "").strip()
-            if v:
-                return v
         keys = st.get("keys") or {}
-        for name in ("vision", "qwen", "zhipu", "deepseek"):
-            v = str(keys.get(name) or "").strip()
-            if v:
-                return v
+        dedicated = str(st.get("voiceApiKey") or keys.get("voice") or "").strip()
+        if dedicated:
+            return dedicated
+        if host in {"dashscope.aliyuncs.com", "dashscope-intl.aliyuncs.com"}:
+            matching = str(keys.get("qwen") or (st.get("apiKey") if st.get("provider") == "qwen" else "") or "").strip()
+            if matching:
+                return matching
+        if destination and destination == origin(st.get("baseUrl")):
+            return str(st.get("apiKey") or "").strip()
     except Exception:
         pass
-    try:
-        v = str(((cfg.get("deepseek") or {}).get("apiKey") or "")).strip()
-        if v:
-            return v
-    except Exception:
-        pass
+    legacy = cfg.get("deepseek") or {}
+    if destination and destination == origin(legacy.get("baseUrl") or "https://api.deepseek.com"):
+        return str(legacy.get("apiKey") or "").strip()
     return ""
 
 
@@ -1006,7 +1010,9 @@ def wait_for_server(url, timeout=30):
     while _t.time() < deadline:
         try:
             r = LOCAL_HTTP.get(health, timeout=3)
-            if r.status_code < 500:
+            body = r.json() if r.status_code == 200 else None
+            if (isinstance(body, dict) and body.get("ok") is True
+                    and body.get("up") is True and body.get("service") == "whale-girl"):
                 if waited > 0:
                     log("服务已就绪（等了 %d 秒）" % waited)
                 return True
@@ -1052,9 +1058,9 @@ def ensure_ffmpeg_env():
 
 
 try:
-    from .msg_pipeline import MessagePipeline
+    from .msg_pipeline import MessagePipeline, MessageBatches, split_runs, mergeable
 except ImportError:                                  # 以脚本方式跑（bridge/ 在 sys.path 上）
-    from msg_pipeline import MessagePipeline
+    from msg_pipeline import MessagePipeline, MessageBatches, split_runs, mergeable
 
 def _bg_cli(argv=None):
     """零焦点通道的命令行自检 / 发送。
@@ -1196,7 +1202,7 @@ def main():
             try:
                 import importlib.util as _ilu
                 _spec = _ilu.spec_from_file_location(
-                    "uia_compat", os.path.join(_here, "uia_compat.py"))
+                    "uia_compat", os.path.join(ROOT, "examples", "uia_compat.py"))
                 _mod = _ilu.module_from_spec(_spec)
                 sys.modules["uia_compat"] = _mod
                 _spec.loader.exec_module(_mod)
@@ -2755,8 +2761,8 @@ def main():
         if not generation or sticker_config_now() is None:
             return False
         try:
-            response = LOCAL_HTTP.get(sticker_base + "/api/stickers/status",
-                                      headers=sticker_headers, timeout=3)
+            response = LOCAL_HTTP.get(sticker_base + "/api/stickers/gate",
+                                      params={"id": job_id}, headers=sticker_headers, timeout=3)
             status = response.json() if response.status_code == 200 else None
             return bool(isinstance(status, dict) and status.get("ok") is True
                         and status.get("enabled") is True
@@ -3232,6 +3238,7 @@ def main():
                         buf = _io.BytesIO()
                         seg.save(buf, format="JPEG", quality=88)
                         parts.append(buf.getvalue())
+                    mime = "image/jpeg"
                     log("长截图 %dx%d，切成 %d 段分别识别" % (w, h, len(parts)))
                     # 切段后存的全是 JPEG 字节，mime 必须跟着改（M4）：
                     # 否则 PNG 长截图按 image/png 发 JPEG 字节，看图接口直接解析失败。
@@ -3276,6 +3283,9 @@ def main():
         """语音消息 → 文字；失败返回空串。"""
         if not VOICE_ENABLED:
             log("语音识别已关闭（voice.enabled=false）")
+            return ""
+        if not VOICE_API_KEY:
+            log_throttled("voice-key-missing", "语音识别未配置对应服务商的 Key，请在启动器「看图与语音」中填写语音 Key")
             return ""
         try:
             import io
@@ -3333,6 +3343,9 @@ def main():
             username = msg.get("username") or ""
             if not username:
                 return
+            sender = msg.get("sender_username") or ""
+            if sender == me:
+                return  # 自己发的
             mtype = msg.get("type") or ""
             content = (msg.get("content") or "").strip()
             # 有的微信版本把表情包报成「图片」，正文里还是 <emoji md5=...>：
@@ -3385,16 +3398,6 @@ def main():
                 if username.endswith("@chatroom"):
                     content = _GROUP_SENDER_PREFIX_RE.sub("", content, count=1).strip()
             if not content or content.startswith("<"):
-                return
-            sender = msg.get("sender_username") or ""
-            if sender == me:
-                return  # 自己发的
-            create_time = float(msg.get("create_time") or 0)
-            if create_time and create_time < START_TS - SKIP_OLDER_THAN:
-                return
-            # 已经放了太久的消息（比如前面堵着几条），不再回
-            if create_time and (time.time() - create_time) > STALE_AFTER:
-                log("跳过过期消息（%.0fs 前）：%s" % (time.time() - create_time, content[:20]))
                 return
 
             is_group = username.endswith("@chatroom")
@@ -3489,7 +3492,19 @@ def main():
                     headers=headers,
                     timeout=120,
                 )
+                if r.status_code != 200:
+                    CONN_STATE["ok"] = False
+                    hint = "桥接 token 不匹配，请核对配置并重启桥接" if r.status_code in (401, 403) else "请查看内核诊断日志"
+                    log_throttled("webhook-http:" + str(r.status_code), "鲸鲸接口返回 HTTP %s：%s" % (r.status_code, hint))
+                    return
                 data = r.json()
+                if not isinstance(data, dict) or data.get("ok") is not True:
+                    CONN_STATE["ok"] = False
+                    log_throttled("webhook-response", "鲸鲸接口返回异常，未发送回复")
+                    return
+                if data.get("skipped") == "adapter_disabled":
+                    log_throttled("adapter-disabled", "微信网关未开启，请在启动器设置中开启 gateway.wechat.enabled")
+                    return
             except Exception as e:
                 _msg = repr(e)
                 if "10061" in _msg or "refused" in _msg.lower() or "积极拒绝" in _msg:
@@ -3518,7 +3533,12 @@ def main():
                 log("    去网页右上角「设置」填一把 Key（DeepSeek / 智谱 都行）就会切成真模型。")
 
             target = display_name(username)
-            bubbles = data.get("bubbles") or [data["reply"]]
+            bubbles = data.get("bubbles")
+            if not isinstance(bubbles, list):
+                bubbles = [data["reply"]]
+            bubbles = [line for line in bubbles if isinstance(line, str) and line.strip()]
+            if not bubbles:
+                bubbles = [str(data["reply"])]
             mention = str(data.get("mention") or "").strip()
             # 生成期间又来了新消息 → 这条旧回复就不发了（避免回上一句）
             # 不再因为“有新消息”丢掉旧回复：宁可晚一点，也要回
@@ -3545,7 +3565,9 @@ def main():
                     log("真 @ 失败，退回普通文本：", mention)
                     if not line.startswith("@"):
                         line = "@%s %s" % (mention, line)
-                send_text(line, target, username, quote_text=(content if first and QUOTE_REPLY else None))
+                if not send_text(line, target, username, quote_text=(content if first and QUOTE_REPLY else None)):
+                    log("文字发送失败，停止本次后续气泡和表情包：", target)
+                    return
                 first = False
                 time.sleep(0.6)
             # Stale/queued webhook payloads must claim a current-generation job;
@@ -3556,14 +3578,18 @@ def main():
         except Exception as e:
             log("处理消息异常：", repr(e))
 
-    wait_for_server(bot_url, timeout=30)
+    if not wait_for_server(bot_url, timeout=30):
+        return 2
     log("开始监听新消息…（Ctrl+C 退出）")
     pipeline = MessagePipeline(
         workers=PIPELINE_WORKERS,
         per_chat_limit=PIPELINE_QUEUE_LIMIT,
         log=log,
     )
-    log("消息调度：%d 个 worker（同一会话串行、跨会话并发）" % PIPELINE_WORKERS)
+    # 同一个会话在一轮里攒下的消息：等上一轮跑完再整批交给 on_message_inner。
+    # 上限给队列上限的两倍（至少 4）：正常连发两三条都装得下。
+    batches = MessageBatches(limit=max(4, PIPELINE_QUEUE_LIMIT * 2), log=log)
+    log("消息调度：%d 个 worker（同一会话串行、跨会话并发，连发的几条合并成一次）" % PIPELINE_WORKERS)
 
     def sticker_test_loop():
         """常驻但默认休眠：关闭时不访问任何表情包接口、文件或窗口，也不打印日志。"""
@@ -3587,11 +3613,77 @@ def main():
     threading.Thread(target=sticker_test_loop, daemon=True).start()
 
 
-    def on_message(msg, listener):
-        # 收（Listener 线程）→ 判（这里，按会话排队）→ 发（send_text 内部串行）
-        # 以前是 max_workers=1：一张长截图的 OCR 能把后面所有消息堵几分钟。
+    def merge_text_batch(run, username):
+        """同一个人连发的一串纯文本 → 合成一条消息交给服务端。
+
+        只合并正文和消息 id；发送者、会话、shard 沿用最后一条。
+        群消息正文前面带的 "wxid_xxx:" 前缀要先逐条剥掉，不然合并后
+        模型会看到一串 wxid（原来每条各自剥，合并后只剥一次就漏了）。
+        """
+        merged = dict(run[-1])
+        parts = []
+        ids = []
+        for m in run:
+            text = (m.get("content") or "").strip()
+            if username.endswith("@chatroom"):
+                text = _GROUP_SENDER_PREFIX_RE.sub("", text, count=1).strip()
+            if text:
+                parts.append(text)
+            ids.append(str(m.get("local_id")))
+        if not parts:
+            return [run[-1]]
+        merged["content"] = "\n".join(parts)
+        merged["local_id"] = "|".join(ids)
+        log("合并 %d 条连发消息一起回：%s" % (len(run), " / ".join(parts)[:60]))
+        return [merged]
+
+    def flush_chat(chat, listener):
+        """这个会话的上一轮跑完了：把攒下的消息取走，逐组处理。
+
+        同一轮里同一个人连发的几条合成一条（只调一次模型、只发一次），
+        不同人的消息分开回，顺序不乱。
+        """
         try:
-            pipeline.submit(msg.get("username") or "unknown", on_message_inner, msg, listener)
+            items = batches.take(chat)
+        except Exception as e:                     # noqa: BLE001
+            log("取消息批次失败：", repr(e))
+            return
+        if not items:
+            return
+        for run in split_runs(items):
+            username = (run[0] or {}).get("username") or ""
+            todo = merge_text_batch(run, username) if mergeable(run) else run
+            for msg in todo:
+                try:
+                    on_message_inner(msg, listener)
+                except Exception as e:             # noqa: BLE001
+                    log("处理消息异常：", repr(e))
+
+    def on_message(msg, listener):
+        # 收（Listener 线程）→ 攒（按会话）→ 判（worker，同一会话串行）→ 发（send_lock 串行）
+        # 以前是 max_workers=1：一张长截图的 OCR 能把后面所有消息堵几分钟。
+        #
+        # 「过期」判断必须放在这里（收到的那一刻），不能放到 worker 里：
+        # 同一会话连发两条时，第二条要等第一条生成+发送 10~30 秒才出队，
+        # 到那时候再判就已经是「过期消息」，于是被静默丢掉。
+        try:
+            username = msg.get("username") or ""
+            create_time = float(msg.get("create_time") or 0)
+            if create_time and create_time < START_TS - SKIP_OLDER_THAN:
+                return
+            if create_time and (time.time() - create_time) > STALE_AFTER:
+                log("跳过过期消息（%.0fs 前）：%s"
+                    % (time.time() - create_time, (msg.get("content") or "")[:20]))
+                return
+            chat = username or "unknown"
+            if batches.push(chat, msg):
+                try:
+                    queued = pipeline.submit(chat, flush_chat, chat, listener)
+                except Exception:                  # noqa: BLE001
+                    queued = False
+                if not queued:
+                    # 没投进去就别留着「已排 flush」的标记，否则这一批永远没人来取
+                    batches.release(chat)
         except Exception as e:
             log("提交消息处理失败：", repr(e))
 
@@ -4047,6 +4139,12 @@ def main():
             if mt <= last:
                 continue
             last = mt
+            current = read_config()
+            if (str(((current.get("gateway") or {}).get("wechat") or {}).get("inboundToken") or "") != str(token or "")
+                    or str((current.get("wechat") or {}).get("dbDir") or "") != str((cfg.get("wechat") or {}).get("dbDir") or "")
+                    or build_bot_url(current) != bot_url):
+                log("桥接连接设置变了，重新连接微信与内核…")
+                os._exit(7)
             if reload_config():
                 log("配置已热更新（调试台改完即时生效，不用重启桥接）")
 
@@ -4131,7 +4229,10 @@ def main():
     threading.Thread(target=bridge_heartbeat, daemon=True).start()
     threading.Thread(target=listener_watch, daemon=True).start()
     threading.Thread(target=contacts_sync_once, daemon=True).start()
-    start_reminder_watch()
+    global REMINDER_RUNNER
+    REMINDER_RUNNER = start_reminder_watch(
+        http=LOCAL_HTTP, base=bot_url.rsplit("/webhook", 1)[0], token=token,
+        send_text=send_text, send_at=send_at, log=log)
     log("已启动。鲸鲸地址：", bot_url)
 
     # 就绪标记：外部（守护脚本 / 自检）据此判断「进程在，但可能卡在初始化」

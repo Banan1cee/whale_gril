@@ -125,8 +125,8 @@ test('任务过期不重试，满队列明确报错而非静默丢任务', (t) =
   let now = 1;
   const service = new StickerService(cfg, { now: () => now });
   const first = service.enqueue('other', '文件传输助手'); service.claim(first.id);
-  for (let i = 1; i < 20; i++) service.enqueue('other', '文件传输助手');
-  assert.throws(() => service.enqueue('other', '文件传输助手'), { statusCode: 429 });
+  for (let i = 1; i < 20; i++) service.enqueue('other', '测试会话' + i);
+  assert.throws(() => service.enqueue('other', '另一个测试会话'), { statusCode: 429 });
   now += 5 * 60000 + 1;
   assert.deepEqual(service.pending(), []);
   assert.equal(service.jobs.get(first.id).status, 'unconfirmed');

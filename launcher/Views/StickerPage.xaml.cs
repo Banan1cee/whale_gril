@@ -19,8 +19,9 @@ namespace WhaleLauncher.Views
         private string _current = "";
         private bool _loading;
         private bool _loaded;
+        private bool _fetching;
+        private string _librarySignature = "";
         private bool _currentIsExtra;
-        private int _loadSeq;   // 请求序号：快速切分类时丢掉过期响应（L17）
         private readonly Dictionary<string, int> _imgVer = new Dictionary<string, int>();   // 需要强制刷新的单图版本号（L17）
 
         public StickerPage(RuntimeSupervisor sup)
@@ -32,22 +33,29 @@ namespace WhaleLauncher.Views
 
         public async Task RefreshAsync()
         {
-            if (!_sup.NodeRunning || _loaded) return;
+            if (!_sup.NodeRunning) { _loaded = false; return; }
             await LoadAsync();
         }
 
         private async Task LoadAsync()
         {
-            var seq = ++_loadSeq;
+            if (_fetching) return;
+            _fetching = true;
+            try { await LoadCoreAsync(); }
+            finally { _fetching = false; }
+        }
+
+        private async Task LoadCoreAsync()
+        {
             var res = await Api.Get(_sup.Url, "/api/stickers/status");
-            if (seq != _loadSeq) return;   // 有更新的请求（比如刚切了分类），丢掉旧结果（L17）
             if (!res.Ok)
             {
                 // 功能关闭时接口会 404，这是正常的
-                ChkEnabled.IsChecked = await ReadFlagAsync();
-                if (seq != _loadSeq) return;
+                _loading = true;
+                try { ChkEnabled.IsChecked = await ReadFlagAsync(); }
+                finally { _loading = false; }
                 EmptyHint.Visibility = Visibility.Visible;
-                EmptyHint.Text = "表情包功能还没开。\n打开上面的开关，再把图片拖进来（或者点「上传图片…」）。";
+                EmptyHint.Text = res.StatusCode == 404 ? "表情包功能还没开。\n打开上面的开关，再添加图片。" : "暂时无法读取图库，请稍后刷新或查看诊断。";
                 GridHost.Children.Clear();
                 Tabs.Children.Clear();
                 StatusText.Text = "接口返回：" + (res.Error.Length > 0 ? res.Error : res.Raw);
@@ -69,16 +77,20 @@ namespace WhaleLauncher.Views
             if (_current.Length == 0 || !_emotions.Any(x => x.Key == _current))
                 _current = _emotions.Count > 0 ? _emotions[0].Key : "";
 
-            BuildTabs();
-            RenderGrid(res);
+            var signature = _current + ":" + res.Prop("emotions").GetRawText();
+            if (!_loaded || signature != _librarySignature)
+            {
+                BuildTabs();
+                RenderGrid(res);
+                _librarySignature = signature;
+            }
             DirHint.Text = "目录：" + res.Str("dir");
             if (string.IsNullOrWhiteSpace(TxtTestChat.Text)) TxtTestChat.Text = res.Str("testChat");
 
             var pending = res.Long("pending");
             QueueInfo.Text = pending > 0 ? $"排队中 {pending} 张" : "队列空";
             RenderJobs(res);
-            StatusText.Text = $"共 {_emotions.Sum(x => CountOf(res, x.Key))} 张图。发送测试会排进队列，由桥接按「微信在前台」的时机真的发出去。";
-            await LoadSettingsAsync();
+            if (!_loaded) StatusText.Text = $"共 {_emotions.Sum(x => CountOf(res, x.Key))} 张图。排队不代表送达；桥接核验账号、会话和空输入框后才发送。";
             _loaded = true;
         }
 
@@ -187,7 +199,8 @@ namespace WhaleLauncher.Views
                 {
                     any = true;
                     var name = S(it, "name");
-                    GridHost.Children.Add(BuildCell(name));
+                    var id = S(it, "id");
+                    GridHost.Children.Add(BuildCell(id.Length > 0 ? id : name));
                 }
             }
 
@@ -277,9 +290,12 @@ namespace WhaleLauncher.Views
                 var status = S(j, "status");
                 var chat = S(j, "chat");
                 var file = S(j, "filename");
-                var err = S(j, "error");
+                var err = FriendlyError(S(j, "error"));
                 var when = status switch
                 {
+                    "confirmed" => "已确认送达",
+                    "unconfirmed" => "未确认，请勿重复发送",
+                    "cancelled" => "已取消",
                     "sent" or "done" => "已发出",
                     "failed" => "失败",
                     "claimed" or "sending" => "正在发",
@@ -385,7 +401,7 @@ namespace WhaleLauncher.Views
                 StatusText.Text = "拖进来的不是图片。支持 GIF / PNG / JPG / WebP。";
                 return;
             }
-            if (ok.Length > 5) ok = ok.Take(5).ToArray();
+            if (ok.Length > 5) { StatusText.Text = "一次最多上传 5 张，请分批拖入。"; return; }
             await UploadFilesAsync(ok);
         }
 
@@ -408,18 +424,23 @@ namespace WhaleLauncher.Views
 
         private async Task UploadFilesAsync(string[] files)
         {
+            try
+            {
             var sb = new StringBuilder();
             sb.Append("{\"emotion\":\"").Append(Api.Esc(_current)).Append("\",\"files\":[");
             var first = true;
+            var uploadedCount = 0;
+            var skippedCount = 0;
             foreach (var f in files)
             {
                 var info = new FileInfo(f);
                 if (info.Length > 4 * 1024 * 1024)
                 {
-                    StatusText.Text = $"{info.Name} 超过 4MB，跳过。";
+                    skippedCount++;
                     continue;
                 }
-                var data = Convert.ToBase64String(File.ReadAllBytes(f));
+                var data = Convert.ToBase64String(await File.ReadAllBytesAsync(f));
+                uploadedCount++;
                 if (!first) sb.Append(',');
                 first = false;
                 sb.Append("{\"name\":\"").Append(Api.Esc(info.Name)).Append("\",\"data\":\"").Append(data).Append("\"}");
@@ -435,10 +456,12 @@ namespace WhaleLauncher.Views
                 return;
             }
 
-            StatusText.Text = $"正在上传 {files.Length} 张…";
+            StatusText.Text = $"正在上传 {uploadedCount} 张…";
             var res = await Api.Post(_sup.Url, "/api/stickers/upload", sb.ToString());
-            StatusText.Text = res.Ok ? $"已上传 {files.Length} 张。" : "上传失败：" + (res.Error.Length > 0 ? res.Error : res.Raw);
+            StatusText.Text = res.Ok ? $"已上传 {uploadedCount} 张。" + (skippedCount > 0 ? $"另有 {skippedCount} 张超过 4MB，已跳过。" : "") : "上传失败：" + (res.Error.Length > 0 ? res.Error : res.Raw);
             await LoadAsync();
+            }
+            catch (Exception ex) { StatusText.Text = "上传未完成：" + ex.Message; }
         }
 
         private async void OnTestSend(object sender, RoutedEventArgs e)
@@ -451,7 +474,7 @@ namespace WhaleLauncher.Views
             QueueInfo.Text = res.Ok ? "已排队 1 张" : "排队失败";
             StatusText.Text = res.Ok
                 ? "已排队，接收会话：" + (chat.Length > 0 ? chat : "（配置里的默认会话）")
-                  + "。真正发出去的时机由桥接掌握：微信窗口在前台、账号校验通过才会发。"
+                  + "。桥接会核验目标，必要时短暂切换微信；以任务结果为准。"
                 : "排队失败：" + (res.Error.Length > 0 ? res.Error : res.Raw);
         }
 
@@ -466,6 +489,17 @@ namespace WhaleLauncher.Views
             _loaded = false;
             await LoadAsync();
         }
+
+        private static string FriendlyError(string error) => error switch
+        {
+            "target account window could not be verified" => "无法核验微信账号窗口，请确认微信已登录并选对账号，再重启桥接",
+            "window driver is not ready" => "微信窗口驱动尚未就绪，请等待桥接初始化",
+            "UIA target proof is unavailable; no OCR fallback" => "微信窗口控件不可读取，请查看诊断，必要时重开微信后重启桥接",
+            "sticker job was not claimed; nothing was sent" => "未能领取任务，本次未发送",
+            "an uncertain attachment draft must be cleared manually before further sends" => "上次发送可能留下附件草稿，请先在微信中手动清空输入框",
+            "could not bring the WeChat window to the foreground" => "无法切到微信窗口，请确认窗口可正常打开",
+            _ => error
+        };
 
         private static string S(JsonElement e, string n)
             => e.ValueKind == JsonValueKind.Object && e.TryGetProperty(n, out var v) && v.ValueKind == JsonValueKind.String ? (v.GetString() ?? "") : "";

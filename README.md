@@ -1,3 +1,9 @@
+> **main 分支现为 4.0 桌面版（2026-10-31）**：保留新版界面、按会话隔离的记忆 v2 和连发合并，并合入桥接恢复、表情包发送、凭据隔离及数据保护修复。
+>
+> 使用现有 4.0 配套的 `runtime`，启动根目录 `WhaleLauncher.exe`。启动器已内置 .NET；仓库不包含 Node/Python 运行环境。下方 3.9 发行说明保留作历史参考，不代表本次 main 的运行方式。
+>
+> 本次合入范围及验证见 [4.0 main 合入说明](docs/4.0-main合入说明.md)。升级前请保留原 `data/` 和 `config.json`；更新代码不应覆盖它们。
+
 # 🐋 鲸鲸 · DeepSeek 鲸鱼娘聊天机器人
 
 > **想直接跑？点右边的 [Releases](https://github.com/Banan1cee/whale_gril/releases/latest)，下 `whale-girl-3.54.zip`（86 MB）。**

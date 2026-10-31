@@ -160,7 +160,8 @@ function refreshWechatAccounts(runtime, timeoutMs = 30000) {
     child.stdout.on('data', (d) => { tail = (tail + String(d)).slice(-1200); });
     child.stderr.on('data', (d) => { tail = (tail + String(d)).slice(-1200); });
     child.on('error', (err) => finish({ ok: false, error: err.message }));
-    child.on('close', () => {
+    child.on('close', (code) => {
+      if (code !== 0) return finish({ ok: false, error: '扫描账号失败，请确认微信已登录并查看诊断日志' });
       const cache = readAccountsCache(config);
       finish(cache ? { ok: true, cache } : { ok: false, error: '扫描没拿到账号（看 data/wechat-bridge-4x.log）' });
     });

@@ -1,0 +1,34 @@
+{
+  "scenario": "200 sessions, 40 updates to one session each; five samples",
+  "baseline": {
+    "medianMs": 15.05,
+    "ms": 15.21,
+    "bytes": 93361,
+    "entries": 40,
+    "sessionsWritten": 40,
+    "fullSnapshots": 0,
+    "samples": [
+      15.21,
+      14.48,
+      14.39,
+      15.05,
+      15.06
+    ]
+  },
+  "fixed": {
+    "medianMs": 14.84,
+    "ms": 14.41,
+    "bytes": 95401,
+    "entries": 40,
+    "sessionsWritten": 40,
+    "fullSnapshots": 0,
+    "samples": [
+      14.41,
+      15.21,
+      14.84,
+      15.28,
+      14.74
+    ]
+  },
+  "scope": "历史 c67ea79 工作区的旧快照/日志测试，不适用于 main 的记忆 v2；合入时保留 main 的 Store/ChatStore。"
+}

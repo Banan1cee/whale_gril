@@ -2,12 +2,13 @@
 # 停掉：服务（8787）、微信桥接、桥接守护循环、启动器窗口，并写 data\PAUSED 防止被自动拉起
 # 用法：双击 一键终止.bat，或 powershell -File scripts\stop-all.ps1
 param(
-  [switch]$Quiet
+  [switch]$Quiet,
+  [string]$AppRoot = ''
 )
 
 $ErrorActionPreference = 'Continue'
 
-$root = Split-Path -Parent $PSScriptRoot
+$root = if ($AppRoot) { [IO.Path]::GetFullPath($AppRoot) } else { Split-Path -Parent $PSScriptRoot }
 if (-not $root) { $root = (Get-Location).Path }
 Set-Location $root
 $dataDir = Join-Path $root 'data'
@@ -48,13 +49,37 @@ function Find-Targets {
       if ($proc.ProcessId -eq $PID) { continue }
       if ($proc.CommandLine -notlike ('*' + $p.Match + '*')) { continue }
       # 必须属于本项目，避免误伤同名的别的 node / python
-      if ($proc.CommandLine -notlike '*whale-girl*') { continue }
+      if ($proc.CommandLine.IndexOf($root, [StringComparison]::OrdinalIgnoreCase) -lt 0) { continue }
       # 别碰 DeepSeek Harness 自己的子进程，只杀真正跑 server.js 的那个
       if ($proc.Name -eq 'DSH Desktop.exe' -and $p.Match -ne 'server.js') { continue }
       $found += [pscustomobject]@{ Pid = $proc.ProcessId; Label = $p.Label }
     }
   }
   return $found
+}
+
+# 停止前先保存当前记忆；失败时保留服务，避免强杀丢掉尚未写盘的数据。
+$port = 8787
+try {
+  $value = [int](Get-Content -LiteralPath (Join-Path $dataDir 'server-port.txt') -Raw -ErrorAction Stop)
+  if ($value -gt 0 -and $value -lt 65536) { $port = $value }
+} catch { }
+$serviceIds = @((Find-Targets | Where-Object { $_.Label -eq '鲸鲸服务' }).Pid)
+if ($serviceIds.Count -gt 0) {
+  try {
+    $health = Invoke-RestMethod -Uri "http://127.0.0.1:$port/healthz" -TimeoutSec 3 -ErrorAction Stop
+    if ($health.service -ne 'whale-girl' -or $serviceIds -notcontains $health.pid) { throw '无法确认本目录的内核身份' }
+    $settings = Get-Content -LiteralPath (Join-Path $root 'config.json') -Encoding UTF8 -Raw -ErrorAction Stop | ConvertFrom-Json
+    $token = if ($null -ne $settings.gateway.wechat.inboundToken) { [string]$settings.gateway.wechat.inboundToken } else { 'change-me-wechat' }
+    $headers = @{}
+    if ($token) { $headers['x-bot-token'] = $token }
+    $saved = Invoke-RestMethod -Headers $headers -Uri "http://127.0.0.1:$port/api/runtime/prepare-stop" -Method Post -ContentType 'application/json' -Body '{}' -TimeoutSec 10 -ErrorAction Stop
+    if (-not $saved.ok) { throw '记忆保存失败' }
+    Say '  · 最新记忆已保存并备份'
+  } catch {
+    Say ('  保存未完成，已取消终止，服务保留运行：' + $_.Exception.Message) 'Yellow'
+    exit 1
+  }
 }
 
 # 2) 多轮清扫：杀父进程的时候可能正好有子进程在启动，多扫两遍才干净
@@ -75,10 +100,12 @@ for ($pass = 1; $pass -le 3; $pass++) {
 
 # 3) 兜底：还在监听 8787 的，按端口再杀一次
 Start-Sleep -Milliseconds 300
-$listener = Get-NetTCPConnection -LocalPort 8787 -State Listen -ErrorAction SilentlyContinue |
+$listener = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |
   Select-Object -ExpandProperty OwningProcess -Unique
 foreach ($procId in @($listener)) {
   if (-not $procId -or $procId -eq $PID) { continue }
+  $owned = @((Find-Targets).Pid)
+  if ($owned -notcontains $procId) { Say ('  跳过其它程序占用的端口，pid ' + $procId) 'Yellow'; continue }
   $null = & taskkill.exe /PID $procId /T /F 2>&1
   if ($LASTEXITCODE -eq 0) {
     [void]$killed.Add(('8787 端口 pid {0}' -f $procId))
@@ -89,7 +116,7 @@ foreach ($procId in @($listener)) {
 # 4) 确认结果
 Start-Sleep -Milliseconds 700
 $left = @(Find-Targets | Sort-Object Pid -Unique)
-$portLeft = @(Get-NetTCPConnection -LocalPort 8787 -State Listen -ErrorAction SilentlyContinue).Count
+$portLeft = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue).Count
 
 Say ''
 if ($left.Count -eq 0 -and $portLeft -eq 0) {

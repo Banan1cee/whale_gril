@@ -78,14 +78,17 @@ async function main() {
   if (cmd === 'restore') {
     // 服务在跑，直接改文件的话，内存里的旧记忆会在下次写盘时把文件盖回去
     const serverUp = await new Promise((resolve) => {
-      const probe = net.connect({ host: '127.0.0.1', port: 8787 });
+      let port = 8787;
+      try { const saved = Number(fs.readFileSync(path.join(root, 'data', 'server-port.txt'), 'utf8')); if (Number.isInteger(saved) && saved > 0 && saved < 65536) port = saved; } catch {}
+      const probe = net.connect({ host: '127.0.0.1', port });
       probe.setTimeout(600, () => { probe.destroy(); resolve(false); });
       probe.once('connect', () => { probe.destroy(); resolve(true); });
       probe.once('error', () => resolve(false));
     });
     if (serverUp) {
       console.log('提示：服务在跑，直接改文件的话，内存里的旧记忆可能把文件盖回去。');
-      console.log('      建议先停服务再恢复（恢复完会自动迁移；旧文件保留在 data/memory/legacy/）。');
+      console.log('      请先停止服务再恢复；记忆 v2 不提供网页或启动器正文恢复入口。');
+      return 1;
     }
     if (!arg) {
       console.error('用法：node scripts/memory-tool.js restore <备份文件>');

@@ -298,7 +298,7 @@ namespace WhaleLauncher.Views
             _sup.Say("刷新微信账号列表");
         }
 
-        private async void OnRestartBridge(object sender, RoutedEventArgs e) => await _sup.RestartBridgeAsync();
+        private void OnRestartBridge(object sender, RoutedEventArgs e) => _sup.RestartBridge();
 
         // ── 配置读写 ────────────────────────────────────────────
         private async Task LoadConfigAsync()

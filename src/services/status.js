@@ -1,6 +1,6 @@
 'use strict';
 
-const { resolveRuntime, maskKey } = require('../infra/config');
+const { maskKey } = require('../infra/config');
 const { LIMITS } = require('../memory/constants');
 
 /** 状态接口用的精简记忆统计 */
@@ -29,7 +29,7 @@ function budgetSnapshot(runtime) {
 
 function statusPayload(runtime) {
   const { config, llm, gateways } = runtime;
-  const rt = resolveRuntime(config);
+  const apiKey = llm.apiKey;
   return {
     ok: true,
     name: config.persona.name,
@@ -42,8 +42,8 @@ function statusPayload(runtime) {
     needsKey: llm.needsKey,
     model: llm.model,
     baseUrl: llm.baseUrl,
-    keyMasked: maskKey(rt.apiKey),
-    hasKey: Boolean(rt.apiKey),
+    keyMasked: maskKey(apiKey),
+    hasKey: Boolean(apiKey),
     temperature: llm.temperature,
     memory: storeSummary(runtime),
     budget: budgetSnapshot(runtime),

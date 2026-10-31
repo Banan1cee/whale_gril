@@ -27,7 +27,7 @@ module.exports = function register(router) {
 
   router.post('/api/vision', async (runtime, req, res) => {
     try {
-      const body = await readBody(req);
+      const body = await readBody(req, 12 * 1024 * 1024);
       const text = await vision.describe(runtime.config, {
         imageBase64: body && body.image,
         mime: (body && body.mime) || 'image/jpeg',
@@ -36,7 +36,7 @@ module.exports = function register(router) {
       return json(res, 200, { ok: true, text });
     } catch (err) {
       runtime.logger.warn('图片识别失败：' + (err && err.message));
-      return json(res, 500, { ok: false, error: String((err && err.message) || err) });
+      return json(res, err.statusCode || 500, { ok: false, error: String((err && err.message) || err) });
     }
   });
 };

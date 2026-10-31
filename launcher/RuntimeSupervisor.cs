@@ -25,6 +25,8 @@ namespace WhaleLauncher
     public sealed class Snapshot
     {
         public bool NodeUp;
+        public bool NodeReady;
+        public bool NeedsKey;
         public bool BridgeUp;
         public int Port = 8787;
         public long UptimeSec;
@@ -61,24 +63,18 @@ namespace WhaleLauncher
         public string LogPath { get; }
         public event Action<LogLine> Line;
 
+        private readonly object _processLock = new object();
+        private bool _bridgeWanted;
+        private bool _disposed;
+        private int _restartGeneration;
+        private int _restartCount;
+        private DateTime _bridgeStartedAt;
         private Process _node;
         private Process _bridge;
         private readonly HttpClient _http = new HttpClient(new HttpClientHandler { UseProxy = false })
         {
             Timeout = TimeSpan.FromSeconds(2)
         };
-
-        // ── 桥接自动重启（对齐 scripts/bridge_loop.bat 的退出码约定）────
-        // 命令行用户走 bridge_loop.bat，它会处理 code=7（发送卡住看门狗要求重启）
-        // 和原生崩溃；启动器直接拉 python，原来只打一行「已退出（code=7）」就完了，
-        // 桥接卡死后不会自己回来。这里补上同样的语义。
-        private readonly object _bridgeLock = new object();
-        private volatile bool _bridgeAutoRestart = true;   // 用户主动停止时置 false
-        private volatile bool _disposed;
-        private int _bridgeRestarts;                        // 连续「起来就退」次数
-        private DateTime _bridgeStartedAt = DateTime.MinValue;
-        private const int BridgeRestartLimit = 3;
-        private const int BridgeStableSeconds = 60;         // 活过 60 秒才算真的起来了
 
         private readonly List<LogLine> _history = new List<LogLine>();
         private readonly object _histLock = new object();
@@ -221,47 +217,81 @@ namespace WhaleLauncher
             if (NodeRunning) return;
             var exe = Path.Combine(BaseDir, "runtime", "node.exe");
             if (!File.Exists(exe)) exe = "node";
-            _node = Launch(exe, "server.js", "K", "内核");
+            _node = Launch(exe, "server.js --no-browser", "K", "内核");
+        }
+
+        public async Task<bool> WaitForNodeAsync()
+        {
+            for (var attempt = 0; attempt < 40; attempt++)
+            {
+                if (!NodeRunning) return false;
+                try
+                {
+                    using var response = await _http.GetAsync(Url + "/healthz");
+                    using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+                    if (response.IsSuccessStatusCode && Str(body.RootElement, "service") == "whale-girl"
+                        && Bool(body.RootElement, "up") && Long(body.RootElement, "pid") == _node.Id) return true;
+                }
+                catch { }
+                await Task.Delay(250);
+            }
+            Say("内核尚未就绪，请查看诊断日志");
+            return false;
         }
 
         public void StartBridge()
         {
-            if (BridgeRunning) return;
-            var exe = Path.Combine(BaseDir, "runtime", "python", "python.exe");
-            if (!File.Exists(exe))
+            lock (_processLock)
             {
-                Say("找不到 runtime\\python\\python.exe，桥接起不来");
-                return;
-            }
-            lock (_bridgeLock)
-            {
-                _bridgeAutoRestart = true;
-            }
-            _bridge = Launch(exe, "-u examples\\wechatauto_bridge.py", "B", "桥接");
-            if (_bridge != null)
-            {
-                _bridgeStartedAt = DateTime.Now;
+                if (_disposed || BridgeRunning) return;
+                if (!NodeRunning) { Say("内核尚未启动，请先启动服务"); return; }
+                var exe = Path.Combine(BaseDir, "runtime", "python", "python.exe");
+                if (!File.Exists(exe)) { Say("找不到内置 Python，桥接起不来，请检查安装包"); return; }
+                try { File.Delete(Path.Combine(DataDir, "bridge-ready.json")); } catch { }
+                try { File.Delete(Path.Combine(DataDir, "PAUSED")); } catch { }
+                _bridgeWanted = true;
+                _bridgeStartedAt = DateTime.UtcNow;
+                _bridge = Launch(exe, "-u examples\\wechatauto_bridge.py", "B", "桥接");
             }
         }
 
-        public void StartAll()
+        private async Task RecoverBridgeAsync(Process exited, int generation)
+        {
+            int code;
+            try { code = exited.ExitCode; } catch { return; }
+            // 缺依赖、账号/数据库配置错误不反复重启；崩溃和配置切换才恢复。
+            if (code == 0 || code == 1 || code == 2) return;
+            await Task.Delay(3000);
+            lock (_processLock)
+            {
+                if (_disposed || !_bridgeWanted || generation != _restartGeneration
+                    || !ReferenceEquals(_bridge, exited) || !NodeRunning
+                    || File.Exists(Path.Combine(DataDir, "PAUSED"))) return;
+                if ((DateTime.UtcNow - _bridgeStartedAt).TotalSeconds >= 60) _restartCount = 0;
+                if (++_restartCount > 3) { _bridgeWanted = false; Say("桥接连续异常退出，已停止自动重启，请查看诊断"); return; }
+                Say(code == 7 ? "桥接请求重新连接，正在重启…" : "桥接异常退出，正在自动恢复…");
+                _bridge = null;
+                StartBridge();
+            }
+        }
+
+        public async Task StartAllAsync()
         {
             StartNode();
-            StartBridge();
+            if (await WaitForNodeAsync()) StartBridge();
         }
 
-        /// <summary>重启桥接。异步等旧进程退出，不再卡 UI 线程（M31）。</summary>
-        public async Task RestartBridgeAsync()
+        public void RestartBridge()
         {
-            // 先关自动重启再杀，避免 Kill 触发的 Exited 又把进程拉起来一次
-            lock (_bridgeLock) { _bridgeAutoRestart = false; }
-            await KillAsync(_bridge, "B", "桥接").ConfigureAwait(false);
-            lock (_bridgeLock)
+            lock (_processLock)
             {
+                _bridgeWanted = false;
+                _restartGeneration++;
+                _restartCount = 0;
+                Kill(_bridge, "B", "桥接");
                 _bridge = null;
-                _bridgeRestarts = 0;
+                StartBridge();
             }
-            StartBridge();   // StartBridge 内部会把自动重启重新打开
         }
 
         private Process Launch(string exe, string args, string src, string what)
@@ -273,6 +303,7 @@ namespace WhaleLauncher
                     WorkingDirectory = BaseDir,
                     UseShellExecute = false,
                     CreateNoWindow = true,
+                    RedirectStandardInput = true,
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
                     StandardOutputEncoding = Encoding.UTF8,
@@ -284,14 +315,15 @@ namespace WhaleLauncher
                 psi.Environment["PYTHONIOENCODING"] = "utf-8";
                 psi.Environment["PYTHONUNBUFFERED"] = "1";
                 psi.Environment["PYTHONUTF8"] = "1";
+                if (src == "K") psi.Environment["WHALE_CONTROL_STDIN"] = "1";
 
                 var p = new Process { StartInfo = psi, EnableRaisingEvents = true };
                 p.OutputDataReceived += (_, e) => { if (e.Data != null) Emit(src, e.Data); };
                 p.ErrorDataReceived += (_, e) => { if (e.Data != null) Emit(src, e.Data); };
                 p.Exited += (_, __) =>
                 {
-                    if (src == "B") OnBridgeExited(p);
-                    else Emit(src, $"{what}已退出（code={TryExitCode(p)}）");
+                    Emit(src, $"{what}已退出（code={TryExitCode(p)}）");
+                    if (src == "B") _ = RecoverBridgeAsync(p, _restartGeneration);
                 };
                 p.Start();
                 p.BeginOutputReadLine();
@@ -311,109 +343,45 @@ namespace WhaleLauncher
             try { return p.ExitCode.ToString(); } catch { return "?"; }
         }
 
-        private static int TryExitCodeInt(Process p)
+        public void StopAll()
         {
-            try { return p.ExitCode; } catch { return -1; }
-        }
-
-        /// <summary>
-        /// 桥接退出后的处置，对齐 scripts/bridge_loop.bat 的约定：
-        ///   code 0     正常退出，不重启
-        ///   code 1/2   缺依赖 / 数据库打不开，重试只会刷屏，停下来等人工
-        ///   code 7     它自己要求重启（发送卡住看门狗、账号设置变更）
-        ///   其他/负数  原生崩溃（微信窗口被回收时的访问违规），也重试
-        /// 连续起来就退超过 3 次就停，避免无限重启刷屏。
-        /// </summary>
-        private void OnBridgeExited(Process p)
-        {
-            int code = TryExitCodeInt(p);
-            Emit("B", $"桥接已退出（code={code}）");
-            if (_disposed) return;
-            if (code == 0) return;
-
-            lock (_bridgeLock)
+            lock (_processLock)
             {
-                if (!ReferenceEquals(_bridge, p)) return;   // 已经换新进程了，不归这次管
-                if (!_bridgeAutoRestart) return;            // 用户主动停止
-            }
-
-            if (code == 1 || code == 2)
-            {
-                Emit("B", "桥接启动失败（code=" + code + "），不自动重启：按上面日志里的原因修（缺依赖 / 数据库打不开）");
-                return;
-            }
-
-            int round;
-            lock (_bridgeLock)
-            {
-                if ((DateTime.Now - _bridgeStartedAt).TotalSeconds >= BridgeStableSeconds) _bridgeRestarts = 0;
-                round = ++_bridgeRestarts;
-            }
-            if (round > BridgeRestartLimit)
-            {
-                Emit("B", $"桥接连续 {BridgeRestartLimit} 次起来就退出，先停下，修好再手动点「启动」");
-                return;
-            }
-
-            Emit("B", $"桥接要求重启（code={code}），3 秒后自动拉起（第 {round}/{BridgeRestartLimit} 次）");
-            Task.Delay(3000).ContinueWith(_ =>
-            {
-                lock (_bridgeLock)
-                {
-                    if (_disposed || !_bridgeAutoRestart) return;
-                    if (!ReferenceEquals(_bridge, p)) return;
-                    _bridge = null;      // 清旧引用，StartBridge 才会真的再拉一个
-                }
-                StartBridge();
-            });
-        }
-
-        /// <summary>停止全部进程。异步版：UI 线程不再同步 WaitForExit（M31：原来最长冻结 6 秒）。</summary>
-        public async Task StopAllAsync()
-        {
-            lock (_bridgeLock) { _bridgeAutoRestart = false; }
-            await KillAsync(_bridge, "B", "桥接").ConfigureAwait(false);
-            await KillAsync(_node, "K", "内核").ConfigureAwait(false);
-            lock (_bridgeLock)
-            {
+                _bridgeWanted = false;
+                _restartGeneration++;
+                _restartCount = 0;
+                Kill(_bridge, "B", "桥接");
+                Kill(_node, "K", "内核");
                 _bridge = null;
                 _node = null;
             }
         }
 
-        private async Task KillAsync(Process p, string src, string what)
+        private void Kill(Process p, string src, string what)
         {
             if (p == null) return;
             try
             {
                 if (!p.HasExited)
                 {
-                    p.Kill(entireProcessTree: true);
-                    // 等退出改成异步：原来 WaitForExit(3000) 同步阻塞 UI 线程（M31）。
-                    // ConfigureAwait(false)：Dispose 里同步等它收尾也不会和 UI 线程互锁。
-                    await Task.WhenAny(p.WaitForExitAsync(), Task.Delay(5000)).ConfigureAwait(false);
-
-                    // 卡在 UIA/COM 调用里时 Kill 可能迟迟不返回；补一刀 taskkill /T /F，
-                    // 否则「重启」会变成「旧进程还活着 + 新进程又起来」。
-                    if (!p.HasExited)
+                    // 内核先落盘退出；只有超时才强制结束。
+                    if (src == "K")
                     {
                         try
                         {
-                            using var tk = Process.Start(new ProcessStartInfo("taskkill", $"/PID {p.Id} /T /F")
+                            p.StandardInput.WriteLine("shutdown");
+                            p.StandardInput.Flush();
+                            if (p.WaitForExit(5000))
                             {
-                                UseShellExecute = false,
-                                CreateNoWindow = true,
-                                RedirectStandardOutput = true,
-                                RedirectStandardError = true
-                            });
-                            tk?.WaitForExit(5000);
+                                Emit(src, $"已正常停止{what}");
+                                return;
+                            }
                         }
-                        catch { }
-                        await Task.WhenAny(p.WaitForExitAsync(), Task.Delay(3000)).ConfigureAwait(false);
+                        catch { /* 管道断开时回退到强制结束 */ }
                     }
-
-                    if (p.HasExited) Emit(src, $"已停止{what}");
-                    else Emit(src, $"⚠ {what}没能停下（pid={p.Id}，可能卡在 UIA 调用里）；它若还在跑，会和下次启动的进程抢微信窗口");
+                    p.Kill(entireProcessTree: true);
+                    p.WaitForExit(3000);
+                    Emit(src, $"已停止{what}");
                 }
             }
             catch (Exception ex)
@@ -434,6 +402,8 @@ namespace WhaleLauncher
                     var json = await _http.GetStringAsync(Url + "/api/status");
                     using var doc = JsonDocument.Parse(json);
                     var root = doc.RootElement;
+                    s.NodeReady = Bool(root, "ok");
+                    s.NeedsKey = Bool(root, "needsKey");
                     s.UptimeSec = Long(root, "uptimeSec");
                     s.Provider = Str(root, "providerLabel");
                     if (string.IsNullOrEmpty(s.Provider)) s.Provider = Str(root, "provider");
@@ -443,7 +413,8 @@ namespace WhaleLauncher
 
                     if (root.TryGetProperty("gateways", out var gws) && gws.ValueKind == JsonValueKind.Array && gws.GetArrayLength() > 0)
                     {
-                        var gw = gws[0];
+                        var gw = gws.EnumerateArray().FirstOrDefault(g => Str(g, "platform") == "wechat");
+                        if (gw.ValueKind != JsonValueKind.Object) return s;
                         if (gw.TryGetProperty("stats", out var st) && st.ValueKind == JsonValueKind.Object)
                         {
                             s.StReceived = (int)Long(st, "received");
@@ -470,7 +441,7 @@ namespace WhaleLauncher
                         s.BridgeUp = s.BridgeUp || s.BrOnline;
                     }
                 }
-                catch { /* 内核刚起还没监听 */ }
+                catch { s.StLastError = "内核进程在运行，但状态接口尚未就绪，请查看诊断"; }
             }
 
             return s;
@@ -539,10 +510,8 @@ namespace WhaleLauncher
         public void Dispose()
         {
             _disposed = true;
-            lock (_bridgeLock) { _bridgeAutoRestart = false; }
+            StopAll();
             _http.Dispose();
-            // 退出时同步收尾，别把内核/桥接留成孤儿；KillAsync 内部 ConfigureAwait(false)，这里等不会死锁
-            StopAllAsync().GetAwaiter().GetResult();
         }
     }
 }

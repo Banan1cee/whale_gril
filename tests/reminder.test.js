@@ -313,6 +313,20 @@ test('普通聊天不会被提醒分支吃掉', async (t) => {
   assert.equal(bot.reminders.list().length, 0);
 });
 
+test('聊天取消提醒按实际取消数回复，并说明正在发送的任务', async t => {
+  const { config } = fixture(t);
+  const { bot } = makeBot(t, config);
+  bot.reminders.add({ wxid: 'wxid_a', text: '正在发', at: NOW.getTime() + 1000 });
+  bot.reminders.add({ wxid: 'wxid_a', text: '稍后发', at: NOW.getTime() + 10000 });
+  bot.reminders.due(NOW.getTime() + 2000);
+  const result = await bot.decide({ platform: 'wechat', chatId: 'wxid_a', chatType: 'private',
+    senderId: 'u1', senderName: '阿螈', text: '取消提醒' });
+  assert.match(result.canned, /取消了 1 条/);
+  assert.match(result.canned, /另有 1 条正在发送/);
+  assert.equal(bot.reminders.list().find(it => it.text === '正在发').status, 'sending');
+  assert.equal(bot.reminders.list().find(it => it.text === '稍后发').status, 'cancelled');
+});
+
 /* ---------------- HTTP ---------------- */
 
 test('HTTP：列表 / 取消 / 桥接领取要 token', async (t) => {
@@ -363,4 +377,43 @@ test('HTTP：列表 / 取消 / 桥接领取要 token', async (t) => {
 
   const missing = await post('/api/reminders/cancel', { id: 'nope' });
   assert.equal(missing.status, 404);
+});
+
+/* ---------------- 并发额度与过期宽限 ---------------- */
+
+test('在途的提醒也占当日额度（连续领取不能突破每日上限）', (t) => {
+  const { config } = fixture(t);
+  config.reminder.maxPerDay = 2;
+  const clock = { ms: NOW.getTime() };
+  const svc = serviceAt(config, clock);
+  const at = clock.ms + 1000;
+  svc.add({ wxid: 'wxid_a', text: '第一条', at });
+  svc.add({ wxid: 'wxid_b', text: '第二条', at });
+  svc.add({ wxid: 'wxid_c', text: '第三条', at });
+
+  clock.ms += 2000;
+  const first = svc.due();
+  assert.equal(first.length, 2, '当日上限 2 条，一轮最多领 2 条');
+  // 一条都没回执：它们还在发送中，但已经占掉了今天的额度
+  const again = svc.due();
+  assert.equal(again.length, 0, '在途的提醒必须占额度，否则并发领取能突破每日上限');
+  const third = svc.list().find((x) => x.text === '第三条');
+  assert.notEqual(third.status, 'sending', '第三条不该被悄悄领走');
+});
+
+test('桥接卡住超过 5 分钟宽限：不再重发，直接标过期', (t) => {
+  const { config } = fixture(t);
+  const clock = { ms: NOW.getTime() };
+  const svc = serviceAt(config, clock);
+  svc.add({ wxid: 'wxid_a', text: '开会', at: clock.ms + 1000 });
+
+  clock.ms += 2000;
+  const first = svc.due();
+  assert.equal(first.length, 1);
+
+  // 桥接拿走任务后卡了 10 分钟，早过了「提醒时间 + 5 分钟」的宽限
+  clock.ms += 10 * 60 * 1000;
+  const out = svc.due();
+  assert.equal(out.length, 0, '过了宽限期的提醒不许再发出去');
+  assert.equal(svc.list()[0].status, 'expired');
 });

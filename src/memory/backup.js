@@ -9,6 +9,8 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
+const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+
 const BUNDLE_VERSION = 2;
 const KEEP = 20;
 const MAX_TOTAL_MB = 300;
@@ -185,12 +187,16 @@ function validateBundle(bundle) {
   if (!bundle || bundle.kind !== 'whale-girl-memory') {
     throw new Error('这个文件不是鲸鲸的记忆备份（缺少 kind=whale-girl-memory）');
   }
-  const files = bundle.files || {};
-  if (files.memory && (typeof files.memory !== 'object' || Array.isArray(files.memory))) {
-    throw new Error('备份里的 memory 结构不对，为了不毁掉现在的记忆，已取消恢复');
+  const files = bundle.files;
+  if (!object(files)) throw new Error('备份里的 files 必须是对象');
+  for (const key of ['memory', 'store', 'settings', 'persona', 'careState', 'shareState']) {
+    if (Object.hasOwn(files, key) && !object(files[key])) throw new Error('备份里的 ' + key + ' 结构不对，已取消恢复');
   }
   if (!files.memory && !files.store) throw new Error('备份里没有可恢复的记忆');
-  if (files.settings && typeof files.settings !== 'object') throw new Error('备份里的 settings 不是对象，已取消恢复');
+  if (files.store && (!object(files.store.sessions) || Object.values(files.store.sessions).some(session => !object(session)))) throw new Error('备份里的 store sessions 结构不对，已取消恢复');
+  for (const body of Object.values(files.memory || {})) {
+    if (typeof body !== 'string') throw new Error('备份里的记忆文件内容必须是文本，已取消恢复');
+  }
   // 路径穿越防护：记忆包里的 key 只能是相对路径
   for (const rel of Object.keys(files.memory || {})) {
     if (rel.includes('..') || path.isAbsolute(rel) || /^[a-zA-Z]:/.test(rel)) {
@@ -244,6 +250,8 @@ function restoreFrom(root, bundle) {
       for (const k of SECRET_SETTING_KEYS) {
         if (value[k] === undefined && current[k] !== undefined) merged[k] = current[k];
       }
+      if (object(current.keys) || object(value.keys)) merged.keys = { ...(current.keys || {}), ...(value.keys || {}) };
+      if (value.provider && value.provider !== current.provider && value.apiKey === undefined) merged.apiKey = (merged.keys || {})[value.provider] || '';
       value = merged;
     }
     fs.writeFileSync(path.join(dir, item.name), JSON.stringify(value, null, 2), 'utf8');

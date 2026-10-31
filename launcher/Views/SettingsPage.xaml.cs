@@ -107,19 +107,9 @@ namespace WhaleLauncher.Views
                 new FieldSpec { Path = "links.timeoutMs", Label = "链接超时(毫秒)", Kind = "num", Min = 1000, Max = 30000 },
                 new FieldSpec { Path = "links.cacheMinutes", Label = "链接缓存(分钟)", Kind = "num", Min = 0, Max = 1440 },
             }},
-            new SectionSpec { Title = "网关", Note = "给别的客户端接入用；桥接自己用的是这套，一般不用改。", Fields =
-            {
-                new FieldSpec { Path = "gateway.wechat.enabled", Label = "微信网关", Kind = "bool" },
-                new FieldSpec { Path = "gateway.wechat.inboundToken", Label = "微信 token", Kind = "secret", Hint = "留空表示不改" },
-                new FieldSpec { Path = "gateway.wechat.outboundUrl", Label = "微信出站地址", Kind = "text" },
-                new FieldSpec { Path = "gateway.douyin.enabled", Label = "抖音网关", Kind = "bool" },
-                new FieldSpec { Path = "gateway.douyin.inboundToken", Label = "抖音 token", Kind = "secret", Hint = "留空表示不改" },
-                new FieldSpec { Path = "gateway.douyin.outboundUrl", Label = "抖音出站地址", Kind = "text" },
-            }},
             new SectionSpec { Title = "高级", Note = "改完要重启的项都在这里；管理员口令也归这一组，平时不用碰。", Fields =
             {
                 new FieldSpec { Path = "server.host", Label = "监听地址", Kind = "text", Hint = "只给本机用就 127.0.0.1；0.0.0.0 = 同 WiFi 也能连（改完重启）" },
-                new FieldSpec { Path = "server.openBrowser", Label = "启动时自动开浏览器", Kind = "bool" },
                 new FieldSpec { Path = "server.port", Label = "本机端口", Kind = "num", Min = 1024, Max = 65535, Hint = "改完重启生效" },
                 new FieldSpec { Path = "log.level", Label = "日志级别（界面 / 控制台）", Kind = "select", Options = new[] { "debug", "info", "error" }, Hint = "只影响界面和启动器控制台；日志文件始终记 debug 全量（data/whale.log、data/wechat-bridge-4x.log），改完重启生效" },
                 new FieldSpec { Path = "storage.mediaKeepDays", Label = "媒体缓存保留几天", Kind = "num", Min = 0, Max = 90 },
@@ -368,9 +358,7 @@ namespace WhaleLauncher.Views
                     pwd.LostFocus += async (s, e) =>
                     {
                         if (_loading || pwd.Password.Length == 0) return;
-                        await PatchAsync(f.Path, "\"" + Api.Esc(pwd.Password.Trim()) + "\"");
-                        pwd.Password = "";
-                        StatusText.Text = f.Label + " 已保存。";
+                        if (await PatchAsync(f.Path, "\"" + Api.Esc(pwd.Password.Trim()) + "\"")) pwd.Password = "";
                     };
                     return Row(f.Label, pwd, f.Hint);
                 }
@@ -493,13 +481,14 @@ namespace WhaleLauncher.Views
             }
         }
 
-        private async Task PatchAsync(string path, string jsonLiteral)
+        private async Task<bool> PatchAsync(string path, string jsonLiteral)
         {
             var body = "{\"patch\":{\"" + Api.Esc(path) + "\":" + jsonLiteral + "}}";
             var res = await Api.Post(_sup.Url, "/api/config", body);
             StatusText.Text = res.Ok
                 ? path + " 已保存 " + DateTime.Now.ToString("HH:mm:ss")
                 : path + " 保存失败：" + (res.Error.Length > 0 ? res.Error : res.Raw);
+            return res.Ok;
         }
 
         // ── 模型 / 看图 / 关于 ───────────────────────────────────
@@ -545,16 +534,21 @@ namespace WhaleLauncher.Views
             body.Children.Add(buttons);
             body.Children.Add(result);
 
-            save.Click += async (s, e) =>
+            string ModelRequest()
             {
                 var prov = (cmb.SelectedItem as ProviderItem)?.Key ?? "";
-                var json = "{"
+                return "{"
                     + "\"provider\":\"" + Api.Esc(prov) + "\","
                     + "\"baseUrl\":\"" + Api.Esc(baseUrl.Text.Trim()) + "\","
                     + "\"model\":\"" + Api.Esc(model.Text.Trim()) + "\","
                     + "\"mock\":" + (mock.IsChecked == true ? "true" : "false")
                     + (key.Password.Length > 0 ? ",\"apiKey\":\"" + Api.Esc(key.Password.Trim()) + "\"" : "")
                     + "}";
+            }
+
+            save.Click += async (s, e) =>
+            {
+                var json = ModelRequest();
                 var res = await Api.Post(_sup.Url, "/api/settings", json);
                 if (!res.Ok) { result.Text = "保存失败：" + (res.Error.Length > 0 ? res.Error : res.Raw); return; }
                 key.Password = "";
@@ -563,7 +557,7 @@ namespace WhaleLauncher.Views
             test.Click += async (s, e) =>
             {
                 result.Text = "正在测…";
-                var res = await Api.Post(_sup.Url, "/api/settings/test", "{}");
+                var res = await Api.Post(_sup.Url, "/api/settings/test", ModelRequest());
                 result.Text = res.Ok ? "连通正常。" : "测试没通过：" + (res.Error.Length > 0 ? res.Error : res.Raw);
             };
 
@@ -682,15 +676,6 @@ namespace WhaleLauncher.Views
                     _loadVision?.Invoke(settings.Root);
                 }
                 _configLoaded = true;
-
-                var ver = "4.0";
-                var pkg = Path.Combine(AppContext.BaseDirectory, "package.json");
-                if (File.Exists(pkg))
-                {
-                    var m = System.Text.RegularExpressions.Regex.Match(File.ReadAllText(pkg), "\"version\"\\s*:\\s*\"([^\"]+)\"");
-                    if (m.Success) ver = m.Groups[1].Value;
-                }
-                AboutText.Text = "鲸鲸 " + ver + " · 启动器 4.0";
             }
             finally
             {

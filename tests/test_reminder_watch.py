@@ -3,6 +3,8 @@ import importlib.util
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import Mock, patch
+import ast
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT / 'bridge') not in sys.path:
@@ -77,6 +79,14 @@ class StepTests(unittest.TestCase):
 
 
 class LoopTests(unittest.TestCase):
+    def test_due_backlog_wakes_without_thirty_second_idle(self):
+        b = FakeBridge([{'ok': True, 'items': items('first'), 'nextDueAt': 1000}])
+        wake = Mock()
+        runner = b.runner(now_ms=lambda: 1000, wake=wake)
+        wake.wait.side_effect = lambda delay: runner.stop()
+        runner.run()
+        wake.wait.assert_called_once_with(0.2)
+
     def test_sleeps_until_next_due_not_a_fixed_poll(self):
         now = [1_000_000]
         b = FakeBridge([{'ok': True, 'items': [], 'nextDueAt': now[0] + 5_000}])
@@ -95,6 +105,47 @@ class LoopTests(unittest.TestCase):
         runner.stop()
         runner.run()          # 已经 stopped，立即返回
         self.assertEqual(b.fetches, 0)
+
+
+class WiringTests(unittest.TestCase):
+    def test_engine_imports_starts_and_retains_runner(self):
+        tree = ast.parse((ROOT / 'bridge/engine.py').read_text(encoding='utf-8-sig'))
+        self.assertTrue(any(isinstance(n, ast.ImportFrom) and n.module == 'reminder_watch'
+                            and any(a.name == 'start_reminder_watch' for a in n.names)
+                            for n in ast.walk(tree)))
+        assignments = [n for n in ast.walk(tree) if isinstance(n, ast.Assign)
+                       and isinstance(n.value, ast.Call)
+                       and isinstance(n.value.func, ast.Name)
+                       and n.value.func.id == 'start_reminder_watch']
+        self.assertEqual(len(assignments), 1)
+        self.assertEqual(assignments[0].targets[0].id, 'REMINDER_RUNNER')
+
+    def test_real_adapter_fetches_with_token_sends_target_and_acks(self):
+        http = Mock()
+        http.request.return_value.json.return_value = {'ok': True, 'items': items('a')}
+        send_text, send_at = Mock(return_value=True), Mock(return_value=True)
+        with patch.object(rw.threading, 'Thread') as thread:
+            runner = rw.start_reminder_watch(http=http, base='http://127.0.0.1:5050',
+                                            token='test-token', send_text=send_text,
+                                            send_at=send_at, log=Mock())
+            thread.return_value.start.assert_called_once()
+            self.assertEqual(runner.step()[0], 1)
+        send_text.assert_called_once_with('开会', '阿螈', 'wxid_x')
+        self.assertEqual(http.request.call_args_list[0].args,
+                         ('GET', 'http://127.0.0.1:5050/api/reminders/due'))
+        self.assertEqual(http.request.call_args_list[0].kwargs['headers']['x-bot-token'], 'test-token')
+        self.assertEqual(http.request.call_args_list[1].kwargs['json'],
+                         {'id': 'a', 'ok': True, 'error': ''})
+
+    def test_failed_http_does_not_send_or_ack_as_success(self):
+        http, send = Mock(), Mock()
+        http.request.return_value.raise_for_status.side_effect = RuntimeError('403')
+        with patch.object(rw.threading, 'Thread'):
+            runner = rw.start_reminder_watch(http=http, base='http://localhost', token='bad',
+                                            send_text=send, send_at=send, log=Mock())
+        with self.assertRaisesRegex(RuntimeError, '403'):
+            runner.step()
+        send.assert_not_called()
 
 
 if __name__ == '__main__':

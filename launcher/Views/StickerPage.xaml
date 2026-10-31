@@ -28,12 +28,12 @@
                 </WrapPanel>
                 <WrapPanel Margin="0,8,0,0">
                     <TextBlock Text="目录" Style="{StaticResource Small}" VerticalAlignment="Center" Margin="0,0,6,0" />
-                    <TextBox x:Name="TxtDir" Width="300" Height="24" VerticalAlignment="Center" LostFocus="OnSaveStickerSettings"
+                    <TextBox x:Name="TxtDir" Width="300" VerticalAlignment="Center" LostFocus="OnSaveStickerSettings"
                              ToolTip="相对路径，分类是它下面的文件夹" />
                     <TextBlock Text="概率" Style="{StaticResource Small}" VerticalAlignment="Center" Margin="18,0,6,0" />
-                    <TextBox x:Name="TxtCute" Width="50" Height="24" Margin="0,0,4,0" LostFocus="OnSaveStickerSettings" ToolTip="傲娇" />
-                    <TextBox x:Name="TxtAngry" Width="50" Height="24" Margin="0,0,4,0" LostFocus="OnSaveStickerSettings" ToolTip="炸毛" />
-                    <TextBox x:Name="TxtOther" Width="50" Height="24" Margin="0,0,6,0" LostFocus="OnSaveStickerSettings" ToolTip="其他" />
+                    <TextBox x:Name="TxtCute" Width="50" Margin="0,0,4,0" LostFocus="OnSaveStickerSettings" ToolTip="傲娇" />
+                    <TextBox x:Name="TxtAngry" Width="50" Margin="0,0,4,0" LostFocus="OnSaveStickerSettings" ToolTip="炸毛" />
+                    <TextBox x:Name="TxtOther" Width="50" Margin="0,0,6,0" LostFocus="OnSaveStickerSettings" ToolTip="其他" />
                     <TextBlock Text="傲娇 / 炸毛 / 其他（0–1）" Style="{StaticResource Small}" VerticalAlignment="Center" />
                 </WrapPanel>
                 <TextBlock Text="只有在微信窗口处于前台、且账号校验通过时才会真的发出去；关掉开关会立刻取消所有排队任务。"
@@ -43,7 +43,7 @@
 
         <WrapPanel Grid.Row="2" Margin="0,12,0,0">
             <StackPanel x:Name="Tabs" Orientation="Horizontal" VerticalAlignment="Center" />
-            <TextBox x:Name="TxtNewCat" Width="110" Height="24" Margin="14,0,0,0" ToolTip="新分类的名字（文件夹会同名建出来）" />
+            <TextBox x:Name="TxtNewCat" Width="110" Margin="14,0,0,0" ToolTip="新分类的名字（文件夹会同名建出来）" />
             <Button Content="＋ 新分类" Style="{StaticResource Ghost}" Margin="6,0,0,0" Click="OnAddCategory" />
             <Button x:Name="BtnDelCat" Content="删除分类" Style="{StaticResource Ghost}" Margin="6,0,0,0"
                     Visibility="Collapsed" Click="OnDeleteCategory"
@@ -55,11 +55,11 @@
         <Border Grid.Row="3" Style="{StaticResource Card}" Padding="16,12" Margin="0,12,0,0">
             <StackPanel>
                 <TextBlock Text="可选：真实消息测试" FontWeight="SemiBold" />
-                <TextBlock Text="测试会向微信发出一条真实消息，并可能短暂切换窗口、发完还原。先确认接收会话是空的；排队不代表送达，微信窗口不在前台时桥接会推迟。"
+                <TextBlock Text="测试会向微信发出一条真实消息，并可能短暂切换窗口、发完还原。先清空输入框；排队不代表送达。结果未确认时不要重复发送，请先检查微信是否留下附件草稿。"
                            Style="{StaticResource Small}" Margin="0,6,0,0" TextWrapping="Wrap" />
                 <WrapPanel Margin="0,10,0,0">
                     <TextBlock Text="接收会话" Style="{StaticResource Small}" VerticalAlignment="Center" />
-                    <TextBox x:Name="TxtTestChat" Width="200" Height="24" Margin="10,0,0,0"
+                    <TextBox x:Name="TxtTestChat" Width="200" Margin="10,0,0,0"
                              ToolTip="填微信里的备注名/昵称；默认用设置里的「测试发送到哪个会话」" />
                     <Button Content="排队测试发送" Style="{StaticResource Primary}" Margin="10,0,0,0" Click="OnTestSend" />
                 </WrapPanel>

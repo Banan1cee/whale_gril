@@ -246,6 +246,7 @@ function watchConfigFile(runtime) {
       runtime.configWatcher = null;
     });
     runtime.configWatcher = watcher;
+    runtime.stopConfigWatch = () => { if (timer) clearTimeout(timer); timer = null; watcher.close(); };
   } catch (err) {
     runtime.logger.warn(`监听 config.json 失败（手动改完记得重启服务）：${err && err.message}`);
   }

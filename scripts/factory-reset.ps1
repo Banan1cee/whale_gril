@@ -58,11 +58,9 @@ Say '[1/5] 停止服务与桥接…' 'Cyan'
 $stopAll = Join-Path $PSScriptRoot 'stop-all.ps1'
 if (Test-Path $stopAll) {
   & powershell -NoProfile -ExecutionPolicy Bypass -File $stopAll -Quiet | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw '停止服务未完成，已取消重置，未删除任何数据' }
 } else {
-  Say '  ! 找不到 scripts\stop-all.ps1，按端口兜底杀一次' 'Yellow'
-  foreach ($procId in @(Get-NetTCPConnection -LocalPort 8787 -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique)) {
-    if ($procId) { $null = & taskkill.exe /PID $procId /T /F 2>&1 }
-  }
+  throw '缺少停止脚本，无法安全重置，未删除任何数据'
 }
 Start-Sleep -Seconds 1
 
@@ -72,17 +70,20 @@ Say '[2/5] 备份现有数据…' 'Cyan'
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $backupDir = Join-Path $root ('backup\reset-' + $stamp)
 $backedUp = @()
+$backupFailed = $false
 New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
 foreach ($rel in @('data', 'config.json')) {
   $src = Join-Path $root $rel
   if (-not (Test-Path $src)) { continue }
   try {
-    Copy-Item -LiteralPath $src -Destination (Join-Path $backupDir $rel) -Recurse -Force
+    Copy-Item -LiteralPath $src -Destination (Join-Path $backupDir $rel) -Recurse -Force -ErrorAction Stop
     $backedUp += $rel
   } catch {
+    $backupFailed = $true
     Say ('  ! 备份 ' + $rel + ' 失败：' + $_.Exception.Message) 'Yellow'
   }
 }
+if ($backupFailed) { throw '备份未完成，已取消重置，原数据完整保留' }
 if ($backedUp.Count) {
   Say ('  已备份：' + ($backedUp -join '、')) 'Green'
   Say ('  位置：' + $backupDir) 'Gray'
@@ -99,6 +100,9 @@ foreach ($rel in $targets) {
   $p = Join-Path $root $rel
   if (-not (Test-Path $p)) { continue }
   try {
+    $safeRoot = [IO.Path]::GetFullPath($root).TrimEnd('\') + '\'
+    $safeTarget = [IO.Path]::GetFullPath($p)
+    if (-not $safeTarget.StartsWith($safeRoot, [StringComparison]::OrdinalIgnoreCase)) { throw '删除目标超出项目目录' }
     Remove-Item -LiteralPath $p -Recurse -Force
     Say ('  · 已删除 ' + $rel) 'Gray'
   } catch {

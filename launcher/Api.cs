@@ -10,6 +10,7 @@ namespace WhaleLauncher
     public sealed class ApiResult
     {
         public bool Ok;
+        public int StatusCode;
         public string Error = "";
         public string Raw = "";
         public JsonElement Root;
@@ -45,7 +46,7 @@ namespace WhaleLauncher
         private static async Task<ApiResult> Wrap(HttpResponseMessage res)
         {
             var text = await res.Content.ReadAsStringAsync();
-            var outRes = new ApiResult { Ok = res.IsSuccessStatusCode, Raw = text };
+            var outRes = new ApiResult { Ok = res.IsSuccessStatusCode, StatusCode = (int)res.StatusCode, Raw = text };
             try
             {
                 using var doc = JsonDocument.Parse(text);
@@ -66,7 +67,8 @@ namespace WhaleLauncher
         {
             try
             {
-                return await Wrap(await Http.GetAsync(baseUrl + path));
+                using var response = await Http.GetAsync(baseUrl + path);
+                return await Wrap(response);
             }
             catch (Exception ex)
             {
@@ -78,8 +80,9 @@ namespace WhaleLauncher
         {
             try
             {
-                var body = new StringContent(json, Encoding.UTF8, "application/json");
-                return await Wrap(await Http.PostAsync(baseUrl + path, body));
+                using var body = new StringContent(json, Encoding.UTF8, "application/json");
+                using var response = await Http.PostAsync(baseUrl + path, body);
+                return await Wrap(response);
             }
             catch (Exception ex)
             {
@@ -87,16 +90,11 @@ namespace WhaleLauncher
             }
         }
 
-        /// <summary>
-        /// JSON 字符串转义（不含外层引号，调用方自己拼 "...")。
-        /// 以前手拼漏了 \t 等控制字符、\r 直接删掉，粘贴带 Tab 的文本保存就 400（M32）；
-        /// 现在交给 System.Text.Json：控制字符走 \uXXXX，\r 转 \\r 保留不再丢字。
-        /// </summary>
         public static string Esc(string s)
         {
             if (s == null) return "";
             var json = JsonSerializer.Serialize(s);
-            return json.Substring(1, json.Length - 2);   // 去掉 JsonSerializer 加的外层引号
+            return json.Substring(1, json.Length - 2);
         }
     }
 }

@@ -26,7 +26,7 @@
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
-            <TextBox x:Name="SearchBox" Height="28" VerticalContentAlignment="Center"
+            <TextBox x:Name="SearchBox" VerticalContentAlignment="Center"
                      TextChanged="OnSearchChanged" ToolTip="按名字 / 备注 / wxid 搜" />
             <ComboBox x:Name="TypeBox" Grid.Column="1" Width="96" Margin="8,0,0,0" SelectedIndex="0"
                       SelectionChanged="OnTypeChanged">

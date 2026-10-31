@@ -5,7 +5,7 @@ const crypto = require('node:crypto');
 /**
  * 请求安全闸：
  *   1) CSRF：浏览器跨站写请求一律拒绝（同源写操作还必须是 JSON）
- *   2) 远程写：默认只许本机；开 allowRemote + x-bot-token 才放行
+ *   2) 远程 API：默认只许本机；开 allowRemote + x-bot-token 才放行
  *   3) 安全响应头：nosniff / 禁 referrer / 禁外部脚本
  */
 
@@ -87,10 +87,10 @@ function checkRequest(runtime, req, { pathname, method }) {
     }
   }
 
-  // 安全闸：这些接口能改配置、注入聊天、上传图片。默认只许本机；
+  // 安全闸：API 也能读取记忆、导出密钥；读写都必须验证远程身份。
   // 真要放到局域网（server.allowRemote=true）也必须带对的 x-bot-token，否则一律 403。
-  if (pathname.startsWith('/api/') && method !== 'GET' && !isLoopbackRequest(req) && !remoteAuthorized(req, runtime)) {
-    logger.warn(`拒绝远程写操作：${method} ${pathname} from ${req.socket && req.socket.remoteAddress}`);
+  if (pathname.startsWith('/api/') && !isLoopbackRequest(req) && !remoteAuthorized(req, runtime)) {
+    logger.warn(`拒绝远程访问：${method} ${pathname} from ${req.socket && req.socket.remoteAddress}`);
     return {
       status: 403,
       error: '远程调用被拒绝：请在运行本程序的电脑上操作，或设 server.allowRemote=true 并在请求头带 x-bot-token',

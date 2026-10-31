@@ -58,13 +58,13 @@
                 <TextBlock Text="账号与发送" Style="{StaticResource Label}" Margin="0,10,0,6" />
                 <WrapPanel>
                     <TextBlock Text="固定用哪个号" Style="{StaticResource Small}" VerticalAlignment="Center" Margin="0,0,6,0" />
-                    <TextBox x:Name="TxtAccount" Width="170" Height="24" VerticalAlignment="Center" LostFocus="OnSaveSendSettings"
+                    <TextBox x:Name="TxtAccount" Width="170" VerticalAlignment="Center" LostFocus="OnSaveSendSettings"
                              ToolTip="填 wxid；留空 = 按最近活跃" />
                     <TextBlock Text="编码" Style="{StaticResource Small}" VerticalAlignment="Center" Margin="16,0,6,0" />
                     <ComboBox x:Name="CmbCharMode" Width="76" FontSize="12" VerticalAlignment="Center"
                               SelectionChanged="OnCharModeChanged" />
                     <TextBlock Text="码元间隔" Style="{StaticResource Small}" VerticalAlignment="Center" Margin="16,0,6,0" />
-                    <TextBox x:Name="TxtCharGap" Width="48" Height="24" VerticalAlignment="Center" LostFocus="OnSaveSendSettings" />
+                    <TextBox x:Name="TxtCharGap" Width="48" VerticalAlignment="Center" LostFocus="OnSaveSendSettings" />
                     <TextBlock Text="ms" Style="{StaticResource Small}" VerticalAlignment="Center" Margin="4,0,0,0" />
                 </WrapPanel>
                 <WrapPanel Margin="0,8,0,0">
@@ -89,7 +89,7 @@
                                       IsChecked="True" VerticalAlignment="Center" Click="OnConsoleOption" />
                             <CheckBox x:Name="ChkErrors" Content="仅错误" Foreground="{DynamicResource Muted}" FontSize="11"
                                       VerticalAlignment="Center" Margin="12,0,0,0" Click="OnConsoleOption" />
-                            <TextBox x:Name="TxtSearch" Width="140" Height="22" Margin="12,0,0,0" FontSize="11"
+                            <TextBox x:Name="TxtSearch" Width="140" Margin="12,0,0,0" FontSize="11"
                                      Background="{DynamicResource FieldBg}" Foreground="{DynamicResource Text}" BorderBrush="{DynamicResource FieldBorder}"
                                      VerticalContentAlignment="Center" TextChanged="OnSearchChanged"
                                      ToolTip="搜关键字，回车不生效，边打边过滤" />

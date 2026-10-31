@@ -38,3 +38,14 @@ wechatauto_ocr_tmp.png
 launcher/bin/
 launcher/obj/
 launcher/publish/*.pdb
+
+# 项目内编译工具与审查产物
+.tools/
+artifacts/
+
+# 启动器回归测试的构建缓存
+tests/launcher/**/bin/
+tests/launcher/**/obj/
+
+# 便携运行环境随发行包提供，不提交 Python 依赖及运行时缓存
+runtime/

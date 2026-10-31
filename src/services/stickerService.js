@@ -103,6 +103,8 @@ class StickerService {
     if (!emotion) throw fail('请选择有效的情绪');
     chat = String(chat || '').trim();
     if (!chat || chat.length > 160 || /[\r\n\x00-\x1f]/.test(chat)) throw fail('请输入明确的目标会话名称');
+    const existing = [...this.jobs.values()].find(j => ACTIVE.has(j.status) && (j.chat === chat || j.chatUsername === chat));
+    if (existing) return { ...existing, deduplicated: true };
     const file = stickers.choose(stickers.imagesFor(stickers.stickerDir(this.config, this.config.root), emotion), this.rng);
     if (!file) throw fail('这一类还没有图片（也没有「通用」图），先往这个分类里拖几张');
     return this.add({ emotion, path: file }, chat);
@@ -117,7 +119,7 @@ class StickerService {
     if (!job) throw fail('找不到这个任务', 404);
     if (!['queued', 'reserved'].includes(job.status) || job.generation !== this.generation) throw fail('任务已领取、取消或过期，不能重复发送', 409);
     if (!stickers.regularFile(job.path, stickers.stickerDir(this.config, this.config.root))) {
-      job.status = 'failed'; job.error = '表情包文件已删除或不安全'; throw fail(job.error);
+      job.status = 'failed'; job.error = '表情包文件已删除或不安全'; this._note(job, 'failed'); throw fail(job.error);
     }
     job.status = 'sending';
     return { ...job };
@@ -135,6 +137,12 @@ class StickerService {
     }
     this._note(job, status);
     return { ...job };
+  }
+  gate(id = '') {
+    this.requireEnabled();
+    return { ok: true, enabled: true, generation: this.generation,
+      jobs: [...this.jobs.values()].filter(j => ACTIVE.has(j.status) && (!id || j.id === id))
+        .map(({ id, status, generation }) => ({ id, status, generation })) };
   }
   status() {
     this.requireEnabled();
@@ -157,7 +165,7 @@ class StickerService {
       testChat: this.config.sticker?.testChat || '文件传输助手', emotions,
       pending: [...this.jobs.values()].filter((j) => ACTIVE.has(j.status)).length,
       jobs: [...this.jobs.values()].filter((j) => ACTIVE.has(j.status))
-        .concat([...this.jobs.values()].filter((j) => !ACTIVE.has(j.status)).slice(-20))
+        .concat([...this.jobs.values()].filter((j) => !ACTIVE.has(j.status)).slice(-20).reverse())
         .map(({ id, status, error, chat, emotion, path: file }) =>
         ({ id, status, error, chat, emotion, filename: path.basename(file) })) };
   }

@@ -1,0 +1,10 @@
+using System;
+using System.IO;
+using System.Threading;
+var file = Path.Combine(Environment.CurrentDirectory, "bridge-test-count");
+var count = File.Exists(file) ? int.Parse(File.ReadAllText(file)) : 0;
+File.WriteAllText(file, (++count).ToString());
+var codeFile = Path.Combine(Environment.CurrentDirectory, "bridge-test-code");
+var code = File.Exists(codeFile) ? int.Parse(File.ReadAllText(codeFile)) : 7;
+if (count == 1 || File.Exists("bridge-test-always")) Environment.Exit(code);
+Thread.Sleep(Timeout.Infinite);

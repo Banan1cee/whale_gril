@@ -721,7 +721,7 @@ function Test-NewCodeSyntax {
     $targets = @('server.js')
     $srcDir = Join-Path $SrcRoot 'src'
     if (Test-Path -LiteralPath $srcDir) {
-        foreach ($f in @(Get-ChildItem -LiteralPath $srcDir -Filter '*.js' -ErrorAction SilentlyContinue)) { $targets += ('src\' + $f.Name) }
+        foreach ($f in @(Get-ChildItem -LiteralPath $srcDir -Filter '*.js' -Recurse -ErrorAction SilentlyContinue)) { $targets += $f.FullName.Substring($SrcRoot.TrimEnd('\').Length + 1) }
     }
     foreach ($t in $targets) {
         $full = Join-Path $SrcRoot $t

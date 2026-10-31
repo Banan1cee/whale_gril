@@ -104,10 +104,11 @@ async function startServer({ root = projectRoot(), env = process.env, port, host
       try { if (server.closeAllConnections) server.closeAllConnections(); } catch { /* ignore */ }
     }, 300).unref?.();
     await new Promise((resolve) => server.close(resolve));
-    runtime.store.close();
     logger.close();
   };
   server.on('close', () => {
+    clearInterval(runtime.snapshotTimer);
+    runtime.stopConfigWatch?.();
     runtime.store.close();
   });
 
@@ -217,6 +218,15 @@ async function main() {
     await instance.close();
     process.exit(0);
   };
+  // 启动器通过专属标准输入管道请求正常退出，无需暴露 HTTP 控制接口。
+  if (process.env.WHALE_CONTROL_STDIN === '1') {
+    const readline = require('node:readline');
+    const control = readline.createInterface({ input: process.stdin });
+    let stopping = false;
+    control.on('line', (line) => {
+      if (line === 'shutdown' && !stopping) { stopping = true; void shutdown(); }
+    });
+  }
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
 }

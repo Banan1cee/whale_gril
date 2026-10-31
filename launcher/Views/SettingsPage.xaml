@@ -34,17 +34,14 @@
         </Style>
     </UserControl.Resources>
 
-    <Grid Margin="28,24,32,20">
+    <Grid Margin="28,20,32,16">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
-            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
         <DockPanel Grid.Row="0" LastChildFill="False" Margin="0,0,0,10">
             <TextBlock DockPanel.Dock="Left" Text="设置" Style="{StaticResource H1}" VerticalAlignment="Center" />
-            <TextBlock x:Name="KernelHint" DockPanel.Dock="Right" Style="{StaticResource Small}"
-                       HorizontalAlignment="Right" VerticalAlignment="Center" />
         </DockPanel>
 
         <Grid Grid.Row="1">
@@ -57,6 +54,13 @@
                 <DockPanel>
                     <TextBlock DockPanel.Dock="Top" Text="设置分类" FontSize="9.5" FontWeight="Bold"
                                Foreground="{DynamicResource Dim}" Margin="9,4,0,8" />
+
+                    <!-- 状态与提示挪到分类栏下面，底部不再单占一行（那行会留一条黑边） -->
+                    <StackPanel DockPanel.Dock="Bottom" Margin="9,10,6,6">
+                        <TextBlock x:Name="KernelHint" Style="{StaticResource Small}" TextWrapping="Wrap" />
+                        <TextBlock x:Name="StatusText" Style="{StaticResource Small}" TextWrapping="Wrap" Margin="0,6,0,0" />
+                    </StackPanel>
+
                     <ListBox x:Name="SettingsNav" Background="Transparent" BorderThickness="0"
                              ItemContainerStyle="{StaticResource SettingsNavItem}"
                              ScrollViewer.HorizontalScrollBarVisibility="Disabled"
@@ -70,11 +74,5 @@
                 <StackPanel x:Name="SectionsHost" Margin="0,0,10,0" />
             </ScrollViewer>
         </Grid>
-
-        <DockPanel Grid.Row="2" Margin="0,8,0,0" LastChildFill="False">
-            <TextBlock x:Name="StatusText" DockPanel.Dock="Left" Style="{StaticResource Small}" VerticalAlignment="Center" />
-            <TextBlock x:Name="AboutText" DockPanel.Dock="Right" Style="{StaticResource Small}"
-                       VerticalAlignment="Center" HorizontalAlignment="Right" />
-        </DockPanel>
     </Grid>
 </UserControl>

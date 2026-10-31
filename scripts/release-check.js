@@ -152,7 +152,7 @@ try {
   // 构建产物也要跳过：launcher/obj 里的 FileListAbsolute.txt 记着本机的绝对路径，
   // 不跳过的话「刚编译完再跑自检」必然误报成泄露个人信息（.gitignore 里已有这些目录，
   // 这里按相对路径前缀对齐，避免把别处的普通 bin/obj 一并跳过）。
-  const SKIP_PREFIX = ['launcher/bin/', 'launcher/obj/', 'launcher/publish/', 'dist/', 'release/', '.venv/', 'venv/'];
+  const SKIP_PREFIX = ['launcher/bin/', 'launcher/obj/', 'launcher/publish/', 'dist/', 'release/', '.tools/', 'artifacts/', 'tests/launcher/Checks/bin/', 'tests/launcher/Checks/obj/', 'tests/launcher/FakeBridge/bin/', 'tests/launcher/FakeBridge/obj/', '.venv/', 'venv/'];
   const SKIP_FILES = /(^|\/)(config\.json|settings\.json|.*\.log|.*\.bak.*|.*\.zip)$/;
   const walk = (dir) => {
     const out = [];

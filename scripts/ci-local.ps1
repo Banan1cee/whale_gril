@@ -58,6 +58,10 @@ Step '启动器编译' {
     dotnet build launcher/WhaleLauncher.csproj -c Release --nologo
 }
 
+Step '启动器进程生命周期回归（模拟桥接）' {
+    & (Join-Path $PSScriptRoot 'test-launcher.ps1')
+}
+
 Step '启动冒烟（--doctor）' {
     node server.js --doctor
 }

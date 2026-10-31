@@ -11,6 +11,39 @@
 import threading
 
 
+def start_reminder_watch(*, http, base, token, send_text, send_at, log):
+    """连接实际桥接发送通道；所有 HTTP 回应都必须成功才能继续。"""
+    headers = {"x-whale-bridge": "1", "x-bot-token": token}
+
+    def request(method, endpoint, **kwargs):
+        response = http.request(method, base + endpoint, headers=headers, timeout=10, **kwargs)
+        response.raise_for_status()
+        data = response.json()
+        if not isinstance(data, dict) or data.get("ok") is not True:
+            raise RuntimeError("提醒接口返回失败：" + str(data))
+        return data
+
+    def send(item, text):
+        wxid = str(item.get("wxid") or "").strip()
+        if not wxid:
+            raise ValueError("提醒缺少会话 ID，拒绝发送")
+        name = str(item.get("name") or wxid)
+        member = str(item.get("atName") or "").strip()
+        if item.get("chatType") == "group" and member:
+            return send_at(member, text, name, wxid)
+        return send_text(text, name, wxid)
+
+    runner = ReminderRunner(
+        fetch=lambda: request("GET", "/api/reminders/due"),
+        send=send,
+        ack=lambda item, ok, error: request("POST", "/api/reminders/ack",
+                                          json={"id": item["id"], "ok": ok, "error": error}),
+        log=log,
+    )
+    threading.Thread(target=runner.run, daemon=True, name="reminder-watch").start()
+    return runner
+
+
 class ReminderRunner:
     def __init__(self, *, fetch, send, ack, now_ms=None, log=None, idle_wait=30.0,
                  max_sleep=60.0, wake=None):

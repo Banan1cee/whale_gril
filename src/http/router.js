@@ -42,12 +42,13 @@ class Router {
 
   async handle(req, res) {
     let url;
+    let pathname;
     try {
       url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+      pathname = decodeURIComponent(url.pathname);
     } catch {
       return json(res, 400, { ok: false, error: 'bad url' });
     }
-    const pathname = decodeURIComponent(url.pathname);
     const method = req.method || 'GET';
     const info = { url, pathname, method, params: {} };
     const { runtime } = this;
@@ -57,7 +58,7 @@ class Router {
       const denied = checkRequest(runtime, req, info);
       if (denied) return json(res, denied.status, { ok: false, error: denied.error });
 
-      if (pathname === '/healthz') return json(res, 200, { ok: true, up: true });
+      if (pathname === '/healthz') return json(res, 200, { ok: true, up: true, service: 'whale-girl', pid: process.pid });
 
       const hit = this.match(method, pathname);
       if (hit && hit !== 'method_miss') return await hit.handler(runtime, req, res, info);

@@ -21,6 +21,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 
+const { toBool } = require('../infra/features');
+
 const MAX_TOTAL = 500;
 const MAX_ACTIVE_PER_CHAT = 20;
 const RETRY_DELAY_MS = 5 * 60 * 1000;
@@ -44,7 +46,8 @@ function normalizeRules(config) {
   const maxPerDay = Number(r.maxPerDay);
   const quiet = Number(r.quietAfterMinutes);
   return {
-    enabled: r.enabled === undefined ? true : Boolean(r.enabled),
+    // 老配置里可能是字符串 "false"（configSchema 允许），Boolean("false") 会当成开
+    enabled: toBool(r.enabled, true),
     dailyCap: Number.isFinite(maxPerDay) && maxPerDay > 0 ? Math.floor(maxPerDay) : 0,
     quietAfterMinutes: Number.isFinite(quiet) && quiet > 0 ? Math.floor(quiet) : 0,
   };
@@ -65,29 +68,57 @@ class ReminderService {
   }
 
   load() {
-    try {
-      const raw = JSON.parse(fs.readFileSync(this.file, 'utf8').replace(/^\uFEFF/, '')) || {};
-      const list = Array.isArray(raw.items) ? raw.items : [];
-      this.items = list.filter((it) => it && it.id && Number(it.dueAt)).slice(-MAX_TOTAL);
-    } catch {
-      this.items = [];
+    let damaged = false;
+    for (const file of [this.file, this.file + '.bak']) {
+      try {
+        const raw = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
+        if (!raw || !Array.isArray(raw.items) || raw.items.some(it =>
+          !it || !it.id || !Number.isFinite(Number(it.dueAt)) || !Number(it.dueAt)
+          || (!ACTIVE.has(it.status) && !DONE.has(it.status)))) throw new Error('提醒文件格式不正确');
+        this.items = raw.items.slice(-MAX_TOTAL);
+        this.loadFailed = false;
+        if (file !== this.file && this.logger) this.logger.warn('提醒主文件不可用，已从 .bak 恢复');
+        return this;
+      } catch (err) {
+        if (err.code !== 'ENOENT') {
+          damaged = true;
+          if (this.logger) this.logger.warn('提醒读取失败：' + file + '：' + err.message);
+        }
+      }
     }
+    // 两份都损坏时保留原件，不能用一次新建操作把可恢复的数据覆盖掉。
+    this.loadFailed = damaged;
+    this.items = [];
     return this;
   }
 
   save() {
-    if (!this.file) return false;
+    if (!this.file || this.loadFailed) return false;
     try {
       fs.mkdirSync(path.dirname(this.file), { recursive: true });
       const body = JSON.stringify({ version: 1, savedAt: this.now(), items: this.items });
       const tmp = this.file + '.tmp';
       fs.writeFileSync(tmp, body, 'utf8');
       fs.renameSync(tmp, this.file);
+      // 镜像最新已提交状态，避免备份仍是 pending 而主文件已经 done。
+      try {
+        fs.writeFileSync(this.file + '.bak.tmp', body, 'utf8');
+        fs.renameSync(this.file + '.bak.tmp', this.file + '.bak');
+      } catch (err) {
+        if (this.logger) this.logger.warn('提醒备份写入失败：' + err.message);
+      }
       return true;
     } catch (err) {
       if (this.logger) this.logger.warn('提醒写入失败：' + err.message);
       return false;
     }
+  }
+
+  // 落盘失败就还原内存，不能向桥接交付没有持久化的任务。
+  commit(previous) {
+    if (this.save()) return;
+    this.items = previous;
+    throw Object.assign(new Error('提醒保存失败，请检查数据目录权限或磁盘空间'), { statusCode: 503 });
   }
 
   activeOf(wxid) {
@@ -99,7 +130,16 @@ class ReminderService {
     const rules = normalizeRules(this.config);
     const d = new Date(now);
     const dayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-    const sentToday = this.items.filter((it) => it.status === 'done' && Number(it.finishedAt) >= dayStart).length;
+    // 已发送 + 在途（sending/retrying）都占当日额度：
+    // 只数 done 的话，桥接还没回执时连续领取能突破每日上限。
+    const sentToday = this.items.filter((it) => {
+      if (it.status === 'done') return Number(it.finishedAt) >= dayStart;
+      if (it.status === 'sending' || it.status === 'retrying') {
+        const at = Number(it.claimedAt || it.dueAt || 0);
+        return at >= dayStart;
+      }
+      return false;
+    }).length;
     return {
       ...rules,
       sentToday,
@@ -145,9 +185,10 @@ class ReminderService {
       retryAt: 0,
       finishedAt: 0,
     };
+    const previous = JSON.parse(JSON.stringify(this.items));
     this.items.push(item);
     this.trim();
-    this.save();
+    this.commit(previous);
     return { ...item };
   }
 
@@ -173,13 +214,31 @@ class ReminderService {
    */
   expire(now = this.now(), { strict = false } = {}) {
     let expired = 0;
+    const previous = JSON.parse(JSON.stringify(this.items));
     for (const item of this.items) {
       if (!ACTIVE.has(item.status)) continue;
+      if (strict && now > Number(item.dueAt) + RETRY_DELAY_MS) {
+        item.status = 'expired';
+        item.error = '过了提醒时间，未发送（不补发）';
+        item.finishedAt = now;
+        expired += 1;
+        continue;
+      }
       if (item.status === 'sending') {
         if (now - Number(item.claimedAt || 0) > CLAIM_TIMEOUT_MS) {
+          item.attempts = Number(item.attempts || 0) + 1;
+          // 宽限期（dueAt + 5 分钟）之后一律不再放回去重发：
+          // 否则桥接卡很久再回来，会把早就过点的提醒重新发出去。
+          const overdue = now > Number(item.dueAt) + RETRY_DELAY_MS;
+          if (overdue || item.attempts >= 2) {
+            item.status = overdue ? 'expired' : 'failed';
+            item.error = overdue ? '过了提醒时间，未发送（不补发）' : '发送回执超时，停止重试';
+            item.finishedAt = now;
+            expired += 1;
+            continue;
+          }
           item.status = 'retrying';
           item.retryAt = now;
-          item.attempts = Number(item.attempts || 0) + 1;
         } else {
           continue;
         }
@@ -194,7 +253,7 @@ class ReminderService {
         expired += 1;
       }
     }
-    if (expired) this.save();
+    if (JSON.stringify(previous) !== JSON.stringify(this.items)) this.commit(previous);
     return { expired };
   }
 
@@ -215,6 +274,9 @@ class ReminderService {
     this.expire(now, { strict: false });
     const rules = this.rules(now);
     const out = [];
+    const previous = JSON.parse(JSON.stringify(this.items));
+    // 已领取但尚未回执的任务也占用每日额度，防止多轮领取超限。
+    const reserved = this.items.filter(it => it.status === 'sending').length;
     for (const item of this.items) {
       if (out.length >= limit) break;
       if (item.status !== 'pending' && item.status !== 'retrying') continue;
@@ -236,7 +298,7 @@ class ReminderService {
           continue;
         }
       }
-      if (rules.dailyCap && rules.sentToday + out.length >= rules.dailyCap) {
+      if (rules.dailyCap && rules.sentToday + reserved + out.length >= rules.dailyCap) {
         item.status = 'expired';
         item.error = `今天提醒次数已满（${rules.dailyCap} 次），不补发`;
         item.finishedAt = now;
@@ -246,7 +308,7 @@ class ReminderService {
       item.claimedAt = now;
       out.push({ ...item });
     }
-    if (out.length) this.save();
+    if (JSON.stringify(previous) !== JSON.stringify(this.items)) this.commit(previous);
     return out;
   }
 
@@ -256,10 +318,15 @@ class ReminderService {
     for (const item of this.items) {
       if (item.status === 'pending') {
         const at = Number(item.dueAt);
-        if (at > now && (!next || at < next)) next = at;
+        const wakeAt = Math.max(now, at);
+        if (!next || wakeAt < next) next = wakeAt;
       } else if (item.status === 'retrying') {
         const at = Math.max(Number(item.dueAt), Number(item.retryAt) || 0);
-        if (at > now && (!next || at < next)) next = at;
+        const wakeAt = Math.max(now, at);
+        if (!next || wakeAt < next) next = wakeAt;
+      } else if (item.status === 'sending') {
+        const at = Math.max(now, Number(item.claimedAt || 0) + CLAIM_TIMEOUT_MS + 1);
+        if (!next || at < next) next = at;
       }
     }
     return next;
@@ -269,6 +336,9 @@ class ReminderService {
   ack(id, { ok = false, error = '' } = {}) {
     const item = this.items.find((it) => it.id === String(id || ''));
     if (!item) return { ok: false, error: '找不到这条提醒', statusCode: 404 };
+    if (item.status === 'done' && ok) return { ok: true, item: { ...item } };
+    if (item.status !== 'sending') return { ok: false, error: '提醒已结束或尚未领取，不能更新回执', statusCode: 409 };
+    const previous = JSON.parse(JSON.stringify(this.items));
     const now = this.now();
     item.attempts = Number(item.attempts || 0) + 1;
     if (ok) {
@@ -284,17 +354,19 @@ class ReminderService {
       item.error = clean(error, 200) || '发送失败';
       item.finishedAt = now;
     }
-    this.save();
+    this.commit(previous);
     return { ok: true, item: { ...item } };
   }
 
   cancel(id) {
     const item = this.items.find((it) => it.id === String(id || ''));
     if (!item) return { ok: false, error: '找不到这条提醒', statusCode: 404 };
+    if (item.status === 'sending') return { ok: false, error: '提醒正在发送，已无法保证撤回，请等待发送结果', statusCode: 409 };
     if (!ACTIVE.has(item.status)) return { ok: false, error: '这条提醒已经结束了', statusCode: 409 };
+    const previous = JSON.parse(JSON.stringify(this.items));
     item.status = 'cancelled';
     item.finishedAt = this.now();
-    this.save();
+    this.commit(previous);
     return { ok: true, item: { ...item } };
   }
 

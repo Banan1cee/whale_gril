@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media;
 using System.Windows.Threading;
 
 namespace WhaleLauncher.Views
@@ -33,6 +34,8 @@ namespace WhaleLauncher.Views
             "wechatAccountGuard", "quoteReply", "stickers",
             "proactiveCare", "careOnlyMaster", "careGroups", "careOthers",
         };
+
+        private string _currentPresetId = "";   // 当前人设来自哪一版，用来把下拉框选到正确项
 
         public PersonaPage(RuntimeSupervisor sup)
         {
@@ -93,6 +96,7 @@ namespace WhaleLauncher.Views
                     ChkLinks.IsChecked = B(p, "links");
 
                     var src = S(p, "sourcePreset");
+                    _currentPresetId = src;
                     CurrentPreset.Text = string.IsNullOrEmpty(src) ? "人设：手写/默认" : "人设：来自 " + src;
                 }
 
@@ -114,10 +118,11 @@ namespace WhaleLauncher.Views
             }
             finally { _loading = false; }
 
-            await LoadPresetsAsync();
+            await LoadPresetsAsync(_currentPresetId);
             await LoadFlagsAsync();
             _loaded = true;
             SaveState.Text = "";
+            PresetSaved.Text = "";
         }
 
         private void UpdateHints()
@@ -132,7 +137,7 @@ namespace WhaleLauncher.Views
             return Math.Max(1, Math.Min(n, sample.Length)).ToString();
         }
 
-        private async Task LoadPresetsAsync()
+        private async Task LoadPresetsAsync(string currentId = "")
         {
             var res = await Api.Get(_sup.Url, "/api/persona/presets");
             if (!res.Ok) return;
@@ -149,8 +154,12 @@ namespace WhaleLauncher.Views
                 }
             }
             CmbPreset.ItemsSource = items;
-            if (items.Count > 0) CmbPreset.SelectedIndex = 0;
-            else PresetResult.Text = "presets 目录里没有人设版本。";
+            // 选中「当前人设实际来自哪一版」，而不是永远选第一个，
+            // 否则导入 v4 再保存，下拉框会跳回 v1，看起来像没导入成功。
+            var hit = items.FirstOrDefault(x => string.Equals(x.Id, currentId, StringComparison.OrdinalIgnoreCase));
+            if (hit != null) CmbPreset.SelectedItem = hit;
+            else if (items.Count > 0) CmbPreset.SelectedIndex = 0;
+            else PresetSaved.Text = "presets 目录里没有人设版本。";
         }
 
         private async Task LoadFlagsAsync()
@@ -327,6 +336,8 @@ namespace WhaleLauncher.Views
             _loadedEmoji = emoji;
 
             SaveState.Text = okText + " · " + DateTime.Now.ToString("HH:mm:ss");
+            PresetSaved.Text = "✔ 已保存";
+            PresetSaved.Foreground = (Brush)FindResource("Text");
         }
 
         private async void OnImportPreset(object sender, RoutedEventArgs e)
@@ -335,12 +346,14 @@ namespace WhaleLauncher.Views
             var res = await Api.Post(_sup.Url, "/api/persona/preset", $"{{\"id\":\"{Api.Esc(p.Id)}\"}}");
             if (!res.Ok)
             {
-                PresetResult.Text = "导入失败：" + (res.Error.Length > 0 ? res.Error : res.Raw);
+                PresetSaved.Text = "导入失败：" + (res.Error.Length > 0 ? res.Error : res.Raw);
+                PresetSaved.Foreground = (Brush)FindResource("Bad");
                 return;
             }
-            PresetResult.Text = "已导入 " + p.Label + "，下面的字段已换成这一版。";
             _loaded = false;
-            await LoadAsync();
+            await LoadAsync();                       // LoadAsync 会按新的 sourcePreset 选中下拉框
+            PresetSaved.Text = "✔ 已保存";
+            PresetSaved.Foreground = (Brush)FindResource("Text");
         }
 
         /// <summary>JSON 数组 → 一行一个（给多行输入框用）</summary>

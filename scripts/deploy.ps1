@@ -23,10 +23,15 @@ $src = Split-Path -Parent $PSScriptRoot
 if (-not (Test-Path $Target)) { throw "目标目录不存在：$Target" }
 if (-not (Test-Path (Join-Path $Target 'server.js'))) { throw "目标不像 whale-girl 目录（没有 server.js）：$Target" }
 
+if ($Restart) {
+  & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'stop-all.ps1') -AppRoot $Target -Quiet
+  if ($LASTEXITCODE -ne 0) { throw '目标服务未安全停止，已取消部署' }
+}
+
 Write-Host "同步：$src  ->  $Target" -ForegroundColor Cyan
 
 # 1) 只同步代码
-$exclDirs = @('data', 'runtime', 'wechatauto_db', 'wechatauto_logs', '__pycache__', 'whale-girl-3.0-full')
+$exclDirs = @('data', 'runtime', 'wechatauto_db', 'wechatauto_logs', '__pycache__', 'backup', '.tools', 'artifacts', 'bin', 'obj', 'publish', '.git', 'whale-girl-3.0-full')
 $exclFiles = @('config.json', '*.log', '*.png', '*.jpg', '*.bak-*')
 $rcArgs = @($src, $Target, '/E', '/NFL', '/NDL', '/NJH', '/NJS', '/NP', '/XD') + $exclDirs + @('/XF') + $exclFiles
 robocopy @rcArgs | Out-Null
@@ -54,18 +59,15 @@ Write-Host "✓ 校验通过：$($must.Count) 个关键文件一致；data\ 与 
 
 # 3) 重启
 if ($Restart) {
-  Get-Process node, python -ErrorAction SilentlyContinue | ForEach-Object {
-    Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
-    Write-Host "  停止 $($_.ProcessName) $($_.Id)"
-  }
   Start-Sleep -Seconds 2
   $env:PYTHONUTF8 = '1'; $env:PYTHONIOENCODING = 'utf-8'; $env:WECHATAUTO_RHYTHM = 'off'
   $env:HTTP_PROXY = ''; $env:HTTPS_PROXY = ''; $env:ALL_PROXY = ''; $env:NO_PROXY = '*'
-  Start-Process -FilePath (Join-Path $Target 'runtime\node.exe') -ArgumentList 'server.js' -WorkingDirectory $Target -WindowStyle Minimized
+  Start-Process -FilePath (Join-Path $Target 'runtime\node.exe') -ArgumentList 'server.js' -WorkingDirectory $Target -WindowStyle Hidden
   # 桥接用守护循环启动：长时间挂着时微信窗口被回收会导致原生崩溃（0xC0000005），
   # 守护循环 3 秒内自动拉起，不用人工重启。
+  Remove-Item -LiteralPath (Join-Path $Target 'data\PAUSED') -Force -ErrorAction SilentlyContinue
   $loop = Join-Path $Target 'scripts\bridge_loop.bat'
-  Start-Process -FilePath $loop -WorkingDirectory $Target -WindowStyle Minimized
+  Start-Process -FilePath $loop -WorkingDirectory $Target -WindowStyle Hidden
   Start-Sleep -Seconds 6
   $listen = (netstat -ano | Select-String ':8787.*LISTENING')
   Write-Host ("  8787 监听：{0}" -f $(if ($listen) { '是' } else { '否 ← 服务没起来' })) -ForegroundColor $(if ($listen) { 'Green' } else { 'Red' })

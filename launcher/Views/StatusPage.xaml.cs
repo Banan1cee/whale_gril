@@ -59,11 +59,11 @@ namespace WhaleLauncher.Views
         private void Apply(Snapshot s)
         {
             // 内核
-            DotNode.Fill = s.NodeUp ? (Brush)FindResource("Ok") : (Brush)FindResource("Idle");
-            NodeMain.Text = s.NodeUp ? "运行中" : "未启动";
+            DotNode.Fill = s.NodeReady ? (Brush)FindResource("Ok") : (Brush)FindResource(s.NodeUp ? "Warn" : "Idle");
+            NodeMain.Text = !s.NodeUp ? "未启动" : (s.NodeReady ? "运行中" : "等待就绪");
             NodeAge.Text = s.NodeUp ? "已跑 " + Short(s.UptimeSec) : "";
             NodeSub.Text = s.NodeUp
-                ? $"端口 {s.Port} · {s.Provider}/{s.Model}{(s.HasKey ? "" : " · 还没有 Key")}{(s.Mock ? " · 演示模式" : "")}"
+                ? $"端口 {s.Port} · {s.Provider}/{s.Model}{(!s.NeedsKey || s.HasKey ? "" : " · 还没有 Key")}{(s.Mock ? " · 演示模式" : "")}"
                 : "点顶栏 ⏻ 启动";
 
             // 桥接

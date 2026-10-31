@@ -20,6 +20,7 @@ const MIME = {
 };
 
 function json(res, status, data) {
+  if (res.destroyed || res.writableEnded) return;
   const body = JSON.stringify(data);
   res.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
@@ -50,10 +51,18 @@ function readBody(req, limit = MAX_BODY) {
       const raw = Buffer.concat(chunks).toString('utf8');
       if (!raw.trim()) return resolve({});
       try {
-        resolve(JSON.parse(raw));
+        const value = JSON.parse(raw);
+        if (!value || typeof value !== 'object' || Array.isArray(value)) {
+          throw new Error('请求内容必须是 JSON 对象');
+        }
+        resolve(value);
       } catch {
         reject(Object.assign(new Error('JSON 格式错误'), { statusCode: 400 }));
       }
+    });
+    req.once('aborted', () => {
+      chunks.length = 0;
+      reject(Object.assign(new Error('请求已中断'), { statusCode: 400 }));
     });
     req.on('error', reject);
   });

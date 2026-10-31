@@ -58,11 +58,6 @@ namespace WhaleLauncher.Views
                 $"桥接 python {_pythonVersion}（{(s.BrOnline ? "在线" : "离线")}）\n" +
                 $"端口 {s.Port} · 数据目录 {_sup.DataDir}";
 
-            ChannelInfo.Text =
-                $"收到 {s.StReceived} · 回复 {s.StReplied} · 发送 {s.StSent} · 失败 {s.StFailed}\n" +
-                (s.StLastMessageAt > 0 ? "最后一条消息：" + DateTimeOffset.FromUnixTimeMilliseconds(s.StLastMessageAt).LocalDateTime.ToString("MM-dd HH:mm:ss") : "还没有消息") +
-                (string.IsNullOrEmpty(s.StLastError) ? "" : "\n最近一次失败：" + s.StLastError);
-
             // 日志统一由本页 1.5 秒定时器驱动，这里不再重复 RenderLogs（L16：双通道驱动整表重建）
         }
 
@@ -72,12 +67,9 @@ namespace WhaleLauncher.Views
             CheckHost.Children.Clear();
             var data = _sup.DataDir;
 
-            AddCheck("内核 node.exe", File.Exists(Path.Combine(_sup.BaseDir, "runtime", "node.exe")),
-                File.Exists(Path.Combine(_sup.BaseDir, "runtime", "node.exe")) ? "已随安装包一起装上" : "缺文件，需要重装");
             AddCheck("内核在跑", s.NodeUp, s.NodeUp ? $"端口 {s.Port}，已跑 {s.UptimeSec} 秒" : "点顶栏 ⏻ 启动");
 
             var py = Path.Combine(_sup.BaseDir, "runtime", "python", "python.exe");
-            AddCheck("桥接 python.exe", File.Exists(py), File.Exists(py) ? "运行时已内置，用户侧不联网" : "缺文件，需要重装");
             AddCheck("桥接在线", s.BrOnline, s.BrOnline
                 ? (s.BrLastSeenSec >= 0 ? $"心跳 {s.BrLastSeenSec} 秒前" : "已连上")
                 : "没心跳：看「微信 · 桥接」页的控制台");
@@ -93,61 +85,61 @@ namespace WhaleLauncher.Views
                 : "不是管理员。微信若是管理员运行的，零焦点发送会被 UIPI 挡掉");
 
             AddCheck("UIA 可用", s.BrUia, s.BrUia ? "能读到微信窗口树" : "读不到：微信可能最小化，或桥接没起");
-            AddCheck("模型 Key", s.HasKey || s.Mock, s.Mock ? "演示模式（不连模型）" : (s.HasKey ? "已配置" : "去「设置」填 Key"));
+            AddCheck("模型 Key", !s.NeedsKey || s.HasKey || s.Mock, !s.NeedsKey ? "当前模型不需要 Key" : s.Mock ? "演示模式（不连模型）" : (s.HasKey ? "已配置" : "去「设置」填 Key"));
 
             var hasWheel = Directory.Exists(Path.Combine(_sup.BaseDir, "runtime", "wheelhouse"));
             if (hasWheel) AddCheck("打包完整性", false, "runtime\\wheelhouse 还在，安装包会白白大 117MB");
 
-            // v3.50 的运行时包不带 manifest.json；只要 node/python 都在就不算错，
-            // 之前这里一律判失败，用户装完运行环境却看到一条红叉。
+            // 运行时清单：node / python / manifest 三件事合并成一条，不再单列两行
+            var nodeExe = Path.Combine(_sup.BaseDir, "runtime", "node.exe");
             var manifest = Path.Combine(_sup.BaseDir, "runtime", "manifest.json");
-            var runtimeReady = File.Exists(Path.Combine(_sup.BaseDir, "runtime", "node.exe")) && File.Exists(py);
-            AddCheck("运行时清单", File.Exists(manifest) || runtimeReady,
-                File.Exists(manifest) ? "manifest.json 在"
-                : (runtimeReady ? "旧版运行时包（无清单），node/python 都在" : "缺 manifest.json，运行时也不全"));
+            var hasNode = File.Exists(nodeExe);
+            var hasPy = File.Exists(py);
+            var missing = new List<string>();
+            if (!hasNode) missing.Add("runtime\\node.exe");
+            if (!hasPy) missing.Add("runtime\\python\\python.exe");
+            var detail = missing.Count > 0
+                ? "缺 " + string.Join(" 和 ", missing)
+                : (File.Exists(manifest)
+                    ? "node 与 python 都在，manifest.json 已就位"
+                    : "node 与 python 都在（旧版运行时包，无 manifest.json）");
+            AddCheck("运行时清单", missing.Count == 0, detail);
         }
 
         private void AddCheck(string name, bool ok, string detail)
         {
-            // 单行：✓ 名称 · 说明（说明超长省略，悬停看全）。十项一屏放得下，不用滚动区。
-            var row = new Grid { Margin = new Thickness(0, 1, 0, 1) };
-            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(16) });
-            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            // 两行式：第一行 ✓ + 名称，第二行灰字说明。项数少了，一屏放得下，不需要滚动区。
+            var row = new Grid { Margin = new Thickness(0, 0, 0, 8) };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(18) });
             row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
             var mark = new TextBlock
             {
                 Text = ok ? "✓" : "✕",
                 Foreground = ok ? (Brush)FindResource("Ok") : (Brush)FindResource("Bad"),
-                FontSize = 12,
+                FontSize = 13,
                 FontWeight = FontWeights.Bold,
-                VerticalAlignment = VerticalAlignment.Center
+                VerticalAlignment = VerticalAlignment.Top
             };
             row.Children.Add(mark);
 
-            var title = new TextBlock
+            var stack = new StackPanel();
+            stack.Children.Add(new TextBlock
             {
                 Text = name,
                 Foreground = (Brush)FindResource("Text"),
-                FontSize = 12,
-                VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(0, 0, 8, 0)
-            };
-            Grid.SetColumn(title, 1);
-            row.Children.Add(title);
-
-            var sub = new TextBlock
+                FontSize = 12.5
+            });
+            stack.Children.Add(new TextBlock
             {
                 Text = detail,
                 Style = (Style)FindResource("Small"),
                 Foreground = (Brush)FindResource("Muted"),
-                FontSize = 10.5,
-                VerticalAlignment = VerticalAlignment.Center,
-                TextTrimming = TextTrimming.CharacterEllipsis,
-                ToolTip = detail
-            };
-            Grid.SetColumn(sub, 2);
-            row.Children.Add(sub);
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 2, 0, 0)
+            });
+            Grid.SetColumn(stack, 1);
+            row.Children.Add(stack);
 
             CheckHost.Children.Add(row);
         }
@@ -196,27 +188,25 @@ namespace WhaleLauncher.Views
                     Width = 62,
                     VerticalAlignment = VerticalAlignment.Center
                 });
-                var btn = new Button
+                var size = new TextBlock
                 {
-                    Content = "…",
-                    Style = (Style)FindResource("TopBtn"),
-                    Tag = path,
+                    Style = (Style)FindResource("Small"),
                     HorizontalAlignment = HorizontalAlignment.Right,
-                    ToolTip = path
+                    VerticalAlignment = VerticalAlignment.Center,
+                    ToolTip = path                 // 只显示大小，不提供点击跳转
                 };
-                btn.Click += (s, e) => OpenPath((string)((Button)s).Tag);
-                DockPanel.SetDock(btn, Dock.Right);
-                row.Children.Add(btn);
+                DockPanel.SetDock(size, Dock.Right);
+                row.Children.Add(size);
                 PathsHost.Children.Add(row);
-                fills.Add(FillSizeAsync(btn, path));
+                fills.Add(FillSizeAsync(size, path));
             }
             await Task.WhenAll(fills);
         }
 
-        /// <summary>算完大小回到 UI 线程再改按钮文字。</summary>
-        private async Task FillSizeAsync(Button btn, string path)
+        /// <summary>算完大小回到 UI 线程再改文字。</summary>
+        private async Task FillSizeAsync(TextBlock target, string path)
         {
-            btn.Content = await SizeOfAsync(path);
+            target.Text = await SizeOfAsync(path);
         }
 
         /// <summary>求大小挪到后台线程算，结果缓存 45 秒（30-60 秒内都算合理）。</summary>
@@ -245,20 +235,6 @@ namespace WhaleLauncher.Views
                 return "不存在";
             }
             catch { return "?"; }
-        }
-
-        private void OpenPath(string path)
-        {
-            try
-            {
-                if (File.Exists(path)) Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{path}\"") { UseShellExecute = true });
-                else
-                {
-                    Directory.CreateDirectory(path);
-                    Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
-                }
-            }
-            catch { }
         }
 
         // ── 版本 ────────────────────────────────────────────────

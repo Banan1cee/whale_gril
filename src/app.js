@@ -98,6 +98,7 @@ function createRuntime({ root = path.resolve(__dirname, '..'), env = process.env
       }
     }, 30 * 60 * 1000);
     if (timer.unref) timer.unref();
+    runtime.snapshotTimer = timer;
   } catch { /* 定时器起不来不影响主流程 */ }
 
   runtime.llm = new DeepSeekClient({ config, logger });

@@ -41,7 +41,7 @@
                                 <TextBlock Text="内核日志" Style="{StaticResource H2}" VerticalAlignment="Center" Margin="0,0,12,0" />
                                 <TextBlock Text="（桥接的日志在「微信 · 桥接」页）" Style="{StaticResource Small}" VerticalAlignment="Center" />
                                 <CheckBox x:Name="ChkErrors" Content="仅异常" Margin="12,0,0,0" VerticalAlignment="Center" Click="OnFilterChanged" />
-                                <TextBox x:Name="TxtSearch" Width="130" Height="22" Margin="12,0,0,0" TextChanged="OnSearchChanged" ToolTip="搜关键字" />
+                                <TextBox x:Name="TxtSearch" Width="130" Margin="12,0,0,0" TextChanged="OnSearchChanged" ToolTip="搜关键字" />
                             </StackPanel>
                             <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" HorizontalAlignment="Right">
                                 <ComboBox x:Name="CmbTail" Width="96" Height="24" SelectionChanged="OnTailChanged">
@@ -112,9 +112,8 @@
 
             <Border Grid.Column="2" Style="{StaticResource Card}" Padding="14,10">
                 <StackPanel>
-                    <TextBlock Text="运行时与通道" Style="{StaticResource Label}" Margin="0,0,0,6" />
+                    <TextBlock Text="运行与通道" Style="{StaticResource Label}" Margin="0,0,0,6" />
                     <TextBlock x:Name="RuntimeInfo" Style="{StaticResource Value}" FontSize="12" TextWrapping="Wrap" />
-                    <TextBlock x:Name="ChannelInfo" Style="{StaticResource Small}" Margin="0,8,0,0" TextWrapping="Wrap" />
                 </StackPanel>
             </Border>
         </Grid>

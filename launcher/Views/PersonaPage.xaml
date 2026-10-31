@@ -176,8 +176,9 @@
                             <WrapPanel Margin="0,12,0,0">
                                 <ComboBox x:Name="CmbPreset" Width="300" Height="28" />
                                 <Button Content="导入这版" Style="{StaticResource Ghost}" Margin="10,0,0,0" Click="OnImportPreset" />
+                                <TextBlock x:Name="PresetSaved" VerticalAlignment="Center" Margin="12,0,0,0"
+                                           FontSize="12" Foreground="{DynamicResource Text}" />
                             </WrapPanel>
-                            <TextBlock x:Name="PresetResult" Style="{StaticResource Small}" Margin="0,10,0,0" TextWrapping="Wrap" />
                         </StackPanel>
                     </Border>
 
