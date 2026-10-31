@@ -7,7 +7,7 @@
 
 const COMMAND_HELP = [
   '咕噜~ 人家会的：聊天、记住你说过的事、被 @ 的时候浮上来说话。',
-  '小命令：/reset 清空这个聊天的记忆；/mute 30 闭麦半小时；/unmute 开麦；/memory 看我记得啥；/remember 记住：xxx；/forget 忘掉 xxx；/help 再看一遍。',
+  '小命令：/reset 清空这个聊天的记忆；/mute 30 闭麦半小时；/unmute 开麦；/remember 记住：xxx；/forget 忘掉 xxx；/help 再看一遍。',
 ].join('\n');
 
 /** 从文本里识别命令；返回 {type, arg} 或 null */
@@ -21,7 +21,6 @@ function extractCommand(text) {
     const map = {
       help: 'help', h: 'help', '帮助': 'help',
       reset: 'reset', clear: 'reset', '重置': 'reset',
-      memory: 'memory', mem: 'memory', '记忆': 'memory',
       mute: 'mute', '闭麦': 'mute', '静音': 'mute',
       unmute: 'unmute', '开麦': 'unmute',
       forget: 'forget', '忘掉': 'forget',
@@ -44,7 +43,7 @@ function extractCommand(text) {
   m = t.match(/^(?:我叫|叫我|以后叫我)[：:\s]*([\s\S]{1,20})$/);
   if (m) return { type: 'name', arg: m[1].trim().replace(/[。.!！~～]+$/, ''), raw };
 
-  if (/^(?:你记得我什么|你记得什么|你记得啥|你的记忆|记忆|记性)$/.test(t)) return { type: 'memory', arg: '', raw };
+  if (/^(?:你记得我什么|你记得什么|你记得啥|你的记忆|记忆|记性)$/.test(t)) return null; // 不提供记忆清单
   if (/^(?:重置|清空|清除|忘掉刚才|重置记忆|清空记忆|清除记忆)(?:一下)?(?:记忆|聊天记录|上下文)?$/.test(t)) {
     return { type: 'reset', arg: '', raw };
   }

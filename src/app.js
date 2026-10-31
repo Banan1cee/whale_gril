@@ -96,6 +96,8 @@ function createRuntime({ root = path.resolve(__dirname, '..'), env = process.env
   } catch { /* 定时器起不来不影响主流程 */ }
 
   runtime.llm = new DeepSeekClient({ config, logger });
+  // 记忆层用同一个模型做 episode 摘要/抽取（后台跑，不在回复热路径）
+  store.llm = runtime.llm;
   runtime.bot = new Bot({ config, store, llm: runtime.llm, logger });
   // 表情包任务队列：内存态，重启不重放（避免把上一条没发出去的表情再补发一次）
   // store 用来记动作账：发了哪张、桥接确认没确认，下一轮提示词才看得见
@@ -127,6 +129,19 @@ function createRuntime({ root = path.resolve(__dirname, '..'), env = process.env
     if (swept.expired) logger.info(`提醒清理：${swept.expired} 条已过期（过了提醒时间，不再补发）`);
   } catch (err) {
     logger.warn('提醒清理失败（不影响使用）：' + err.message);
+  }
+  // 启动：检测 30 分钟空闲的 episode 补写 L2；超过 3,200 token 的按需压缩。
+  // 后台跑，不阻塞服务启动；原文已经在磁盘上，补写失败也只是晚一轮。
+  try {
+    store.startupRecovery({ llm: runtime.llm })
+      .then((r) => {
+        if (r && (r.episodesClosed || r.chats)) {
+          logger.info(`记忆启动恢复：${r.chats} 个聊天，补写 ${r.episodesClosed || 0} 个 episode`);
+        }
+      })
+      .catch((err) => logger.warn('记忆启动恢复失败（不影响聊天）：' + ((err && err.message) || err)));
+  } catch (err) {
+    logger.warn('记忆启动恢复失败（不影响聊天）：' + ((err && err.message) || err));
   }
   runtime.gateways = createGateways({ config, bot: runtime.bot, logger });
   watchConfigFile(runtime);
