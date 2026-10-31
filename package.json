@@ -14,7 +14,8 @@
         "release-check": "node scripts/release-check.js --release",
         "deploy": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/deploy.ps1",
         "release": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-release.ps1",
-        "bump": "node scripts/bump-version.js"
+        "bump": "node scripts/bump-version.js",
+        "ci": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/ci-local.ps1"
     },
     "engines": {
         "node": ">=18"
