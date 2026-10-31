@@ -201,7 +201,8 @@ test('HTTP：自动回包带一次性任务，网页SSE不泄漏本地路径，�
   assert.ok(payload.sticker?.id);
   assert.equal(payload.sticker.status, 'reserved');
   assert.equal((await request('/api/stickers/pending', undefined, 'sticker-test-token')).body.items.length, 0);
-  const web = await fetch(inst.url + '/api/chat', { method: 'POST', headers: { 'content-type': 'application/json' },
+  const web = await fetch(inst.url + '/api/chat', { method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-bot-token': 'sticker-test-token' },
     body: JSON.stringify({ text: '在吗', sessionId: 'sticker-visibility' }) });
   assert.equal((await web.text()).includes('"sticker"'), false);
   assert.equal(inst.runtime.stickerService.jobs.size, 1, '网页聊天不该排队表情包');
