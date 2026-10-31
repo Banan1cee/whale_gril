@@ -301,42 +301,88 @@ namespace WhaleLauncher.Views
             await CheckAsync(s);
         }
 
-        // ── 诊断包 ──────────────────────────────────────────────
+        // ── 日志导出（最近三次启动） ─────────────────────────────
         private void OnExport(object sender, RoutedEventArgs e)
         {
             try
             {
-                var name = "diag-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".zip";
+                var name = "logs-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".zip";
                 var path = Path.Combine(_sup.DataDir, name);
                 Directory.CreateDirectory(_sup.DataDir);
 
+                var runs = new List<string>();
+                var logsRoot = Path.Combine(_sup.DataDir, "logs");
+                if (Directory.Exists(logsRoot))
+                    runs.AddRange(Directory.GetDirectories(logsRoot, "run-*")
+                        .OrderByDescending(d => d).Take(3));
+
                 var sb = new StringBuilder();
-                sb.AppendLine("鲸鲸 4.0 诊断包（诊断页）");
+                sb.AppendLine("鲸鲸 4.0 日志包（最近三次启动）");
                 sb.AppendLine("时间: " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
                 sb.AppendLine("安装目录: " + _sup.BaseDir);
                 sb.AppendLine("管理员: " + IsAdmin());
                 sb.AppendLine("内核: " + _sup.NodeRunning + "  桥接: " + _sup.BridgeRunning + "  端口: " + _sup.Port);
+                sb.AppendLine("日志级别: " + ReadLogLevel());
+                sb.AppendLine("归档的启动次数: " + runs.Count);
                 sb.AppendLine("不含 config.json（里面是 Key）。");
+                sb.AppendLine();
+                sb.AppendLine("目录说明：logs/run-*/ 是历史启动，logs/current/ 是这次正在跑的。");
 
                 using (var zip = ZipFile.Open(path, ZipArchiveMode.Create))
                 {
-                    void Add(string entry, string content)
+                    void AddText(string entry, string content)
                     {
-                        var e2 = zip.CreateEntry(entry, CompressionLevel.Optimal);
-                        using var w = new StreamWriter(e2.Open(), new UTF8Encoding(false));
+                        var item = zip.CreateEntry(entry, CompressionLevel.Optimal);
+                        using var w = new StreamWriter(item.Open(), new UTF8Encoding(false));
                         w.Write(content);
                     }
-                    Add("info.txt", sb.ToString());
-                    var all = _sup.History(5000);
-                    Add("kernel.log", string.Join(Environment.NewLine, all.Where(x => x.Src != "B").Select(x => $"{x.At:HH:mm:ss} {x.Src} {x.Level} {x.Text}")));
-                    Add("bridge.log", string.Join(Environment.NewLine, all.Where(x => x.Src == "B").Select(x => $"{x.At:HH:mm:ss} {x.Src} {x.Level} {x.Text}")));
+                    void AddFile(string entry, string file)
+                    {
+                        try
+                        {
+                            if (File.Exists(file) && new FileInfo(file).Length > 0)
+                                zip.CreateEntryFromFile(file, entry, CompressionLevel.Optimal);
+                        }
+                        catch { /* 正在写的文件可能被占用，跳过就好 */ }
+                    }
+
+                    AddText("info.txt", sb.ToString());
+                    foreach (var run in runs)
+                    {
+                        var tag = "logs/" + Path.GetFileName(run) + "/";
+                        foreach (var f in Directory.GetFiles(run))
+                            AddFile(tag + Path.GetFileName(f), f);
+                    }
+                    foreach (var f in new[] { "launcher.log", "bridge.log", "kernel.log", "whale.log" })
+                        AddFile("logs/current/" + f, Path.Combine(_sup.DataDir, f));
+
+                    // wechatauto 库自己的日志：最近两天的也带上，桥接层的错常在这里露出
+                    var wa = Path.Combine(_sup.BaseDir, "wechatauto_logs");
+                    if (Directory.Exists(wa))
+                        foreach (var f in Directory.GetFiles(wa, "*.log").OrderByDescending(x => x).Take(2))
+                            AddFile("wechatauto_logs/" + Path.GetFileName(f), f);
                 }
                 Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{path}\"") { UseShellExecute = true });
             }
             catch (Exception ex)
             {
-                MessageBox.Show("导出失败：" + ex.Message, "诊断包");
+                MessageBox.Show("导出失败：" + ex.Message, "日志包");
             }
+        }
+
+        private string ReadLogLevel()
+        {
+            try
+            {
+                var file = Path.Combine(_sup.BaseDir, "config.json");
+                if (!File.Exists(file)) return "info";
+                using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(file));
+                if (doc.RootElement.TryGetProperty("log", out var log)
+                    && log.TryGetProperty("level", out var lv) && lv.ValueKind == System.Text.Json.JsonValueKind.String)
+                    return lv.GetString() ?? "info";
+            }
+            catch { }
+            return "info";
         }
     }
 }

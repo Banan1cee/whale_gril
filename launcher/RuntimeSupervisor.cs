@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
@@ -75,9 +76,43 @@ namespace WhaleLauncher
         {
             BaseDir = baseDir;
             DataDir = Path.Combine(baseDir, "data");
+            RotateLogs();
             LogPath = Path.Combine(DataDir, "launcher.log");
             foreach (var k in new[] { "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy" })
                 try { Environment.SetEnvironmentVariable(k, null); } catch { }
+        }
+
+        /// <summary>
+        /// 每次启动把上一轮的日志归档到 data/logs/run-时间戳/，只保留最近 5 次。
+        /// 「导出最近三次启动的日志」靠的就是这些归档；直接覆盖会把现场冲掉。
+        /// </summary>
+        private void RotateLogs()
+        {
+            try
+            {
+                var logsRoot = Path.Combine(DataDir, "logs");
+                Directory.CreateDirectory(logsRoot);
+                var current = new[] { "launcher.log", "bridge.log", "kernel.log", "whale.log" }
+                    .Select(f => Path.Combine(DataDir, f))
+                    .Where(f => File.Exists(f) && new FileInfo(f).Length > 0)
+                    .ToList();
+                if (current.Count > 0)
+                {
+                    var dir = Path.Combine(logsRoot, "run-" + DateTime.Now.ToString("yyyyMMdd-HHmmss"));
+                    Directory.CreateDirectory(dir);
+                    foreach (var src in current)
+                    {
+                        try { File.Move(src, Path.Combine(dir, Path.GetFileName(src))); }
+                        catch { /* 被占用就跳过，别耽误启动 */ }
+                    }
+                }
+                foreach (var old in Directory.GetDirectories(logsRoot, "run-*")
+                             .OrderByDescending(d => d).Skip(5))
+                {
+                    try { Directory.Delete(old, true); } catch { }
+                }
+            }
+            catch { /* 归档失败不能挡住启动 */ }
         }
 
         // ── 日志 ────────────────────────────────────────────────
