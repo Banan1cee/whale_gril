@@ -78,7 +78,64 @@ namespace WhaleLauncher.Views
             QueueInfo.Text = pending > 0 ? $"排队中 {pending} 张" : "队列空";
             RenderJobs(res);
             StatusText.Text = $"共 {_emotions.Sum(x => CountOf(res, x.Key))} 张图。发送测试会排进队列，由桥接按「微信在前台」的时机真的发出去。";
+            await LoadSettingsAsync();
             _loaded = true;
+        }
+
+        /// <summary>目录和三类概率存在 config 里；原来在「设置 → 表情包」，现在归位到本页。</summary>
+        private async Task LoadSettingsAsync()
+        {
+            var cfg = await Api.Get(_sup.Url, "/api/config");
+            if (!cfg.Ok) return;
+            var c = cfg.Prop("config");
+            if (c.ValueKind != JsonValueKind.Object) return;
+            if (!c.TryGetProperty("sticker", out var st) || st.ValueKind != JsonValueKind.Object) return;
+
+            if (!TxtDir.IsKeyboardFocusWithin) TxtDir.Text = St(st, "dir");
+            if (st.TryGetProperty("chances", out var ch) && ch.ValueKind == JsonValueKind.Object)
+            {
+                if (!TxtCute.IsKeyboardFocusWithin) TxtCute.Text = Nm(ch, "cute");
+                if (!TxtAngry.IsKeyboardFocusWithin) TxtAngry.Text = Nm(ch, "angry");
+                if (!TxtOther.IsKeyboardFocusWithin) TxtOther.Text = Nm(ch, "other");
+            }
+        }
+
+        private async void OnSaveStickerSettings(object sender, RoutedEventArgs e)
+        {
+            if (_loading || !_sup.NodeRunning) return;
+            if (!Prob(TxtCute.Text, out var cute) || !Prob(TxtAngry.Text, out var angry) || !Prob(TxtOther.Text, out var other))
+            {
+                StatusText.Text = "概率要填 0～1 之间的数（留空按 0）";
+                return;
+            }
+            var body = "{\"patch\":{"
+                + "\"sticker.dir\":\"" + Api.Esc(TxtDir.Text.Trim()) + "\","
+                + "\"sticker.chances.cute\":" + cute.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture) + ","
+                + "\"sticker.chances.angry\":" + angry.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture) + ","
+                + "\"sticker.chances.other\":" + other.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)
+                + "}}";
+            var res = await Api.Post(_sup.Url, "/api/config", body);
+            StatusText.Text = res.Ok
+                ? "表情包设置已保存 · " + DateTime.Now.ToString("HH:mm:ss")
+                : "保存失败：" + (res.Error.Length > 0 ? res.Error : res.Raw);
+        }
+
+        private static string St(JsonElement o, string name)
+            => o.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? (v.GetString() ?? "") : "";
+
+        private static string Nm(JsonElement o, string name)
+        {
+            if (!o.TryGetProperty(name, out var v) || v.ValueKind != JsonValueKind.Number) return "";
+            return v.GetDouble().ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        private static bool Prob(string raw, out double value)
+        {
+            value = 0;
+            var t = (raw ?? "").Trim();
+            if (t.Length == 0) return true;
+            if (!double.TryParse(t, out value)) return false;
+            return value >= 0 && value <= 1;
         }
 
         private long CountOf(ApiResult res, string key)

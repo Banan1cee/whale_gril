@@ -61,7 +61,7 @@ namespace WhaleLauncher
             }
             catch { }
             VersionText.Text = ver;
-            FootVersion.Text = ver;
+            NavVersion.Text = ver;
 
             foreach (var k in NavKeys) Nav.Items.Add(k);
             Nav.SelectedIndex = 0;

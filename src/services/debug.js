@@ -60,7 +60,7 @@ function debugState(runtime) {
       freeChat: config.group.freeChat,
       freeChatChance: config.group.freeChatChance,
       cooldownSec: config.group.cooldownSec,
-      maxRepliesPerHour: config.group.maxRepliesPerHour,
+      maxRepliesPerMinute: config.group.maxRepliesPerMinute,
     },
     links: {
       enabled: !config.links || config.links.enabled !== false,

@@ -455,7 +455,7 @@ function buildSystem({ config, msg, profile, notes = [], noteReminders = [], ses
       roastTail += '\n\n【最后一个指令】刚才骂你主人的就是「' + msg.fightTarget.name + '」。不要问主人「谁骂你」，直接冲这个人大骂，句子里必须出现 TA 的名字。';
     }
     // 自定义人设也要看得见自己做过什么，否则同样是「发了图不知道」
-    const actionBlock = actionEvents.formatBlock(events);
+    const actionBlock = actionEvents.formatBlock(events, { now });
     return custom + '\n\n' + CORE_TEMPER + '\n\n' + scene + '\n' + nowLine + '\n' + tone + masterBlock + '\n' + tease + '\n' + netRule + webBlock + styleBlock + slangBlock + abbrevText + fightBlock + roastTail + (actionBlock ? '\n\n' + actionBlock : '') + (stickerBlock ? '\n\n' + stickerBlock : '') + '\n\n' + conversationGuidance(msg);
   }
   const name = config.persona.name;
@@ -668,7 +668,7 @@ function buildSystem({ config, msg, profile, notes = [], noteReminders = [], ses
     lines.push('你刚点开看了这些信息。回复时像真人一样接一句（吐槽、好奇、接梗都行），不要照念简介，也别假装看完了整个视频或文章；拿不准就问对方一句。');
   }
 
-  const actionBlock = actionEvents.formatBlock(events);
+  const actionBlock = actionEvents.formatBlock(events, { now });
   if (actionBlock) lines.push('', actionBlock);
 
   lines.push('');

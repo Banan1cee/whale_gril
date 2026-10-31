@@ -77,7 +77,8 @@ test('可以自定义要忽略的系统号名字', async () => {
 });
 
 test('同一会话一分钟回太多条会暂停，避免刷屏死循环', async () => {
-  const { bot, cleanup } = makeBot();
+  const { bot, config, cleanup } = makeBot();
+  config.group.maxRepliesPerMinute = 5;   // 显式压低，别依赖默认值（默认 30 这里发不满）
   let limited = null;
   for (let i = 0; i < 14; i += 1) {
     const r = await bot.decide(private_('第' + i + '句话', { chatId: 'u-fast', senderId: 'wxid_fast', senderName: '话痨' }));

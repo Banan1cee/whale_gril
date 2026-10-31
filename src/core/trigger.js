@@ -87,24 +87,24 @@ function computeTrigger(bot, { msg, atMe, clean, isGroup, state, nowMs, isMaster
   const g = bot.config.group;
   const cooldownMs = (Number(g.cooldownSec) || 0) * 1000;
   const tooSoon = Number(state.lastReplyAt) + cooldownMs > nowMs;
-  // 每小时回复上限：这个配置以前只在配置文件和状态接口里出现，
-  // 代码里根本没读，等于摆设。现在真的按「最近一小时回了几条」拦。
-  const cap = Number(g.maxRepliesPerHour);
+  // 每分钟回复上限（原来按小时，1000 基本等于不限；改成分钟制后才有防刷屏的意义）。
+  // 同一套计数在 chat.js 的 burst_limit 里也会兜一次，两处读同一个配置。
+  const cap = Number(g.maxRepliesPerMinute);
   if (cap > 0) {
-    const hourAgo = nowMs - 3600 * 1000;
+    const minuteAgo = nowMs - 60 * 1000;
     const times = Array.isArray(state.replyTimes) ? state.replyTimes : [];
     let recent = 0;
-    for (const t of times) if (Number(t) > hourAgo) recent += 1;
+    for (const t of times) if (Number(t) > minuteAgo) recent += 1;
     // state.replyTimes 在会话状态被重建时会丢条目（并发下实测会漏拦），
     // 所以再数一遍存储里真正落盘的助手消息 —— 那才是权威来源。
     try {
       const stored = bot.store
         .messages(key, 200)
-        .filter((m) => m.role === 'assistant' && Number(m.ts) > hourAgo).length;
+        .filter((m) => m.role === 'assistant' && Number(m.ts) > minuteAgo).length;
       if (stored > recent) recent = stored;
     } catch { /* 读不到就按内存里的算 */ }
-    if (!recent && Number(state.lastReplyAt) > hourAgo) recent = 1;
-    if (recent >= cap) return { wake: false, reason: 'hourly_cap' };
+    if (!recent && Number(state.lastReplyAt) > minuteAgo) recent = 1;
+    if (recent >= cap) return { wake: false, reason: 'minute_cap' };
   }
   // 没点名她的时候有两种放行方式，都受同一个「插话概率」控制：
   //   1. 「允许她自己插话」开着 → 按概率抽一句；

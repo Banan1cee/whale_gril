@@ -200,7 +200,9 @@ namespace WhaleLauncher.Views
 
         private void OnOpenBridgeLog(object sender, RoutedEventArgs e)
         {
-            var path = Path.Combine(AppContext.BaseDirectory, "data", "bridge.log");
+            // 优先打开桥接自己写的全量日志（debug），bridge.log 只是启动器收到的 stdout 副本（info）
+            var full = Path.Combine(AppContext.BaseDirectory, "data", "wechat-bridge-4x.log");
+            var path = File.Exists(full) ? full : Path.Combine(AppContext.BaseDirectory, "data", "bridge.log");
             try
             {
                 if (File.Exists(path)) Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{path}\"") { UseShellExecute = true });
@@ -233,6 +235,7 @@ namespace WhaleLauncher.Views
             if (!s.NodeUp)
             {
                 PermLine.Text = "内核没起，读不到权限信息。";
+                PermLine.ToolTip = null;
                 return;
             }
             var sb = new StringBuilder();
@@ -242,8 +245,11 @@ namespace WhaleLauncher.Views
             sb.Append("   ·   UIA ").Append(s.BrUia ? "正常" : "拿不到");
             sb.Append("   ·   收消息 ").Append(s.BrListener ? "正常" : "停了");
             sb.Append("   ·   双开守卫 ").Append(s.BrAccountGuard ? "开" : "关");
-            if (!string.IsNullOrEmpty(s.BrAccountWhy)) sb.Append("\n").Append(s.BrAccountWhy);
+            // 账号没确认的原因并进同一行（原来换行会被截断成两行）；放不下时悬停看全
+            if (!string.IsNullOrEmpty(s.BrAccountWhy))
+                sb.Append("   ·   ").Append(s.BrAccountWhy.Replace("\r", " ").Replace("\n", " "));
             PermLine.Text = sb.ToString();
+            PermLine.ToolTip = sb.ToString();
             UpdateStat();
         }
 
@@ -311,11 +317,26 @@ namespace WhaleLauncher.Views
 
                 var enabled = true;
                 var fallback = true;
+                var charMode = "auto";
+                var charGap = 40;
+                TxtAccount.Text = Str(wx, "account");
                 if (wx.TryGetProperty("bgSend", out var bg) && bg.ValueKind == JsonValueKind.Object)
                 {
                     enabled = Bool(bg, "enabled");
                     fallback = Bool(bg, "fallbackToForeground");
+                    charMode = Str(bg, "charMode");
+                    if (charMode.Length == 0) charMode = "auto";
+                    charGap = Int(bg, "charGapMs", 40);
+                    ChkUnhide.IsChecked = Bool(bg, "unhideWindow");
+                    ChkVerify.IsChecked = Bool(bg, "verify");
+                    ChkStrip.IsChecked = Bool(bg, "stripUnencodable");
                 }
+                if (!TxtCharGap.IsKeyboardFocusWithin) TxtCharGap.Text = charGap.ToString();
+                CmbCharMode.Items.Clear();
+                CmbCharMode.Items.Add("auto");
+                CmbCharMode.Items.Add("utf16");
+                CmbCharMode.Items.Add("gbk");
+                CmbCharMode.SelectedItem = charMode;
                 CmbSend.Items.Clear();
                 CmbSend.Items.Add("自动：后台优先，失败回前台");
                 CmbSend.Items.Add("仅前台：剪贴板粘贴");
@@ -335,6 +356,9 @@ namespace WhaleLauncher.Views
 
         private static string Str(JsonElement e, string name)
             => e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? (v.GetString() ?? "") : "";
+
+        private static int Int(JsonElement e, string name, int fallback)
+            => e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out var n) ? n : fallback;
 
         private async Task PatchAsync(string json)
         {
@@ -371,6 +395,41 @@ namespace WhaleLauncher.Views
             var fallback = idx == 0;
             await PatchAsync("{\"wechat\":{\"bgSend\":{\"enabled\":" + (enabled ? "true" : "false") +
                              ",\"fallbackToForeground\":" + (fallback ? "true" : "false") + "}}}");
+        }
+
+        // ── 账号与发送（原「设置 → 微信 · 账号与发送」，归位到本页）────
+        private async void OnSaveSendSettings(object sender, RoutedEventArgs e)
+        {
+            if (_loading) return;
+            await SaveSendSettingsAsync();
+        }
+
+        private async void OnCharModeChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (_loading) return;
+            await SaveSendSettingsAsync();
+        }
+
+        private async Task SaveSendSettingsAsync()
+        {
+            var gap = 40;
+            if (int.TryParse((TxtCharGap.Text ?? "").Trim(), out var g)) gap = Math.Clamp(g, 20, 80);
+            else if ((TxtCharGap.Text ?? "").Trim().Length > 0) TxtCharGap.Text = gap.ToString();
+
+            var mode = CmbCharMode.SelectedItem as string ?? "auto";
+            await PatchAsync("{\"wechat\":{"
+                + "\"account\":\"" + Api.Esc(TxtAccount.Text.Trim()) + "\","
+                + "\"bgSend\":{\"charMode\":\"" + Api.Esc(mode) + "\",\"charGapMs\":" + gap + "}}}");
+        }
+
+        private async void OnSaveSendOpt(object sender, RoutedEventArgs e)
+        {
+            if (_loading) return;
+            await PatchAsync("{\"wechat\":{\"bgSend\":{"
+                + "\"unhideWindow\":" + (ChkUnhide.IsChecked == true ? "true" : "false") + ","
+                + "\"verify\":" + (ChkVerify.IsChecked == true ? "true" : "false") + ","
+                + "\"stripUnencodable\":" + (ChkStrip.IsChecked == true ? "true" : "false")
+                + "}}}");
         }
     }
 }

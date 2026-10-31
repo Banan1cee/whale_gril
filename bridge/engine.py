@@ -208,7 +208,7 @@ BG_SEND = {"enabled": True, "charGap": 0.04, "verify": True, "charMode": "auto",
 
 # 消息调度：同一个会话串行、跨会话并发。workers=1 就等于旧行为（全部串行）。
 PIPELINE_WORKERS = 4
-PIPELINE_QUEUE_LIMIT = 4
+PIPELINE_QUEUE_LIMIT = 8
 
 _cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "config.json")
 # 新版发行包不再自带 config.json（免得覆盖安装时把用户的主人名单/token 冲掉）。
@@ -255,7 +255,7 @@ try:
         pass
     try:
         PIPELINE_WORKERS = max(1, min(16, int(_wechat.get("pipelineWorkers", 4) or 4)))
-        PIPELINE_QUEUE_LIMIT = max(1, min(32, int(_wechat.get("pipelineQueueLimit", 4) or 4)))
+        PIPELINE_QUEUE_LIMIT = max(1, min(32, int(_wechat.get("pipelineQueueLimit", 8) or 8)))
     except Exception:
         pass
     # 调试用：WHALE_PIPELINE_WORKERS=1 可以立刻退回「全串行」的旧行为
@@ -418,7 +418,7 @@ def reload_config(path=None):
         pass
     try:
         PIPELINE_WORKERS = max(1, min(16, int(w.get("pipelineWorkers", PIPELINE_WORKERS) or 4)))
-        PIPELINE_QUEUE_LIMIT = max(1, min(32, int(w.get("pipelineQueueLimit", PIPELINE_QUEUE_LIMIT) or 4)))
+        PIPELINE_QUEUE_LIMIT = max(1, min(32, int(w.get("pipelineQueueLimit", PIPELINE_QUEUE_LIMIT) or 8)))
     except Exception:
         pass
     ACCOUNT_GUARD = _as_bool(w.get("accountGuard", True), True)
@@ -902,17 +902,49 @@ def _log_allowed(text):
     return not any(h in text for h in _LOG_DEBUG_HINT)
 
 
-def log(*args):
-    line = time.strftime("[%H:%M:%S] ") + " ".join(str(a) for a in args)
-    if not _log_allowed(line):
+_last_rotate_check = [0.0]
+
+
+def _rotate_bridge_log():
+    """日志文件超过 10MB 就轮转成 .1（只留一份）。文件现在记 debug 全量，涨得比以前快。"""
+    import time as _t
+    now = _t.time()
+    if now - _last_rotate_check[0] < 60:
         return
-    # 先写文件，再打印：这样即使控制台卡住，日志也不会丢
+    _last_rotate_check[0] = now
+    try:
+        if os.path.getsize(LOG_FILE) <= 10 * 1024 * 1024:
+            return
+        bak = LOG_FILE + ".1"
+        if os.path.exists(bak):
+            os.remove(bak)
+        os.replace(LOG_FILE, bak)
+    except Exception:
+        pass
+
+
+def _fmt_log_arg(a):
+    """日志参数不省略：异常展开完整 traceback，容器用 repr，字符串原样。"""
+    if isinstance(a, BaseException):
+        import traceback
+        return "".join(traceback.format_exception(type(a), a, a.__traceback__)).strip()
+    if isinstance(a, (dict, list, tuple, set)):
+        return repr(a)
+    return str(a)
+
+
+def log(*args):
+    line = time.strftime("[%H:%M:%S] ") + " ".join(_fmt_log_arg(a) for a in args)
+    # 文件：永远记全量（debug），出问题能溯源；界面/启动器控制台按 LOG_LEVEL 过滤。
     try:
         os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
+        _rotate_bridge_log()
         with open(LOG_FILE, "a", encoding="utf-8") as f:
             f.write(line + "\n")
     except Exception:
         pass
+    if not _log_allowed(line):
+        return
     try:
         print(line, flush=True)
     except Exception:

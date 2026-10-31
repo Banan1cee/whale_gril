@@ -9,7 +9,7 @@
  *
  *   B. 两个开关在业务代码里根本没被读过，纯摆设：
  *      · group.requireAt（群里必须@她才接）—— 只有 config 和状态接口提到过；
- *      · group.maxRepliesPerHour（每小时上限）—— 同上。
+ *      · group.maxRepliesPerMinute（每分钟上限）—— 同上。
  *      · share.sources（分享来源）—— 写什么都硬抓 B 站。
  *      → 现在三个都真的生效。
  */
@@ -80,13 +80,13 @@ test('group.requireAt 真的管用：开=不@不回，关=按概率回', async (
   const app = await boot();
   try {
     // 概率 0：没点名一律不接（插话开关开着也一样）
-    await patch(app, { 'group.requireAt': true, 'group.freeChat': true, 'group.freeChatChance': 0, 'group.maxRepliesPerHour': 1000 });
+    await patch(app, { 'group.requireAt': true, 'group.freeChat': true, 'group.freeChatChance': 0, 'group.maxRepliesPerMinute': 30 });
     const ignored = await groupMsg(app, 'grp_require_on');
     assert.equal(ignored.action, 'ignore', '开着 requireAt 时，没 @ 她不该回');
     assert.equal(ignored.reason, 'not_addressed');
 
     // 关掉 requireAt + 概率 1：不 @ 也回（概率现在是唯一的闸门，不再是「每条都回」）
-    await patch(app, { 'group.requireAt': false, 'group.freeChat': false, 'group.freeChatChance': 1, 'group.maxRepliesPerHour': 1000 });
+    await patch(app, { 'group.requireAt': false, 'group.freeChat': false, 'group.freeChatChance': 1, 'group.maxRepliesPerMinute': 30 });
     const replied = await groupMsg(app, 'grp_require_off');
     assert.equal(replied.action, 'reply', '关掉 requireAt 后，不 @ 也应该回：' + JSON.stringify(replied).slice(0, 120));
     assert.ok(String(replied.reply || '').length > 0, '要真的有一句回复');
@@ -95,19 +95,22 @@ test('group.requireAt 真的管用：开=不@不回，关=按概率回', async (
   }
 });
 
-test('group.maxRepliesPerHour 真的限流', async () => {
+test('group.maxRepliesPerMinute 真的限流', async () => {
   const app = await boot();
   try {
-    await patch(app, { 'group.requireAt': false, 'group.freeChatChance': 1, 'group.maxRepliesPerHour': 1 });
+    await patch(app, { 'group.requireAt': false, 'group.freeChatChance': 1, 'group.maxRepliesPerMinute': 5 });
     // 先确认配置真的落地了，避免把「保存没生效」误判成「限流坏了」
     await waitConfig(app, 'group.requireAt', false);
-    await waitConfig(app, 'group.maxRepliesPerHour', 1);
+    await waitConfig(app, 'group.maxRepliesPerMinute', 5);
 
-    const first = await groupMsg(app, 'grp_cap', '第一句话');
-    assert.equal(first.action, 'reply', '第一条应该回，实际：' + JSON.stringify(first).slice(0, 200));
-    const second = await groupMsg(app, 'grp_cap', '第二句话');
-    assert.equal(second.action, 'ignore', '一小时只允许 1 条时，第二条应被拦：' + JSON.stringify(second).slice(0, 200));
-    assert.equal(second.reason, 'hourly_cap');
+    // 配置下限就是 5，测试只能用最小值：前 5 条正常回，第 6 条被拦
+    for (let i = 1; i <= 5; i += 1) {
+      const r = await groupMsg(app, 'grp_cap', '第 ' + i + ' 句话');
+      assert.equal(r.action, 'reply', '第 ' + i + ' 条应该回，实际：' + JSON.stringify(r).slice(0, 200));
+    }
+    const blocked = await groupMsg(app, 'grp_cap', '第六句话');
+    assert.equal(blocked.action, 'ignore', '一分钟只允许 5 条时，第 6 条应被拦：' + JSON.stringify(blocked).slice(0, 200));
+    assert.equal(blocked.reason, 'minute_cap');
   } finally {
     await app.close();
   }

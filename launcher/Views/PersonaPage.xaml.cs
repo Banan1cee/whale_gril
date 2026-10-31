@@ -22,13 +22,22 @@ namespace WhaleLauncher.Views
         private readonly DispatcherTimer _saveTimer;
         private bool _loading;
         private bool _loaded;
+        private string _loadedEmoji = "正常";   // 上次载入的颜文字档位，用来判断用户有没有改过
+
+        /// <summary>
+        /// 这些开关在各自专页已经有入口（微信桥接 / 主动与提醒 / 表情包），
+        /// 人设页不再重复列一份，避免同一个键两处可改、改完另一处不刷新。
+        /// </summary>
+        private static readonly HashSet<string> HiddenFlags = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "wechatAccountGuard", "quoteReply", "stickers",
+            "proactiveCare", "careOnlyMaster", "careGroups", "careOthers",
+        };
 
         public PersonaPage(RuntimeSupervisor sup)
         {
             InitializeComponent();
             _sup = sup;
-
-            foreach (var e in new[] { "关", "少", "正常", "多" }) CmbEmoji.Items.Add(e);
 
             _saveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(450) };
             _saveTimer.Tick += async (_, __) =>
@@ -70,12 +79,14 @@ namespace WhaleLauncher.Views
 
                     TxtPrivate.Text = L(p, "privateMaxChars").ToString();
                     TxtGroup.Text = L(p, "groupMaxChars").ToString();
+                    TxtBubbles.Text = L(p, "maxBubbles").ToString();
                     TxtTurns.Text = L(p, "historyTurns").ToString();
                     TxtGroupTurns.Text = L(p, "groupHistoryTurns").ToString();
                     var emoji = S(p, "emoji");
-                    CmbEmoji.SelectedItem = string.IsNullOrEmpty(emoji) ? "正常" : emoji;
+                    _loadedEmoji = string.IsNullOrEmpty(emoji) ? "正常" : emoji;
+                    SldEmoji.Value = EmojiPercent(cfg, _loadedEmoji);
+                    UpdateEmojiHint();
 
-                    ChkFreeChat.IsChecked = B(p, "freeChat");
                     ChkEmotions.IsChecked = B(p, "emotions");
                     ChkProactive.IsChecked = B(p, "proactive");
                     ChkOpinions.IsChecked = B(p, "opinions");
@@ -87,9 +98,6 @@ namespace WhaleLauncher.Views
 
                 if (set.Ok) TxtOwner.Text = set.Str("userName");
 
-                if (cfg.Ok && cfg.Prop("config").ValueKind == JsonValueKind.Object &&
-                    cfg.Prop("config").TryGetProperty("group", out var g) && g.ValueKind == JsonValueKind.Object)
-                    ChkRequireAt.IsChecked = B(g, "requireAt");
                 if (cfg.Ok && cfg.Prop("config").ValueKind == JsonValueKind.Object &&
                     cfg.Prop("config").TryGetProperty("persona", out var pcfg) && pcfg.ValueKind == JsonValueKind.Object)
                 {
@@ -156,6 +164,7 @@ namespace WhaleLauncher.Views
             foreach (var f in arr.EnumerateArray())
             {
                 var key = S(f, "key");
+                if (HiddenFlags.Contains(key)) continue;   // 有专页的开关不在这里重复
                 var label = S(f, "label");
                 var desc = S(f, "desc");
                 var on = B(f, "value");
@@ -209,11 +218,44 @@ namespace WhaleLauncher.Views
             _saveTimer.Start();
         }
 
-        private void OnEmojiChanged(object sender, SelectionChangedEventArgs e)
+        private void OnEmojiChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
         {
+            UpdateEmojiHint();
             if (_loading) return;
             _saveTimer.Stop();
             _saveTimer.Start();
+        }
+
+        private void UpdateEmojiHint()
+        {
+            if (HintEmoji == null || SldEmoji == null) return;
+            var pct = (int)Math.Round(SldEmoji.Value);
+            if (pct <= 0)
+            {
+                HintEmoji.Text = "关闭：不主动带颜文字";
+                return;
+            }
+            var every = Math.Max(1, (int)Math.Round(100.0 / pct));
+            HintEmoji.Text = pct + "% · 约每 " + every + " 条带一次";
+        }
+
+        /// <summary>拖动条位置：优先用显式概率，没设过就按档位换算（关/少/正常/多 → 0/12/30/65）。</summary>
+        private static double EmojiPercent(ApiResult cfg, string level)
+        {
+            if (cfg != null && cfg.Ok && cfg.Prop("config").ValueKind == JsonValueKind.Object
+                && cfg.Prop("config").TryGetProperty("chat", out var chat) && chat.ValueKind == JsonValueKind.Object
+                && chat.TryGetProperty("emojiChance", out var ec) && ec.ValueKind == JsonValueKind.Number)
+            {
+                var explicitPct = ec.GetDouble() * 100;
+                if (explicitPct > 0) return Math.Clamp(explicitPct, 0, 100);
+            }
+            return level switch
+            {
+                "关" => 0,
+                "少" => 12,
+                "多" => 65,
+                _ => 30
+            };
         }
 
         private async void OnSaveAll(object sender, RoutedEventArgs e) => await SaveAllAsync("已保存");
@@ -234,8 +276,14 @@ namespace WhaleLauncher.Views
             int grp = int.TryParse(TxtGroup.Text.Trim(), out var gv) ? Math.Clamp(gv, 20, 300) : 70;
             int turns = int.TryParse(TxtTurns.Text.Trim(), out var tv) ? Math.Clamp(tv, 4, 400) : 200;
             int gturns = int.TryParse(TxtGroupTurns.Text.Trim(), out var gtv) ? Math.Clamp(gtv, 2, 300) : 150;
+            int bubbles = int.TryParse(TxtBubbles.Text.Trim(), out var bv) ? Math.Clamp(bv, 1, 8) : 2;
 
-            var emoji = CmbEmoji.SelectedItem as string ?? "正常";
+            var pct = Math.Clamp((int)Math.Round(SldEmoji.Value), 0, 100);
+            // 0% 用档位「关」做硬关；>0 时把档位恢复成可用值，真正生效的是下面的精确概率
+            var emoji = pct == 0
+                ? "关"
+                : (string.Equals(_loadedEmoji, "关", StringComparison.Ordinal) ? "正常" : _loadedEmoji);
+            var emojiChance = pct / 100.0;
 
             var json = "{" +
                 $"\"name\":\"{Api.Esc(TxtName.Text.Trim())}\"," +
@@ -247,10 +295,10 @@ namespace WhaleLauncher.Views
                 $"\"customPrompt\":\"{Api.Esc(TxtPrompt.Text.Trim())}\"," +
                 $"\"privateMaxChars\":{priv}," +
                 $"\"groupMaxChars\":{grp}," +
+                $"\"maxBubbles\":{bubbles}," +
                 $"\"historyTurns\":{turns}," +
                 $"\"groupHistoryTurns\":{gturns}," +
                 $"\"emoji\":\"{Api.Esc(emoji)}\"," +
-                $"\"freeChat\":{(ChkFreeChat.IsChecked == true ? "true" : "false")}," +
                 $"\"emotions\":{(ChkEmotions.IsChecked == true ? "true" : "false")}," +
                 $"\"proactive\":{(ChkProactive.IsChecked == true ? "true" : "false")}," +
                 $"\"opinions\":{(ChkOpinions.IsChecked == true ? "true" : "false")}," +
@@ -264,18 +312,19 @@ namespace WhaleLauncher.Views
                 return;
             }
 
-            // 称呼（persona 接口不收，走 settings）和群聊「必须 @」走 config
+            // 称呼（persona 接口不收，走 settings）；群聊规则统一在「设置 → 群聊」，这里不再写 config
             var owner = TxtOwner.Text.Trim();
             if (owner.Length > 0)
                 await Api.Post(_sup.Url, "/api/settings", $"{{\"userName\":\"{Api.Esc(owner)}\"}}");
             var patch = "{\"patch\":{" +
-                "\"group.requireAt\":" + (ChkRequireAt.IsChecked == true ? "true" : "false") + "," +
                 "\"persona.masterRoast\":" + (ChkRoast.IsChecked == true ? "true" : "false") + "," +
                 "\"persona.aliases\":" + Lines(TxtAliases) + "," +
                 "\"persona.master.names\":" + Lines(TxtMasterNames) + "," +
-                "\"persona.master.wxids\":" + Lines(TxtMasterWxids) +
+                "\"persona.master.wxids\":" + Lines(TxtMasterWxids) + "," +
+                "\"chat.emojiChance\":" + emojiChance.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture) +
                 "}}";
             await Api.Post(_sup.Url, "/api/config", patch);
+            _loadedEmoji = emoji;
 
             SaveState.Text = okText + " · " + DateTime.Now.ToString("HH:mm:ss");
         }

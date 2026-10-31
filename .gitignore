@@ -4,8 +4,8 @@ config.json
 wechatauto_logs/
 wechatauto_db/
 
-# 包内自带的 Node 运行时（发行包用，不入库）
-runtime/node.exe
+# 包内自带的 Node + Python 运行时（发行包用，不入库；setup-runtime.ps1 装出来的）
+runtime/
 
 # 依赖 / 缓存
 node_modules/

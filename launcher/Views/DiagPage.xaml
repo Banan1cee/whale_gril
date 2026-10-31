@@ -25,12 +25,10 @@
             </Grid.ColumnDefinitions>
 
             <!-- 自检 -->
-            <Border Grid.Column="0" Style="{StaticResource Card}" Padding="14,12">
+            <Border Grid.Column="0" Style="{StaticResource Card}" Padding="14,10">
                 <DockPanel>
-                    <TextBlock DockPanel.Dock="Top" Text="自检" Style="{StaticResource H2}" Margin="0,0,0,8" />
-                    <ScrollViewer VerticalScrollBarVisibility="Auto">
-                        <StackPanel x:Name="CheckHost" />
-                    </ScrollViewer>
+                    <TextBlock DockPanel.Dock="Top" Text="自检" Style="{StaticResource H2}" Margin="0,0,0,6" />
+                    <StackPanel x:Name="CheckHost" />
                 </DockPanel>
             </Border>
 

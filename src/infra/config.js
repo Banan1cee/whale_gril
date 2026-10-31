@@ -202,7 +202,7 @@ const DEFAULT_CONFIG = {
     masterAlwaysReply: true,
     engagedMinutes: 6,
     silentMinutes: 10,
-    maxRepliesPerHour: 1000,
+    maxRepliesPerMinute: 15,
     muteDefaultMinutes: 30,
   },
   // 记忆参数已移到 src/memory/constants.js（写死，不提供 UI/接口）；
@@ -228,7 +228,7 @@ const DEFAULT_CONFIG = {
     },
     // 消息调度：同一会话串行、跨会话并发。workers=1 等于旧的全串行行为。
     pipelineWorkers: 4,
-    pipelineQueueLimit: 4,
+    pipelineQueueLimit: 8,
     // 这些会话永不回复（微信团队、订阅号…）。必须是数组：保存时按数组原样写回，
     // 缺省会退化成字符串，界面上再读就成了一整行。
     ignoreSenders: [],
@@ -237,7 +237,7 @@ const DEFAULT_CONFIG = {
     wechat: { enabled: false, inboundToken: 'change-me-wechat', outboundUrl: '', outboundHeaders: {} },
     douyin: { enabled: false, inboundToken: 'change-me-douyin', outboundUrl: '', outboundHeaders: {} },
   },
-  log: { level: 'info' },
+  log: { level: 'info', fileLevel: 'debug' },
 };
 
 function isPlainObject(v) {

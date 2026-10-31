@@ -125,9 +125,14 @@ test('设置页有分类侧栏，外观固定在最后', () => {
 
   const build = code.slice(code.indexOf('private void BuildOnce()'), code.indexOf('private void AddSection'));
   const calls = [...build.matchAll(/AddSection\("([^"]+)"/g)].map((m) => m[1]);
-  assert.ok(calls.length >= 4, 'BuildOnce 应该注册多个分区');
+  assert.ok(calls.length >= 3, 'BuildOnce 应该显式注册模型/看图/外观');
   assert.equal(calls[calls.length - 1], '外观', '外观必须排在设置的最后');
   assert.ok(calls.includes('模型与 Key'));
+
+  // 其余分区来自 Specs()：不能只剩模型/看图/外观三张
+  const specs = code.slice(code.indexOf('private static List<SectionSpec> Specs()'), code.indexOf('private void BuildOnce'));
+  const titles = [...specs.matchAll(/Title = "([^"]+)"/g)].map((m) => m[1]);
+  assert.ok(titles.length >= 5, `Specs 里应该有多个分区，实际 ${titles.length} 个`);
 });
 
 test('卡片不再把 DropShadowEffect 挂在内容上，避免竖线/糊字', () => {

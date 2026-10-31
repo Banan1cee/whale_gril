@@ -40,7 +40,7 @@ const FIELDS = {
   'group.freeChat': { type: 'bool' },
   'group.freeChatChance': { type: 'float', min: 0, max: 1 },
   'group.cooldownSec': { type: 'int', min: 0, max: 3600 },
-  'group.maxRepliesPerHour': { type: 'int', min: 0, max: 10000 },
+  'group.maxRepliesPerMinute': { type: 'int', min: 5, max: 30 },
   'group.silentMinutes': { type: 'int', min: 1, max: 10080 },
   'group.engagedMinutes': { type: 'int', min: 1, max: 1440 },
   'group.masterAlwaysReply': { type: 'bool' },

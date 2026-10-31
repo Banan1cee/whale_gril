@@ -37,6 +37,11 @@ const { cannedReply, dismissReply } = require('./stages/canned');
 const reminderCore = require('../core/reminder');
 const stickers = require('../adapters/stickers');
 const { LIMITS } = require('../memory/constants');
+
+// 全局硬上限：所有会话加起来每分钟最多这么多条回复。
+// 单会话上限（group.maxRepliesPerMinute，5–30）防的是「一个群里爆刷」，
+// 这个是防「同时开了几十个群，每个都没超但加起来停不下来」。固定 30，不给配。
+const GLOBAL_REPLY_CAP_PER_MINUTE = 30;
 const memoryBudget = require('../memory/budget');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -55,6 +60,8 @@ class Bot {
     this.startedAt = Date.now();
     // handle() 的按会话串行队列：key → 上一条的收尾 promise（M21）
     this._handleChains = new Map();
+    // 全局回复时间戳（跨会话共用），只留在内存里：重启后重新数
+    this.globalReplyTimes = [];
     this.lastBudget = null;
     this.lastUsage = null;
   }
@@ -483,6 +490,7 @@ class Bot {
       return { action: 'ignore', reason: 'muted', key, msg, atMe };
     }
     // 同一个会话一分钟内已经回了太多条 → 先停一下，别越聊越乱。
+    // 阈值跟「每分钟最多回几条」共用（原来这里硬编码 10，跟配置的每小时上限打架）。
     // state.replyTimes 在会话状态被重建时会丢条目（CHANGELOG 实测 1/4 漏拦），
     // 所以照搬 trigger.js 的兜底：再数一遍存储里真正落盘的助手消息，取两边较大的（M20）。
     const minuteAgo = nowMs - 60000;
@@ -494,8 +502,15 @@ class Bot {
         .filter((m) => m.role === 'assistant' && Number(m.ts) > minuteAgo).length;
       if (stored > recentCount) recentCount = stored;
     } catch { /* 读不到就按内存里的算 */ }
-    if (recentCount >= 10) {
+    const minuteCap = Number(this.config.group.maxRepliesPerMinute);
+    if (minuteCap > 0 && recentCount >= minuteCap) {
       return { action: 'ignore', reason: 'burst_limit', key, msg, atMe };
+    }
+    // 全局闸门：所有会话合计每分钟最多 30 条（单会话都没超也可能整体刷起来）
+    const globalNow = this.now().getTime();
+    this.globalReplyTimes = (this.globalReplyTimes || []).filter((t) => globalNow - Number(t) < 60000);
+    if (this.globalReplyTimes.length >= GLOBAL_REPLY_CAP_PER_MINUTE) {
+      return { action: 'ignore', reason: 'global_minute_cap', key, msg, atMe };
     }
 
     // 固定话术：查自己的号 / 同意被损 / 主人点名吐槽（canned.js）。
@@ -1365,6 +1380,9 @@ class Bot {
         decision.finalText = text;
       }
     }
+    // 记一笔全局回复时间（跨会话共用），_decide 的全局闸门读它
+    this.globalReplyTimes.push(this.now().getTime());
+    if (this.globalReplyTimes.length > 600) this.globalReplyTimes = this.globalReplyTimes.slice(-300);
     this.store.appendMessage(decision.key, {
       role: 'assistant',
       name: this.config.persona.name,

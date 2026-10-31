@@ -23,6 +23,7 @@ namespace WhaleLauncher.Views
         public double Max = double.NaN;
         public string[] Options;
         public bool IsInt = true;
+        public string Unit = "";          // 拖动条右侧读数后缀，比如「 条/分钟」
     }
 
     public sealed class SectionSpec
@@ -45,27 +46,12 @@ namespace WhaleLauncher.Views
         private readonly Dictionary<string, Action<JsonElement>> _loaders = new Dictionary<string, Action<JsonElement>>();
         private Action<JsonElement, Dictionary<string, JsonElement>> _loadModel;
         private Action<JsonElement> _loadVision;
-        private Action<JsonElement> _loadAbout;
         private Dictionary<string, JsonElement> _providers;
         private bool _loading;
         private bool _configLoaded;      // 已经成功全量回填过一次（M30：周期刷新据此判断要不要补）
         private bool _loadingConfig;     // 全量回填在途，防止载入和定时器双跑
         private DateTime _lastLoad = DateTime.MinValue;
-        private string _configFile = "";
-        private string _dataDir = "";
         private readonly List<Border> _sectionCards = new List<Border>();
-
-        // 白名单 / 静音黑名单
-        private readonly Dictionary<string, ContactInfo> _contactCache = new Dictionary<string, ContactInfo>();
-        private List<string> _whitelist = new List<string>();
-        private List<string> _mutedGroups = new List<string>();
-        private WrapPanel _whitelistChips;
-        private WrapPanel _mutedChips;
-        private TextBlock _whitelistHint;
-        private TextBlock _mutedHint;
-        private TextBlock _whitelistError;
-        private TextBlock _mutedError;
-        private DateTime _lastContactsTry = DateTime.MinValue;
 
         public SettingsPage(RuntimeSupervisor sup)
         {
@@ -83,51 +69,34 @@ namespace WhaleLauncher.Views
         // ── 全部设置清单（启动器是唯一界面）────────────────────────
         private static List<SectionSpec> Specs() => new List<SectionSpec>
         {
-            new SectionSpec { Title = "聊天与气泡", Note = "决定她一次说多少、分几条说。", Fields =
+            new SectionSpec { Title = "语音", Note = "别人发语音时先转成文字再回复；超时和时长上限也在这张卡里。", Fields =
             {
-                new FieldSpec { Path = "chat.privateMaxChars", Label = "私聊每条最多几个字", Kind = "num", Min = 40, Max = 800 },
-                new FieldSpec { Path = "chat.groupMaxChars", Label = "群聊每条最多几个字", Kind = "num", Min = 20, Max = 300 },
-                new FieldSpec { Path = "chat.maxBubbles", Label = "最多分几条消息", Kind = "num", Min = 1, Max = 8, Hint = "长回复才拆，短句仍然一条" },
-                new FieldSpec { Path = "chat.emojiChance", Label = "颜文字概率", Kind = "num", Min = 0, Max = 1, IsInt = false },
+                new FieldSpec { Path = "voice.enabled", Label = "语音回复", Kind = "bool" },
+                new FieldSpec { Path = "voice.apiKey", Label = "语音接口 Key", Kind = "secret", Hint = "留空表示不改；留空则用主模型的 Key" },
+                new FieldSpec { Path = "voice.baseUrl", Label = "语音接口地址", Kind = "text" },
+                new FieldSpec { Path = "voice.model", Label = "语音模型", Kind = "text" },
+                new FieldSpec { Path = "voice.timeoutMs", Label = "语音识别超时(毫秒)", Kind = "num", Min = 1000, Max = 300000 },
+                new FieldSpec { Path = "voice.maxSeconds", Label = "超过多少秒的语音不转", Kind = "num", Min = 1, Max = 600 },
             }},
             new SectionSpec { Title = "群聊", Fields =
             {
                 new FieldSpec { Path = "group.requireAt", Label = "必须 @ 她才回", Kind = "bool", Hint = "关掉 = 群里不 @ 也会接，但按下面的插话概率抽，不是每条都回" },
                 new FieldSpec { Path = "group.freeChat", Label = "允许她自己插话", Kind = "bool", Hint = "开着时没点名的消息也按概率抽一句；@ 她的不受影响" },
-                new FieldSpec { Path = "group.freeChatChance", Label = "插话概率（0.06=6%，1=每条都回）", Kind = "num", Min = 0, Max = 1, IsInt = false, Hint = "没点名的消息按这个概率接一句；默认 0.06 约等于 16 条回 1 条。填 1 = 每条都回，仍受冷却和每小时上限约束" },
+                new FieldSpec { Path = "group.freeChatChance", Label = "插话概率（0.06=6%，1=每条都回）", Kind = "num", Min = 0, Max = 1, IsInt = false, Hint = "没点名的消息按这个概率接一句；默认 0.06 约等于 16 条回 1 条。填 1 = 每条都回，仍受冷却和每分钟上限约束" },
                 new FieldSpec { Path = "group.cooldownSec", Label = "两次回复冷却(秒)", Kind = "num", Min = 0, Max = 3600 },
-                new FieldSpec { Path = "group.maxRepliesPerHour", Label = "每小时最多回几条", Kind = "num", Min = 1, Max = 200 },
+                new FieldSpec { Path = "group.maxRepliesPerMinute", Label = "每分钟最多回几条", Kind = "slider", Min = 5, Max = 30, Unit = " 条/分钟", Hint = "推荐 10–20 条" },
                 new FieldSpec { Path = "group.masterAlwaysReply", Label = "主人在群里说话永远回", Kind = "bool" },
                 new FieldSpec { Path = "group.engagedMinutes", Label = "接话后保持参与(分钟)", Kind = "num", Min = 1, Max = 1440 },
                 new FieldSpec { Path = "group.silentMinutes", Label = "冷场多久算话题结束(分钟)", Kind = "num", Min = 1, Max = 10080 },
                 new FieldSpec { Path = "group.muteDefaultMinutes", Label = "免打扰默认时长(分钟)", Kind = "num", Min = 1, Max = 1440 },
             }},
-            new SectionSpec { Title = "表情包", Fields =
+            new SectionSpec { Title = "微信 · 数据与管道", Fields =
             {
-                new FieldSpec { Path = "sticker.dir", Label = "表情包目录", Kind = "text", Hint = "相对路径，分类是它下面的文件夹" },
-                new FieldSpec { Path = "sticker.testChat", Label = "测试发送到哪个会话", Kind = "text" },
-                new FieldSpec { Path = "sticker.chances.cute", Label = "傲娇概率", Kind = "num", Min = 0, Max = 1, IsInt = false },
-                new FieldSpec { Path = "sticker.chances.angry", Label = "炸毛概率", Kind = "num", Min = 0, Max = 1, IsInt = false },
-                new FieldSpec { Path = "sticker.chances.other", Label = "其他概率", Kind = "num", Min = 0, Max = 1, IsInt = false },
-            }},
-            new SectionSpec { Title = "微信与通道", Fields =
-            {
-                new FieldSpec { Path = "wechat.account", Label = "固定用哪个号（留空 = 按最近活跃）", Kind = "text" },
-                new FieldSpec { Path = "wechat.accountGuard", Label = "双开时钉死账号", Kind = "bool" },
-                new FieldSpec { Path = "wechat.quoteReply", Label = "引用回复（慢）", Kind = "bool" },
-                new FieldSpec { Path = "wechat.bgSend.enabled", Label = "零焦点后台发送", Kind = "bool" },
-                new FieldSpec { Path = "wechat.bgSend.charMode", Label = "打字编码", Kind = "select", Options = new[] { "auto", "utf16", "gbk" }, Hint = "auto = 按微信版本自动（4.2+ 用 UTF-16 码元）" },
-                new FieldSpec { Path = "wechat.bgSend.charGapMs", Label = "每个码元间隔(毫秒)", Kind = "num", Min = 20, Max = 80 },
-                new FieldSpec { Path = "wechat.bgSend.fallbackToForeground", Label = "后台失败时回前台发", Kind = "bool" },
-                new FieldSpec { Path = "wechat.bgSend.unhideWindow", Label = "微信在托盘时自动打开窗口", Kind = "bool" },
-                new FieldSpec { Path = "wechat.backgroundSend", Label = "后台发送（不抢前台）", Kind = "bool", Hint = "关掉 = 每次发送先把微信拉到前台" },
-                new FieldSpec { Path = "wechat.bgSend.verify", Label = "发送后回读确认", Kind = "bool" },
-                new FieldSpec { Path = "wechat.bgSend.stripUnencodable", Label = "跳过 GBK 编不了的字符", Kind = "bool" },
                 new FieldSpec { Path = "wechat.dbDir", Label = "微信文件保存位置", Kind = "text", Hint = "留空 = 自动找；填到 xwechat_files 这一层" },
                 new FieldSpec { Path = "wechat.staleAfterSec", Label = "多久没消息算去忙(秒)", Kind = "num", Min = 60, Max = 86400 },
                 new FieldSpec { Path = "wechat.ignoreSenders", Label = "这些会话永不回复", Kind = "multiline", Hint = "一行一个（微信团队、订阅号…）" },
                 new FieldSpec { Path = "wechat.pipelineWorkers", Label = "同时处理几个会话", Kind = "num", Min = 1, Max = 8 },
-                new FieldSpec { Path = "wechat.pipelineQueueLimit", Label = "单个会话最多积压几条", Kind = "num", Min = 1, Max = 100 },
+                new FieldSpec { Path = "wechat.pipelineQueueLimit", Label = "单个会话最多积压几条", Kind = "num", Min = 1, Max = 32, Hint = "超出就丢掉最早的一条；默认 8" },
             }},
             new SectionSpec { Title = "联网与链接", Fields =
             {
@@ -138,19 +107,6 @@ namespace WhaleLauncher.Views
                 new FieldSpec { Path = "links.timeoutMs", Label = "链接超时(毫秒)", Kind = "num", Min = 1000, Max = 30000 },
                 new FieldSpec { Path = "links.cacheMinutes", Label = "链接缓存(分钟)", Kind = "num", Min = 0, Max = 1440 },
             }},
-            new SectionSpec { Title = "管理员权限", Note = "在微信里发一段口令就能临时获得管理员权限（安静、忘掉、重启这类命令）。", Fields =
-            {
-                new FieldSpec { Path = "admin.spell", Label = "管理员口令", Kind = "text", Hint = "在微信里发这句获得权限；留空 = 关闭" },
-                new FieldSpec { Path = "admin.minutes", Label = "权限有效期(分钟)", Kind = "num", Min = 1, Max = 1440 },
-                new FieldSpec { Path = "admin.allowAll", Label = "谁发都给权限", Kind = "bool", Hint = "关掉 = 只有主人发才给" },
-            }},
-            new SectionSpec { Title = "语音", Note = "别人发语音时先转成文字再回复。", Fields =
-            {
-                new FieldSpec { Path = "voice.enabled", Label = "语音回复", Kind = "bool" },
-                new FieldSpec { Path = "voice.apiKey", Label = "语音接口 Key", Kind = "secret", Hint = "留空表示不改；留空则用主模型的 Key" },
-                new FieldSpec { Path = "voice.baseUrl", Label = "语音接口地址", Kind = "text" },
-                new FieldSpec { Path = "voice.model", Label = "语音模型", Kind = "text" },
-            }},
             new SectionSpec { Title = "网关", Note = "给别的客户端接入用；桥接自己用的是这套，一般不用改。", Fields =
             {
                 new FieldSpec { Path = "gateway.wechat.enabled", Label = "微信网关", Kind = "bool" },
@@ -160,29 +116,17 @@ namespace WhaleLauncher.Views
                 new FieldSpec { Path = "gateway.douyin.inboundToken", Label = "抖音 token", Kind = "secret", Hint = "留空表示不改" },
                 new FieldSpec { Path = "gateway.douyin.outboundUrl", Label = "抖音出站地址", Kind = "text" },
             }},
-            new SectionSpec { Title = "看图与语音", Note = "看图 Key 在下面的「看图」卡片里。", Fields =
-            {
-                new FieldSpec { Path = "vision.baseUrl", Label = "看图接口地址", Kind = "text" },
-                new FieldSpec { Path = "vision.model", Label = "看图模型名", Kind = "text", Hint = "默认 glm-4v-flash（免费）" },
-                new FieldSpec { Path = "vision.timeoutMs", Label = "看图超时(毫秒)", Kind = "num", Min = 1000, Max = 300000 },
-                new FieldSpec { Path = "voice.timeoutMs", Label = "语音识别超时(毫秒)", Kind = "num", Min = 1000, Max = 300000 },
-                new FieldSpec { Path = "voice.maxSeconds", Label = "超过多少秒的语音不转", Kind = "num", Min = 1, Max = 600 },
-            }},
-            new SectionSpec { Title = "功能开关", Note = "细碎但会影响她表现的小开关。", Fields =
-            {
-                new FieldSpec { Path = "features.groupAddressGuard", Label = "群聊分清说话对象", Kind = "bool", Hint = "关掉容易答张三的话给李四" },
-                new FieldSpec { Path = "features.fightQuoteCheck", Label = "还嘴前核对对方原话", Kind = "bool" },
-                new FieldSpec { Path = "features.mediaCleanup", Label = "自动清理媒体缓存", Kind = "bool" },
-                new FieldSpec { Path = "features.memorySnapshot", Label = "自动备份记忆", Kind = "bool" },
-            }},
-            new SectionSpec { Title = "高级", Fields =
+            new SectionSpec { Title = "高级", Note = "改完要重启的项都在这里；管理员口令也归这一组，平时不用碰。", Fields =
             {
                 new FieldSpec { Path = "server.host", Label = "监听地址", Kind = "text", Hint = "只给本机用就 127.0.0.1；0.0.0.0 = 同 WiFi 也能连（改完重启）" },
                 new FieldSpec { Path = "server.openBrowser", Label = "启动时自动开浏览器", Kind = "bool" },
                 new FieldSpec { Path = "server.port", Label = "本机端口", Kind = "num", Min = 1024, Max = 65535, Hint = "改完重启生效" },
-                new FieldSpec { Path = "log.level", Label = "日志级别（debug=详细 / info=常规 / error=仅错误）", Kind = "select", Options = new[] { "debug", "info", "error" }, Hint = "每次启动的日志都会归档到 data/logs，保留最近 5 次" },
+                new FieldSpec { Path = "log.level", Label = "日志级别（界面 / 控制台）", Kind = "select", Options = new[] { "debug", "info", "error" }, Hint = "只影响界面和启动器控制台；日志文件始终记 debug 全量（data/whale.log、data/wechat-bridge-4x.log），改完重启生效" },
                 new FieldSpec { Path = "storage.mediaKeepDays", Label = "媒体缓存保留几天", Kind = "num", Min = 0, Max = 90 },
                 new FieldSpec { Path = "storage.mediaMaxMB", Label = "媒体缓存上限(MB)", Kind = "num", Min = 0, Max = 10000 },
+                new FieldSpec { Path = "admin.spell", Label = "管理员口令", Kind = "text", Hint = "在微信里发这句获得权限；留空 = 关闭" },
+                new FieldSpec { Path = "admin.minutes", Label = "权限有效期(分钟)", Kind = "num", Min = 1, Max = 1440 },
+                new FieldSpec { Path = "admin.allowAll", Label = "谁发都给权限", Kind = "bool", Hint = "关掉 = 只有主人发才给" },
             }},
         };
 
@@ -195,7 +139,6 @@ namespace WhaleLauncher.Views
             AddSection("模型与 Key", BuildModelSection());
             AddSection("看图（视觉模型）", BuildVisionSection());
             foreach (var spec in Specs()) AddSection(spec.Title, BuildSection(spec));
-            AddSection("路径", BuildAboutSection());
             AddSection("外观", BuildAppearanceSection());
 
             SettingsNav.SelectedIndex = 0;
@@ -386,265 +329,6 @@ namespace WhaleLauncher.Views
             return card;
         }
 
-        // ── 白名单 / 黑名单选择行 ───────────────────────────────
-        private FrameworkElement BuildContactListSelector(string configPath, string label,
-            string emptyHint, string buttonText, bool allowAllMute)
-        {
-            var grid = new Grid { Margin = new Thickness(0, 0, 0, 12) };
-            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(210) });
-            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            grid.Children.Add(new TextBlock
-            {
-                Text = label,
-                Style = (Style)FindResource("Label"),
-                VerticalAlignment = VerticalAlignment.Top,
-                Margin = new Thickness(0, 4, 0, 0),
-                TextWrapping = TextWrapping.Wrap
-            });
-
-            var right = new StackPanel();
-            var top = new DockPanel { LastChildFill = true };
-            var chips = new WrapPanel { VerticalAlignment = VerticalAlignment.Center };
-            var button = new Button
-            {
-                Content = buttonText,
-                Style = (Style)FindResource("Ghost"),
-                Margin = new Thickness(10, 0, 0, 0),
-                VerticalAlignment = VerticalAlignment.Top
-            };
-            DockPanel.SetDock(button, Dock.Right);
-            top.Children.Add(button);
-            top.Children.Add(chips);
-
-            var hint = new TextBlock
-            {
-                Style = (Style)FindResource("Small"),
-                TextWrapping = TextWrapping.Wrap,
-                Margin = new Thickness(0, 5, 0, 0),
-                Text = emptyHint
-            };
-            var error = new TextBlock
-            {
-                Style = (Style)FindResource("Small"),
-                Foreground = (Brush)FindResource("Warn"),
-                TextWrapping = TextWrapping.Wrap,
-                Margin = new Thickness(0, 3, 0, 0),
-                Visibility = Visibility.Collapsed
-            };
-
-            right.Children.Add(top);
-            right.Children.Add(hint);
-            right.Children.Add(error);
-            Grid.SetColumn(right, 1);
-            grid.Children.Add(right);
-
-            if (configPath == "care.whitelist")
-            {
-                _whitelistChips = chips;
-                _whitelistHint = hint;
-                _whitelistError = error;
-            }
-            else
-            {
-                _mutedChips = chips;
-                _mutedHint = hint;
-                _mutedError = error;
-            }
-
-            _loaders[configPath] = v =>
-            {
-                if (configPath == "care.whitelist") _whitelist = ReadStringArray(v);
-                else _mutedGroups = ReadStringArray(v);
-                RenderContactList(configPath);
-            };
-
-            button.Click += async (s, e) =>
-            {
-                var current = configPath == "care.whitelist" ? _whitelist : _mutedGroups;
-                var dlg = new ContactPicker(_sup, current, _contactCache, allowAllMute)
-                {
-                    Owner = Window.GetWindow(this)
-                };
-                if (dlg.ShowDialog() != true) return;
-
-                foreach (var kv in dlg.KnownContacts) _contactCache[kv.Key] = kv.Value;
-                var ids = new List<string>(dlg.SelectedIds);
-                var res = await PatchContactListAsync(configPath, ids);
-                if (!res.Ok)
-                {
-                    SetListError(configPath, "保存失败：" + Detail(res));
-                    StatusText.Text = label + "保存失败，界面先保留旧值。";
-                    return;
-                }
-                if (configPath == "care.whitelist") _whitelist = ids;
-                else _mutedGroups = ids;
-                RenderContactList(configPath);
-                SetListError(configPath, "");
-                StatusText.Text = label + " 已保存 " + DateTime.Now.ToString("HH:mm:ss");
-            };
-
-            RenderContactList(configPath);
-            return grid;
-        }
-
-        private void RenderContactList(string configPath)
-        {
-            var isWhite = configPath == "care.whitelist";
-            var chips = isWhite ? _whitelistChips : _mutedChips;
-            var hint = isWhite ? _whitelistHint : _mutedHint;
-            if (chips == null) return;
-
-            var list = isWhite ? _whitelist : _mutedGroups;
-            chips.Children.Clear();
-            foreach (var id in list) chips.Children.Add(BuildContactChip(id));
-
-            if (hint != null)
-            {
-                hint.Visibility = list.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-                hint.Text = isWhite
-                    ? "留空 = 只有主人和文件传输助手"
-                    : "留空 = 不静音任何会话；「全部静音（*）」= 所有群都不接";
-            }
-        }
-
-        private Border BuildContactChip(string id)
-        {
-            string display;
-            string sub;
-            if (id == "*")
-            {
-                display = "全部静音（*）";
-                sub = "所有群";
-            }
-            else if (id == "filehelper")
-            {
-                display = "文件传输助手";
-                sub = "filehelper";
-            }
-            else if (!string.IsNullOrEmpty(id) && _contactCache.TryGetValue(id, out var info))
-            {
-                display = info.Display;
-                sub = id + (info.IsGroup ? " · 群" : "");
-            }
-            else
-            {
-                display = string.IsNullOrEmpty(id) ? "（空）" : id;
-                sub = "微信名未同步";
-            }
-
-            var stack = new StackPanel();
-            stack.Children.Add(new TextBlock
-            {
-                Text = display,
-                Foreground = (Brush)FindResource("Text"),
-                FontSize = 12,
-                TextTrimming = TextTrimming.CharacterEllipsis,
-                MaxWidth = 240
-            });
-            stack.Children.Add(new TextBlock
-            {
-                Text = sub,
-                Style = (Style)FindResource("Small"),
-                TextTrimming = TextTrimming.CharacterEllipsis,
-                MaxWidth = 240
-            });
-            var chip = new Border
-            {
-                CornerRadius = new CornerRadius(5),
-                Padding = new Thickness(8, 4, 8, 4),
-                Margin = new Thickness(0, 2, 6, 2),
-                ToolTip = id,
-                Child = stack
-            };
-            chip.SetResourceReference(Border.BackgroundProperty, "Surface3");
-            return chip;
-        }
-
-        private void SetListError(string configPath, string text)
-        {
-            var err = configPath == "care.whitelist" ? _whitelistError : _mutedError;
-            if (err == null) return;
-            err.Text = text ?? "";
-            err.Visibility = string.IsNullOrEmpty(text) ? Visibility.Collapsed : Visibility.Visible;
-        }
-
-        private Task<ApiResult> PatchContactListAsync(string configPath, List<string> ids)
-        {
-            var arr = "[" + string.Join(",", ids.Select(i => "\"" + Api.Esc(i) + "\"")) + "]";
-            var body = "{\"patch\":{\"" + Api.Esc(configPath) + "\":" + arr + "}}";
-            return Api.Post(_sup.Url, "/api/config", body);
-        }
-
-        /// <summary>把已保存的 wxid 换成显示名；接口没上线就显示原始 wxid 并给出提示。</summary>
-        private async Task ResolveContactNamesAsync()
-        {
-            if (!_sup.NodeRunning) return;
-            if (!NeedContactNames()) return;
-            if ((DateTime.Now - _lastContactsTry).TotalSeconds < 60) return;
-            _lastContactsTry = DateTime.Now;
-
-            var res = await Api.Get(_sup.Url, "/api/wechat/contacts?type=all");
-            if (!res.Ok)
-            {
-                var msg = "联系人接口未就绪（GET /api/wechat/contacts 失败），先显示原始 wxid。";
-                if (_whitelist.Count > 0) SetListError("care.whitelist", msg);
-                if (_mutedGroups.Count > 0) SetListError("group.mutedGroups", msg);
-                return;
-            }
-
-            MergeContacts(res.Prop("items"));
-            SetListError("care.whitelist", "");
-            SetListError("group.mutedGroups", "");
-            RenderContactList("care.whitelist");
-            RenderContactList("group.mutedGroups");
-        }
-
-        private bool NeedContactNames()
-        {
-            bool Unknown(IEnumerable<string> ids) => ids.Any(id =>
-                !string.IsNullOrEmpty(id) && id != "*" && id != "filehelper" && !_contactCache.ContainsKey(id));
-            return Unknown(_whitelist) || Unknown(_mutedGroups);
-        }
-
-        private void MergeContacts(JsonElement items)
-        {
-            if (items.ValueKind != JsonValueKind.Array) return;
-            foreach (var it in items.EnumerateArray())
-            {
-                if (it.ValueKind != JsonValueKind.Object) continue;
-                var wxid = GetStr(it, "wxid");
-                if (wxid.Length == 0) continue;
-                _contactCache[wxid] = new ContactInfo
-                {
-                    Wxid = wxid,
-                    Name = GetStr(it, "name"),
-                    Remark = GetStr(it, "remark"),
-                    IsGroup = it.TryGetProperty("isGroup", out var g) && g.ValueKind == JsonValueKind.True
-                };
-            }
-        }
-
-        private static List<string> ReadStringArray(JsonElement v)
-        {
-            var list = new List<string>();
-            if (v.ValueKind != JsonValueKind.Array) return list;
-            foreach (var x in v.EnumerateArray())
-            {
-                if (x.ValueKind != JsonValueKind.String) continue;
-                var s = (x.GetString() ?? "").Trim();
-                if (s.Length > 0) list.Add(s);
-            }
-            return list;
-        }
-
-        private static string Detail(ApiResult res)
-        {
-            var raw = (res?.Raw ?? "").Trim();
-            if (raw.Length == 0) return res?.Error ?? "";
-            raw = raw.Replace("\r", " ").Replace("\n", " ");
-            return raw.Length > 120 ? raw.Substring(0, 120) + "…" : raw;
-        }
-
         // ── 单个字段 ────────────────────────────────────────────
         private FrameworkElement BuildField(FieldSpec f)
         {
@@ -737,6 +421,57 @@ namespace WhaleLauncher.Views
                     };
                     return Row(f.Label, box, f.Hint);
                 }
+                case "slider":
+                {
+                    // 拖动条：拖动时只更新右侧读数，停手 450ms 才写回（避免拖一次发几十个 PATCH）
+                    var slider = new Slider
+                    {
+                        Minimum = double.IsNaN(f.Min) ? 0 : f.Min,
+                        Maximum = double.IsNaN(f.Max) ? 100 : f.Max,
+                        TickFrequency = 1,
+                        IsSnapToTickEnabled = true,
+                        Width = 220,
+                        VerticalAlignment = VerticalAlignment.Center
+                    };
+                    var readout = new TextBlock
+                    {
+                        Style = (Style)FindResource("Small"),
+                        VerticalAlignment = VerticalAlignment.Center,
+                        Margin = new Thickness(12, 0, 0, 0)
+                    };
+                    var debounce = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(450) };
+                    debounce.Tick += async (s, e) =>
+                    {
+                        debounce.Stop();
+                        if (_loading) return;
+                        await PatchAsync(f.Path, Math.Round(slider.Value).ToString());
+                    };
+                    void ShowValue() => readout.Text = Math.Round(slider.Value) + (f.Unit ?? "");
+                    slider.ValueChanged += (s, e) =>
+                    {
+                        ShowValue();
+                        if (_loading) return;
+                        debounce.Stop();
+                        debounce.Start();
+                    };
+                    _loaders[f.Path] = v =>
+                    {
+                        _loading = true;
+                        if (v.ValueKind == JsonValueKind.Number)
+                        {
+                            var n = v.GetDouble();
+                            if (!double.IsNaN(f.Min)) n = Math.Max(f.Min, n);
+                            if (!double.IsNaN(f.Max)) n = Math.Min(f.Max, n);
+                            slider.Value = Math.Round(n);
+                        }
+                        _loading = false;
+                        ShowValue();
+                    };
+                    var panel = new WrapPanel { HorizontalAlignment = HorizontalAlignment.Left };
+                    panel.Children.Add(slider);
+                    panel.Children.Add(readout);
+                    return Row(f.Label, panel, f.Hint);
+                }
                 default:
                 {
                     var box = new TextBox();
@@ -777,7 +512,6 @@ namespace WhaleLauncher.Views
             var model = new TextBox();
             var key = new PasswordBox();
             var mock = new CheckBox();
-            var owner = new TextBox();
             var result = new TextBlock { Style = (Style)FindResource("Small"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 0) };
 
             cmb.SelectionChanged += (s, e) =>
@@ -795,7 +529,6 @@ namespace WhaleLauncher.Views
             body.Children.Add(Row("模型名", model, ""));
             body.Children.Add(Row("API Key", key, "留空表示不改；已存的这里不会显示"));
             body.Children.Add(Row("演示模式", mock, "不连模型，用内置台词"));
-            body.Children.Add(Row("她怎么叫你", owner, ""));
 
             // 采样参数也放这张卡：以前只在网页里能改，启动器用户根本看不到。
             body.Children.Add(BuildField(new FieldSpec { Path = "deepseek.temperature", Label = "温度", Kind = "num", Min = 0, Max = 2, IsInt = false, Hint = "越大越放得开；超过 1.2 容易越聊越离谱" }));
@@ -824,8 +557,6 @@ namespace WhaleLauncher.Views
                     + "}";
                 var res = await Api.Post(_sup.Url, "/api/settings", json);
                 if (!res.Ok) { result.Text = "保存失败：" + (res.Error.Length > 0 ? res.Error : res.Raw); return; }
-                if (owner.Text.Trim().Length > 0)
-                    await Api.Post(_sup.Url, "/api/settings", "{\"userName\":\"" + Api.Esc(owner.Text.Trim()) + "\"}");
                 key.Password = "";
                 result.Text = "已保存。";
             };
@@ -851,7 +582,6 @@ namespace WhaleLauncher.Views
                 if (!baseUrl.IsKeyboardFocusWithin) baseUrl.Text = GetStr(set, "baseUrl");
                 if (!model.IsKeyboardFocusWithin) model.Text = GetStr(set, "model");
                 if (!mock.IsKeyboardFocusWithin) mock.IsChecked = set.ValueKind == JsonValueKind.Object && set.TryGetProperty("mock", out var m) && m.ValueKind == JsonValueKind.True;
-                if (!owner.IsKeyboardFocusWithin) owner.Text = GetStr(set, "userName");
                 _loading = false;
             };
             return card;
@@ -863,6 +593,9 @@ namespace WhaleLauncher.Views
             var hint = new TextBlock { Style = (Style)FindResource("Small"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) };
             var pwd = new PasswordBox();
             body.Children.Add(hint);
+            body.Children.Add(BuildField(new FieldSpec { Path = "vision.baseUrl", Label = "看图接口地址", Kind = "text" }));
+            body.Children.Add(BuildField(new FieldSpec { Path = "vision.model", Label = "看图模型名", Kind = "text", Hint = "默认 glm-4v-flash（免费）" }));
+            body.Children.Add(BuildField(new FieldSpec { Path = "vision.timeoutMs", Label = "看图超时(毫秒)", Kind = "num", Min = 1000, Max = 300000 }));
             body.Children.Add(Row("看图 Key", pwd, "留空表示不改"));
             var buttons = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
             var save = new Button { Content = "保存看图 Key", Style = (Style)FindResource("Ghost") };
@@ -900,40 +633,6 @@ namespace WhaleLauncher.Views
             return card;
         }
 
-        private Border BuildAboutSection()
-        {
-            var card = Card("路径", "", out var body);
-            var text = new TextBlock { Style = (Style)FindResource("Small"), TextWrapping = TextWrapping.Wrap };
-            body.Children.Add(text);
-            var buttons = new WrapPanel { Margin = new Thickness(0, 10, 0, 0) };
-            void Add(string label, Func<string> path)
-            {
-                var b = new Button { Content = label, Style = (Style)FindResource("Ghost"), Margin = new Thickness(0, 0, 8, 0) };
-                b.Click += (s, e) => Open(path());
-                buttons.Children.Add(b);
-            }
-            Add("打开数据目录", () => string.IsNullOrEmpty(_dataDir) ? Path.Combine(AppContext.BaseDirectory, "data") : _dataDir);
-            Add("打开配置文件", () => string.IsNullOrEmpty(_configFile) ? Path.Combine(AppContext.BaseDirectory, "config.json") : _configFile);
-            Add("打开表情包目录", () => Path.Combine(AppContext.BaseDirectory, "data", "stickers"));
-            body.Children.Add(buttons);
-            _loadAbout = cfg =>
-            {
-                _configFile = GetStr(cfg, "configFile");
-                _dataDir = GetStr(cfg, "dataDir");
-                text.Text = "配置文件：" + _configFile + "\n数据目录：" + _dataDir;
-            };
-            return card;
-        }
-
-        private void Open(string target)
-        {
-            try
-            {
-                if (!string.IsNullOrEmpty(target)) Process.Start(new ProcessStartInfo(target) { UseShellExecute = true });
-            }
-            catch (Exception ex) { StatusText.Text = "打开失败：" + ex.Message; }
-        }
-
         // ── 读写 ────────────────────────────────────────────────
         /// <summary>
         /// 周期刷新（MainWindow 2 秒定时器驱动）：只更新状态行，不动表单——
@@ -950,7 +649,6 @@ namespace WhaleLauncher.Views
             }
             KernelHint.Text = "改完立即写回 config.json（密钥留空表示不改）";
             if (!_configLoaded) await LoadConfigAsync();      // 还没回填过，补一次
-            await ResolveContactNamesAsync();                 // 只补联系人显示名，不动表单
         }
 
         /// <summary>全量回填：把服务端的值刷回所有表单控件（跳过正在编辑的）。</summary>
@@ -983,7 +681,6 @@ namespace WhaleLauncher.Views
                     _loadModel?.Invoke(settings.Root, provs);
                     _loadVision?.Invoke(settings.Root);
                 }
-                _loadAbout?.Invoke(cfg.Root);
                 _configLoaded = true;
 
                 var ver = "4.0";
@@ -994,8 +691,6 @@ namespace WhaleLauncher.Views
                     if (m.Success) ver = m.Groups[1].Value;
                 }
                 AboutText.Text = "鲸鲸 " + ver + " · 启动器 4.0";
-
-                await ResolveContactNamesAsync();
             }
             finally
             {

@@ -23,19 +23,25 @@
 """
 
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 
 class MessagePipeline:
-    def __init__(self, workers=4, per_chat_limit=4, log=None, name="whale-decider"):
+    def __init__(self, workers=4, per_chat_limit=8, log=None, name="whale-decider",
+                 drop_log_interval=10.0):
         self.workers = max(1, int(workers))
         self.per_chat_limit = max(1, int(per_chat_limit))
+        self.drop_log_interval = max(0.0, float(drop_log_interval))
         self.log = log or (lambda *a: None)
         self._pool = ThreadPoolExecutor(max_workers=self.workers, thread_name_prefix=name)
         self._guard = threading.Lock()
         self._queues = {}          # chat -> [(fn, args)]
         self._running = set()      # 正在被处理的会话
         self._closed = False
+        # 积压日志节流：卡住时每条新消息都溢出一次，原样打印就是刷屏。
+        self._drop_log_at = {}     # chat -> 上次打日志的时间
+        self._drop_count = {}      # chat -> 本窗口内已丢条数
         self.stats = {"in": 0, "done": 0, "dropped": 0, "errors": 0, "peak_queue": 0}
 
     def submit(self, chat, fn, *args):
@@ -52,8 +58,13 @@ class MessagePipeline:
                 # （服务端还有 STALE_AFTER 兜底），留着只会让她回上一句。
                 q.pop(0)
                 self.stats["dropped"] += 1
-                self.log("会话积压超过 %d 条，丢掉最早的一条：%s"
-                         % (self.per_chat_limit, chat))
+                self._drop_count[chat] = self._drop_count.get(chat, 0) + 1
+                now = time.time()
+                if now - self._drop_log_at.get(chat, 0.0) >= self.drop_log_interval:
+                    self._drop_log_at[chat] = now
+                    n = self._drop_count.pop(chat, 1)
+                    self.log("会话积压超过 %d 条，%.0f 秒内丢掉 %d 条：%s"
+                             % (self.per_chat_limit, self.drop_log_interval, n, chat))
             if len(q) > self.stats["peak_queue"]:
                 self.stats["peak_queue"] = len(q)
             if chat in self._running:

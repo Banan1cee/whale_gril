@@ -70,29 +70,45 @@ function timeLabel(ts) {
   return `${hh}:${mm}`;
 }
 
-/** 单条记录 → 一行事实，例：`14:02 发表情包「开心/wave.gif」—— 桥接确认发出` */
-function describe(event) {
+/**
+ * 距今多久。只给绝对时间（14:02）模型没法判断「刚发的」还是「一小时前的」，
+ * 被追问时容易说错，所以每条都带上相对时间。
+ */
+function relativeLabel(ts, now = Date.now()) {
+  const diff = Math.max(0, Number(now) - Number(ts));
+  const min = Math.floor(diff / 60000);
+  if (min < 1) return '刚刚';
+  if (min < 60) return `${min} 分钟前`;
+  const hour = Math.floor(min / 60);
+  if (hour < 24) return `${hour} 小时前`;
+  return `${Math.floor(hour / 24)} 天前`;
+}
+
+/** 单条记录 → 一行事实，例：`14:02（2 分钟前） 发表情包「开心/wave.gif」—— 桥接确认发出` */
+function describe(event, now = Date.now()) {
   const status = STATUS_LABEL.get(event.status) || '完成';
-  return `${timeLabel(event.ts)} ${TYPE_LABEL.get(event.type)}「${event.detail}」—— ${status}`;
+  return `${timeLabel(event.ts)}（${relativeLabel(event.ts, now)}）${TYPE_LABEL.get(event.type)}「${event.detail}」—— ${status}`;
 }
 
 /**
  * 组装【最近做过的事】段落。没有记录返回空串，调用方直接跳过。
  * @param {Array} events store.events() 的顺序（旧 → 新）
+ * @param {{max?: number, now?: number|Date}} opts now 用于算「距今多久」
  */
-function formatBlock(events, { max = 12 } = {}) {
+function formatBlock(events, { max = 12, now = Date.now() } = {}) {
   const list = (Array.isArray(events) ? events : [])
     .filter((e) => e && TYPE_LABEL.has(e.type) && e.detail)
     .slice(-max);
   if (!list.length) return '';
   return [
     '【最近做过的事（系统记录，不是你说的话）】',
-    ...list.map((e) => '- ' + describe(e)),
+    ...list.map((e) => '- ' + describe(e, now)),
     '- 这些是程序记下的真实结果，和你嘴上说什么无关。',
+    '- 括号里是距今多久：写着「刚刚」「几分钟前」的就是刚发生的事，被问起时照实承认即可；几小时前、几天前的别当成刚做的。',
     '- 记录里写着发出/完成的，可以顺着承认（「给你发了」「刚发了张图」），但别添油加醋描述画面内容。',
     '- 记录里写着失败、没回执、跳过、已取消的，就照实说没发成，不要编造送达，也不要假装没这回事。',
     '- 记录里根本没有的事，一律不要声称自己做过。',
   ].join('\n');
 }
 
-module.exports = { clampEvent, describe, formatBlock, timeLabel, TYPE_LABEL, STATUS_LABEL };
+module.exports = { clampEvent, describe, formatBlock, timeLabel, relativeLabel, TYPE_LABEL, STATUS_LABEL };

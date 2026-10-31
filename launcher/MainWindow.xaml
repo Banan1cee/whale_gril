@@ -143,6 +143,15 @@
                 <DockPanel Margin="14,22,14,16">
                     <TextBlock DockPanel.Dock="Top" Text="工作台" FontSize="9.5" FontWeight="Bold"
                                Foreground="{DynamicResource Dim}" Margin="12,0,0,10" />
+
+                    <!-- 关于：整个界面的左下角（版本 + 数据目录入口都在这附近，不再占设置一页） -->
+                    <StackPanel DockPanel.Dock="Bottom" Margin="12,10,0,0">
+                        <Border Height="1" Background="{DynamicResource Line}" Margin="0,0,0,8" />
+                        <TextBlock x:Name="NavVersion" Text="v4.0.0" Style="{StaticResource Small}" />
+                        <TextBlock x:Name="NavAboutHint" Text="鲸鲸 · 启动器" Style="{StaticResource Small}"
+                                   Foreground="{DynamicResource Dim}" Margin="0,2,0,0" />
+                    </StackPanel>
+
                     <ListBox x:Name="Nav" Background="Transparent" BorderThickness="0"
                              ItemContainerStyle="{StaticResource NavItem}"
                              IsSynchronizedWithCurrentItem="False"
@@ -176,8 +185,6 @@
                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
                     <Button x:Name="BtnDataDir" Content="数据目录" Style="{StaticResource TopBtn}"
                             FontSize="10.5" Padding="6,2" Click="OnOpenData" Cursor="Hand" />
-                    <TextBlock x:Name="FootVersion" Text="v4.0.0" Style="{StaticResource Small}"
-                               Margin="10,0,0,0" VerticalAlignment="Center" />
                 </StackPanel>
             </DockPanel>
         </Border>

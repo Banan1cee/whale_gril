@@ -36,7 +36,12 @@ function createRuntime({ root = path.resolve(__dirname, '..'), env = process.env
   // 测试/自检可以传 WHALE_LOG_FILE='' 关掉文件日志：Windows 上'日志流没关'会把 data 目录占住，删不掉
   const logFileFromEnv = Object.prototype.hasOwnProperty.call(env || {}, 'WHALE_LOG_FILE') ? String(env.WHALE_LOG_FILE) : null;
   const logFile = logFileFromEnv === null ? config.paths.logFile : (logFileFromEnv || null);
-  const logger = createLogger({ level: loggerLevel || config.log.level, file: logFile });
+  const logger = createLogger({
+    level: loggerLevel || config.log.level,
+    // 文件永远记 debug 全量：界面按 level 过滤，出问题回看文件时不能丢细节
+    fileLevel: (config.log && config.log.fileLevel) || 'debug',
+    file: logFile,
+  });
   // 配置体检：非法值以前会被各处的 `Number(x) || 默认` 静默吃掉，
   // 用户在调试台填错了也看不出来。这里启动时报一次，不阻断运行。
   try {

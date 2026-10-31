@@ -8,7 +8,6 @@
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
-            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
         <!-- 页头 -->
@@ -116,11 +115,6 @@
             </DockPanel>
         </Border>
 
-        <!-- 排障动作 -->
-        <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
-            <Button Content="重启桥接" Style="{StaticResource Ghost}" Click="OnRestartBridge" />
-            <Button Content="导出诊断包" Style="{StaticResource Ghost}" Margin="8,0,0,0" Click="OnExportDiag" />
-            <Button Content="打开数据目录" Style="{StaticResource Ghost}" Margin="8,0,0,0" Click="OnOpenData" />
-        </StackPanel>
+        <!-- 排障动作统一在「诊断」页和底栏，这里不再重复放一遍 -->
     </Grid>
 </UserControl>

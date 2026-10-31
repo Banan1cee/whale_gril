@@ -52,7 +52,7 @@ function statusPayload(runtime) {
       freeChat: config.group.freeChat,
       freeChatChance: config.group.freeChatChance,
       cooldownSec: config.group.cooldownSec,
-      maxRepliesPerHour: config.group.maxRepliesPerHour,
+      maxRepliesPerMinute: config.group.maxRepliesPerMinute,
     },
     gateways: [...gateways.values()].map((g) => g.status()),
     webhookPaths: [...gateways.keys()].map((p) => `/webhook/${p}`),

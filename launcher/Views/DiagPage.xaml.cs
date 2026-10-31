@@ -98,37 +98,56 @@ namespace WhaleLauncher.Views
             var hasWheel = Directory.Exists(Path.Combine(_sup.BaseDir, "runtime", "wheelhouse"));
             if (hasWheel) AddCheck("打包完整性", false, "runtime\\wheelhouse 还在，安装包会白白大 117MB");
 
+            // v3.50 的运行时包不带 manifest.json；只要 node/python 都在就不算错，
+            // 之前这里一律判失败，用户装完运行环境却看到一条红叉。
             var manifest = Path.Combine(_sup.BaseDir, "runtime", "manifest.json");
-            AddCheck("运行时清单", File.Exists(manifest), File.Exists(manifest) ? "manifest.json 在" : "缺 manifest.json（旧的运行时目录）");
+            var runtimeReady = File.Exists(Path.Combine(_sup.BaseDir, "runtime", "node.exe")) && File.Exists(py);
+            AddCheck("运行时清单", File.Exists(manifest) || runtimeReady,
+                File.Exists(manifest) ? "manifest.json 在"
+                : (runtimeReady ? "旧版运行时包（无清单），node/python 都在" : "缺 manifest.json，运行时也不全"));
         }
 
         private void AddCheck(string name, bool ok, string detail)
         {
-            var row = new Grid { Margin = new Thickness(0, 0, 0, 9) };
-            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(18) });
+            // 单行：✓ 名称 · 说明（说明超长省略，悬停看全）。十项一屏放得下，不用滚动区。
+            var row = new Grid { Margin = new Thickness(0, 1, 0, 1) };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(16) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
             var mark = new TextBlock
             {
                 Text = ok ? "✓" : "✕",
                 Foreground = ok ? (Brush)FindResource("Ok") : (Brush)FindResource("Bad"),
-                FontSize = 13,
+                FontSize = 12,
                 FontWeight = FontWeights.Bold,
-                VerticalAlignment = VerticalAlignment.Top
+                VerticalAlignment = VerticalAlignment.Center
             };
             row.Children.Add(mark);
 
-            var stack = new StackPanel { Margin = new Thickness(0, 0, 0, 0) };
-            stack.Children.Add(new TextBlock { Text = name, Foreground = (Brush)FindResource("Text"), FontSize = 12.5 });
-            stack.Children.Add(new TextBlock
+            var title = new TextBlock
+            {
+                Text = name,
+                Foreground = (Brush)FindResource("Text"),
+                FontSize = 12,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 8, 0)
+            };
+            Grid.SetColumn(title, 1);
+            row.Children.Add(title);
+
+            var sub = new TextBlock
             {
                 Text = detail,
                 Style = (Style)FindResource("Small"),
-                TextWrapping = TextWrapping.Wrap,
-                Margin = new Thickness(0, 2, 0, 0)
-            });
-            Grid.SetColumn(stack, 1);
-            row.Children.Add(stack);
+                Foreground = (Brush)FindResource("Muted"),
+                FontSize = 10.5,
+                VerticalAlignment = VerticalAlignment.Center,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                ToolTip = detail
+            };
+            Grid.SetColumn(sub, 2);
+            row.Children.Add(sub);
 
             CheckHost.Children.Add(row);
         }
@@ -157,8 +176,11 @@ namespace WhaleLauncher.Views
             var items = new (string Label, string Path)[]
             {
                 ("数据", _sup.DataDir),
-                ("日志", Path.Combine(_sup.DataDir, "launcher.log")),
-                ("桥接日志", Path.Combine(_sup.DataDir, "bridge.log")),
+                ("配置", Path.Combine(_sup.BaseDir, "config.json")),
+                ("启动器日志", Path.Combine(_sup.DataDir, "launcher.log")),
+                // 内核和桥接自己写的全量日志（debug），出问题时先看这两个
+                ("内核日志", Path.Combine(_sup.DataDir, "whale.log")),
+                ("桥接日志", Path.Combine(_sup.DataDir, "wechat-bridge-4x.log")),
                 ("备份", Path.Combine(_sup.DataDir, "backups")),
                 ("安装目录", _sup.BaseDir),
             };
