@@ -38,7 +38,7 @@ const { isEcho } = require('../core/echo');
 const { extractSelfFacts } = require('../core/facts');
 const { extractMentionNames } = require('../core/mentions');
 const { COMMAND_HELP, extractCommand } = require('../core/commands');
-const { cannedReply } = require('./stages/canned');
+const { cannedReply, dismissReply } = require('./stages/canned');
 const reminderCore = require('../core/reminder');
 const stickers = require('../adapters/stickers');
 
@@ -56,6 +56,8 @@ class Bot {
     this.mockChunkDelayMs = mockChunkDelayMs;
     this.linkReader = linkReader || ((url) => links.describeLink(url, { timeoutMs: (config.links && config.links.timeoutMs) || 6000 }));
     this.startedAt = Date.now();
+    // handle() 的按会话串行队列：key → 上一条的收尾 promise（M21）
+    this._handleChains = new Map();
   }
 
   sessionKey(msg) {
@@ -220,8 +222,11 @@ class Bot {
     const key = this.sessionKey(msg);
     const now = this.now();
     const nowMs = now.getTime();
-    // 群消息常带 "wxid_xxx:\n正文" 前缀，先去掉再识别 @/名字，否则别名不在行首会漏判
-    const rawText = String(msg.text || '').replace(/^[A-Za-z0-9_\-]{4,}:\s*/, '');
+    // 群消息常带 "wxid_xxx:\n正文" 前缀，先去掉再识别 @/名字，否则别名不在行首会漏判。
+    // 以前这里用 \s*（零空白也吞）："https://example.com" 被剥成 "//example.com"、
+    // "Note: xxx" 也被截断，残缺文本进了提示词/搜索/记忆。wxid 前缀后面本来就有换行/空格，
+    // 改成 \s+ 就够了（H8）。
+    const rawText = String(msg.text || '').replace(/^[A-Za-z0-9_\-]{4,}:\s+/, '');
     const clean = persona.cleanIncoming(rawText, this.config);
     msg.cleanText = clean.text;
     const atMe = msg.atMe || clean.atMe;
@@ -297,7 +302,9 @@ class Bot {
     }
 
     // 2) 记录收到的话（被忽略的也记，让它知道群里在聊什么）
-    // 只 @ 不说话时：看看这个人刚才是不是问过什么，直接接着回答上一个问题
+    // 只 @ 不说话时：看看这个人刚才是不是问过什么，直接接着回答上一个问题。
+    // 回填的是旧问题：标成 msg.recycled（M27），只拿它组装回复 —— 以前它会被当成新消息
+    // 再落一次库、再抽一遍事实、再登记一遍提醒、再执行一遍命令（副作用全部重放）。
     if (isGroup && atMe && (!clean.text || /^[?？!！.。…~～\s]+$/.test(clean.text))) {
       try {
         const recent = this.store
@@ -312,12 +319,13 @@ class Bot {
         if (last && this.now().getTime() - Number(last.ts || 0) < 180000) {
           clean.text = String(last.text).trim();
           msg.cleanText = clean.text;
+          msg.recycled = true; // 回填的旧问题：只用于组装回复，不重放副作用
         }
       } catch { /* ignore */ }
     }
 
     const hasText = Boolean(clean.text);
-    if (hasText) {
+    if (hasText && !msg.recycled) {
       this.store.appendMessage(key, {
         role: 'user',
         name: msg.senderName,
@@ -334,7 +342,8 @@ class Bot {
     }
     const profile = this.store.profile(key, msg.senderId, msg.senderName);
     // 自动记一点关于这个人的事实，下次不用重新问（只认明确的自述句）
-    if (hasText && !isGroup) {
+    // 回填的旧问题（recycled）不再抽一遍，避免同一句话反复写进笔记
+    if (hasText && !isGroup && !msg.recycled) {
       try {
         const facts = extractSelfFacts(clean.text);
         for (const fact of facts) this.store.addNote(key, msg.senderId, fact);
@@ -375,7 +384,8 @@ class Bot {
 
     // 提醒：任何会话、任何人都能设（「十点半提醒我开会」）。
     // 放在最前面：群里没 @ 她也要能设，且不能被后面的静默/忽略逻辑挡掉。
-    if (hasText) {
+    // 回填的旧问题（recycled）不再登记一遍，否则只 @ 一下就多出一条重复提醒（M27）。
+    if (hasText && !msg.recycled) {
       const reminderReply = await this.tryReminder({ msg, clean, key, now, nowMs, isGroup, atMe });
       if (reminderReply) return reminderReply;
     }
@@ -386,9 +396,9 @@ class Bot {
     }
 
 
-    // 固定话术：群成员名录 / 查自己的号 / 同意被损 / 主人点名吐槽 / 退场 / 休息模式。
-    // 这些只靠一条正则就能决定，不调模型；实现见 pipeline/stages/canned.js。
-    const canned = cannedReply(this, {
+    // 固定话术 · 退场分支：「让她滚 / 走吧 / 闭嘴」这类要先应一声再进静默，
+    // 必须排在静音/禁言闸门之前（被赶走也得有交代）；实现见 pipeline/stages/canned.js。
+    const dismiss = dismissReply(this, {
       msg,
       text: clean.text,
       isGroup,
@@ -398,7 +408,7 @@ class Bot {
       nowMs,
       key,
     });
-    if (canned) return canned;
+    if (dismiss) return dismiss;
 
     // 魔咒 / 管理员权限（只有主人能用）
     const adminReply = this.handleAdmin({ msg, clean, key, state, isMaster, nowMs });
@@ -414,7 +424,8 @@ class Bot {
     }
 
     // 3) 命令（群里说「安静」这类自然语言命令，要先叫到鲸鲸才算；主人说话直接算）
-    let command = hasText ? extractCommand(clean.text) : null;
+    // 回填的旧问题（recycled）不再重复执行命令，那句话只用来组装回复（M27）
+    let command = hasText && !msg.recycled ? extractCommand(clean.text) : null;
     const slashCommand = Boolean(command && /^[/／!！]/.test(command.raw));
     const addressed = atMe || msg.replyToBot;
     if (command && isGroup && !addressed && !slashCommand && !isMaster) command = null;
@@ -424,11 +435,12 @@ class Bot {
     }
 
     // 4) 群聊里没被叫到就先不说话
-    const trigger = this.computeTrigger({ msg, atMe, clean, isGroup, state, nowMs, isMaster });
+    // （triggerResult 以前叫 trigger，把模块导入 trigger 遮蔽了（L12），改个名）
+    const triggerResult = this.computeTrigger({ msg, atMe, clean, isGroup, state, nowMs, isMaster });
     // 群里被人骂了但没 @：只有「骂的是她」才唤醒她反击。
     // 以前这里只看「文本带脏字」+「她刚说过话/在接话窗口」就唤醒 —— 于是群里任何人
     // 抱怨一句「这天气真垃圾」「股票跌了滚蛋吧」，她都会跳出来，还绕过静默期。
-    if (!trigger.wake && isGroup && !atMe) {
+    if (!triggerResult.wake && isGroup && !atMe) {
       const said = String(clean.text || '');
       const insulted = INSULT_RE.test(said) || INSULT_LOOSE_RE.test(said);
       const guard = features.isOn(this.config, 'groupAddressGuard');
@@ -455,29 +467,55 @@ class Bot {
       const silent = Number(state.silentUntil) > nowMs;
       // 静默期内（被赶走了）不反击：除非 @ 她（上面 addressed 已解除静默）
       if (insulted && aimedAtHer && !silent) {
-        trigger.wake = true;
-        trigger.reason = 'insulted';
+        triggerResult.wake = true;
+        triggerResult.reason = 'insulted';
       }
       if (guard && talkingToOthers && this.logger) {
         this.logger.info(`[group] 判定在跟别人说话，不接：${said.slice(0, 24)}`);
       }
     }
-    if (!trigger.wake) {
-      return { action: 'ignore', reason: trigger.reason, key, msg, atMe };
+    if (!triggerResult.wake) {
+      return { action: 'ignore', reason: triggerResult.reason, key, msg, atMe };
     }
     // 只有明确叫她、定向叫她或同一个人接着聊，才延长接话窗口。
     // 不能让旁人的闲聊把窗口续下去。
-    if (isGroup && ['addressed', 'directed', 'engaged', 'insulted'].includes(trigger.reason)) {
+    if (isGroup && ['addressed', 'directed', 'engaged', 'insulted'].includes(triggerResult.reason)) {
       state.engagedUntil = nowMs + Math.max(1, Number(this.config.group.engagedMinutes) || 6) * 60000;
     }
     if (muted) {
       return { action: 'ignore', reason: 'muted', key, msg, atMe };
     }
-    // 同一个会话一分钟内已经回了太多条 → 先停一下，别越聊越乱
-    const recentReplies = (state.replyTimes || []).filter((t) => nowMs - Number(t) < 60000);
-    if (recentReplies.length >= 10) {
+    // 同一个会话一分钟内已经回了太多条 → 先停一下，别越聊越乱。
+    // state.replyTimes 在会话状态被重建时会丢条目（CHANGELOG 实测 1/4 漏拦），
+    // 所以照搬 trigger.js 的兜底：再数一遍存储里真正落盘的助手消息，取两边较大的（M20）。
+    const minuteAgo = nowMs - 60000;
+    const recentList = Array.isArray(state.replyTimes) ? state.replyTimes.filter((t) => Number(t) > minuteAgo) : [];
+    let recentCount = recentList.length;
+    try {
+      const stored = this.store
+        .messages(key, 200)
+        .filter((m) => m.role === 'assistant' && Number(m.ts) > minuteAgo).length;
+      if (stored > recentCount) recentCount = stored;
+    } catch { /* 读不到就按内存里的算 */ }
+    if (recentCount >= 10) {
       return { action: 'ignore', reason: 'burst_limit', key, msg, atMe };
     }
+
+    // 固定话术：查自己的号 / 同意被损 / 主人点名吐槽（canned.js）。
+    // 以前这些排在所有闸门前面（M19）：mute、禁言群、静默期、burst_limit 全挡不住；
+    // 现在挪到静音/禁言/限流之后 —— 被静音时一律不接，consent/self_wxid 等分支
+    // 在 canned.js 里还补了「群聊没 @ 不接」的门。
+    const canned = cannedReply(this, {
+      msg,
+      text: clean.text,
+      isGroup,
+      isMaster,
+      atMe,
+      state,
+      nowMs,
+      key,
+    });
+    if (canned) return canned;
 
     // 对方只发了一个「？」→ 也回一个「？」
     if (hasText && /^[?？]+$/.test(String(clean.text || '').trim())) {
@@ -758,7 +796,7 @@ class Bot {
     }
     // buildTurns 也要知道在不在对喷：对喷时不洗掉脏话，否则模型看不见对面骂了啥
     msg.fight = fight;
-    msg.fightReason = trigger.reason || '';
+    msg.fightReason = triggerResult.reason || '';
     msg.fightDirty = fightDirty;
     msg.fightTarget = fightTarget;
     msg.fightOnMaster = fightOnMaster;
@@ -796,9 +834,9 @@ class Bot {
         notes,
         rng: this.rng,
       });
-      return { action: 'reply', key, msg, atMe, system, turns, mock: true, text, reason: trigger.reason };
+      return { action: 'reply', key, msg, atMe, system, turns, mock: true, text, reason: triggerResult.reason };
     }
-    return { action: 'reply', key, msg, atMe, system, turns, mock: false, reason: trigger.reason };
+    return { action: 'reply', key, msg, atMe, system, turns, mock: false, reason: triggerResult.reason };
   }
 
   computeTrigger(args) {
@@ -824,6 +862,8 @@ class Bot {
         return { action: 'ignore', reason: 'not_owner', key, msg, atMe: Boolean(msg && msg.atMe) };
       }
       state.adminUntil = nowMs + minutes * 60000;
+      // 时限权限认人不认会话：记下是谁拿到的，别的群友/聊友不能借光（见下面 2) 的门）
+      state.adminUser = String(msg.senderId || '');
       this.store.redactLastMessage(key, '（已隐藏：管理员验证）');
       this.store.markDirty();
       this.logger && this.logger.info(`[admin] 主人 ${msg.senderName} 获得管理员权限 ${minutes} 分钟（会话 ${key}）`);
@@ -834,9 +874,16 @@ class Bot {
       );
     }
 
-    // 2) 管理员命令：主人直接生效，不用开魔咒；allowAll=true 时任何人也能用
-    if (!isMaster && !allowAll) return null;
-    if (!isMaster && !allowAll && !(Number(state.adminUntil) > nowMs)) {
+    // 2) 管理员命令：主人直接生效，不用开魔咒；allowAll=true 时任何人也能用。
+    // 其他人要靠魔咒发的时限权限（adminUntil）才能用，到期就真的失去权限。
+    // 以前这里是 if (!isMaster && !allowAll) return null 一票否决，把下一行的 adminUntil
+    // 检查永远堵死（死代码）：「管理员权限 N 分钟」只是句空承诺（H7）。
+    // 注意 adminUntil 认发放对象（adminUser）：不能让同聊天里的路人甲借着主人刚开的
+    // 时限拿到管理员命令 —— bot.test.js 固化了「别人发『状态』不会拿到管理员回复」，
+    // 字面只判 adminUntil 的写法会让那条测试挂掉，所以这里按人放行。
+    const adminOk = isMaster || allowAll
+      || (Number(state.adminUntil) > nowMs && String(state.adminUser || '') === String(msg.senderId || ''));
+    if (!adminOk) {
       const looksControl =
         /(禁言|解禁|静音)/.test(text) ||
         /^(?:别|不要|停止)(?:再)?(?:在)?\s*.+?群/.test(text) ||
@@ -846,7 +893,11 @@ class Bot {
       }
       return null;
     }
-    const remaining = Math.max(1, Math.round(((Number(state.adminUntil) || nowMs) - nowMs) / 60000));
+    // 剩余时间按新语义算：主人/allowAll 不限时；临时管理员看 adminUntil，到期即失效
+    const remaining = (isMaster || allowAll)
+      ? 0
+      : Math.max(1, Math.ceil((Number(state.adminUntil) - nowMs) / 60000));
+    const remainingText = remaining > 0 ? `剩 ${remaining} 分钟` : '不限时';
 
     // —— 群禁言（让某个群安静） ——
     let mg;
@@ -873,6 +924,13 @@ class Bot {
       personaStore.save(this.config, { mutedGroups: ['*'] });
       return say('好，所有群都不说话了，只陪你私聊。');
     }
+    // 全解分支要排在单群解禁前面（M23）：以前它排在后面，「允许所有群」「解除禁言 所有群」
+    // 会被下面单群那条 `(.+?)` 先吞掉（「所有群」被当成群名），全解分支永远走不到。
+    if (/^(?:解除所有群禁言|解除所有禁言|取消所有禁言|全部恢复|允许所有群)$/.test(mt)
+        || /^(?:解除禁言|取消禁言|解开禁言|解禁)[\s]*(?:(?:所有|全部)(?:个)?(?:群|群聊)?)?[。.!！~～]*$/.test(mt)) {
+      personaStore.save(this.config, { mutedGroups: [] });
+      return say('所有群的禁言都解开了。');
+    }
     if ((mg = mt.match(/^(?:解除禁言|取消禁言|允许)\s*(.+?)(?:了|啦|啊|吧|嘛)?[。.!！~～]*$/))
         || (mg = mt.match(/^解禁\s*(.+?)$/))
         || (mg = mt.match(/^解开\s*(.+?)\s*(?:群)?\s*的?禁言$/))
@@ -880,17 +938,11 @@ class Bot {
         || (mg = mt.match(/^让\s*(.+?)\s*(?:群)?\s*(?:可以|能)\s*说话$/))
         || (mg = mt.match(/^(?:恢复|放开)\s*(?!默认|语态|人设)(.+?)\s*(?:群)?\s*(?:说话)?$/))) {
       const g = String(mg[1]).replace(/[「」"'“”]/g, '').trim();
-      const list = (Array.isArray(this.config.group.mutedGroups) ? this.config.group.mutedGroups : []).filter((x) => !nameMatches(x, g) && x !== '*');
+      // '*'（所有群禁言）不归单群解禁管：放行一个群不能顺手把全禁言清掉
+      const list = (Array.isArray(this.config.group.mutedGroups) ? this.config.group.mutedGroups : [])
+        .filter((x) => x === '*' || !nameMatches(x, g));
       personaStore.save(this.config, { mutedGroups: list });
       return say(`好，「${g}」群恢复说话了。`);
-    }
-    if (/^(?:解除禁言|解开禁言|解禁|解除所有禁言|取消所有禁言)$/.test(text)) {
-      personaStore.save(this.config, { mutedGroups: [] });
-      return say('所有群的禁言都解开了。');
-    }
-    if (/^(?:解除所有群禁言|全部恢复|允许所有群)$/.test(text)) {
-      personaStore.save(this.config, { mutedGroups: [] });
-      return say('所有群都恢复说话了。');
     }
 
     // —— 上下文长度 / 人味开关 ——
@@ -1001,7 +1053,7 @@ class Bot {
       const mock = this.llm.isMock;
       const muted = this.config.group.mutedGroups || [];
       return say(
-        `管理员在线（剩 ${remaining} 分钟）｜模型：${mock ? '演示模式' : this.llm.providerLabel + ' · ' + this.llm.model}` +
+        `管理员在线（${remainingText}）｜模型：${mock ? '演示模式' : this.llm.providerLabel + ' · ' + this.llm.model}` +
         `｜记忆：${s.sessions} 个聊天 / ${s.messages} 条消息` +
         `｜上下文：${this.config.chat.historyTurns} 条` +
         `｜语态：${this.config.persona.stylePreset || '默认'}${this.config.persona.styleText ? '（' + this.config.persona.styleText.slice(0, 12) + '）' : ''}` +
@@ -1046,7 +1098,9 @@ class Bot {
       siliconflow: 'siliconflow', 硅基: 'siliconflow', 硅基流动: 'siliconflow',
       ollama: 'ollama', 本地: 'ollama',
     };
-    const pm = text.match(/^(?:接|用|切到|换成|切换到)?\s*([A-Za-z\u4e00-\u9fff]{1,12})(?:\s*(?:chat|v3|flash|plus))?$/i);
+    // 前缀必须带「接/用/切到/换成/切换到」（M25）：以前整段可省，
+    // 「本地」「千问」这种普通词命中就静默切走 LLM 并落盘
+    const pm = text.match(/^(?:接|用|切到|换成|切换到)\s*([A-Za-z\u4e00-\u9fff]{1,12})(?:\s*(?:chat|v3|flash|plus))?$/i);
     if (pm) {
       const target = providerAlias[pm[1].toLowerCase()] || providerAlias[pm[1]];
       if (target) {
@@ -1062,6 +1116,9 @@ class Bot {
     }
     if (/^(?:群聊)?主动接话\s*(开|打开|关|关闭|关掉)$/.test(text)) {
       const on = /开/.test(text);
+      // 以前只改内存（this.config.group.freeChat = on），重启就丢；
+      // 照「能力 主动接话」的写法补落盘（M24）
+      personaStore.save(this.config, { freeChat: on });
       this.config.group.freeChat = on;
       this.logger && this.logger.info(`[admin] 群聊主动接话 ${on ? '开' : '关'}`);
       return say(on ? '群聊主动接话已打开（按概率接话，仍受冷却限制）。' : '群聊主动接话已关闭。');
@@ -1079,6 +1136,7 @@ class Bot {
     }
     if (/^(退出管理|结束管理|关闭管理|收起魔咒)$/.test(text)) {
       state.adminUntil = 0;
+      state.adminUser = '';
       this.store.markDirty();
       this.logger && this.logger.info('[admin] 管理员权限已关闭');
       return say('管理员权限已关闭。');
@@ -1105,7 +1163,19 @@ class Bot {
         return finish('呜…刚才的聊天人家忘掉啦（只清掉这个聊天框的记忆哦）🫧');
       }
       case 'memory': {
-        const rows = this.store.listNotes(key);
+        // 群聊里只回调用者自己的笔记（store.profile(key, senderId).notes），
+        // 全量摊开只有主人可见（M29）：以前任何群友一发「记忆」就把全会话成员的
+        // 小抄都摊给他看（「B 怕黑」这种隐私横向泄露）。
+        const groupChat = msg.chatType === 'group';
+        let rows;
+        if (groupChat && !msg.isMaster) {
+          const mineRows = (profile.notes || [])
+            .map((n) => String((n && n.text) || n || ''))
+            .filter(Boolean);
+          rows = mineRows.length ? [{ name: profile.name || msg.senderName || '你', notes: mineRows }] : [];
+        } else {
+          rows = this.store.listNotes(key);
+        }
         const mine = profile.notes || [];
         if (!rows.length && !mine.length) {
           return finish('人家还什么都没记住呢。想让我记住就说「记住：你怕黑」这种，我就能记好久…大概。');
@@ -1211,7 +1281,10 @@ class Bot {
     // 脏话换成年轻人的说法（对喷时保留原样，不然吵起来没劲）
     const fighting = Boolean(decision && decision.msg && decision.msg.fight) || (decision && decision.reason === 'clapback');
     if (!fighting) {
-      text = text.replace(/我操|我靠|草泥马|操你/g, '我去').replace(/卧槽|卧超|我超|我焯|我擦/g, '我去，').replace(/^草[，,\\s]?/g, '我去');
+      // 「草」只在整句被当成语气词时才软化：草 / 草，/ 草！ 都要换，
+      // 但「草莓」「草地」「草案」这类正常词不能动（以前 ^草 一网打尽，草莓都变我去莓）。
+      // 用前瞻保留后面的标点，替换后读起来才是「我去，明天见」而不是「我去明天见」。
+      text = text.replace(/我操|我靠|草泥马|操你/g, '我去').replace(/卧槽|卧超|我超|我焯|我擦/g, '我去，').replace(/^草(?=[，,。！!？?…、\s]|$)/g, '我去');
     }
     // 弱模型爱说客服话，直接掐掉（免费模型尤其明显）
     const serviceTone = /(有什么(我)?能?可以?帮(你|您)的?吗?|需要我帮(你|您)|希望(这)?能帮到你|还有什么可以帮|作为一个(?:AI|语言模型)|随时告诉我)/;
@@ -1317,7 +1390,8 @@ class Bot {
       error,
     });
     const isGroup = msg.chatType === 'group';
-    if (decision.action === 'command') return [text];
+    // 命令路径以前在这里直接 return [text]，刚剥出来的 foundEmoji（🫧 这种）直接丢了（M28）
+    if (decision.action === 'command') return foundEmoji ? [text, foundEmoji] : [text];
     const maxBubbles = Math.max(1, Number(this.config.chat.maxBubbles) || 2);
     const maxChars = msg.discussion ? (this.config.chat.discussionMaxChars || 400) : (isGroup ? this.config.chat.groupMaxChars : this.config.chat.privateMaxChars);
     let bubbles;
@@ -1336,22 +1410,22 @@ class Bot {
     } else {
       bubbles = persona.splitBubbles(text, { maxChars, maxBubbles }).map((b) => String(b || '').trim()).filter(Boolean);
     }
-    // emoji / 颜文字单独一条发，不粘在句末（概率由「颜文字用量」档位决定）
+    // emoji / 颜文字单独一条发，不粘在句末。
+    // 以前回加和「颜文字用量」概率绑在一起（M28）：chance=0（关/吵架模式）时模型自带的
+    // emoji 被剥掉就再也回不来。现在解耦：模型自带的 emoji 无论概率多少都按原设计
+    // 回加成单独一条气泡，只有「随机补表情」才看概率。
     const chance = persona.emojiChanceFor(this.config);
-    if (!error && decision.action === 'reply' && chance > 0) {
-      let extra = '';
-      if (foundEmoji) extra = foundEmoji;
-      else if (this.rng() <= chance) {
-        // 颜文字和 emoji 各一半，这样「颜文字用量」调高后真的能看到颜文字
-        extra = this.rng() < 0.5
-          ? persona.kaomojiPick(this.rng)
-          : ['🐋', '🥺', '😭', '✨', '💧', '🫧', '🍚'][Math.floor(this.rng() * 7)];
-      }
-      if (extra) {
-        // 遵守 maxBubbles：气泡已经满了就并到最后一条，别偷偷多发一条
-        if (bubbles.length < maxBubbles) bubbles.push(extra);
-        else if (bubbles.length) bubbles[bubbles.length - 1] = (bubbles[bubbles.length - 1] + ' ' + extra).trim();
-      }
+    let extra = foundEmoji || '';
+    if (!error && decision.action === 'reply' && !extra && chance > 0 && this.rng() <= chance) {
+      // 颜文字和 emoji 各一半，这样「颜文字用量」调高后真的能看到颜文字
+      extra = this.rng() < 0.5
+        ? persona.kaomojiPick(this.rng)
+        : ['🐋', '🥺', '😭', '✨', '💧', '🫧', '🍚'][Math.floor(this.rng() * 7)];
+    }
+    if (extra) {
+      // 遵守 maxBubbles：气泡已经满了就并到最后一条，别偷偷多发一条
+      if (bubbles.length < maxBubbles) bubbles.push(extra);
+      else if (bubbles.length) bubbles[bubbles.length - 1] = (bubbles[bubbles.length - 1] + ' ' + extra).trim();
     }
     return bubbles;
   }
@@ -1361,6 +1435,24 @@ class Bot {
    * @returns {{action: string, reply?: string, bubbles?: string[], reason: string, commandType?: string}}
    */
   async handle(rawMsg, { signal } = {}) {
+    // M21：同一会话串行、不同会话并发。
+    // 网关会并发调 handle，而 decide() 里多处 await 之间读改写共享 state，
+    // 同会话两条消息并发处理会互相覆盖计数、双回复（CHANGELOG 的并发漏拦即此类）。
+    const chainKey = this.sessionKey(this.normalize(rawMsg));
+    const prev = this._handleChains.get(chainKey) || Promise.resolve();
+    const run = prev.then(() => this._handleOnce(rawMsg, { signal }));
+    // 链尾留在表里给后来者排队；跑完（成功或失败）把自己清掉，别把 Map 越攒越大
+    const guard = run.then(() => null, () => null);
+    this._handleChains.set(chainKey, guard);
+    try {
+      return await run;
+    } finally {
+      if (this._handleChains.get(chainKey) === guard) this._handleChains.delete(chainKey);
+    }
+  }
+
+  /** handle 的实际处理体，由 handle() 按会话串行调用（不同会话仍然并发） */
+  async _handleOnce(rawMsg, { signal } = {}) {
     let decision;
     try {
       decision = await this.decide(rawMsg);
@@ -1382,7 +1474,7 @@ class Bot {
       } else if (decision.mock) {
         text = decision.text;
       } else {
-        text = await this.llm.complete({ system: decision.system, turns: decision.turns });
+        text = await this.llm.complete({ system: decision.system, turns: decision.turns, signal });
         // 模型有时候只会把别人说过的话复读一遍，或者重复自己上一句，这种重写一次
         const heardList = this.recentHeard(decision);
         const ownList = this.recentOwn(decision);
@@ -1397,28 +1489,32 @@ class Bot {
             const retry = await this.llm.complete({
               system: decision.system + '\n\n【重写要求】你刚才的回答' + why + '，不合格。现在重写：换一个说法，给出新的信息或明确态度；不能出现对方原句，也不能重复你上面说过的话。',
               turns: decision.turns,
+              signal,
             });
+            // 只有重写合格才采用（M18）：以前不合格时 `else text = retry || text` 照样把
+            // 还在复读的 retry 发出去，这道校验形同虚设；不合格就保留原文，finalize 里
+            // 还有第二道 echo 兜底。
             if (retry && !heardList.some((h) => isEcho(retry, h)) && !ownList.some((h) => isEcho(retry, h))) text = retry;
-            else text = retry || text;
           } catch { /* 重写失败就沿用原文，后面还有兜底 */ }
         }
       }
     } catch (err) {
-      const rawMsg = String((err && err.message) || '');
-      const blocked = /敏感|不安全|安全|内容/.test(rawMsg) && /400/.test(rawMsg);
+      // （errText 以前叫 rawMsg，把 handle 的入参 rawMsg 遮蔽了（L12），改个名）
+      const errText = String((err && err.message) || '');
+      const blocked = /敏感|不安全|安全|内容/.test(errText) && /400/.test(errText);
       this.logger && this.logger.error('生成回复失败：' + (err && err.message));
       let retried = null;
       // 钥匙失效 / 额度用完（429）/ 模型名不可用（404）→ 切到存过 Key 的备用服务商再试一次。
       // 千问的 qwen-turbo 免费额度经常先耗尽，用户会以为「Key 不能用」，这里直接兜住。
       const canFallback =
-        /401|invalid|api key|Unauthorized|密钥|令牌/i.test(rawMsg) ||
-        /\b429\b|rate.?limit|exceeded your current request limit/i.test(rawMsg) ||
-        (/\b404\b/.test(rawMsg) && /model/i.test(rawMsg));
+        /401|invalid|api key|Unauthorized|密钥|令牌/i.test(errText) ||
+        /\b429\b|rate.?limit|exceeded your current request limit/i.test(errText) ||
+        (/\b404\b/.test(errText) && /model/i.test(errText));
       if (canFallback && typeof this.llm.switchFallback === 'function') {
         const switched = this.llm.switchFallback();
         if (switched) {
           try {
-            retried = await this.llm.complete({ system: decision.system, turns: decision.turns });
+            retried = await this.llm.complete({ system: decision.system, turns: decision.turns, signal });
             this.logger && this.logger.warn(`已切到备用服务商 ${switched.label} 并重试成功`);
           } catch (err2) {
             this.logger && this.logger.error('备用服务商也失败了：' + (err2 && err2.message));
@@ -1429,7 +1525,7 @@ class Bot {
         try {
           const sys = sanitizeForModel(decision.system || '');
           const cur = sanitizeForModel((decision.msg && (decision.msg.cleanText || decision.msg.text)) || '');
-          retried = await this.llm.complete({ system: sys, turns: cur ? [{ role: 'user', content: cur }] : [] });
+          retried = await this.llm.complete({ system: sys, turns: cur ? [{ role: 'user', content: cur }] : [], signal });
           this.logger && this.logger.warn('内容审核拦截，已丢掉历史用精简上下文重试成功');
         } catch (err2) {
           this.logger && this.logger.error('精简重试仍失败：' + (err2 && err2.message));

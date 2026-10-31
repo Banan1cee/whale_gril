@@ -43,7 +43,7 @@ class ReminderRunner:
                 break
             text = str(item.get("text") or "").strip()
             if not text:
-                self.ack(item, False, "提醒内容为空")
+                self._ack_safe(item, False, "提醒内容为空")
                 failed += 1
                 continue
             try:
@@ -58,13 +58,26 @@ class ReminderRunner:
             else:
                 failed += 1
                 self.failed += 1
-            self.ack(item, ok, err)
+            self._ack_safe(item, ok, err)
             if not ok:
                 self.log("提醒发送失败（服务端会在 5 分钟后重试一次）：", text[:30], err)
         return sent, next_at
 
+    def _ack_safe(self, item, ok, err):
+        """回执也纳入异常保护（M15）：回执挂了只记日志、继续下一条。
+
+        不保护的话一条回执异常会打断整批，同批剩余提醒全漏发。
+        """
+        try:
+            self.ack(item, ok, err)
+        except Exception as exc:                          # noqa: BLE001
+            self.log("提醒回执失败（不影响后续提醒）：", repr(exc))
+
     def run(self):
         while not self.stopped:
+            # 先清唤醒位、再 fetch（M14）：fetch 之后到来的 kick 会把位重新置上，
+            # 下一轮 wait 立即返回 —— 不会像旧写法（wait 返回与 clear 之间）那样丢唤醒。
+            self.wake.clear()
             try:
                 _, next_at = self.step()
             except Exception as exc:                      # noqa: BLE001
@@ -75,7 +88,6 @@ class ReminderRunner:
             if next_at:
                 delay = max(0.2, min(self.max_sleep, (next_at - self.now_ms()) / 1000.0))
             self.wake.wait(delay)
-            self.wake.clear()
 
     def stop(self):
         self.stopped = True

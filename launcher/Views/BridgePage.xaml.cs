@@ -66,11 +66,12 @@ namespace WhaleLauncher.Views
             _drain.Tick += (_, __) => Drain();
             _drain.Start();
 
-            Unloaded += (_, __) => _sup.Line -= OnLine;
+            Unloaded += (_, __) => { _sup.Line -= OnLine; _drain.Stop(); };   // 页面不在了就停表，别空转（L16）
             Loaded += async (_, __) =>
             {
                 _sup.Line -= OnLine;
                 _sup.Line += OnLine;
+                if (!_drain.IsEnabled) _drain.Start();
                 await LoadConfigAsync();
                 await RefreshAsync();
             };
@@ -291,7 +292,7 @@ namespace WhaleLauncher.Views
             _sup.Say("刷新微信账号列表");
         }
 
-        private void OnRestartBridge(object sender, RoutedEventArgs e) => _sup.RestartBridge();
+        private async void OnRestartBridge(object sender, RoutedEventArgs e) => await _sup.RestartBridgeAsync();
 
         // ── 配置读写 ────────────────────────────────────────────
         private async Task LoadConfigAsync()

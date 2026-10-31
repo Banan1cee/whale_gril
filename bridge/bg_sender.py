@@ -44,6 +44,7 @@ __all__ = [
 ]
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
+kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
 # ---------------------------------------------------------------- 消息常量（文档 §4）
 WM_SETFOCUS = 0x0007
@@ -151,6 +152,17 @@ class UipiDenied(RuntimeError):
 
 def _noop(*_a, **_kw):
     pass
+
+
+def _is_blank(value):
+    """微信输入框「空」时 UIA 读到的并不是空字符串，而是 '\\n'（有时带空格）。
+
+    与 sticker_transport._is_blank 同一实测结论：按真值判空会把空框误判成
+    「有草稿」（input_not_empty，bg 通道整体失效）；按 `== ''` 判发送结果又会
+    把空框误判成 residue_left → 回退重发、同一条消息发两遍（M1）。
+    所以一律「strip 后为空即认为空」。
+    """
+    return isinstance(value, str) and value.strip() == ""
 
 
 # ---------------------------------------------------------------- 物化（文档 §4.1）
@@ -785,6 +797,65 @@ def open_chat(sender, aliases, timeout=6.0, log=None):
     return False
 
 
+# ---------------------------------------------------------------- 发送互斥（M3）
+_SEND_LOCK = threading.Lock()          # 同进程：并发 worker 别交错写同一个输入框
+_MUTEX_NAME = "Local\\whale_bg_send"   # 跨进程：--bg-send CLI 与常驻桥接共用
+
+
+def _acquire_named_mutex(timeout_ms=20000):
+    """跨进程互斥：CreateMutexW + WaitForSingleObject。
+
+    fail-open：创建失败（非 Windows / 权限不足）或等超时都返回 None，
+    调用方退化为只用模块锁 —— 互斥拿不到绝不能让发送本身失败。
+    """
+    try:
+        kernel32.CreateMutexW.argtypes = [wintypes.LPVOID, wintypes.BOOL,
+                                          wintypes.LPCWSTR]
+        kernel32.CreateMutexW.restype = wintypes.HANDLE
+        kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        kernel32.WaitForSingleObject.restype = wintypes.DWORD
+        h = kernel32.CreateMutexW(None, False, _MUTEX_NAME)
+        if not h:
+            return None
+        if kernel32.WaitForSingleObject(h, int(timeout_ms)) != 0:   # 0 = WAIT_OBJECT_0
+            kernel32.CloseHandle(h)             # 等不到就不占，别把句柄泄漏出去
+            return None
+        return h
+    except Exception:
+        return None
+
+
+def _release_named_mutex(handle):
+    if not handle:
+        return
+    try:
+        kernel32.ReleaseMutex(handle)
+    except Exception:
+        pass
+    try:
+        kernel32.CloseHandle(handle)
+    except Exception:
+        pass
+
+
+class _WriteGuard:
+    """写输入框序列（物化→open_chat→WM_CHAR→点发送）的互斥上下文。
+
+    两级都 fail-open：命名互斥拿不到就只靠模块锁，绝不因为互斥失败而
+    拒发。probe() 的写路径经 send() 进同一把锁，不用再包一层。
+    """
+
+    def __enter__(self):
+        _SEND_LOCK.acquire()
+        self.handle = _acquire_named_mutex()
+        return self
+
+    def __exit__(self, *exc):
+        _release_named_mutex(getattr(self, "handle", None))
+        _SEND_LOCK.release()
+        return False
+
+
 # ---------------------------------------------------------------- 组合：发一条
 _MODE_LOGGED = set()
 
@@ -805,6 +876,7 @@ def send(text, chat=None, hwnd=0, log=None, char_gap=0.04,
     | gbk_unsupported | ❌ | 全部字符都编不了 |
     | uipi_denied | ❌ | 微信提权了，桥接没提权 |
     | residue_left | ❌ | 点了发送但输入框没清空 |
+    | input_dirty | ❌ | 打字之后失败，草稿可能残留在输入框（续发前先清框） |
     | error:<Type> | ❌ | 其它异常 |
     """
     log = log or _noop
@@ -827,77 +899,96 @@ def send(text, chat=None, hwnd=0, log=None, char_gap=0.04,
         pass
 
     sender = WeChatSender(hwnd)
-    try:
-        info = _ensure_tree(hwnd, log=log, unhide=unhide, want_edit=bool(chat))
-        if len(info["nodes"]) < MIN_NODES:
-            return False, "tree_not_ready"
+    draft_dirty = False                        # 打过字的失败返回要声明残留（M2）
+    # M3：整段写序列（物化 → open_chat → WM_CHAR → 点发送）进互斥：
+    # 同进程模块锁防并发 worker，跨进程命名互斥防 --bg-send CLI 与常驻桥接交错。
+    with _WriteGuard():
+        try:
+            info = _ensure_tree(hwnd, log=log, unhide=unhide, want_edit=bool(chat))
+            if len(info["nodes"]) < MIN_NODES:
+                return False, "tree_not_ready"
 
-        # 先切会话，再看输入框：微信可能停在朋友圈 / 通讯录，
-        # 这时 edit 不存在，但会话列表行还在，点一下就能回到聊天页。
-        if chat and not open_chat(sender, chat, log=log):
-            return False, "chat_not_found"
+            # 先切会话，再看输入框：微信可能停在朋友圈 / 通讯录，
+            # 这时 edit 不存在，但会话列表行还在，点一下就能回到聊天页。
+            if chat and not open_chat(sender, chat, log=log):
+                return False, "chat_not_found"
 
-        info = read_ui(hwnd)                   # 切过会话要重读（按钮位置会变）
-        if info["edit"] is None:
-            # 点完会话后微信会重建一次控件树（实测 150 → 81 再回来），补一次物化
-            info = _ensure_tree(hwnd, log=log, unhide=False)
-        if info["edit"] is None:
-            return False, "no_input_field"
-        if info["send_xy"] is None:
-            return False, "no_send_button"
-        if info["value"]:
-            return False, "input_not_empty"
+            info = read_ui(hwnd)                   # 切过会话要重读（按钮位置会变）
+            if info["edit"] is None:
+                # 点完会话后微信会重建一次控件树（实测 150 → 81 再回来），补一次物化
+                info = _ensure_tree(hwnd, log=log, unhide=False)
+            if info["edit"] is None:
+                return False, "no_input_field"
+            if info["send_xy"] is None:
+                return False, "no_send_button"
+            # 空框 UIA 读出来是 '\n'，按真值判会误报 input_not_empty（M1）；
+            # 读不到（None）维持原语义：当作没草稿，继续发。
+            if info["value"] is not None and not _is_blank(info["value"]):
+                return False, "input_not_empty"
 
-        mode = char_mode
-        if mode in (None, "", "auto"):
-            mode = detect_char_mode(hwnd)
-        if mode not in _MODE_LOGGED:
-            _MODE_LOGGED.add(mode)
-            log("后台通道：打字编码 = %s（%s）" % (
-                mode,
-                "UTF-16 码元，微信 4.2+" if mode == "utf16"
-                else "GBK 字节，微信 4.1 及以前；4.2 上中文会变乱码，请检查版本探测"))
-        ok, skipped = sender.type_text(text, char_gap=char_gap,
-                                       strip_unencodable=strip_unencodable, mode=mode)
-        if not ok:
-            return False, "gbk_unsupported"
-        if skipped:
-            log("后台通道：GBK 编不了 %d 个字符，已跳过：%s"
-                % (len(skipped), "".join(skipped)[:20]))
+            mode = char_mode
+            if mode in (None, "", "auto"):
+                mode = detect_char_mode(hwnd)
+            if mode not in _MODE_LOGGED:
+                _MODE_LOGGED.add(mode)
+                log("后台通道：打字编码 = %s（%s）" % (
+                    mode,
+                    "UTF-16 码元，微信 4.2+" if mode == "utf16"
+                    else "GBK 字节，微信 4.1 及以前；4.2 上中文会变乱码，请检查版本探测"))
+            # 从这里开始往输入框投字：之后的失败返回一律改带 input_dirty（新增枚举，
+            # 向后兼容），声明「草稿可能残留」（M2），免得调用方在脏草稿上接着打字、
+            # 拼出双份或拼接脏消息。
+            draft_dirty = True
+            ok, skipped = sender.type_text(text, char_gap=char_gap,
+                                           strip_unencodable=strip_unencodable, mode=mode)
+            if not ok:
+                # 编码就失败了，一个字都没投出去，不算残留
+                return False, "gbk_unsupported"
+            if skipped:
+                log("后台通道：GBK 编不了 %d 个字符，已跳过：%s"
+                    % (len(skipped), "".join(skipped)[:20]))
 
-        time.sleep(0.35)                       # 等按钮变 enabled（文档 §9）
-        info = read_ui(hwnd)                   # 再读一次：按钮此刻才 enabled
-        xy = info["send_xy"]
-        if xy is None:
+            time.sleep(0.35)                       # 等按钮变 enabled（文档 §9）
+            info = read_ui(hwnd)                   # 再读一次：按钮此刻才 enabled
+            xy = info["send_xy"]
+            if xy is None:
+                sender.end_input()
+                log("后台通道：打完字找不到发送按钮，草稿可能残留在输入框")
+                return False, "input_dirty"
+            sender.click_screen(*xy)
+            time.sleep(0.40)
             sender.end_input()
-            return False, "no_send_button"
-        sender.click_screen(*xy)
-        time.sleep(0.40)
-        sender.end_input()
 
-        partial = "sent_partial" if skipped else "sent"
-        if not verify:
-            return True, partial
-
-        # 发出去了没有：输入框清空 = 走了。读不到（None）按「已发送」处理，
-        # 免得退回前台通道再打一遍、聊天里出现两句一样的话。
-        deadline = time.time() + 2.0
-        while time.time() < deadline:
-            v = read_ui(hwnd)["value"]
-            if v == "":
+            partial = "sent_partial" if skipped else "sent"
+            if not verify:
                 return True, partial
-            if v is None:
-                log("后台通道：回读不到输入框状态，按已发送处理（避免重复）")
-                return True, "sent_unverified"
-            time.sleep(0.2)
-        return False, "residue_left"
 
-    except UipiDenied as e:
-        log("后台通道：%s" % (e,))
-        return False, "uipi_denied"
-    except Exception as e:                     # noqa: BLE001
-        log("后台通道异常：%r" % (e,))
-        return False, "error:" + type(e).__name__
+            # 发出去了没有：输入框清空 = 走了。空框可能是 '\n'，按 _is_blank 判
+            # （M1）；读不到（None）按「已发送」处理，免得退回前台通道再打一遍、
+            # 聊天里出现两句一样的话。
+            deadline = time.time() + 2.0
+            while time.time() < deadline:
+                v = read_ui(hwnd)["value"]
+                if v is None:
+                    log("后台通道：回读不到输入框状态，按已发送处理（避免重复）")
+                    return True, "sent_unverified"
+                if _is_blank(v):
+                    return True, partial
+                time.sleep(0.2)
+            return False, "residue_left"
+
+        except UipiDenied as e:
+            log("后台通道：%s" % (e,))
+            if draft_dirty:
+                log("后台通道：打字被拦，草稿可能残留在输入框")
+                return False, "input_dirty"
+            return False, "uipi_denied"
+        except Exception as e:                     # noqa: BLE001
+            log("后台通道异常：%r" % (e,))
+            if draft_dirty:
+                log("后台通道：打字中断，草稿可能残留在输入框")
+                return False, "input_dirty"
+            return False, "error:" + type(e).__name__
 
 
 # ---------------------------------------------------------------- 自检（文档 §11）

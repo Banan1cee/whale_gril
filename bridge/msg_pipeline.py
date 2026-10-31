@@ -59,7 +59,20 @@ class MessagePipeline:
             if chat in self._running:
                 return True
             self._running.add(chat)
-        self._pool.submit(self._drain, chat)
+        # submit 保持在锁外（收进锁内会让 drain 线程晚一步拿到锁、队首被积压上限
+        # 挤掉），改用 try/except 挡住与 close() 的竞态（L7）：close() 把 _closed
+        # 置真后才 shutdown 线程池，这里撞上「已经关池」时不能把 RuntimeError
+        # 抛给消息线程（旧实现会话会永久卡死），而是清掉本会话痕迹、按「已关闭」
+        # 语义返回 False。
+        try:
+            self._pool.submit(self._drain, chat)
+        except RuntimeError:
+            with self._guard:
+                self._running.discard(chat)
+                self._queues.pop(chat, None)
+                self._closed = True
+            self.log("消息调度已关闭，这条没能排上：", chat)
+            return False
         return True
 
     def _drain(self, chat):

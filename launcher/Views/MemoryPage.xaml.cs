@@ -29,8 +29,8 @@ namespace WhaleLauncher.Views
     {
         private readonly RuntimeSupervisor _sup;
         private List<SessionRow> _sessions = new List<SessionRow>();
-        private JsonElement _sessionDetailLoaded;
         private bool _loading;
+        private int _loadSeq;        // 详情请求序号：快速切换会话时丢掉过期响应（M35）
         private string _backupDir = "";
 
         public MemoryPage(RuntimeSupervisor sup)
@@ -99,7 +99,7 @@ namespace WhaleLauncher.Views
                     });
                 }
             }
-            ApplyFilter();
+            ApplyFilter(true);
 
             var feats = await Api.Get(_sup.Url, "/api/features");
             if (feats.Ok && feats.Prop("features").ValueKind == JsonValueKind.Array)
@@ -120,18 +120,25 @@ namespace WhaleLauncher.Views
                 : $"共 {_sessions.Count} 个会话。数据目录：{_sup.DataDir}";
         }
 
-        private void ApplyFilter()
+        /// <summary>
+        /// 过滤只在本地内存里做（数据已经在 _sessions），不再每敲一个字拉一遍 /api/debug/sessions（M35）。
+        /// autoSelect 只在载入/手动刷新时为 true：平时过滤不重置 SelectedIndex=0，
+        /// 免得每敲一个字都触发 SelectionChanged 去拉全量详情。
+        /// </summary>
+        private void ApplyFilter(bool autoSelect)
         {
             var q = (TxtFilter.Text ?? "").Trim();
             var list = string.IsNullOrEmpty(q)
                 ? _sessions
                 : _sessions.Where(s => s.Title.IndexOf(q, StringComparison.OrdinalIgnoreCase) >= 0 ||
                                        s.Key.IndexOf(q, StringComparison.OrdinalIgnoreCase) >= 0).ToList();
+            var keep = Sessions.SelectedItem as SessionRow;
             Sessions.ItemsSource = list;
-            if (list.Count > 0) Sessions.SelectedIndex = 0;
+            if (keep != null && list.Contains(keep)) Sessions.SelectedItem = keep;   // 还在结果里就保持选中
+            else if (autoSelect && list.Count > 0) Sessions.SelectedIndex = 0;
         }
 
-        private void OnFilterChanged(object sender, TextChangedEventArgs e) => ApplyFilter();
+        private void OnFilterChanged(object sender, TextChangedEventArgs e) => ApplyFilter(false);
 
         private async void OnSessionChanged(object sender, SelectionChangedEventArgs e)
         {
@@ -141,6 +148,7 @@ namespace WhaleLauncher.Views
 
         private async Task LoadDetailAsync(SessionRow row)
         {
+            var seq = ++_loadSeq;   // 请求序号：快速切换会话时旧响应直接丢掉（M35，照 ContactPicker 的做法）
             DetailTitle.Text = row.Title;
             DetailSub.Text = row.Key;
             NotesHost.Children.Clear();
@@ -149,6 +157,7 @@ namespace WhaleLauncher.Views
             EmptyHint.Visibility = Visibility.Collapsed;
 
             var res = await Api.Get(_sup.Url, "/api/debug/sessions");
+            if (seq != _loadSeq) return;   // 已经有更新的请求，别用旧响应盖掉新内容
             if (!res.Ok || res.Prop("sessions").ValueKind != JsonValueKind.Array) return;
 
             foreach (var s in res.Prop("sessions").EnumerateArray())
@@ -197,14 +206,6 @@ namespace WhaleLauncher.Views
                 Margin = new Thickness(0, 0, 0, 4)
             });
         }
-
-
-        private static string JStr(JsonElement e, string name)
-            => e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String
-                ? (v.GetString() ?? "") : "";
-
-        private static JsonElement JProp(JsonElement e, string name)
-            => e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out var v) ? v : default;
 
         // ── 动作 ────────────────────────────────────────────────
         private async void OnReload(object sender, RoutedEventArgs e)

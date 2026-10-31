@@ -148,7 +148,7 @@ namespace WhaleLauncher
                 {
                     BtnToggle.IsEnabled = false;
                     _sup.Say("— 停止中 —");
-                    _sup.StopAll();
+                    await _sup.StopAllAsync();
                     await Task.Delay(200);
                 }
                 else
@@ -176,7 +176,7 @@ namespace WhaleLauncher
             {
                 BtnRestart.IsEnabled = false;
                 _sup.Say("— 重启中 —");
-                _sup.StopAll();
+                await _sup.StopAllAsync();
                 await Task.Delay(600);
                 _sup.StartNode();
                 await Task.Delay(1200);

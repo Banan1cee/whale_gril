@@ -29,15 +29,20 @@ namespace WhaleLauncher.Views
         private readonly RuntimeSupervisor _sup;
         private DateTime _lastLoad = DateTime.MinValue;
         private bool _busy;
+        private bool _formsLoaded;   // 表单（提醒规则 / 主动搭话）载入过没有（M30）
 
         public ReminderPage(RuntimeSupervisor sup)
         {
             InitializeComponent();
             _sup = sup;
-            Loaded += async (_, __) => await RefreshAsync();
+            Loaded += async (_, __) => await RefreshAsync(true);   // 页面载入才全量回填（M30）
         }
 
-        public async Task RefreshAsync()
+        /// <summary>周期刷新（MainWindow 2 秒定时器驱动）：只刷提醒列表和状态行，不动表单（M30）。</summary>
+        public Task RefreshAsync() => RefreshAsync(false);
+
+        /// <summary>full = 全量回填：页面载入/手动刷新时把「提醒规则」「主动搭话」表单也刷回服务端的值。</summary>
+        private async Task RefreshAsync(bool full)
         {
             if (_busy) return;
             if ((DateTime.Now - _lastLoad).TotalSeconds < 3) return;
@@ -94,8 +99,9 @@ namespace WhaleLauncher.Views
                 {
                     EmptyText.Visibility = Visibility.Collapsed;
                 }
-                LoadRules(res.Prop("rules"));
-                await LoadCareAsync();
+                LoadRules(res.Prop("rules"), full || !_formsLoaded);
+                if (full || !_formsLoaded) await LoadCareAsync();   // 周期刷新不碰表单，免得覆盖正在编辑的值（M30）
+                _formsLoaded = true;
                 StatusText.Text = "共 " + rows.Count + " 条 · " + DateTime.Now.ToString("HH:mm:ss") + " 刷新";
             }
             catch (Exception ex)
@@ -111,7 +117,7 @@ namespace WhaleLauncher.Views
         private async void OnRefresh(object sender, RoutedEventArgs e)
         {
             _lastLoad = DateTime.MinValue;
-            await RefreshAsync();
+            await RefreshAsync(true);   // 手动刷新 = 全量回填（M30）
         }
 
         private async void OnCancelReminder(object sender, RoutedEventArgs e)
@@ -149,17 +155,19 @@ namespace WhaleLauncher.Views
             if (!cfg.Ok || cfg.Prop("config").ValueKind != JsonValueKind.Object) return;
             if (!cfg.Prop("config").TryGetProperty("care", out var care) || care.ValueKind != JsonValueKind.Object)
                 return;
-            ChkCareEnabled.IsChecked = Flag(care, "enabled");
-            ChkCareOnlyMaster.IsChecked = Flag(care, "onlyMaster");
-            ChkCareGroups.IsChecked = Flag(care, "allowGroups");
-            ChkCareOthers.IsChecked = Flag(care, "allowOthers");
-            TxtCareEvery.Text = Num(care, "everyMinutes", 90);
-            TxtCareJitter.Text = Num(care, "jitterMinutes", 25);
-            TxtCareMax.Text = Num(care, "maxPerDay", 0);
-            TxtCareQuiet.Text = Num(care, "quietAfterMinutes", 0);
-            TxtCareWindows.Text = JoinLines(care, "windows");
-            TxtCareWhitelist.Text = JoinLines(care, "whitelist");
-            if (cfg.Prop("config").TryGetProperty("group", out var g) && g.ValueKind == JsonValueKind.Object)
+            // 回填前跳过正在编辑（有键盘焦点）的控件，别把没保存的输入冲掉（M30）
+            if (!ChkCareEnabled.IsKeyboardFocusWithin) ChkCareEnabled.IsChecked = Flag(care, "enabled");
+            if (!ChkCareOnlyMaster.IsKeyboardFocusWithin) ChkCareOnlyMaster.IsChecked = Flag(care, "onlyMaster");
+            if (!ChkCareGroups.IsKeyboardFocusWithin) ChkCareGroups.IsChecked = Flag(care, "allowGroups");
+            if (!ChkCareOthers.IsKeyboardFocusWithin) ChkCareOthers.IsChecked = Flag(care, "allowOthers");
+            if (!TxtCareEvery.IsKeyboardFocusWithin) TxtCareEvery.Text = Num(care, "everyMinutes", 90);
+            if (!TxtCareJitter.IsKeyboardFocusWithin) TxtCareJitter.Text = Num(care, "jitterMinutes", 25);
+            if (!TxtCareMax.IsKeyboardFocusWithin) TxtCareMax.Text = Num(care, "maxPerDay", 0);
+            if (!TxtCareQuiet.IsKeyboardFocusWithin) TxtCareQuiet.Text = Num(care, "quietAfterMinutes", 0);
+            if (!TxtCareWindows.IsKeyboardFocusWithin) TxtCareWindows.Text = JoinLines(care, "windows");
+            if (!TxtCareWhitelist.IsKeyboardFocusWithin) TxtCareWhitelist.Text = JoinLines(care, "whitelist");
+            if (cfg.Prop("config").TryGetProperty("group", out var g) && g.ValueKind == JsonValueKind.Object
+                && !TxtCareMuted.IsKeyboardFocusWithin)
                 TxtCareMuted.Text = JoinLines(g, "mutedGroups");
             CareStatus.Text = "";
         }
@@ -238,14 +246,16 @@ namespace WhaleLauncher.Views
             return "[" + string.Join(",", items) + "]";
         }
 
-        private void LoadRules(JsonElement rules)
+        private void LoadRules(JsonElement rules, bool apply)
         {
             if (rules.ValueKind != JsonValueKind.Object) return;
-            if (rules.TryGetProperty("enabled", out var en))
+            if (!apply) return;   // 周期刷新不动表单（M30）
+            // 回填前跳过正在编辑的控件
+            if (rules.TryGetProperty("enabled", out var en) && !ChkEnabled.IsKeyboardFocusWithin)
                 ChkEnabled.IsChecked = en.ValueKind == JsonValueKind.True;
-            if (rules.TryGetProperty("maxPerDay", out var cap) && cap.ValueKind == JsonValueKind.Number)
+            if (rules.TryGetProperty("maxPerDay", out var cap) && cap.ValueKind == JsonValueKind.Number && !TxtMaxPerDay.IsKeyboardFocusWithin)
                 TxtMaxPerDay.Text = cap.GetInt32().ToString();
-            if (rules.TryGetProperty("quietAfterMinutes", out var quiet) && quiet.ValueKind == JsonValueKind.Number)
+            if (rules.TryGetProperty("quietAfterMinutes", out var quiet) && quiet.ValueKind == JsonValueKind.Number && !TxtQuiet.IsKeyboardFocusWithin)
                 TxtQuiet.Text = quiet.GetInt32().ToString();
             RulesStatus.Text = "";
         }

@@ -24,8 +24,23 @@ def normalize_item(username, name="", remark="", is_group=False):
     return {"wxid": wxid, "name": nickname, "remark": note, "isGroup": group}
 
 
-def collect(db, limit=MAX_CONTACTS):
+def _fallback_log(*args):
+    """没人注入 log 时兜底打印：行解析异常绝不能静默吞掉（L8）。"""
+    print("[contacts_sync]", *args)
+
+
+def _row_field(row, key, idx):
+    """兼容两种行形态（L8）：dict / sqlite3.Row 按列名取，tuple 按下标取
+    （SELECT 不设 row_factory 时 sqlite3 默认返回 tuple）。"""
+    try:
+        return row[key]
+    except (TypeError, KeyError, IndexError):
+        return row[idx]
+
+
+def collect(db, limit=MAX_CONTACTS, log=None):
     """从 WeChatDB 取私聊联系人 + 群；任何一步失败都只是少一部分，不抛。"""
+    log = log or _fallback_log
     items = []
     seen = set()
 
@@ -59,20 +74,27 @@ def collect(db, limit=MAX_CONTACTS):
             rows = db.search_contact("")   # LIKE '%%'，最多 50 条，聊胜于无
         except Exception:
             rows = []
+    bad = 0
     for row in rows:
         try:
-            push(normalize_item(row["username"], row["nick_name"], row["remark"]))
-        except Exception:
+            push(normalize_item(_row_field(row, "username", 0),
+                                _row_field(row, "nick_name", 1),
+                                _row_field(row, "remark", 2)))
+        except Exception as exc:                      # noqa: BLE001
+            # 以前字典式取行在 tuple 行上抛 TypeError、被这里静默吞光，
+            # 联系人整个丢失还没人知道（L8）：记一行异常、带计数，继续下一行。
+            bad += 1
+            log("联系人行解析失败（累计 %d 行）：%r" % (bad, exc))
             continue
 
     return items
 
 
-def payload(db, at_ms, limit=MAX_CONTACTS):
+def payload(db, at_ms, limit=MAX_CONTACTS, log=None):
     """给 POST /api/wechat/contacts/sync 的请求体。"""
     account = ""
     try:
         account = _clean(getattr(db, "wxid", "") or "", 120)
     except Exception:
         account = ""
-    return {"account": account, "at": int(at_ms), "items": collect(db, limit)}
+    return {"account": account, "at": int(at_ms), "items": collect(db, limit, log)}

@@ -20,6 +20,8 @@ namespace WhaleLauncher.Views
         private bool _loading;
         private bool _loaded;
         private bool _currentIsExtra;
+        private int _loadSeq;   // 请求序号：快速切分类时丢掉过期响应（L17）
+        private readonly Dictionary<string, int> _imgVer = new Dictionary<string, int>();   // 需要强制刷新的单图版本号（L17）
 
         public StickerPage(RuntimeSupervisor sup)
         {
@@ -36,11 +38,14 @@ namespace WhaleLauncher.Views
 
         private async Task LoadAsync()
         {
+            var seq = ++_loadSeq;
             var res = await Api.Get(_sup.Url, "/api/stickers/status");
+            if (seq != _loadSeq) return;   // 有更新的请求（比如刚切了分类），丢掉旧结果（L17）
             if (!res.Ok)
             {
                 // 功能关闭时接口会 404，这是正常的
                 ChkEnabled.IsChecked = await ReadFlagAsync();
+                if (seq != _loadSeq) return;
                 EmptyHint.Visibility = Visibility.Visible;
                 EmptyHint.Text = "表情包功能还没开。\n打开上面的开关，再把图片拖进来（或者点「上传图片…」）。";
                 GridHost.Children.Clear();
@@ -151,11 +156,13 @@ namespace WhaleLauncher.Views
             try
             {
                 var url = $"{_sup.Url}/api/stickers/image?emotion={Uri.EscapeDataString(_current)}&name={Uri.EscapeDataString(name)}";
+                // 走 WPF 位图缓存，不再 IgnoreImageCache + 时间戳全量重下（L17）；
+                // 真要刷新单图（比如覆盖上传后），只给那张图加版本参数。
+                if (_imgVer.TryGetValue(_current + "/" + name, out var ver)) url += "&v=" + ver;
                 var bmp = new BitmapImage();
                 bmp.BeginInit();
                 bmp.CacheOption = BitmapCacheOption.OnLoad;
-                bmp.CreateOptions = BitmapCreateOptions.IgnoreImageCache;
-                bmp.UriSource = new Uri(url + "&t=" + DateTime.Now.Ticks);
+                bmp.UriSource = new Uri(url);
                 bmp.EndInit();
                 var img = new Image { Source = bmp, Stretch = Stretch.UniformToFill };
                 RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.HighQuality);
@@ -359,6 +366,9 @@ namespace WhaleLauncher.Views
                 if (!first) sb.Append(',');
                 first = false;
                 sb.Append("{\"name\":\"").Append(Api.Esc(info.Name)).Append("\",\"data\":\"").Append(data).Append("\"}");
+                // 覆盖同名旧图时只给这张图加版本参数强制刷新（L17）
+                var key = _current + "/" + info.Name;
+                _imgVer[key] = _imgVer.TryGetValue(key, out var v) ? v + 1 : 1;
             }
             sb.Append("]}");
 

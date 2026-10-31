@@ -22,6 +22,7 @@ from __future__ import annotations
 import ctypes
 import os
 import subprocess
+import threading
 import time
 from ctypes import wintypes
 from typing import Dict, List, Optional, Tuple
@@ -218,6 +219,13 @@ def tree_state(hwnd: int, timeout: float = 1.0, max_nodes: int = 1200) -> str:
 
 # ── 让微信把窗口"正常打开" ──────────────────────────────────────────
 _LAST_RESTORE = [0.0]
+_RESTORE_LOCK = threading.Lock()   # 「检查 15 秒冷却 + 占坑」必须原子（L6）
+
+
+def _release_restore_slot() -> None:
+    """唤起失败时把冷却占坑回滚成 0（L6）：失败不算「刚唤起过」，下一轮能立刻重试。"""
+    with _RESTORE_LOCK:
+        _LAST_RESTORE[0] = 0.0
 
 
 def restore_wechat(win: dict, log=None, wait: float = 15.0) -> bool:
@@ -241,16 +249,20 @@ def restore_wechat(win: dict, log=None, wait: float = 15.0) -> bool:
         return False
 
     hwnd = win["hwnd"]
-    # 15 秒内只唤起一次：两次 ensure 并发时重复拉起会被微信忽略，反而拖慢
+    # 15 秒内只唤起一次：两次 ensure 并发时重复拉起会被微信忽略，反而拖慢。
+    # 检查 + 占坑放进同一把锁（L6）：否则两个线程能同时通过检查、各拉起一次。
     now = time.time()
-    if now - _LAST_RESTORE[0] < 15:
+    with _RESTORE_LOCK:
+        recent = now - _LAST_RESTORE[0] < 15
+        if not recent:
+            _LAST_RESTORE[0] = now
+    if recent:
         deadline = now + 2.0
         while time.time() < deadline:
             if tree_state(hwnd, timeout=0.5) == "ok":
                 return True
             time.sleep(0.3)
         return False
-    _LAST_RESTORE[0] = now
 
     try:
         import psutil
@@ -261,12 +273,14 @@ def restore_wechat(win: dict, log=None, wait: float = 15.0) -> bool:
             exe = None
         if not exe or not os.path.exists(exe):
             say("UIA 自检：找不到 Weixin.exe 路径，没法自动打开微信窗口")
+            _release_restore_slot()
             return False
 
         say("UIA 自检：微信窗口是隐藏的（托盘态），自动唤起一次让它重建控件树…")
         subprocess.Popen([exe], cwd=os.path.dirname(exe), close_fds=True)
     except Exception as e:                      # noqa: BLE001
         say("UIA 自检：唤起微信失败：%r" % (e,))
+        _release_restore_slot()
         return False
 
     deadline = time.time() + max(1.0, wait)
@@ -283,6 +297,7 @@ def restore_wechat(win: dict, log=None, wait: float = 15.0) -> bool:
     if not ok:
         if callable(log):
             log("UIA 自检：唤起了微信，但 %.0f 秒内控件树没出来" % wait)
+        _release_restore_slot()
         return False
 
     # 需求：微信在托盘时要让它显示出来，而且建完树之后**不能再缩回托盘**
@@ -346,8 +361,14 @@ def launch_wechat(log=None, wait: float = 15.0):
     return win, False
 
 # ── 物化 ───────────────────────────────────────────────────────────
+# kernel32 按 use_last_error=True 加载（对照 bg_sender.py 的 user32 写法）：
+# 只有这样 ctypes.get_last_error() 才拿得到 OpenProcess 的真实错误码，
+# err==5 的「桥接需要提权」提示才可信（L6；旧的 ctypes.windll 拿到的是假值）。
+kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+
 def _open_process(pid: int):
-    k32 = ctypes.windll.kernel32
+    k32 = kernel32
     k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
     k32.OpenProcess.restype = ctypes.c_void_p
     k32.ReadProcessMemory.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
@@ -509,6 +530,11 @@ def ensure(prefer_hwnd: int = 0, log=None, max_candidates: int = 6,
 
     # 4.2 上最常见的情形：窗口缩在托盘里，UI 子树被销毁 → 先让它正常打开一次
     if restore_wechat(win, log=log):
+        # restore 内部 win.update(w2) 可能已经换到新窗口（H6）：返回值必须从
+        # 更新后的 win 重新取，别用上面 504 行的旧局部变量（对照下面延迟分支
+        # 拿 w2["hwnd"] 的写法），否则 engine 会把过期 hwnd 写进 ACCOUNT。
+        hwnd, pid = win["hwnd"], win["pid"]
+        version = win.get("version") or version
         say(f"UIA 自检：微信 {version} 窗口已唤起，控件树重建成功")
         return {"ok": True, "reason": "restored", "hwnd": hwnd, "pid": pid,
                 "version": version, "tree": "ok"}

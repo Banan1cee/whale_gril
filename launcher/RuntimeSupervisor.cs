@@ -230,9 +230,10 @@ namespace WhaleLauncher
             StartBridge();
         }
 
-        public void RestartBridge()
+        /// <summary>重启桥接。异步等旧进程退出，不再卡 UI 线程（M31）。</summary>
+        public async Task RestartBridgeAsync()
         {
-            Kill(_bridge, "B", "桥接");
+            await KillAsync(_bridge, "B", "桥接").ConfigureAwait(false);
             _bridge = null;
             StartBridge();
         }
@@ -280,15 +281,16 @@ namespace WhaleLauncher
             try { return p.ExitCode.ToString(); } catch { return "?"; }
         }
 
-        public void StopAll()
+        /// <summary>停止全部进程。异步版：UI 线程不再同步 WaitForExit（M31：原来最长冻结 6 秒）。</summary>
+        public async Task StopAllAsync()
         {
-            Kill(_bridge, "B", "桥接");
-            Kill(_node, "K", "内核");
+            await KillAsync(_bridge, "B", "桥接").ConfigureAwait(false);
+            await KillAsync(_node, "K", "内核").ConfigureAwait(false);
             _bridge = null;
             _node = null;
         }
 
-        private void Kill(Process p, string src, string what)
+        private async Task KillAsync(Process p, string src, string what)
         {
             if (p == null) return;
             try
@@ -296,7 +298,9 @@ namespace WhaleLauncher
                 if (!p.HasExited)
                 {
                     p.Kill(entireProcessTree: true);
-                    p.WaitForExit(3000);
+                    // 等退出改成异步：原来 WaitForExit(3000) 同步阻塞 UI 线程（M31）。
+                    // ConfigureAwait(false)：Dispose 里同步等它收尾也不会和 UI 线程互锁。
+                    await Task.WhenAny(p.WaitForExitAsync(), Task.Delay(3000)).ConfigureAwait(false);
                     Emit(src, $"已停止{what}");
                 }
             }
@@ -423,7 +427,8 @@ namespace WhaleLauncher
         public void Dispose()
         {
             _http.Dispose();
-            StopAll();
+            // 退出时同步收尾，别把内核/桥接留成孤儿；KillAsync 内部 ConfigureAwait(false)，这里等不会死锁
+            StopAllAsync().GetAwaiter().GetResult();
         }
     }
 }

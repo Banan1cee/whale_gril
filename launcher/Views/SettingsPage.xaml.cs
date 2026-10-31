@@ -47,6 +47,8 @@ namespace WhaleLauncher.Views
         private Action<JsonElement> _loadAbout;
         private Dictionary<string, JsonElement> _providers;
         private bool _loading;
+        private bool _configLoaded;      // 已经成功全量回填过一次（M30：周期刷新据此判断要不要补）
+        private bool _loadingConfig;     // 全量回填在途，防止载入和定时器双跑
         private DateTime _lastLoad = DateTime.MinValue;
         private string _configFile = "";
         private string _dataDir = "";
@@ -68,7 +70,7 @@ namespace WhaleLauncher.Views
             InitializeComponent();
             _sup = sup;
             BuildOnce();
-            Loaded += async (_, __) => { MainScroll.ScrollToTop(); await RefreshAsync(); };
+            Loaded += async (_, __) => { MainScroll.ScrollToTop(); await LoadConfigAsync(); };   // 页面载入才全量回填（M30）
         }
 
         // ── 全部设置清单（启动器是唯一界面）────────────────────────
@@ -517,7 +519,7 @@ namespace WhaleLauncher.Views
                         if (_loading) return;
                         await PatchAsync(f.Path, ((CheckBox)s).IsChecked == true ? "true" : "false");
                     };
-                    _loaders[f.Path] = v => { _loading = true; chk.IsChecked = v.ValueKind == JsonValueKind.True; _loading = false; };
+                    _loaders[f.Path] = v => { if (chk.IsKeyboardFocusWithin) return; _loading = true; chk.IsChecked = v.ValueKind == JsonValueKind.True; _loading = false; };
                     return Row(f.Label, chk, f.Hint);
                 }
                 case "select":
@@ -530,6 +532,7 @@ namespace WhaleLauncher.Views
                     };
                     _loaders[f.Path] = v =>
                     {
+                        if (cmb.IsKeyboardFocusWithin) return;   // 正在编辑就不覆盖（M30）
                         _loading = true;
                         cmb.SelectedItem = v.ValueKind == JsonValueKind.String ? v.GetString() : null;
                         _loading = false;
@@ -559,6 +562,7 @@ namespace WhaleLauncher.Views
                     };
                     _loaders[f.Path] = v =>
                     {
+                        if (box.IsKeyboardFocusWithin) return;   // 正在编辑就不覆盖（M30）
                         _loading = true;
                         box.Text = v.ValueKind == JsonValueKind.Array
                             ? string.Join("\n", v.EnumerateArray().Select(x => x.ToString()))
@@ -585,6 +589,7 @@ namespace WhaleLauncher.Views
                     };
                     _loaders[f.Path] = v =>
                     {
+                        if (box.IsKeyboardFocusWithin) return;   // 正在编辑就不覆盖（M30）
                         _loading = true;
                         box.Text = v.ValueKind == JsonValueKind.Number
                             ? (f.IsInt ? Math.Round(v.GetDouble()).ToString() : v.GetDouble().ToString("0.###"))
@@ -603,6 +608,7 @@ namespace WhaleLauncher.Views
                     };
                     _loaders[f.Path] = v =>
                     {
+                        if (box.IsKeyboardFocusWithin) return;   // 正在编辑就不覆盖（M30）
                         _loading = true;
                         box.Text = v.ValueKind == JsonValueKind.String ? (v.GetString() ?? "")
                             : (v.ValueKind == JsonValueKind.Array ? string.Join(",", v.EnumerateArray().Select(x => x.ToString())) : "");
@@ -701,11 +707,12 @@ namespace WhaleLauncher.Views
                 cmb.ItemsSource = null;
                 cmb.ItemsSource = items;
                 var cur = GetStr(set, "provider");
-                cmb.SelectedItem = items.FirstOrDefault(x => x.Key == cur);
-                baseUrl.Text = GetStr(set, "baseUrl");
-                model.Text = GetStr(set, "model");
-                mock.IsChecked = set.ValueKind == JsonValueKind.Object && set.TryGetProperty("mock", out var m) && m.ValueKind == JsonValueKind.True;
-                owner.Text = GetStr(set, "userName");
+                // 回填前跳过正在编辑的控件，别把用户没保存的输入冲掉（M30）
+                if (!cmb.IsKeyboardFocusWithin) cmb.SelectedItem = items.FirstOrDefault(x => x.Key == cur);
+                if (!baseUrl.IsKeyboardFocusWithin) baseUrl.Text = GetStr(set, "baseUrl");
+                if (!model.IsKeyboardFocusWithin) model.Text = GetStr(set, "model");
+                if (!mock.IsKeyboardFocusWithin) mock.IsChecked = set.ValueKind == JsonValueKind.Object && set.TryGetProperty("mock", out var m) && m.ValueKind == JsonValueKind.True;
+                if (!owner.IsKeyboardFocusWithin) owner.Text = GetStr(set, "userName");
                 _loading = false;
             };
             return card;
@@ -789,54 +796,72 @@ namespace WhaleLauncher.Views
         }
 
         // ── 读写 ────────────────────────────────────────────────
+        /// <summary>
+        /// 周期刷新（MainWindow 2 秒定时器驱动）：只更新状态行，不动表单——
+        /// 否则会把用户正在编辑的值冲掉，随后 LostFocus 又把旧值写回服务端（M30）。
+        /// 全量回填只在页面载入（Loaded）做；表单还没载入过（比如内核后启动）时补一次。
+        /// </summary>
         public async Task RefreshAsync()
         {
             if (!_sup.NodeRunning)
             {
                 KernelHint.Text = "内核没起，设置读不到也存不了。点顶栏 ⏻ 启动。";
+                _configLoaded = false;
                 return;
             }
             KernelHint.Text = "改完立即写回 config.json（密钥留空表示不改）";
-            if ((DateTime.Now - _lastLoad).TotalSeconds < 5) return;
-            _lastLoad = DateTime.Now;
-            await LoadConfigAsync();
+            if (!_configLoaded) await LoadConfigAsync();      // 还没回填过，补一次
+            await ResolveContactNamesAsync();                 // 只补联系人显示名，不动表单
         }
 
+        /// <summary>全量回填：把服务端的值刷回所有表单控件（跳过正在编辑的）。</summary>
         private async Task LoadConfigAsync()
         {
-            var cfg = await Api.Get(_sup.Url, "/api/config");
-            if (!cfg.Ok) return;
-            var settings = await Api.Get(_sup.Url, "/api/settings");
-            var config = cfg.Prop("config");
-            _loading = true;
+            if ((DateTime.Now - _lastLoad).TotalSeconds < 5) return;   // 节流：≥5 秒一次（照 SettingsPage 原有做法）
+            if (_loadingConfig) return;
+            _loadingConfig = true;
+            _lastLoad = DateTime.Now;
             try
             {
-                foreach (var kv in _loaders)
-                    kv.Value(GetPath(config, kv.Key));
-            }
-            finally { _loading = false; }
+                var cfg = await Api.Get(_sup.Url, "/api/config");
+                if (!cfg.Ok) return;
+                var settings = await Api.Get(_sup.Url, "/api/settings");
+                var config = cfg.Prop("config");
+                _loading = true;
+                try
+                {
+                    foreach (var kv in _loaders)
+                        kv.Value(GetPath(config, kv.Key));
+                }
+                finally { _loading = false; }
 
-            if (settings.Ok)
+                if (settings.Ok)
+                {
+                    var provs = new Dictionary<string, JsonElement>();
+                    var p = settings.Prop("providers");
+                    if (p.ValueKind == JsonValueKind.Object)
+                        foreach (var it in p.EnumerateObject()) provs[it.Name] = it.Value;
+                    _loadModel?.Invoke(settings.Root, provs);
+                    _loadVision?.Invoke(settings.Root);
+                }
+                _loadAbout?.Invoke(cfg.Root);
+                _configLoaded = true;
+
+                var ver = "4.0";
+                var pkg = Path.Combine(AppContext.BaseDirectory, "package.json");
+                if (File.Exists(pkg))
+                {
+                    var m = System.Text.RegularExpressions.Regex.Match(File.ReadAllText(pkg), "\"version\"\\s*:\\s*\"([^\"]+)\"");
+                    if (m.Success) ver = m.Groups[1].Value;
+                }
+                AboutText.Text = "鲸鲸 " + ver + " · 启动器 4.0";
+
+                await ResolveContactNamesAsync();
+            }
+            finally
             {
-                var provs = new Dictionary<string, JsonElement>();
-                var p = settings.Prop("providers");
-                if (p.ValueKind == JsonValueKind.Object)
-                    foreach (var it in p.EnumerateObject()) provs[it.Name] = it.Value;
-                _loadModel?.Invoke(settings.Root, provs);
-                _loadVision?.Invoke(settings.Root);
+                _loadingConfig = false;
             }
-            _loadAbout?.Invoke(cfg.Root);
-
-            var ver = "4.0";
-            var pkg = Path.Combine(AppContext.BaseDirectory, "package.json");
-            if (File.Exists(pkg))
-            {
-                var m = System.Text.RegularExpressions.Regex.Match(File.ReadAllText(pkg), "\"version\"\\s*:\\s*\"([^\"]+)\"");
-                if (m.Success) ver = m.Groups[1].Value;
-            }
-            AboutText.Text = "鲸鲸 " + ver + " · 启动器 4.0";
-
-            await ResolveContactNamesAsync();
         }
 
         private static JsonElement GetPath(JsonElement root, string dotted)

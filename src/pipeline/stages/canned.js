@@ -9,58 +9,42 @@
  *
  * 什么时候该放这里：**不需要模型、不需要上下文压缩、只靠一条正则就能决定**的回复。
  * 需要读历史/拼 prompt 的留在 decide() 里。
+ *
+ * 现在分成两步调用（M19）：
+ *   dismissReply() —— 「让她滚/走吧/闭嘴」这类退场分支，chat.js 里**提前**调用：
+ *       被赶走要先回一句再进静默，不能被静音/触发判断挡掉；
+ *   cannedReply()  —— 其余固定话术，chat.js 里挪到**静音/禁言/限流闸门之后**调用：
+ *       以前它们排在所有闸门前面，mute、禁言群、静默期、burst_limit 全挡不住。
  */
 
 const persona = require('../../persona');
 
+/** 授权条目的到期时间：兼容旧版「纯数字」存法和新版 { expires, name } 对象 */
+function consentExpires(entry) {
+  return Number(entry && typeof entry === 'object' ? entry.expires : entry) || 0;
+}
+
 /**
+ * 吐槽授权表清理：删掉超过 30 分钟的过期键。
+ * 以前这表只增不删，越聊越大（M26）；现在写入/读取时都顺手清一遍。
+ */
+function pruneConsent(consent, nowMs) {
+  for (const k of Object.keys(consent)) {
+    if (consentExpires(consent[k]) <= nowMs) delete consent[k];
+  }
+  return consent;
+}
+
+/**
+ * 退场分支：「让她滚 / 走吧 / 闭嘴 / 安静」→ 回一句就进静默，之后不再接。
+ * 必须在静音/禁言等闸门**之前**处理：被赶走也得先应一声，否则群里会永远没交代。
+ *
  * @param {object} bot  需要 bot.store / bot.config / bot.rng / bot.logger
- * @param {object} ctx
- * @param {object} ctx.msg
- * @param {string} ctx.text        清洗后的正文
- * @param {boolean} ctx.isGroup
- * @param {boolean} ctx.isMaster
- * @param {boolean} ctx.atMe
- * @param {object} ctx.state       会话状态（会写 consent / silentUntil 等）
- * @param {number} ctx.nowMs
- * @param {string} ctx.key
+ * @param {object} ctx  同 cannedReply
  * @returns {object|null} decision
  */
-function cannedReply(bot, { msg, text, isGroup, isMaster, atMe, state, nowMs, key }) {
+function dismissReply(bot, { msg, text, isGroup, isMaster, atMe, state, nowMs, key }) {
   const ask = String(text || '').trim();
-
-  // 群成员发言次数排名已按用户要求删除：不再统计任何人说了几句，
-  // 「群里都有谁 / 谁最活跃」交给模型正常回答。
-
-  // 查自己的微信号（只告诉主人）
-  if (/我(的)?微信(号)?(是)?(多少|啥|什么)/.test(ask)) {
-    const canned = isMaster ? `你的微信号是 ${msg.senderId || '未知'}` : '这个不告诉你';
-    return { action: 'reply', key, msg, atMe, canned, reason: 'self_wxid' };
-  }
-
-  // 「可以骂我吗」→ 记下 30 分钟授权
-  if (/(可以|能)(损|骂)我|来(损|骂)我/.test(ask)) {
-    state.consent = state.consent || {};
-    state.consent[String(msg.senderName || msg.senderId || '')] = nowMs + 30 * 60000;
-    return { action: 'reply', key, msg, atMe, canned: '行，那你别后悔', reason: 'consent' };
-  }
-
-  // 主人点名吐槽三句（对方必须先同意）
-  if (isMaster && /(骂|损)/.test(ask) && /(三句|3句)/.test(ask)) {
-    const m = ask.match(/@([^\s@]+)/);
-    const target = m && m[1];
-    if (!target) return { action: 'reply', key, msg, atMe, canned: '要骂谁？@他一下', reason: 'roast_no_target' };
-    const until = Number((state.consent || {})[target] || 0);
-    if (until <= nowMs) return { action: 'reply', key, msg, atMe, canned: `${target} 没同意，我不骂`, reason: 'roast_no_consent' };
-    const three = [];
-    // 主人点名吐槽走「轻」档：好笑但不下脏口，毕竟对方是自愿配合的
-    for (let i = 0; i < 3; i += 1) {
-      const line = persona.clapbackPick(['轻', '一般'], bot.rng);
-      if (line && !three.includes(line)) three.push(line);
-    }
-    const canned = `@${target} ` + three.join('，');
-    return { action: 'reply', key, msg, atMe, canned, reason: 'roast' };
-  }
 
   // 「没你事儿了，走吧」→ 回一句就退场，之后不再接
   const dismissClean = ask.replace(/^[\s，,。.!！~～、]+|[\s，,。.!！~～、…]+$/g, '');
@@ -95,6 +79,73 @@ function cannedReply(bot, { msg, text, isGroup, isMaster, atMe, state, nowMs, ke
       reason: 'dismissed',
     };
   }
+  return null;
+}
+
+/**
+ * @param {object} bot  需要 bot.store / bot.config / bot.rng / bot.logger
+ * @param {object} ctx
+ * @param {object} ctx.msg
+ * @param {string} ctx.text        清洗后的正文
+ * @param {boolean} ctx.isGroup
+ * @param {boolean} ctx.isMaster
+ * @param {boolean} ctx.atMe
+ * @param {object} ctx.state       会话状态（会写 consent / silentUntil 等）
+ * @param {number} ctx.nowMs
+ * @param {string} ctx.key
+ * @returns {object|null} decision
+ */
+function cannedReply(bot, { msg, text, isGroup, isMaster, atMe, state, nowMs, key }) {
+  const ask = String(text || '').trim();
+  // 这些分支不看 atMe 就能触发，群里旁人随口一句话（子串就命中）会被误登记/误回答。
+  // 群聊没 @ 不接，私聊照旧。
+  const canAnswer = Boolean(atMe) || !isGroup;
+
+  // 群成员发言次数排名已按用户要求删除：不再统计任何人说了几句，
+  // 「群里都有谁 / 谁最活跃」交给模型正常回答。
+
+  // 查自己的微信号（只告诉主人）
+  if (canAnswer && /我(的)?微信(号)?(是)?(多少|啥|什么)/.test(ask)) {
+    const canned = isMaster ? `你的微信号是 ${msg.senderId || '未知'}` : '这个不告诉你';
+    return { action: 'reply', key, msg, atMe, canned, reason: 'self_wxid' };
+  }
+
+  // 「可以骂我吗」→ 记下 30 分钟授权。
+  // 以前的坑（M26）：①按 senderName 存键，同名的人能冒用对方的授权；
+  // ②授权表只增不删，越聊越大。现在键用 senderId（没有 id 才用昵称），
+  // 昵称另外记进条目里供 @ 查找；写入时清掉超过 30 分钟的过期键。
+  if (canAnswer && /(可以|能)(损|骂)我|来(损|骂)我/.test(ask)) {
+    const consent = pruneConsent(state.consent = state.consent || {}, nowMs);
+    const cid = String(msg.senderId || msg.senderName || '');
+    consent[cid] = { expires: nowMs + 30 * 60000, name: String(msg.senderName || '') };
+    return { action: 'reply', key, msg, atMe, canned: '行，那你别后悔', reason: 'consent' };
+  }
+
+  // 主人点名吐槽三句（对方必须先同意）
+  if (canAnswer && isMaster && /(骂|损)/.test(ask) && /(三句|3句)/.test(ask)) {
+    // @ 捕获收紧（M26）：以前 @[^\s@]+ 太贪，「@小明骂他三句」把整句尾巴吞进 target，
+    // 授权键对不上、提示里还带着半句话。
+    const m = ask.match(/@([^\s@，,。!？?]+)/);
+    const target = m && m[1];
+    if (!target) return { action: 'reply', key, msg, atMe, canned: '要骂谁？@他一下', reason: 'roast_no_target' };
+    // 键是 senderId：@ 到的通常是昵称，直接查键查不到，再按登记时的昵称找一次
+    const consent = pruneConsent(state.consent = state.consent || {}, nowMs);
+    let until = consentExpires(consent[target]);
+    if (!until) {
+      for (const entry of Object.values(consent)) {
+        if (entry && typeof entry === 'object' && entry.name === target) { until = consentExpires(entry); break; }
+      }
+    }
+    if (until <= nowMs) return { action: 'reply', key, msg, atMe, canned: `${target} 没同意，我不骂`, reason: 'roast_no_consent' };
+    const three = [];
+    // 主人点名吐槽走「轻」档：好笑但不下脏口，毕竟对方是自愿配合的
+    for (let i = 0; i < 3; i += 1) {
+      const line = persona.clapbackPick(['轻', '一般'], bot.rng);
+      if (line && !three.includes(line)) three.push(line);
+    }
+    const canned = `@${target} ` + three.join('，');
+    return { action: 'reply', key, msg, atMe, canned, reason: 'roast' };
+  }
 
   // 「休息模式」（我去玩了 / 我回来了 / away.json 排队补发）已按用户要求整段删除：
   // 桥接不再因游戏或离开而暂停发送，也不再排队补发。
@@ -102,4 +153,4 @@ function cannedReply(bot, { msg, text, isGroup, isMaster, atMe, state, nowMs, ke
   return null;
 }
 
-module.exports = { cannedReply };
+module.exports = { cannedReply, dismissReply };

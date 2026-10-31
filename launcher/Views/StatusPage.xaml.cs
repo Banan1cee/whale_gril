@@ -190,7 +190,7 @@ namespace WhaleLauncher.Views
         private async void OnRestartBridge(object sender, RoutedEventArgs e)
         {
             _sup.Say("— 从状态页重启桥接 —");
-            _sup.RestartBridge();
+            await _sup.RestartBridgeAsync();
             await Task.Delay(500);
             await RefreshAsync();
         }

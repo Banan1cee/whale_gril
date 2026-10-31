@@ -74,9 +74,6 @@ LOG_LEVEL = "info"
 _LOG_ERROR_HINT = ("错误", "失败", "异常", "超时", "Traceback", "Exception", "Error", "error:", "❌")
 _LOG_DEBUG_HINT = ("跳过", "忽略", "热激活", "布局", "轮询", "重试", "装死", "收到")
 
-# 提醒调度器：main() 里构造；模块级是为了让退出分支能拿到它
-REMINDER_RUNNER = None
-
 # 只回复这些会话（留空 = 全部会话都交给鲸鲸判断）
 # 例如 ["文件传输助手", "深海鱼塘"]
 ONLY_CHATS = []
@@ -101,6 +98,40 @@ CARE_ALLOW_OTHERS = False
 CARE_QUIET_MIN = 20.0
 # Fail closed even when an earlier setting makes startup config parsing fail.
 STICKER_TEST_ON = False
+# 账号名同样必须在启动配置解析失败时存在（M12）：它丢了，config_watch 会把
+# 「没解析出来」误判成「账号变了」，走 os._exit(7) 无限重启。
+ACCOUNT_WANTED = ""
+
+# 提醒调度器：main() 里构造；模块级是为了让退出分支能拿到它
+REMINDER_RUNNER = None
+# 消息汇总 worker 尚未实现（Node 侧 src/memory/digest 做汇总，桥接侧常驻 worker 还没写）。
+# 先定义成 None：reload_config / 退出清理引用它时不再 NameError（H1）。
+DIGEST_WORKER = None
+# 发送状态（单一 owner：send_text / send_at / send_sticker 的临界区上下文）。
+# 放模块级是为了让 reload_config 的「账号变更 → 重启」路径能等到在途发送结束（M16）。
+# budget：看门狗预算，按文本长度动态放宽（H3），见 _SendStateScope。
+SEND_STATE = {"active": False, "start": 0.0, "budget": 40.0}
+
+
+class _SendStateScope:
+    """发送临界区的看门狗心跳（M7/H3）：进区置位、出区清零，单一 owner 写 SEND_STATE。
+
+    预算按文本长度动态放宽：bg 通道逐字投递，长文本单打字就要一两分钟，
+    旧的「固定 40 秒一刀切」会把这种合法慢发送当卡死杀掉（H3）。
+    """
+
+    def __init__(self, text_len=0):
+        self.budget = max(40.0, float(text_len or 0) * 0.12)
+
+    def __enter__(self):
+        SEND_STATE["active"] = True
+        SEND_STATE["start"] = time.time()
+        SEND_STATE["budget"] = self.budget
+        return self
+
+    def __exit__(self, *exc):
+        SEND_STATE["active"] = False
+        return False
 
 
 def _as_bool(value, default=False):
@@ -116,6 +147,25 @@ def _as_bool(value, default=False):
     if isinstance(value, (int, float)):
         return value != 0
     return str(value).strip().lower() in ("1", "true", "yes", "on", "开")
+
+
+def _as_int(value, default=0):
+    """配置里的整数：写成 "123" 也认，坏值给默认值，绝不让一个字段炸掉整段解析（M12）。"""
+    try:
+        return int(value)
+    except Exception:
+        try:
+            return int(float(value))
+        except Exception:
+            return default
+
+
+def _as_float(value, default=0.0):
+    """配置里的小数：坏值给默认值，绝不让一个字段炸掉整段解析（M12）。"""
+    try:
+        return float(value)
+    except Exception:
+        return default
 
 
 def _parse_bg_send(wechat_cfg):
@@ -187,12 +237,15 @@ try:
     # 上游 3.9 起不再有「打游戏就休息 / 离开回来打招呼 / 忙时排队补发」：
     # gameWhitelist / awayNotice / returnNotice / queuedMax* 这些键即使还留在
     # 旧 config.json 里也不再读取（写权限不在这里，配置本身由前面那一步清理）。
-    # 引用回复要额外走一遍「悬停消息 → 点回复 → 输入」，实测一条能慢好几秒；默认关
-    QUOTE_REPLY = bool(_wechat.get("quoteReply", False))
+    # 引用回复要额外走一遍「悬停消息 → 点回复 → 输入」，实测一条能慢好几秒；默认关。
+    # 旧写法 QUOTE_REPLY = bool(_wechat.get("quoteReply", False)) 会把字符串 "false" 当 True，
+    # 布尔配置统一走 _as_bool（M11）；上面这行旧写法保留作对照（默认值仍是 False）。
+    QUOTE_REPLY = _as_bool(_wechat.get("quoteReply", False), False)
     # UIA 彻底发不出去时，退到「Ctrl+F 搜索会话 → 粘贴 → 回车」的键盘通道（会抢前台）
-    KEYBOARD_FALLBACK = bool(_wechat.get("keyboardFallback", True))
+    KEYBOARD_FALLBACK = _as_bool(_wechat.get("keyboardFallback", True), True)
     # 后台发送：不抢前台直接发（实测最小化/被遮挡也能发）。false = 每次先把微信拉到前台
-    BACKGROUND_SEND = bool(_wechat.get("backgroundSend", True))
+    # 旧写法 BACKGROUND_SEND = bool(_wechat.get("backgroundSend", True)) 同样会把 "false" 当 True（M11）
+    BACKGROUND_SEND = _as_bool(_wechat.get("backgroundSend", True), True)
     # 零焦点通道（bridge/bg_sender.py）：真正不碰前台的发送方式。
     # 和上面那个 backgroundSend 的区别：backgroundSend 是「尽量少占前台，失败就拉前台」，
     # bgSend 是「结构上不碰前台，做不到就退回旧通道」。
@@ -215,12 +268,13 @@ try:
     # 多账号（同时登着大号 + 小号）：启动时钉死在 wechat.account 指定的那个号上，
     # 发送前再确认「要发消息的那个窗口就是这个号」；认不出来宁可不发，也不从别的号发。
     # accountGuard=false 只用于「本机确实只登一个号、但窗口读取时好时坏」的兜底。
-    ACCOUNT_GUARD = bool(_wechat.get("accountGuard", True))
+    ACCOUNT_GUARD = _as_bool(_wechat.get("accountGuard", True), True)
     # 手动钉窗口（调试用）：填微信主窗的 hwnd，直接用它，跳过自动识别
-    WINDOW_HWND = int(_wechat.get("windowHwnd") or 0)
-    # 网页「设置」里选的账号（目录名 / wxid / 昵称都行）；留空 = 自动选「最近活跃」
-    ACCOUNT_WANTED = str(_wechat.get("account") or "").strip()
-    LOW_BATTERY_PCT = float(_wechat.get("lowBatteryPercent", 5))
+    # 强转换都走安全 helper（M12）：一个坏值不该让后面的配置全都不解析。
+    WINDOW_HWND = _as_int(_wechat.get("windowHwnd"), 0)
+    # 网页「设置」里选的账号（目录名 / wxid / 昵称都行）；留空 = 自动选「最近活跃」。
+    # 这个键最关键，见大 try 结束后的独立兜底解析（M12）。
+    LOW_BATTERY_PCT = _as_float(_wechat.get("lowBatteryPercent", 5), 5)
     GOODNIGHT_TEXT = str(_wechat.get("goodnightText", "晚安，电量快没了，我先睡啦，明天见～"))
     # 主动搭话（问「在干啥 / 累不累」）。时间窗和频率由服务端 /api/care/due 算，这里只留一个开关和静默期
     _care = _cfg.get("care") or {}
@@ -230,12 +284,24 @@ try:
     CARE_ALLOW_GROUPS = _as_bool(_care.get("allowGroups", False), False)
     CARE_ONLY_MASTER = _as_bool(_care.get("onlyMaster", True), True)
     CARE_ALLOW_OTHERS = _as_bool(_care.get("allowOthers", False), False)
-    CARE_QUIET_MIN = float(_care.get("quietAfterMinutes", 20) or 0)
+    CARE_QUIET_MIN = _as_float(_care.get("quietAfterMinutes", 20) or 0, 20.0)
     # 表情包（实验性）：总闸在 features.stickers。关着就不轮询、不发图、日志一句不提。
     STICKER_TEST_ON = _as_bool(((_cfg.get("features") or {}).get("stickers", False)), False)
     MASTER_WXID = (((_cfg.get("persona") or {}).get("master") or {}).get("wxids") or [''])[0]
-except Exception:
-    pass
+except Exception as _boot_cfg_err:                # noqa: BLE001
+    # 以前这里 except: pass：一个坏值把后续解析全截断了都不知道（M12）。
+    # log() 在本块之后才定义，先 try 它、拿不到就 print，绝不让兜底自己再炸。
+    try:
+        log("启动配置解析中断：", repr(_boot_cfg_err))
+    except Exception:
+        print("[启动配置解析中断]", repr(_boot_cfg_err))
+
+# ACCOUNT_WANTED 独立兜底（M12）：上面大 try 里任何坏值把解析截断，都不能把账号键弄丢——
+# 它丢了 config_watch 会把「没解析出来」误判成「账号变了」，os._exit(7) 重启死循环。
+try:
+    ACCOUNT_WANTED = str(((_cfg.get("wechat") or {}).get("account")) or "").strip()
+except Exception:                                 # noqa: BLE001
+    ACCOUNT_WANTED = ""
 
 START_TS = time.time()
 
@@ -341,9 +407,11 @@ def reload_config(path=None):
         LOW_BATTERY_PCT = float(w.get("lowBatteryPercent", 5))
     except Exception:
         pass
-    QUOTE_REPLY = bool(w.get("quoteReply", False))
-    KEYBOARD_FALLBACK = bool(w.get("keyboardFallback", True))
-    BACKGROUND_SEND = bool(w.get("backgroundSend", True))
+    # 旧写法 QUOTE_REPLY = bool(w.get("quoteReply", False)) 会把字符串 "false" 当 True（M11）；
+    # 保留这行作对照：热重载时默认也必须是 False。
+    QUOTE_REPLY = _as_bool(w.get("quoteReply", False), False)
+    KEYBOARD_FALLBACK = _as_bool(w.get("keyboardFallback", True), True)
+    BACKGROUND_SEND = _as_bool(w.get("backgroundSend", True), True)
     try:
         BG_SEND = _parse_bg_send(w)
     except Exception:
@@ -353,7 +421,7 @@ def reload_config(path=None):
         PIPELINE_QUEUE_LIMIT = max(1, min(32, int(w.get("pipelineQueueLimit", PIPELINE_QUEUE_LIMIT) or 4)))
     except Exception:
         pass
-    ACCOUNT_GUARD = bool(w.get("accountGuard", True))
+    ACCOUNT_GUARD = _as_bool(w.get("accountGuard", True), True)
     try:
         WINDOW_HWND = int(w.get("windowHwnd") or 0)
     except Exception:
@@ -363,6 +431,13 @@ def reload_config(path=None):
     if wanted_now != ACCOUNT_WANTED:
         log("账号设置变了（%r → %r），3 秒后自动重启桥接…" % (ACCOUNT_WANTED, wanted_now))
         time.sleep(3)
+        # 退出前等在途发送收尾（M16）：直接退会把半截草稿留在输入框、表情包停在 unconfirmed。
+        _restart_deadline = time.time() + 15
+        while SEND_STATE.get("active") and time.time() < _restart_deadline:
+            log("等待在途发送结束再重启（最多 15 秒）…")
+            time.sleep(1)
+        if SEND_STATE.get("active"):
+            log("⚠️ 仍有发送未结束就重启了，输入框可能留有半截草稿，请手动清一下")
         # bridge_loop.bat 把 exit code 7 当成「桥接自己要求重启」，3 秒后会用新配置拉起来。
         # 直接 os._exit 而不是 sys.exit：这里是后台线程，sys.exit 退不掉整个进程。
         os._exit(7)
@@ -384,7 +459,7 @@ def reload_config(path=None):
 
     vo = cfg.get("voice") or {}
     if "enabled" in vo:
-        VOICE_ENABLED = bool(vo.get("enabled"))
+        VOICE_ENABLED = _as_bool(vo.get("enabled"), False)
     if vo.get("baseUrl"):
         VOICE_BASE_URL = str(vo.get("baseUrl"))
     if vo.get("model"):
@@ -417,12 +492,14 @@ SYSTEM_SENDER_NAMES = {
     "微信团队", "微信支付", "服务通知", "订阅号消息", "文件传输助手",
     "微信运动", "微信公众平台", "腾讯客服", "微信安全中心", "微信广告",
 }
+# 系统会话名单的原始底表（热更新时以它为基准重新算，避免配置里的旧值越滚越多）。
+# 只快照固定表、**不含** ignoreSenders 合并结果（M10）：否则热更新「解除忽略」时，
+# 旧配置里加过的名字还留在底表里，永远摘不掉，会话被永久静默。
+BASE_SYSTEM_SENDERS = set(SYSTEM_SENDER_NAMES)
 try:
     SYSTEM_SENDER_NAMES |= {str(x).strip() for x in (_wechat.get("ignoreSenders") or []) if str(x).strip()}
 except Exception:
     pass
-# 系统会话名单的原始底表（热更新时以它为基准重新算，避免配置里的旧值越滚越多）
-BASE_SYSTEM_SENDERS = set(SYSTEM_SENDER_NAMES)
 
 # 微信 4.x 数据目录的常见名字（不同版本 / 不同安装方式会有差异）
 DB_ROOT_NAMES = ("xwechat_files", "WeChat Files", "xwechat_files_data")
@@ -649,15 +726,8 @@ def list_accounts_cli():
     return 0
 
 
-# 系统 / 公众号通知：只用来记录，不接话（否则会跟「微信团队」吵起来）
-SYSTEM_SENDER_NAMES = {
-    "微信团队", "微信支付", "服务通知", "订阅号消息", "文件传输助手",
-    "微信运动", "微信公众平台", "腾讯客服", "微信安全中心", "微信广告",
-}
-try:
-    SYSTEM_SENDER_NAMES |= {str(x).strip() for x in (_wechat.get("ignoreSenders") or []) if str(x).strip()}
-except Exception:
-    pass
+# （原先这里还有一份 SYSTEM_SENDER_NAMES 的重复定义，已删除（M10）：两处快照时机不同、
+#   互相覆盖，ignoreSenders 的热更新会打摆子。名单只在上面定义一次。）
 _SYSTEM_TEXT_RE = __import__("re").compile(r"<a\s+href=|weixin://|&lt;a\s+href=", __import__("re").I)
 # 同一会话同一句话的重复回复保护（秒）与每分钟回复上限
 DUP_REPLY_WINDOW = 45
@@ -711,7 +781,7 @@ def _resolve_voice_key(cfg):
 
 try:
     _voice_cfg = (_cfg.get("voice") or {})
-    VOICE_ENABLED = bool(_voice_cfg.get("enabled", True))
+    VOICE_ENABLED = _as_bool(_voice_cfg.get("enabled", True), True)
     VOICE_BASE_URL = str(_voice_cfg.get("baseUrl") or VOICE_BASE_URL)
     VOICE_MODEL = str(_voice_cfg.get("model") or VOICE_MODEL)
     VOICE_TIMEOUT = float(_voice_cfg.get("timeoutMs", 90000)) / 1000.0
@@ -1141,7 +1211,8 @@ def main():
     log("连接微信 4.x 数据库（只读）…")
     # token 一定要读到：读不到就是「她不理人」最隐蔽的原因（服务端会直接 401）
     if token:
-        log("webhook token：已读取（%s…）" % token[:6])
+        # 只报「已读取 + 长度」（M17）：日志按设计会外发给作者，token 前缀也是泄露
+        log("webhook token：已读取（长度 %d，内容不进日志）" % len(token))
     else:
         log("⚠️ webhook token 是空的！检查 config.json 的 gateway.wechat.inboundToken（文件要能正常解析）")
     db_dir = resolve_db_dir()
@@ -1201,6 +1272,9 @@ def main():
         log("  常见原因：微信没完全登录 / 数据库被占用 / 微信正在更新。")
         log("  处理：确认微信已登录 → 重启微信 → 再双击「启动微信桥接.bat」。")
         log("  如果反复卡住，把 data\\bridge-hang.log 和这段日志发给作者。")
+        # L2：说清楚孤儿线程——那个 open-db 线程还卡在 wechatauto 内部（找微信进程/取密钥），
+        # 杀不掉也回收不了，会留到本进程退出为止；下次启动是全新线程，不受它影响。
+        log("  注：卡住的 open-db 线程会作为孤儿线程留到进程退出，属已知现象，不影响下次启动。")
         return 2
     db = _db_box.get("db")
     _db_err = _db_box.get("err")
@@ -1217,6 +1291,14 @@ def main():
         log("     （填到 xwechat_files 这一层，不是里面的 wxid_xxx 目录）")
         log("  3) 保存后重新运行「启动微信桥接.bat」")
         log("  原始错误：%s" % e)
+        return 2
+    except Exception as e:
+        # 其它异常（解不开密钥 / 驱动异常…）也按「指引 + 退出码」分级处理（L2），
+        # 不再穿透出去把 main() 裸崩掉。
+        log("")
+        log("✗ 打开微信数据库失败（%s）：%s" % (type(e).__name__, e))
+        log("  按顺序检查：1) 微信 4.x 已登录？2) config.json 的 wechat.dbDir 填对没有；")
+        log("  3) 重跑「启动微信桥接.bat」；还不行就把这段日志发给作者。")
         return 2
 
     # 建库后硬断言：指定了账号就必须真的是那个账号。
@@ -1287,6 +1369,7 @@ def main():
         if username in name_cache:
             return name_cache[username]
         name = ""
+        ok = False
         try:
             if username.endswith("@chatroom"):
                 name = db.group_id_to_name(username) or ""
@@ -1295,10 +1378,14 @@ def main():
                     name = s.get("last_sender") or ""
             else:
                 name = db.get_nickname(username) or ""
+            ok = True
         except Exception:
             name = ""
         name = name or username
-        name_cache[username] = name
+        # 只缓存正结果（L1）：一次 DB 瞬断就把兜底值永久钉进缓存，
+        # 账号窗口按名字比对会跟着长期失配。
+        if ok and name != username:
+            name_cache[username] = name
         return name
 
     alias_cache = {}
@@ -1316,6 +1403,7 @@ def main():
         if key in alias_cache:
             return alias_cache[key]
         out = []
+        partial = False
         if shown and shown != username and not str(shown).endswith("@chatroom"):
             out.append(shown)
         if username and str(username).endswith("@chatroom"):
@@ -1323,6 +1411,7 @@ def main():
                 nm = db.group_id_to_name(username) or ""
             except Exception:
                 nm = ""
+                partial = True
             if nm and nm != username:
                 out.append(nm)
             try:
@@ -1336,11 +1425,14 @@ def main():
                 if nicks:
                     out.append("、".join(nicks))
             except Exception:
-                pass
+                partial = True
         if not out:
             out.append(shown or username)
         out = [x for x in dict.fromkeys(out) if x]
-        alias_cache[key] = out
+        # 和 display_name 同理（L1）：DB 瞬断凑出来的兜底别名不进缓存，
+        # 否则一次异常就把「成员名连起来」这类不完整候选钉死。
+        if not partial:
+            alias_cache[key] = out
         return out
 
     def chat_latest_seq(username):
@@ -1353,10 +1445,24 @@ def main():
     gui = None
     gui_lock = threading.Lock()
     send_lock = threading.Lock()
+    # 账号窗口「查 → 改 → 钉」必须互斥（M13）：4 个 worker 并发 check-then-act 会重复
+    # UIA 探测、把钉窗结果互相覆盖，偶发发错窗口。RLock：ensure_account_window 会在
+    # 内部再进 pick_account_window / rebind_uia。它只做叶子动作、不反向拿 send_lock/gui_lock，
+    # 既有顺序（send_lock → gui_lock）不变，不会引入死锁。
+    account_lock = threading.RLock()
+
+    def _account_locked(fn):
+        """把账号窗口绑定函数整体罩进 account_lock（见上面注释）。"""
+        def _wrap(*args, **kwargs):
+            with account_lock:
+                return fn(*args, **kwargs)
+        _wrap.__name__ = fn.__name__
+        return _wrap
+
     dead_chats = set()
     fail_streak = {}
     self_wxid = db.wxid
-    SEND_STATE = {"active": False, "start": 0.0}
+    # SEND_STATE 在模块级定义（reload_config 的「账号变更 → 重启」要能看到在途发送，M16）。
 
     # ---------- 多账号：把「读」和「发」钉在同一个号上 ----------
     # 微信 4.x 一个号一个进程，每个进程的主窗标题都叫「微信」。老逻辑按窗口面积挑，
@@ -1467,6 +1573,7 @@ def main():
                 pass
         return g
 
+    @_account_locked
     def rebind_uia(hwnd, engine=None):
         """把 UIA 引擎 + uia_compat 的钉窗 + GUI 目标全部对齐到 hwnd。"""
         hwnd = int(hwnd or 0)
@@ -1499,6 +1606,7 @@ def main():
             pass
         return True
 
+    @_account_locked
     def pick_account_window(force=False, quiet=False):
         """确认哪个微信窗口是 config/网页指定的账号，并钉死它。"""
         if ACCOUNT["verified"] and not force:
@@ -1596,6 +1704,7 @@ def main():
             % (h, len(scored), nhit, "，最新一条也在" if newest_ok else ""))
         return True
 
+    @_account_locked
     def ensure_account_window(engine=None):
         """发送前确认「锁定的微信窗口」还活着；微信重启/换号后自动重认。
 
@@ -1891,8 +2000,8 @@ def main():
              这样你在用电脑时最多看到它闪一下。
         把 wechat.backgroundSend 设成 false 就退回以前的「每次先抢前台、发完不管」。
         """
-        SEND_STATE["active"] = True
-        SEND_STATE["start"] = time.time()
+        # SEND_STATE 由 send_text / send_at 的临界区上下文统一置位和清零（M7）：
+        # 这里不写它，OCR 兜底的僵尸线程跑进来也污染不了看门狗状态（H2）。
         snap = snapshot_win_state() if BACKGROUND_SEND else None
         try:
             if BACKGROUND_SEND:
@@ -1907,7 +2016,6 @@ def main():
         finally:
             if BACKGROUND_SEND:
                 restore_win_state(snap)
-            SEND_STATE["active"] = False
 
     def force_foreground(hwnd):
         """把微信强制拉到前台，并且**确认真的到位**。
@@ -2046,6 +2154,9 @@ def main():
             import ctypes
             import win32gui
             import win32con
+            # H4：少了 win32api，下面 keybd_event 必抛 NameError 被吞，
+            # 同 try 里的 SetForegroundWindow 永远跑不到（前台还原主路径是死代码）。
+            import win32api
             wx = snap.get("hwnd")
             if wx and snap.get("iconic"):
                 try:
@@ -2063,8 +2174,9 @@ def main():
                     win32api.keybd_event(win32con.VK_MENU, 0, win32con.KEYEVENTF_KEYUP, 0)
                     time.sleep(0.04)
                     ctypes.windll.user32.SetForegroundWindow(fg)
-                except Exception:
-                    pass
+                except Exception as _e:          # noqa: BLE001
+                    # 以前 except: pass：ALT 解锁失败被吞掉，看不出还原为什么没生效
+                    log("还原前台重试 %d/3：%r" % (attempt + 1, _e))
                 time.sleep(0.12)
                 if ctypes.windll.user32.GetForegroundWindow() == fg:
                     return
@@ -2162,6 +2274,9 @@ def main():
                 strip_unencodable=BG_SEND.get("strip", True),
                 verify=BG_SEND.get("verify", True),
                 unhide=BG_SEND.get("unhide", True),
+                # L9：charMode 也要透传（CLI 路径一直传，常驻桥接漏了）：
+                # 版本探测静默回退 GBK 时，才能用配置纠正 WM_CHAR 的编码语义。
+                char_mode=BG_SEND.get("charMode") or "auto",
             )
         except Exception as e:                   # noqa: BLE001
             ok, why = False, "exception:" + type(e).__name__
@@ -2365,17 +2480,45 @@ def main():
             return False
 
         def set_clip(t):
+            opened = False
             for _ in range(5):
                 try:
                     win32clipboard.OpenClipboard()
+                    opened = True
                     break
                 except Exception:                  # noqa: BLE001
                     time.sleep(0.1)
+            if not opened:
+                # 5 次都打不开就明确失败（M6）：再往下 EmptyClipboard 只会抛错，
+                # 还会被 finally 的 CloseClipboard 二次异常把真因盖掉。
+                raise RuntimeError("剪贴板打不开（可能被别的程序占用）")
             try:
                 win32clipboard.EmptyClipboard()
                 win32clipboard.SetClipboardData(win32clipboard.CF_UNICODETEXT, t)
             finally:
-                win32clipboard.CloseClipboard()
+                win32clipboard.CloseClipboard()   # 只有真的 Open 成功过才走到这
+
+        def get_clip():
+            """读出剪贴板当前文本；没有文本/读不到返回 None（M6 还原用）。"""
+            for _ in range(5):
+                try:
+                    win32clipboard.OpenClipboard()
+                    try:
+                        return win32clipboard.GetClipboardData(win32clipboard.CF_UNICODETEXT)
+                    finally:
+                        win32clipboard.CloseClipboard()
+                except Exception:                  # noqa: BLE001
+                    time.sleep(0.1)
+            return None
+
+        def restore_clip(saved):
+            """发完把用户剪贴板还回去（M6）：以前发完剪贴板里一直留着要发的内容。"""
+            if saved is None:
+                return
+            try:
+                set_clip(saved)
+            except Exception as e:                 # noqa: BLE001
+                log("键盘通道：还原剪贴板失败：", repr(e))
 
         def tap(vk, mods=()):
             for m in mods:
@@ -2414,6 +2557,8 @@ def main():
                 pass
             return (cur in cands), cur
 
+        t_start = time.time()            # 发送起点：回读确认只认这之后的消息（M5）
+        saved_clip = get_clip()          # 进 set_clip 前先读出原内容，结束时还原（M6）
         try:
             # ① 搜索会话（微信的 Ctrl+F）
             tap(ord("F"), (win32con.VK_CONTROL,))
@@ -2436,22 +2581,32 @@ def main():
             tap(ord("V"), (win32con.VK_CONTROL,))
             time.sleep(0.4)
             tap(win32con.VK_RETURN)          # ④ 发送
+
+            # ⑤ 回读数据库确认这条真的发出去了（搜错会话时能立刻发现）。
+            #    只认「本次发送起点之后」的完整文本（M5）：旧的「最近 3 条 + 12 字符前缀」
+            #    对短文本/重复话术会命中旧消息，没发出去也算成功，消息就静默丢了。
+            want = str(text).strip()
+            for _ in range(8):
+                time.sleep(0.5)
+                try:
+                    msgs = db.get_messages(chat_username or chat_display_name, limit=5) or []
+                except Exception:
+                    msgs = []
+                for m in msgs:
+                    try:
+                        if float(m.get("create_time") or 0) <= t_start:
+                            continue
+                    except Exception:            # noqa: BLE001
+                        continue
+                    if str(m.get("content") or "").strip() == want:
+                        return True
+            log("键盘通道：按键发了，但数据库里没确认到（可能发到了别的会话），这条按失败处理")
+            return False
         except Exception as e:                 # noqa: BLE001
             log("键盘通道按键失败：", repr(e))
             return False
-
-        # ⑤ 回读数据库确认这条真的发出去了（搜错会话时能立刻发现）
-        for _ in range(8):
-            time.sleep(0.5)
-            try:
-                msgs = db.get_messages(chat_username or chat_display_name, limit=3) or []
-            except Exception:
-                msgs = []
-            for m in msgs:
-                if str(m.get("content") or "").strip()[:12] == str(text).strip()[:12]:
-                    return True
-        log("键盘通道：按键发了，但数据库里没确认到（可能发到了别的会话），这条按失败处理")
-        return False
+        finally:
+            restore_clip(saved_clip)   # 不管成败都把剪贴板还回去（M6）
 
     # Protected by send_lock. Feature OFF must not erase a latent attachment
     # draft: this guard protects ordinary text/@ sends too, without sending keys.
@@ -2593,7 +2748,7 @@ def main():
         """一次性、无导航的图片粘贴；只能向已在前台打开且聚焦的精确会话发送。"""
         if not job_id or not sticker_gate(generation, job_id):
             return sticker_result("cancelled", "stickers are disabled or generation expired")
-        with send_lock:
+        with send_lock, _SendStateScope(len(str(path or ""))):
             if not sticker_gate(generation, job_id):
                 return sticker_result("cancelled", "stickers are disabled or generation expired")
             if not sticker_quarantine_allows(chat_username, chat_display_name):
@@ -2613,9 +2768,21 @@ def main():
                     # 这里做同样的事：短暂抬到前台，粘贴前仍会重新校验会话标题/焦点/空输入框。
                     snap = snapshot_win_state()
                     if not force_foreground(hwnd) or not desktop.foreground(hwnd):
+                        # 早退也要把抢走的焦点还回去（M9）：下面那段 try 的 finally 罩不到这里
+                        try:
+                            restore_win_state(snap)
+                        except Exception:             # noqa: BLE001
+                            pass
+                        snap = None
                         return sticker_result("failed", "could not bring the WeChat window to the foreground")
                     log_throttled("sticker-foreground", "表情包：微信不在前台，先切过去（发完会把窗口还原）", ttl=120)
             except Exception:
+                # 早退同样要还原窗口状态（M9）
+                try:
+                    restore_win_state(snap)
+                except Exception:                     # noqa: BLE001
+                    pass
+                snap = None
                 return sticker_result("failed", "foreground safety checks are unavailable")
             try:
               with gui_lock:
@@ -2683,7 +2850,8 @@ def main():
                         return (os.path.normcase(os.path.abspath(latest_dir)) == os.path.normcase(os.path.abspath(directory))
                                 and wanted_hwnd in (0, hwnd))
 
-                    SEND_STATE["active"] = True
+                    # 进入真落键/粘贴段：刷新看门狗心跳（H3）。
+                    # 置位/清零由外层 _SendStateScope 统一负责（M7）。
                     SEND_STATE["start"] = time.time()
                     try:
                         outcome = guarded_sticker_send(
@@ -2696,8 +2864,6 @@ def main():
                     except Exception:
                         outcome = sticker_result("unconfirmed", "transport action is uncertain; a draft may remain; do not retry",
                                                  draft_may_remain=True)
-                    finally:
-                        SEND_STATE["active"] = False
                     if outcome.get("draft_may_remain") or outcome.get("status") == "unconfirmed":
                         sticker_draft_quarantine[canonical] = {
                             "hwnd": hwnd, "aliases": aliases,
@@ -2778,7 +2944,9 @@ def main():
         # 账号闸：认不出「哪个窗口是小号」就不发。其余安全检查保持原样。
         if not account_send_allowed("发送"):
             return False
-        with send_lock:
+        # _SendStateScope（M7）：进发送流程即置位 SEND_STATE、finally 即清，
+        # UIA/剪贴板/OCR 任何一段挂死看门狗都看得见（以前只罩三个小段）。
+        with send_lock, _SendStateScope(len(text)):
             if not sticker_quarantine_allows(chat_username, chat_display_name):
                 return False
             if send_guard is not None:
@@ -2796,8 +2964,7 @@ def main():
             t_start = time.time()
             allow_mark_dead = True
             if BG_SEND.get("enabled", True):
-                SEND_STATE["active"] = True
-                SEND_STATE["start"] = time.time()
+                SEND_STATE["start"] = time.time()   # 进通道前刷新心跳（H3）
                 try:
                     if bg_send(text, chat_display_name, chat_username):
                         fail_streak.pop(chat_username, None)
@@ -2806,8 +2973,6 @@ def main():
                         return True
                 except Exception as e:            # noqa: BLE001
                     log("后台通道异常，继续用旧通道：", repr(e))
-                finally:
-                    SEND_STATE["active"] = False
                 if not BG_SEND.get("fallback", True):
                     # 用户明确要求「绝不抢前台」：这条不发，但不把会话标死
                     # （窗口最小化、会话不在列表里都是可恢复状态）。
@@ -2823,6 +2988,7 @@ def main():
             bind_gui_window(gui)
             # ① 引用回复（引用对方那条消息）——比普通发送慢，失败自动回退
             if quote_text and QUOTE_REPLY:
+                SEND_STATE["start"] = time.time()   # 进通道前刷新心跳（H3）
                 try:
                     if with_window_on_top(lambda: gui.quote_msg(text, who=chat_display_name, target_text=quote_text, verify=False)):
                         log("引用回复成功 →", chat_display_name)
@@ -2837,6 +3003,7 @@ def main():
                 uia_available = False
             for attempt in (1, 2):
                 t_att = time.time()
+                SEND_STATE["start"] = time.time()   # 进通道前刷新心跳（H3）
                 try:
                     if with_window_on_top(lambda: uia_send(text, chat_display_name, chat_username)):
                         fail_streak.pop(chat_username, None)
@@ -2867,6 +3034,7 @@ def main():
             # ①.5 键盘兜底：完全不碰 accessibility（Ctrl+F 搜索会话 → 粘贴 → 回车），
             #      并用数据库回读确认。OCR 这条路会卡在截屏，所以先试它。
             if KEYBOARD_FALLBACK:
+                SEND_STATE["start"] = time.time()   # 进通道前刷新心跳（H3）
                 if keyboard_send(text, chat_display_name, chat_username):
                     fail_streak.pop(chat_username, None)
                     log("发送成功（键盘通道，%.1fs）→ %s" % (time.time() - t_start, chat_display_name))
@@ -2876,6 +3044,7 @@ def main():
             #    （data/bridge-hang.log 有栈），以前直接拖到 40 秒看门狗把整个桥接
             #    os.exit 重启；这里给它 25 秒，超时就放弃这一条。
             if not uia_available:
+                SEND_STATE["start"] = time.time()   # 进通道前刷新心跳（H3）
                 try:
                     with gui_lock:
                         try:
@@ -2884,11 +3053,15 @@ def main():
                             log("重建窗口驱动失败：", repr(e))
                     bind_gui_window(gui)
                     _box = {}
+                    _ocr_cancel = threading.Event()   # H2：放弃后要能叫停卡住的僵尸线程
 
                     def _ocr_send():
                         try:
+                            if _ocr_cancel.is_set():
+                                return                # 这条已放弃：绝不再落键（H2）
                             _box["r"] = with_window_on_top(
-                                lambda: gui.send_msg(text, chat_display_name, True))
+                                lambda: (not _ocr_cancel.is_set())
+                                        and bool(gui.send_msg(text, chat_display_name, True)))
                         except Exception as _e:      # noqa: BLE001
                             _box["e"] = _e
 
@@ -2898,6 +3071,9 @@ def main():
                     _th.join(8)
                     if _th.is_alive():
                         log("OCR 兜底 8 秒没返回（卡在截屏），放弃这条，等下次消息")
+                        # 僵尸线程卡在截屏里杀不掉，但它落键前会自查这个标记（H2）：
+                        # 醒来后不会再发、也不会再写 SEND_STATE（owner 是 send_text 的临界区）。
+                        _ocr_cancel.set()
                         resp = False
                     else:
                         if "e" in _box:
@@ -2932,7 +3108,7 @@ def main():
         # 账号闸：@ 人要点开成员列表，窗口不对就会在别的号里 @ 别人
         if not account_send_allowed("@ 成员"):
             return False
-        with send_lock:
+        with send_lock, _SendStateScope(len(text)):
             if not sticker_quarantine_allows(chat_username, chat_display_name):
                 return False
             with gui_lock:
@@ -3025,6 +3201,9 @@ def main():
                         seg.save(buf, format="JPEG", quality=88)
                         parts.append(buf.getvalue())
                     log("长截图 %dx%d，切成 %d 段分别识别" % (w, h, len(parts)))
+                    # 切段后存的全是 JPEG 字节，mime 必须跟着改（M4）：
+                    # 否则 PNG 长截图按 image/png 发 JPEG 字节，看图接口直接解析失败。
+                    mime = "image/jpeg"
                 else:
                     # 普通图：统一转 RGB JPEG 再发，规避 webp/heic 之类的格式坑
                     img2 = img.convert("RGB")
@@ -3095,13 +3274,20 @@ def main():
                 log("语音太长（%.0fs > %.0fs），跳过" % (seconds, VOICE_MAX_SECONDS))
                 return ""
             wav_path = os.path.splitext(path)[0] + ".wav"
-            with wave.open(wav_path, "wb") as w:
-                w.setnchannels(1)
-                w.setsampwidth(2)
-                w.setframerate(VOICE_SAMPLE_RATE)
-                w.writeframes(raw)
-            with open(wav_path, "rb") as f:
-                text = asr_transcribe(f.read(), VOICE_API_KEY, VOICE_MODEL, VOICE_BASE_URL, VOICE_TIMEOUT)
+            try:
+                with wave.open(wav_path, "wb") as w:
+                    w.setnchannels(1)
+                    w.setsampwidth(2)
+                    w.setframerate(VOICE_SAMPLE_RATE)
+                    w.writeframes(raw)
+                with open(wav_path, "rb") as f:
+                    text = asr_transcribe(f.read(), VOICE_API_KEY, VOICE_MODEL, VOICE_BASE_URL, VOICE_TIMEOUT)
+            finally:
+                # 转录用完就把 .wav 删掉（L5）：以前每条语音落一个文件，缓存目录只增不减
+                try:
+                    os.remove(wav_path)
+                except Exception:                    # noqa: BLE001
+                    pass
             text = clean_transcript(text)
             log("语音识别（%.1fs）：%s" % (seconds, text[:60] or "（空）"))
             return text
@@ -3486,10 +3672,17 @@ def main():
             if not text:
                 continue
             log("主动搭话 →", name, text[:30])
-            ok = send_text(text, name, u)
-            # 发失败也要记一次时间：以前失败不写状态，于是每 60 秒重试一次，
-            # 日志里就出现「每分钟都在主动搭话」的刷屏（实测 158 条）。
-            save_state({"lastTs": time.time(), "day": today, "count": sent + (0 if ok is False else 1)})
+            # 发送圈进 try（M8，照抄 battery_watch）：WeChatGUI 构造失败一次不该
+            # 让这条线程无声死掉直到重启。
+            try:
+                ok = send_text(text, name, u)
+                # 发失败也要记一次时间：以前失败不写状态，于是每 60 秒重试一次，
+                # 日志里就出现「每分钟都在主动搭话」的刷屏（实测 158 条）。
+                save_state({"lastTs": time.time(), "day": today, "count": sent + (0 if ok is False else 1)})
+            except Exception as e:                   # noqa: BLE001
+                log("主动搭话发送失败：", repr(e))
+                # 异常也记一次时间，免得每 60 秒重试刷屏
+                save_state({"lastTs": time.time(), "day": today, "count": sent})
 
 
     BATTERY_SENT = {"done": False}
@@ -3655,11 +3848,18 @@ def main():
             log("发送通道预热失败：", repr(e))
 
     def send_watchdog():
-        """发送卡住超过 40 秒就重启桥接，避免整个队列卡死。"""
+        """发送卡住超过预算就重启桥接，避免整个队列卡死。
+
+        预算不再是「固定 40 秒」（H3）：bg 通道逐字投递，长文本单打字就要一两分钟，
+        一刀切会把合法慢发送当卡死杀掉（半截草稿留在输入框、重启后不补发）。
+        预算 = max(40 秒, 0.12 秒 × 文本长度)，随每次发送在 SEND_STATE 里更新；
+        各通道进入时还会刷新 SEND_STATE["start"] 当进度心跳。
+        """
         while True:
             time.sleep(5)
-            if SEND_STATE["active"] and (time.time() - SEND_STATE["start"]) > 40:
-                log("发送卡住超过 40 秒，强制重启桥接进程…")
+            _budget = float(SEND_STATE.get("budget") or 40)
+            if SEND_STATE["active"] and (time.time() - SEND_STATE["start"]) > _budget:
+                log("发送卡住超过 %.0f 秒，强制重启桥接进程…" % _budget)
                 time.sleep(0.3)
                 # 用 7 而不是 2：2 是「找不到数据库目录」这种优雅报错（不该被守护循环
                 # 无限重启），7 才是「我自己要重启」—— 启动脚本看到 7 就连着重启。
@@ -3719,7 +3919,13 @@ def main():
                 # 不用等消息才去唤醒引擎：心跳每 20 秒问一次（库内部 30 秒节流、
                 # 会自动重新热激活），这样状态是真实的，也能顺手把假死的引擎救回来。
                 uia_now = None
-                if not resting:
+                if not resting and SEND_STATE.get("active"):
+                    # 发送进行中（H5）：这轮心跳不做窗口/引擎动作 —— WeChatGUI() 构造会
+                    # 抢焦点、ensure_uia_ready/_get_uia 会重写 gate 字节，撞上正在打字的
+                    # 发送会把 Enter/粘贴落到别的窗口。只按上次已知状态上报，下轮再预热。
+                    log("心跳跳过预热（正在发送中）")
+                    uia_now = UIA_CACHE.get("u") is not None
+                elif not resting:
                     try:
                         if not wechat_window_alive():
                             # 微信主窗没了（进程更新/重启/被回收）。缓存引擎里那个窗口
@@ -3811,6 +4017,79 @@ def main():
             last = mt
             if reload_config():
                 log("配置已热更新（调试台改完即时生效，不用重启桥接）")
+
+    def contacts_sync_once():
+        """把「联系人 + 群」清单推给服务端一次（H1 接线；后台线程跑完即退）。
+
+        bridge/contacts_sync.py 只负责从 DB 整理数据；推送（POST
+        /api/wechat/contacts/sync）在这里做。失败只记日志：清单丢一轮只影响
+        网页选择器的候选，绝不影响收发消息。
+        """
+        try:
+            try:
+                import contacts_sync
+            except Exception:                        # noqa: BLE001
+                from . import contacts_sync          # type: ignore
+            data = contacts_sync.payload(db, int(time.time() * 1000))
+            headers = {"x-whale-bridge": "1"}
+            if token:
+                headers["x-bot-token"] = token
+            base = bot_url.rsplit("/webhook", 1)[0]
+            r = LOCAL_HTTP.post(base + "/api/wechat/contacts/sync", json=data,
+                                headers=headers, timeout=15)
+            code = getattr(r, "status_code", 0)
+            log("联系人同步：%s（%d 条%s）"
+                % ("成功" if code == 200 else "失败 HTTP %s" % code,
+                   len(data.get("items") or []),
+                   ("，账号 " + str(data.get("account") or "")) if data.get("account") else ""))
+        except Exception as e:                       # noqa: BLE001
+            log("联系人同步失败（不影响收发消息）：", repr(e))
+
+    def start_reminder_watch():
+        """构造提醒调度器并启动它的线程（H1 接线）。
+
+        ReminderRunner（bridge/reminder_watch.py）依赖全部注入：
+          fetch → GET  /api/reminders/due（到点的 + 下一条时间）
+          send  → send_text 发到提醒所属会话
+          ack   → POST /api/reminders/ack（回执；失败由服务端 5 分钟后重试）
+        实例存模块级 REMINDER_RUNNER，退出分支（KeyboardInterrupt）能拿到它。
+        """
+        global REMINDER_RUNNER
+        try:
+            try:
+                from reminder_watch import ReminderRunner
+            except Exception:                        # noqa: BLE001
+                from .reminder_watch import ReminderRunner   # type: ignore
+            base = bot_url.rsplit("/webhook", 1)[0]
+            headers = {"x-whale-bridge": "1"}
+            if token:
+                headers["x-bot-token"] = token
+
+            def _fetch_due():
+                r = LOCAL_HTTP.get(base + "/api/reminders/due", headers=headers, timeout=10)
+                return r.json() if getattr(r, "status_code", 0) == 200 else {}
+
+            def _send_due(item, text):
+                wxid = str(item.get("wxid") or "").strip()
+                name = str(item.get("name") or "").strip() or display_name(wxid)
+                return bool(send_text(text, name, wxid))
+
+            def _ack_due(item, ok, err):
+                try:
+                    LOCAL_HTTP.post(base + "/api/reminders/ack",
+                                    json={"id": item.get("id"), "ok": bool(ok),
+                                          "error": str(err or "")},
+                                    headers=headers, timeout=10)
+                except Exception as e:               # noqa: BLE001
+                    log("提醒回执没送到（服务端会自己重试）：", repr(e))
+
+            REMINDER_RUNNER = ReminderRunner(fetch=_fetch_due, send=_send_due,
+                                             ack=_ack_due, log=log)
+            threading.Thread(target=REMINDER_RUNNER.run, daemon=True,
+                             name="reminder-watch").start()
+            log("提醒调度已启动（到点准点发）")
+        except Exception as e:                       # noqa: BLE001
+            log("提醒调度启动失败（提醒停用，不影响收发）：", repr(e))
 
     threading.Thread(target=config_watch, daemon=True).start()
     threading.Thread(target=warmup, daemon=True).start()

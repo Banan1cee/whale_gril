@@ -19,9 +19,14 @@ namespace WhaleLauncher.Views
         private readonly RuntimeSupervisor _sup;
         private readonly DispatcherTimer _timer;
         private int _lastCount = -1;
+        private string _lastLogSig = "";
         private string _nodeVersion = "";
         private string _pythonVersion = "";
         private bool _versionsLoaded;
+
+        // 路径卡的目录求大小要递归整个安装目录（数万文件），缓存一下别每次都算（H9）
+        private DateTime _lastPaths = DateTime.MinValue;
+        private readonly Dictionary<string, (DateTime At, string Text)> _sizeCache = new Dictionary<string, (DateTime At, string Text)>();
 
         public DiagPage(RuntimeSupervisor sup)
         {
@@ -45,7 +50,7 @@ namespace WhaleLauncher.Views
         {
             var s = await _sup.ProbeAsync();
             await CheckAsync(s);
-            RenderPaths();
+            await RenderPathsAsync();      // 内部 ≥5 秒节流 + 后台求大小（H9）
             await LoadVersionsAsync();
 
             RuntimeInfo.Text =
@@ -58,7 +63,7 @@ namespace WhaleLauncher.Views
                 (s.StLastMessageAt > 0 ? "最后一条消息：" + DateTimeOffset.FromUnixTimeMilliseconds(s.StLastMessageAt).LocalDateTime.ToString("MM-dd HH:mm:ss") : "还没有消息") +
                 (string.IsNullOrEmpty(s.StLastError) ? "" : "\n最近一次失败：" + s.StLastError);
 
-            RenderLogs();
+            // 日志统一由本页 1.5 秒定时器驱动，这里不再重复 RenderLogs（L16：双通道驱动整表重建）
         }
 
         // ── 自检 ────────────────────────────────────────────────
@@ -139,8 +144,15 @@ namespace WhaleLauncher.Views
         }
 
         // ── 路径 ────────────────────────────────────────────────
-        private void RenderPaths()
+        /// <summary>
+        /// 路径卡。目录求大小以前每 2 秒在 UI 线程递归整个安装目录，一打开诊断页就卡死（H9）：
+        /// 现在求大小走 Task.Run + 缓存 45 秒，整个渲染 ≥5 秒才做一次（照 SettingsPage 的节流做法）。
+        /// </summary>
+        private async Task RenderPathsAsync()
         {
+            if ((DateTime.Now - _lastPaths).TotalSeconds < 5) return;   // 节流：≥5 秒一次
+            _lastPaths = DateTime.Now;
+
             PathsHost.Children.Clear();
             var items = new (string Label, string Path)[]
             {
@@ -150,6 +162,8 @@ namespace WhaleLauncher.Views
                 ("备份", Path.Combine(_sup.DataDir, "backups")),
                 ("安装目录", _sup.BaseDir),
             };
+
+            var fills = new List<Task>();
             foreach (var (label, path) in items)
             {
                 var row = new DockPanel { Margin = new Thickness(0, 0, 0, 4), LastChildFill = false };
@@ -160,10 +174,9 @@ namespace WhaleLauncher.Views
                     Width = 62,
                     VerticalAlignment = VerticalAlignment.Center
                 });
-                var size = SizeOf(path);
                 var btn = new Button
                 {
-                    Content = size,
+                    Content = "…",
                     Style = (Style)FindResource("TopBtn"),
                     Tag = path,
                     HorizontalAlignment = HorizontalAlignment.Right,
@@ -173,7 +186,25 @@ namespace WhaleLauncher.Views
                 DockPanel.SetDock(btn, Dock.Right);
                 row.Children.Add(btn);
                 PathsHost.Children.Add(row);
+                fills.Add(FillSizeAsync(btn, path));
             }
+            await Task.WhenAll(fills);
+        }
+
+        /// <summary>算完大小回到 UI 线程再改按钮文字。</summary>
+        private async Task FillSizeAsync(Button btn, string path)
+        {
+            btn.Content = await SizeOfAsync(path);
+        }
+
+        /// <summary>求大小挪到后台线程算，结果缓存 45 秒（30-60 秒内都算合理）。</summary>
+        private async Task<string> SizeOfAsync(string path)
+        {
+            if (_sizeCache.TryGetValue(path, out var hit) && (DateTime.Now - hit.At).TotalSeconds < 45)
+                return hit.Text;
+            var text = await Task.Run(() => SizeOf(path));   // 递归枚举放后台线程，别冻 UI
+            _sizeCache[path] = (DateTime.Now, text);
+            return text;
         }
 
         private static string SizeOf(string path)
@@ -267,6 +298,14 @@ namespace WhaleLauncher.Views
                 .ToList();
             if (filtered.Count > tail) filtered = filtered.Skip(filtered.Count - tail).ToList();
 
+            // 内容没变就不动 ItemsSource：整表重建会把滚动位置和选中弄丢（L16）。
+            // 日志只追加，比较行数 + 首尾两行就够判断有没有新内容。
+            var sig = filtered.Count + "|"
+                + (filtered.Count > 0 ? filtered[0].TimeText + filtered[0].Text : "") + "|"
+                + (filtered.Count > 0 ? filtered[filtered.Count - 1].TimeText + filtered[filtered.Count - 1].Text : "");
+            if (sig == _lastLogSig && Logs.ItemsSource != null) return;
+            _lastLogSig = sig;
+
             Logs.ItemsSource = filtered;
             if (filtered.Count > 0 && filtered.Count != _lastCount)
                 Logs.ScrollIntoView(filtered[filtered.Count - 1]);
@@ -282,6 +321,7 @@ namespace WhaleLauncher.Views
         private void OnClear(object sender, RoutedEventArgs e)
         {
             _lastCount = -1;
+            _lastLogSig = "";
             Logs.ItemsSource = null;
         }
 

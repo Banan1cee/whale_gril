@@ -80,16 +80,6 @@ module.exports = function register(router) {
     };
     return json(res, 200, { ok: true, key, notes: sessions[mode], all: sessions, summary: storeSummary(runtime) });
   });
-
-  // ---- 网页当前会话的记忆 ----
-  router.get('/api/memory', (runtime, req, res, info) => {
-    const sessionId = sanitizeId(info.url.searchParams.get('sessionId') || 'default');
-    const mode = info.url.searchParams.get('mode') === 'group' ? 'group' : 'private';
-    const key = `web:${mode === 'group' ? 'g' : 'u'}:${sessionId}:${mode}`;
-    const sessions = {
-      private: runtime.store.listNotes(`web:u:${sessionId}:private`),
-      group: runtime.store.listNotes(`web:g:${sessionId}:group`),
-    };
-    return json(res, 200, { ok: true, key, notes: sessions[mode], all: sessions, summary: storeSummary(runtime) });
-  });
+  // 以前这里还有一份一模一样的 GET /api/memory 逐字注册（73-82 与 85-94 双份），
+  // first-match 路由下第二份永远走不到，是死代码，已删。
 };

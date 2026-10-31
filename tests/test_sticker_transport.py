@@ -431,9 +431,27 @@ def bridge_functions(names, environment):
         def visit_Nonlocal(self, node):
             return ast.copy_location(ast.Global(names=node.names), node)
     definitions = [ClosureGlobals().visit(node) for node in definitions]
-    exec(compile(ast.fix_missing_locations(ast.Module(body=definitions, type_ignores=[])),
+    # 被抽函数会引用 engine.py 里的模块级辅助类（如 send_sticker 用的
+    # _SendStateScope 发送看门狗作用域）。只抽 FunctionDef 会让这些类在 mock
+    # 环境里缺失，报成 NameError 假回归 —— 这里把被抽函数体实际引用到的
+    # 顶层类定义一并搬进来。
+    classes = [node for node in source.body
+               if isinstance(node, ast.ClassDef) and node.name in _referenced_names(definitions)]
+    exec(compile(ast.fix_missing_locations(ast.Module(body=classes + definitions, type_ignores=[])),
                  '<mock-only bridge functions>', 'exec'), environment)
     return environment
+
+
+def _referenced_names(definitions):
+    """收集被抽函数体里引用的标识符名（够用即可，不做完整作用域分析）。"""
+    names = set()
+    for node in definitions:
+        for child in ast.walk(node):
+            if isinstance(child, ast.Name):
+                names.add(child.id)
+            elif isinstance(child, ast.Attribute) and isinstance(child.value, ast.Name):
+                names.add(child.value.id)
+    return names
 
 
 class BridgeContractTest(unittest.TestCase):

@@ -87,10 +87,16 @@ namespace WhaleLauncher
             }
         }
 
+        /// <summary>
+        /// JSON 字符串转义（不含外层引号，调用方自己拼 "...")。
+        /// 以前手拼漏了 \t 等控制字符、\r 直接删掉，粘贴带 Tab 的文本保存就 400（M32）；
+        /// 现在交给 System.Text.Json：控制字符走 \uXXXX，\r 转 \\r 保留不再丢字。
+        /// </summary>
         public static string Esc(string s)
         {
             if (s == null) return "";
-            return s.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "\\n").Replace("\r", "");
+            var json = JsonSerializer.Serialize(s);
+            return json.Substring(1, json.Length - 2);   // 去掉 JsonSerializer 加的外层引号
         }
     }
 }
