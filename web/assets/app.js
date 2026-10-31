@@ -185,7 +185,7 @@ async function refreshStatus() {
       ? data.hasKey
         ? '⚠️ 已保存 API Key，但「演示模式」开着，现在只会说内置台词。去设置里关掉它，就是真模型了。'
         : '演示模式：还没配置模型，用的是内置台词。点右上角「设置」选一个免费模型（智谱 GLM-4-Flash / 本地 Ollama）就能真聊。'
-      : `已接入 ${data.providerLabel || '模型'}（${data.model}）。记忆存在本机，共 ${data.memory.sessions} 个聊天。`;
+      : `已接入 ${data.providerLabel || '模型'}（${data.model}）。`;
     const gws = data.gateways || [];
     $('gatewayState').textContent = gws
       .map((g) => {
@@ -928,57 +928,6 @@ async function testVision() {
   }
 }
 
-/* ---------------- 记忆 ---------------- */
-async function openMemory() {
-  $('memoryModal').hidden = false;
-  const host = $('memoryList');
-  host.innerHTML = '<p class="empty">正在翻小本本…</p>';
-  try {
-    const res = await fetch(`/api/memory?sessionId=${encodeURIComponent(state.sessionId)}&mode=${state.mode}`);
-    const data = await res.json();
-    host.textContent = '';
-    const rows = data.notes || [];
-    if (!rows.length) {
-      host.innerHTML = '<p class="empty">小本本还是空的呀。试试说「记住：我怕黑」。</p>';
-      return;
-    }
-    for (const row of rows) {
-      const div = document.createElement('div');
-      div.className = 'person';
-      const strong = document.createElement('strong');
-      strong.textContent = row.name || row.uid;
-      const ul = document.createElement('ul');
-      for (const n of row.notes) {
-        const li = document.createElement('li');
-        li.textContent = n;
-        ul.appendChild(li);
-      }
-      div.appendChild(strong);
-      div.appendChild(ul);
-      host.appendChild(div);
-    }
-  } catch {
-    host.innerHTML = '<p class="empty">读取失败，服务还在吗？</p>';
-  }
-}
-
-async function clearMemory() {
-  try {
-    const res = await fetch('/api/reset', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sessionId: state.sessionId, mode: state.mode }),
-    });
-    const data = await res.json();
-    if (!data.ok) throw new Error(data.error || '失败');
-    $('memoryModal').hidden = true;
-    addMessage({ role: 'system', text: '（鲸鲸把这个聊天的记忆丢回海里了）' });
-    toast('记忆已清空');
-  } catch (err) {
-    toast('清空失败：' + err.message);
-  }
-}
-
 /* ---------------- 输入框 ---------------- */
 function autoGrow() {
   inputEl.style.height = 'auto';
@@ -1007,11 +956,9 @@ function bindEvents() {
   });
 
   $('btnSettings').addEventListener('click', openSettings);
-  $('btnMemory').addEventListener('click', openMemory);
   $('saveSettings').addEventListener('click', saveSettings);
 const acctRefreshBtn = $('btnRefreshAccounts');
 if (acctRefreshBtn) acctRefreshBtn.addEventListener('click', () => loadWechatAccounts({ refresh: true }));
-  $('clearMemory').addEventListener('click', clearMemory);
   $('btnAutoGroup').addEventListener('click', runAutoGroup);
   $('btnTest').addEventListener('click', testConnection);
   const vBtn = $('btnVisionTest');

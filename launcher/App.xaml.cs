@@ -11,6 +11,8 @@ namespace WhaleLauncher
         protected override void OnStartup(StartupEventArgs e)
         {
             base.OnStartup(e);
+            Appearance.Load();
+            Appearance.ApplyTheme();
             DispatcherUnhandledException += (_, ex) => Crash("UI", ex.Exception);
             AppDomain.CurrentDomain.UnhandledException += (_, ex) => Crash("进程", ex.ExceptionObject as Exception);
         }

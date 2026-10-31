@@ -160,7 +160,7 @@
     <div class="card"><h2>身份 / 主人</h2><table id="tIdentity"><tr><td class="muted">加载中…</td></tr></table></div>
     <div class="card"><h2>模型 / 生成参数</h2><table id="tModel"></table></div>
     <div class="card"><h2>聊天规则</h2><table id="tChat"></table></div>
-    <div class="card"><h2>网关 / 记忆</h2><table id="tGate"></table></div>
+    <div class="card"><h2>网关 / 计数</h2><table id="tGate"></table></div>
   </div>
 
   <div class="card" id="featCard">
@@ -192,8 +192,8 @@
   </div>
 
   <div class="card">
-    <h2>会话与记忆</h2>
-    <p class="muted">这里能看到每个聊天记住的称呼、笔记和最近几条消息；「忘掉这个聊天」只清这一个会话。</p>
+    <h2>会话计数</h2>
+    <p class="muted">只显示每个聊天有多少消息 / 人物卡 / 事件，不显示记忆正文。</p>
     <div id="sessions"><p class="muted">加载中…</p></div>
   </div>
 </main>
@@ -278,13 +278,6 @@ const META = {
   'care.jitterMinutes': ['时间前后浮动（分钟）', '25 = 在 65~115 分钟之间随机，不至于准点得像机器人'],
   'care.maxPerDay': ['每天最多几次', '0 = 不限'],
   'care.quietAfterMinutes': ['刚聊过的会话先跳过（分钟）', '这个会话在这么多分钟内有过消息，就不打扰'],
-  'memory.maxSessions': ['最多记几个会话', ''],
-  'memory.maxMessages': ['每个会话记多少条', ''],
-  'memory.maxNotesPerUser': ['每人记几条笔记', ''],
-  'memory.digestEvery': ['每多少条消息整理一次记忆', '12 = 攒够 12 条新消息，就把这段对话压成摘要并抽几条事实'],
-  'memory.digest': ['自动整理记忆', '开 = 定期生成摘要 + 自动抽事实；关 = 只有手动「记住：…」才写记忆'],
-  'memory.semantic': ['语义检索（让模型挑记忆）', '开 = 回复前让模型判断哪几条记忆真的相关；关 = 只按字面重合挑，快但会漏'],
-  'memory.semanticMinCandidates': ['候选达到几条才走语义检索', '3 = 候选少于 3 条就直接用，省一次模型调用'],
   'admin.spell': ['魔咒口令', '在微信里发这段口令可获得管理员权限；留空 = 关闭'],
   'admin.minutes': ['管理员有效期（分钟）', ''],
   'admin.allowAll': ['谁发口令都给权限', '关 = 只有主人发才给'],
@@ -351,7 +344,7 @@ const SECRET = new Set(['deepseek.apiKey', 'vision.apiKey', 'voice.apiKey', 'gat
 const JSON_FIELDS = new Set(['gateway.wechat.outboundHeaders', 'gateway.douyin.outboundHeaders']);
 const SKIP_TOP = new Set(['paths', 'env', 'root', 'configExists']);
 
-const ORDER = ['provider', 'server', 'log', 'deepseek', 'persona', 'chat', 'group', 'wechat', 'reminder', 'sticker', 'websearch', 'links', 'care', 'memory', 'features', 'storage', 'admin', 'vision', 'voice', 'gateway'];
+const ORDER = ['provider', 'server', 'log', 'deepseek', 'persona', 'chat', 'group', 'wechat', 'reminder', 'sticker', 'websearch', 'links', 'care', 'features', 'storage', 'admin', 'vision', 'voice', 'gateway'];
 const SECTION_TITLES = {
   server: '服务 / 网页（改地址、端口要重启）',
   log: '日志',
@@ -363,7 +356,7 @@ const SECTION_TITLES = {
   reminder: '提醒（规则和主动搭话同语义，但配置独立）',
   links: '链接阅读',
   care: '主动找你聊天（时间窗 / 频率）',
-  memory: '记忆',
+  memory: false,
   admin: '魔咒（管理员权限）',
   vision: '看图说话',
   voice: '语音转文字',
@@ -1131,10 +1124,10 @@ async function loadState() {
     '，收到 ' + g.received + ' 条，发出 ' + g.sent + ' 条' + (g.lastError ? '，<span class="bad">最后错误：' + esc(g.lastError) + '</span>' : '')).join('<br>');
   $('tGate').innerHTML = kvRows([
     ['微信 / 抖音网关', gw],
-    ['记忆会话数', esc(s.memory.sessions)],
-    ['消息 / 笔记', esc(s.memory.messages) + ' / ' + esc(s.memory.notes)],
+    ['记忆聊天数', esc(s.memory.sessions)],
+    ['消息 / 偏好数', esc(s.memory.messages) + ' / ' + esc(s.memory.notes)],
     ['累计收到 / 回复', esc(s.memory.totalMessages) + ' / ' + esc(s.memory.totalReplies)],
-    ['记忆文件', '<code>' + esc(s.paths.storeFile) + '</code>'],
+    ['记忆目录', '<code>' + esc(s.paths.memoryDir || s.paths.storeFile) + '</code>'],
     ['配置文件', '<code>' + esc(s.paths.configFile) + '</code>'],
   ]);
 }
@@ -1142,29 +1135,15 @@ async function loadState() {
 async function loadSessions() {
   const d = await (await fetch('/api/debug/sessions')).json();
   const host = $('sessions');
-  if (!d.sessions.length) { host.innerHTML = '<p class="muted">还没有任何会话记忆。</p>'; return; }
+  if (!d.sessions.length) { host.innerHTML = '<p class="muted">还没有任何聊天计数。</p>'; return; }
   host.innerHTML = d.sessions.map((s) => {
-    const notes = (s.profiles || []).filter((p) => p.notes.length).map((p) => esc(p.name) + '：' + esc(p.notes.join('；'))).join('<br>');
-    const msgs = (s.messages || []).slice(-8).map((m) => '<li>' + (m.role === 'assistant' ? '鲸鲸' : esc(m.name)) + '：' + esc(String(m.text).slice(0, 90)) + '</li>').join('');
     return '<div class="sess"><div class="head"><strong>' + esc(s.title || s.key) + '</strong>'
       + '<span class="tag">' + (s.chatType === 'group' ? '群聊' : '私聊') + '</span>'
       + '<span class="muted">' + esc(s.key) + '</span>'
-      + '<span class="muted">' + s.messageCount + ' 条消息 · 最后活跃 ' + fmtTime(s.lastActiveAt) + '</span>'
+      + '<span class="muted">' + s.messageCount + ' 条消息 · ' + (s.peopleCount || 0) + ' 张人物卡 · ' + (s.eventCount || 0) + ' 条事件 · 最后活跃 ' + fmtTime(s.lastActiveAt) + '</span>'
       + (s.adminUntil && s.adminUntil > Date.now() ? '<span class="tag ok">管理员生效中</span>' : '')
-      + '<span class="spacer"></span><button class="danger" data-reset="' + esc(s.key) + '">忘掉这个聊天</button></div>'
-      + (notes ? '<p class="notes">记住的事：<br>' + notes + '</p>' : '')
-      + (msgs ? '<ul>' + msgs + '</ul>' : '')
-      + '</div>';
+      + '</div></div>';
   }).join('');
-  host.querySelectorAll('[data-reset]').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      const key = btn.getAttribute('data-reset');
-      if (!confirm('确定清空这个聊天的记忆？\n' + key)) return;
-      await fetch('/api/debug/reset', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key }) });
-      loadSessions();
-      loadState();
-    });
-  });
 }
 
 async function makePrompt() {

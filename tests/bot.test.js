@@ -14,7 +14,7 @@ function makeConfig(overrides = {}) {
   const cfg = JSON.parse(JSON.stringify(DEFAULT_CONFIG));
   if (overrides.group) Object.assign(cfg.group, overrides.group);
   if (overrides.chat) Object.assign(cfg.chat, overrides.chat);
-  if (overrides.memory) Object.assign(cfg.memory, overrides.memory);
+  if (overrides.memory) cfg.memory = { ...(cfg.memory || {}), ...overrides.memory };
   // 测试里固定主人和魔咒，不依赖开源默认值
   cfg.persona.master = { names: ['Master'], wxids: ['wxid_test_master'] };
   cfg.admin = { spell: 'test-spell', minutes: 30, allowAll: false };
@@ -117,7 +117,7 @@ test('闭麦 / 开麦 命令生效', async () => {
   cleanup();
 });
 
-test('记住 / 查看记忆 / 忘掉', async () => {
+test('记住 / 忘掉；记忆清单不再作为命令暴露', async () => {
   const { bot, store, cleanup } = makeBot();
   const remember = await bot.decide(privateMsg('记住：我怕黑'));
   assert.equal(remember.action, 'command');
@@ -125,9 +125,10 @@ test('记住 / 查看记忆 / 忘掉', async () => {
   const notes = store.listNotes(remember.key);
   assert.equal(notes[0].notes[0], '我怕黑');
 
+  // 「你记得我什么」不再返回小本本清单，按普通聊天处理
   const memory = await bot.decide(privateMsg('你记得我什么'));
-  assert.equal(memory.commandType, 'memory');
-  assert.match(memory.text, /怕黑/);
+  assert.notEqual(memory.commandType, 'memory');
+  assert.equal(memory.action, 'reply');
 
   const forget = await bot.decide(privateMsg('忘掉怕黑'));
   assert.equal(forget.commandType, 'forget');
@@ -157,7 +158,8 @@ test('群里 @ 她才回应「闭麦」这类自然语言命令；/ 命令随时
 });
 
 test('命令识别覆盖常见写法', () => {
-  assert.equal(extractCommand('/memory').type, 'memory');
+  assert.equal(extractCommand('/memory'), null, '记忆清单命令已删除');
+  assert.equal(extractCommand('你记得我什么'), null, '不返回记忆清单，按普通聊天处理');
   assert.equal(extractCommand('帮助').type, 'help');
   assert.equal(extractCommand('我叫阿海').type, 'name');
   assert.equal(extractCommand('我叫阿海').arg, '阿海');

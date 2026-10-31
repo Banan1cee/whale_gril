@@ -147,10 +147,10 @@ namespace WhaleLauncher.Views
                 Height = 120,
                 Margin = new Thickness(0, 0, 10, 10),
                 CornerRadius = new CornerRadius(8),
-                Background = new SolidColorBrush(Color.FromRgb(0x2A, 0x2E, 0x34)),
                 ClipToBounds = true,
                 ToolTip = name
             };
+            border.SetResourceReference(Border.BackgroundProperty, "Surface3");
 
             var grid = new Grid();
             try

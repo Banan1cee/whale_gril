@@ -106,17 +106,6 @@
   </div>
 
   <div class="card">
-    <h2>上下文 / 记忆长度</h2>
-    <label>私聊上下文：<span class="val" id="htVal">200</span> 条
-      <input type="range" id="historyTurns" min="4" max="400" step="2" />
-    </label>
-    <label style="margin-top:12px">群聊上下文：<span class="val" id="ghtVal">150</span> 条
-      <input type="range" id="groupHistoryTurns" min="2" max="300" step="2" />
-    </label>
-    <p class="hint">这里按消息条数计算，不是问答轮数；条数越多，耗时和模型费用越高。默认私聊 200、群聊 150，上限 400 / 300。</p>
-  </div>
-
-  <div class="card">
     <h2>人味 / 能力开关</h2>
     <div class="row">
       <label class="chk"><input type="checkbox" id="emotions" /> 有情绪（会开心、委屈、犯困）</label>
@@ -187,10 +176,6 @@ function fill(p, llm) {
   // 用户根本看不出预设生效了没有。
   $('customPrompt').value = p.customPrompt || '';
   updateCustomNotice();
-  $('historyTurns').value = p.historyTurns || 200;
-  $('groupHistoryTurns').value = p.groupHistoryTurns || 150;
-  $('htVal').textContent = p.historyTurns || 200;
-  $('ghtVal').textContent = p.groupHistoryTurns || 150;
   $('emotions').checked = p.emotions !== false;
   $('proactive').checked = p.proactive !== false;
   $('opinions').checked = p.opinions !== false;
@@ -252,8 +237,6 @@ function readForm() {
     customPrompt: $('customPrompt').value,
     privateMaxChars: Number($('privateMaxChars').value),
     groupMaxChars: Number($('groupMaxChars').value),
-    historyTurns: Number($('historyTurns').value),
-    groupHistoryTurns: Number($('groupHistoryTurns').value),
     emotions: $('emotions').checked,
     proactive: $('proactive').checked,
     opinions: $('opinions').checked,
@@ -280,8 +263,6 @@ async function save() {
   }
 }
 
-$('historyTurns').addEventListener('input', (e) => { $('htVal').textContent = e.target.value; });
-$('groupHistoryTurns').addEventListener('input', (e) => { $('ghtVal').textContent = e.target.value; });
 $('customPrompt').addEventListener('input', updateCustomNotice);
 $('btnSave').addEventListener('click', save);
 

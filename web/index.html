@@ -31,13 +31,10 @@
         <button class="icon-btn" id="btnMode" type="button" title="切换：私聊 / 群聊模拟">
           <span class="ico">👥</span><em>群聊</em>
         </button>
-        <button class="icon-btn" id="btnMemory" type="button" title="看看她记得你什么">
-          <span class="ico">🧠</span><em>记忆</em>
-        </button>
-        <a class="icon-btn" href="/persona" target="_blank" title="人设调教：性格、语态、上下文、开关">
+        <a class="icon-btn" href="/persona" target="_blank" title="人设调教：性格、语态、开关">
           <span class="ico">🧠</span><em>调教</em>
         </a>
-        <a class="icon-btn" href="/debug" target="_blank" title="调试台：看主人、提示词原文、记忆">
+        <a class="icon-btn" href="/debug" target="_blank" title="调试台：看主人、提示词原文">
           <span class="ico">🧪</span><em>调试</em>
         </a>
         <button class="icon-btn" id="btnSettings" type="button" title="设置 API Key">
@@ -184,22 +181,6 @@
       <div class="modal-foot">
         <button class="ghost" data-close="settingsModal" type="button">取消</button>
         <button class="primary" id="saveSettings" type="button">保存并唤醒鲸鲸</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- 记忆 -->
-  <div class="modal" id="memoryModal" hidden>
-    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="memoryTitle">
-      <div class="modal-head">
-        <h2 id="memoryTitle">🧠 鲸鲸的小本本</h2>
-        <button class="close" data-close="memoryModal" type="button" aria-label="关闭">×</button>
-      </div>
-      <p class="field-help">你说「记住：xxx」她就会记在这里；说「忘掉 xxx」就会删掉。</p>
-      <div class="memory-list" id="memoryList"><p class="empty">正在翻小本本…</p></div>
-      <div class="modal-foot">
-        <button class="ghost danger" id="clearMemory" type="button">清空这个聊天的记忆</button>
-        <button class="primary" data-close="memoryModal" type="button">好的</button>
       </div>
     </div>
   </div>
