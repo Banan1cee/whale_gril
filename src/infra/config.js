@@ -232,6 +232,9 @@ const DEFAULT_CONFIG = {
     // 消息调度：同一会话串行、跨会话并发。workers=1 等于旧的全串行行为。
     pipelineWorkers: 4,
     pipelineQueueLimit: 4,
+    // 这些会话永不回复（微信团队、订阅号…）。必须是数组：保存时按数组原样写回，
+    // 缺省会退化成字符串，界面上再读就成了一整行。
+    ignoreSenders: [],
   },
   gateway: {
     wechat: { enabled: false, inboundToken: 'change-me-wechat', outboundUrl: '', outboundHeaders: {} },

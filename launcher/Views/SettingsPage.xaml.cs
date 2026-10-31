@@ -91,6 +91,10 @@ namespace WhaleLauncher.Views
                 new FieldSpec { Path = "group.freeChatChance", Label = "插话概率", Kind = "num", Min = 0, Max = 1, IsInt = false, Hint = "0~1，0.06 = 6%；未点名的消息都按它抽" },
                 new FieldSpec { Path = "group.cooldownSec", Label = "两次回复冷却(秒)", Kind = "num", Min = 0, Max = 3600 },
                 new FieldSpec { Path = "group.maxRepliesPerHour", Label = "每小时最多回几条", Kind = "num", Min = 1, Max = 200 },
+                new FieldSpec { Path = "group.masterAlwaysReply", Label = "主人在群里说话永远回", Kind = "bool" },
+                new FieldSpec { Path = "group.engagedMinutes", Label = "接话后保持参与(分钟)", Kind = "num", Min = 1, Max = 1440 },
+                new FieldSpec { Path = "group.silentMinutes", Label = "冷场多久算话题结束(分钟)", Kind = "num", Min = 1, Max = 10080 },
+                new FieldSpec { Path = "group.muteDefaultMinutes", Label = "免打扰默认时长(分钟)", Kind = "num", Min = 1, Max = 1440 },
             }},
             new SectionSpec { Title = "主动搭话", Fields =
             {
@@ -132,6 +136,14 @@ namespace WhaleLauncher.Views
                 new FieldSpec { Path = "wechat.bgSend.charGapMs", Label = "每个码元间隔(毫秒)", Kind = "num", Min = 20, Max = 80 },
                 new FieldSpec { Path = "wechat.bgSend.fallbackToForeground", Label = "后台失败时回前台发", Kind = "bool" },
                 new FieldSpec { Path = "wechat.bgSend.unhideWindow", Label = "微信在托盘时自动打开窗口", Kind = "bool" },
+                new FieldSpec { Path = "wechat.backgroundSend", Label = "后台发送（不抢前台）", Kind = "bool", Hint = "关掉 = 每次发送先把微信拉到前台" },
+                new FieldSpec { Path = "wechat.bgSend.verify", Label = "发送后回读确认", Kind = "bool" },
+                new FieldSpec { Path = "wechat.bgSend.stripUnencodable", Label = "跳过 GBK 编不了的字符", Kind = "bool" },
+                new FieldSpec { Path = "wechat.dbDir", Label = "微信文件保存位置", Kind = "text", Hint = "留空 = 自动找；填到 xwechat_files 这一层" },
+                new FieldSpec { Path = "wechat.staleAfterSec", Label = "多久没消息算去忙(秒)", Kind = "num", Min = 60, Max = 86400 },
+                new FieldSpec { Path = "wechat.ignoreSenders", Label = "这些会话永不回复", Kind = "multiline", Hint = "一行一个（微信团队、订阅号…）" },
+                new FieldSpec { Path = "wechat.pipelineWorkers", Label = "同时处理几个会话", Kind = "num", Min = 1, Max = 8 },
+                new FieldSpec { Path = "wechat.pipelineQueueLimit", Label = "单个会话最多积压几条", Kind = "num", Min = 1, Max = 100 },
             }},
             new SectionSpec { Title = "消息汇总", Note = "把“她没接话”的微信消息定时发给你。和“记忆整理”不是一回事。", Fields =
             {
@@ -168,9 +180,43 @@ namespace WhaleLauncher.Views
                 new FieldSpec { Path = "gateway.wechat.outboundUrl", Label = "微信出站地址", Kind = "text" },
                 new FieldSpec { Path = "gateway.douyin.enabled", Label = "抖音网关", Kind = "bool" },
                 new FieldSpec { Path = "gateway.douyin.inboundToken", Label = "抖音 token", Kind = "secret", Hint = "留空表示不改" },
+                new FieldSpec { Path = "gateway.douyin.outboundUrl", Label = "抖音出站地址", Kind = "text" },
+            }},
+            new SectionSpec { Title = "模型参数", Note = "模型和 Key 在下面的「模型与 Key」卡片里；这里调她的说话风格与长度。", Fields =
+            {
+                new FieldSpec { Path = "deepseek.temperature", Label = "温度", Kind = "num", Min = 0, Max = 2, IsInt = false, Hint = "越大越放得开；超过 1.2 容易越聊越离谱" },
+                new FieldSpec { Path = "deepseek.maxTokens", Label = "单次最多生成多少 token", Kind = "num", Min = 16, Max = 32768 },
+                new FieldSpec { Path = "deepseek.frequencyPenalty", Label = "频率惩罚（减少复读）", Kind = "num", Min = -2, Max = 2, IsInt = false },
+                new FieldSpec { Path = "deepseek.presencePenalty", Label = "在场惩罚（鼓励换话题）", Kind = "num", Min = -2, Max = 2, IsInt = false },
+                new FieldSpec { Path = "deepseek.timeoutMs", Label = "请求超时(毫秒)", Kind = "num", Min = 1000, Max = 600000 },
+            }},
+            new SectionSpec { Title = "看图与语音", Note = "看图 Key 在下面的「看图」卡片里。", Fields =
+            {
+                new FieldSpec { Path = "vision.baseUrl", Label = "看图接口地址", Kind = "text" },
+                new FieldSpec { Path = "vision.model", Label = "看图模型名", Kind = "text", Hint = "默认 glm-4v-flash（免费）" },
+                new FieldSpec { Path = "vision.timeoutMs", Label = "看图超时(毫秒)", Kind = "num", Min = 1000, Max = 300000 },
+                new FieldSpec { Path = "voice.timeoutMs", Label = "语音识别超时(毫秒)", Kind = "num", Min = 1000, Max = 300000 },
+                new FieldSpec { Path = "voice.maxSeconds", Label = "超过多少秒的语音不转", Kind = "num", Min = 1, Max = 600 },
+            }},
+            new SectionSpec { Title = "功能开关", Note = "细碎但会影响她表现的小开关。", Fields =
+            {
+                new FieldSpec { Path = "features.groupAddressGuard", Label = "群聊分清说话对象", Kind = "bool", Hint = "关掉容易答张三的话给李四" },
+                new FieldSpec { Path = "features.fightQuoteCheck", Label = "还嘴前核对对方原话", Kind = "bool" },
+                new FieldSpec { Path = "features.mediaCleanup", Label = "自动清理媒体缓存", Kind = "bool" },
+                new FieldSpec { Path = "features.digest", Label = "消息汇总（和上面的汇总开关是同一个）", Kind = "bool" },
+                new FieldSpec { Path = "features.memorySnapshot", Label = "自动备份记忆", Kind = "bool" },
+            }},
+            new SectionSpec { Title = "主人身份", Note = "谁算主人：填了就算，两个都填要同时对上更安全。", Fields =
+            {
+                new FieldSpec { Path = "persona.aliases", Label = "别名 / 外号", Kind = "multiline", Hint = "一行一个；群里喊这些也算叫她" },
+                new FieldSpec { Path = "persona.masterRoast", Label = "主人骂她时允许还嘴", Kind = "bool", Hint = "关掉 = 只委屈不顶嘴" },
+                new FieldSpec { Path = "persona.master.names", Label = "主人名单（微信昵称）", Kind = "multiline", Hint = "一行一个；微信里改昵称就能冒充，建议同时填 wxid" },
+                new FieldSpec { Path = "persona.master.wxids", Label = "主人名单（wxid）", Kind = "multiline", Hint = "一行一个 wxid_xxx，最可靠" },
             }},
             new SectionSpec { Title = "高级", Fields =
             {
+                new FieldSpec { Path = "server.host", Label = "监听地址", Kind = "text", Hint = "只给本机用就 127.0.0.1；0.0.0.0 = 同 WiFi 也能连（改完重启）" },
+                new FieldSpec { Path = "server.openBrowser", Label = "启动时自动开浏览器", Kind = "bool" },
                 new FieldSpec { Path = "server.port", Label = "本机端口", Kind = "num", Min = 1024, Max = 65535, Hint = "改完重启生效" },
                 new FieldSpec { Path = "log.level", Label = "日志级别", Kind = "select", Options = new[] { "info", "debug" } },
                 new FieldSpec { Path = "storage.mediaKeepDays", Label = "媒体缓存保留几天", Kind = "num", Min = 0, Max = 90 },
