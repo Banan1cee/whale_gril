@@ -68,6 +68,11 @@ except Exception:                       # noqa: BLE001
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_PATH = os.path.join(ROOT, "config.json")
 LOG_FILE = os.path.join(ROOT, "data", "wechat-bridge-4x.log")
+# 日志级别：debug（详细）/ info（常规）/ error（仅错误），与 config.log.level 同步。
+# 桥接没有结构化日志，只能按关键词粗分：报错类永远写，排查噪音只在 debug 时写。
+LOG_LEVEL = "info"
+_LOG_ERROR_HINT = ("错误", "失败", "异常", "超时", "Traceback", "Exception", "Error", "error:", "❌")
+_LOG_DEBUG_HINT = ("跳过", "忽略", "热激活", "布局", "轮询", "重试", "装死", "收到")
 
 # 消息汇总 worker：main() 里构造，config_watch 热更新时直接 configure 它。
 # 没起来时保持 None，reload_config() 可以安全地先跑。
@@ -173,6 +178,11 @@ if not os.path.exists(_cfg_path):
 try:
     with open(_cfg_path, "r", encoding="utf-8-sig") as _f:
         _cfg = json.load(_f)
+    try:
+        _lv = str((_cfg.get("log") or {}).get("level") or "info").strip().lower()
+        LOG_LEVEL = _lv if _lv in ("debug", "info", "error") else "info"
+    except Exception:
+        pass
     _stale = (_cfg.get("wechat") or {}).get("staleAfterSec")
     if isinstance(_stale, (int, float)) and _stale > 0:
         STALE_AFTER = float(_stale)
@@ -824,8 +834,21 @@ def boot(msg):
 boot("脚本开始执行")
 
 
+def _log_allowed(text):
+    """按级别粗分：error 只留报错，info 去掉排查噪音，debug 全留。"""
+    if LOG_LEVEL == "debug":
+        return True
+    if any(h in text for h in _LOG_ERROR_HINT):
+        return True
+    if LOG_LEVEL == "error":
+        return False
+    return not any(h in text for h in _LOG_DEBUG_HINT)
+
+
 def log(*args):
     line = time.strftime("[%H:%M:%S] ") + " ".join(str(a) for a in args)
+    if not _log_allowed(line):
+        return
     # 先写文件，再打印：这样即使控制台卡住，日志也不会丢
     try:
         os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)

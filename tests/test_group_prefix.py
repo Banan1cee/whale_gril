@@ -1,7 +1,7 @@
 """群消息前缀剥离的回归测试（不导入 engine：它有启动副作用）。
 
 现场问题：微信 4.2 的群消息正文长这样
-    wxid_e9fnvd2qhp6z22:\\n这个黄团子吃个酸奶
+    wxid_aaaaaaaaaaaa:\\n这个黄团子吃个酸奶
 私聊没有这层前缀，所以只有群聊里「怪怪的」——模型收到的是一串 wxid，
 @ 判定和重复检查也跟着错。这里直接读 engine.py 里的那条正则来验。
 
@@ -40,7 +40,7 @@ class GroupPrefixTest(unittest.TestCase):
 
     def test_wxid_prefix_is_removed(self):
         self.assertEqual(
-            self.strip('wxid_e9fnvd2qhp6z22:\n这个黄团子吃个酸奶'),
+            self.strip('wxid_aaaaaaaaaaaa:\n这个黄团子吃个酸奶'),
             '这个黄团子吃个酸奶')
         self.assertEqual(self.strip('wxid_abc:你好'), '你好')
 

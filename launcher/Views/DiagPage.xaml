@@ -13,7 +13,7 @@
             <TextBlock DockPanel.Dock="Left" Text="诊断" Style="{StaticResource H1}" VerticalAlignment="Center" />
             <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" HorizontalAlignment="Right">
                 <Button Content="⟳ 重新自检" Style="{StaticResource Ghost}" Click="OnRecheck" />
-                <Button Content="导出诊断包" Style="{StaticResource Ghost}" Margin="8,0,0,0" Click="OnExport" />
+                <Button Content="导出日志（最近三次）" Style="{StaticResource Ghost}" Margin="8,0,0,0" Click="OnExport" ToolTip="打包 data/logs 下最近三次启动的日志和这一次的，存到 data/ 里" />
             </StackPanel>
         </DockPanel>
 
