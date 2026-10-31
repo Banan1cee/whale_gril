@@ -83,12 +83,16 @@ test('scan() 会跳过 data/runtime/artifacts，但会扫 launcher/publish 的�
     fs.mkdirSync(path.join(dir, 'launcher', 'publish'), { recursive: true });
     fs.writeFileSync(path.join(dir, 'launcher', 'publish', 'a.exe'),
       Buffer.from('C:\\Users\\21371\\whale_gril\\launcher\\obj\\x.pdb'));
+    // artifacts/ 是审查产物，下面常掖着正在删的临时目录；整棵跳过，不能因 EPERM 崩掉
+    fs.mkdirSync(path.join(dir, 'artifacts', 'tmp'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'artifacts', 'tmp', 'leak.md'), 'id: ' + REAL_WXID);
     fs.writeFileSync(path.join(dir, 'notes.md'), 'ok');
 
     const { findings, binaries } = scan(dir);
     assert.equal(binaries, 1, 'publish 目录的 exe 要被算进二进制');
     assert.ok(findings.some((f) => f.file === 'launcher/publish/a.exe'), 'exe 的路径要报');
     assert.ok(!findings.some((f) => f.file.startsWith('data/')), 'data/ 是运行时数据，不扫');
+    assert.ok(!findings.some((f) => f.file.startsWith('artifacts/')), 'artifacts/ 是审查产物，不扫');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

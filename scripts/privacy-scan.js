@@ -117,11 +117,20 @@ function scanBinaryBuffer(buffer, file = '') {
 
 function walk(root, dir = root) {
   const out = [];
-  for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+  let entries = [];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    // 临时目录可能正被别的进程删除/改 ACL；读不了就跳过，别让自检崩掉
+    return out;
+  }
+  for (const ent of entries) {
     const full = path.join(dir, ent.name);
     const rel = path.relative(root, full).split(path.sep).join('/');
     if (ent.isDirectory()) {
       if (SKIP_DIRS.has(ent.name)) continue;
+      // 中间产物整棵跳过：artifacts/ 下常有正在删的临时目录，walk 进去会 EPERM
+      if (SKIP_PREFIX.some((p) => (rel + '/').startsWith(p))) continue;
       out.push(...walk(root, full));
     } else if (!SKIP_FILES.test(rel)) {
       out.push(rel);

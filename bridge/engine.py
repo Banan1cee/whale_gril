@@ -4229,10 +4229,10 @@ def main():
     threading.Thread(target=bridge_heartbeat, daemon=True).start()
     threading.Thread(target=listener_watch, daemon=True).start()
     threading.Thread(target=contacts_sync_once, daemon=True).start()
-    global REMINDER_RUNNER
-    REMINDER_RUNNER = start_reminder_watch(
-        http=LOCAL_HTTP, base=bot_url.rsplit("/webhook", 1)[0], token=token,
-        send_text=send_text, send_at=send_at, log=log)
+    # 这里调用的是本函数内定义的同名启动器（用闭包里的 bot_url/token/send_text），
+    # 不是模块顶部从 reminder_watch 导入的那个（它要求 http/base/... 全套注入）。
+    # 两者同名，历史上调用处照模块级签名传过关键字参数，启动必抛 TypeError。
+    start_reminder_watch()
     log("已启动。鲸鲸地址：", bot_url)
 
     # 就绪标记：外部（守护脚本 / 自检）据此判断「进程在，但可能卡在初始化」
