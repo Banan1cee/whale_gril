@@ -108,7 +108,7 @@ test('总开关关掉就不发', (t) => {
 test('联系人缓存能存能查，群按 wxid 后缀识别', (t) => {
   const { config, contacts } = fixture(t);
   assert.equal(contacts.get('wxid_master').name, '测试主人');
-  assert.equal(contacts.search('沐子')[0].wxid, 'wxid_master');
+  assert.equal(contacts.search('测试')[0].wxid, 'wxid_master');
   assert.equal(contacts.search('', { type: 'group' }).length, 1);
   assert.equal(contacts.search('', { type: 'user' }).length, 3);
   assert.equal(contacts.payload({ q: '鱼塘' }).items[0].wxid, '1@chatroom');
