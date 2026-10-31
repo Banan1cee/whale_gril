@@ -82,10 +82,13 @@ function linkedPath(file) {
     const literal = path.resolve(file);
     const expected = path.join(resolve(path.dirname(literal)), path.basename(literal));
     const real = resolve(literal);
+    const norm = (s) => s.replace(/^\\\\\?\\/, '').replace(/^\\\\\.\\/, '').toLowerCase();
+    // 8.3 短名（RUNNER~1）解析后一定不同名，但它是同一个目录；链接不会长这样。
+    if (/~\d+(\.[^.]*)?$/.test(path.basename(literal))) return false;
     // 用「父目录解析结果 + 文件名」比，而不是比字面路径：
-    // runner 的临时目录可能带 8.3 短名（RUNNER~1），字面路径与解析路径本来就不同，
-    // 直接比会把所有正常目录都判成链接。
-    return expected.toLowerCase() !== real.toLowerCase();
+    // runner 的临时目录可能带 8.3 短名（RUNNER~1）或 \\?\ 前缀，
+    // 字面路径与解析路径本来就不同，直接比会把所有正常目录都判成链接。
+    return norm(expected) !== norm(real);
   } catch {
     return true;
   }
