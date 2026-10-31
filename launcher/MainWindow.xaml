@@ -1,44 +1,132 @@
 <Window x:Class="WhaleLauncher.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="鲸鲸" Height="720" Width="1180" MinHeight="600" MinWidth="960"
-        Background="{StaticResource Bg}" WindowStartupLocation="CenterScreen"
+        Title="鲸鲸" Height="840" Width="1320" MinHeight="640" MinWidth="1080"
+        Background="{DynamicResource Bg}" Foreground="{DynamicResource Text}" FontSize="12.5"
+        WindowStartupLocation="CenterScreen"
         FontFamily="Microsoft YaHei UI, Segoe UI" UseLayoutRounding="True"
         TextOptions.TextFormattingMode="Display">
 
     <Grid>
         <Grid.RowDefinitions>
-            <RowDefinition Height="46" />
+            <RowDefinition Height="64" />
             <RowDefinition Height="*" />
-            <RowDefinition Height="28" />
+            <RowDefinition Height="30" />
         </Grid.RowDefinitions>
 
-        <!-- 顶栏：三个点 + 起停 -->
-        <Border Grid.Row="0" Background="{StaticResource BgTop}" BorderBrush="{StaticResource Line}" BorderThickness="0,0,0,1">
-            <DockPanel Margin="14,0" VerticalAlignment="Center" LastChildFill="False">
+        <!-- 背景图：只在设置里选过图片时显示；上面压一层主题蒙版保证可读 -->
+        <Grid x:Name="BackdropLayer" Grid.RowSpan="3" Visibility="Collapsed"
+              ClipToBounds="True" IsHitTestVisible="False">
+            <Image x:Name="BackdropImage" Stretch="UniformToFill"
+                   RenderOptions.BitmapScalingMode="HighQuality">
+                <Image.Effect>
+                    <BlurEffect Radius="26" KernelType="Gaussian" RenderingBias="Performance" />
+                </Image.Effect>
+            </Image>
+            <Border Background="{DynamicResource BackdropTint}" />
+        </Grid>
+
+        <!-- 顶栏 -->
+        <Border Grid.Row="0" Background="{DynamicResource BgTop}"
+                BorderBrush="{DynamicResource Line}" BorderThickness="0,0,0,1">
+            <DockPanel Margin="24,0" VerticalAlignment="Center" LastChildFill="False">
                 <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
-                    <TextBlock Text="🐋" FontSize="17" VerticalAlignment="Center" />
-                    <TextBlock Text="鲸鲸" FontSize="14" FontWeight="SemiBold" Foreground="{StaticResource Text}"
-                               Margin="7,0,0,0" VerticalAlignment="Center" />
-                    <Border Background="#FF2E3238" CornerRadius="9" Padding="7,2" Margin="8,0,0,0" VerticalAlignment="Center">
-                        <TextBlock x:Name="VersionText" Text="v4.0.0-alpha" Foreground="{StaticResource Muted}" FontSize="11" />
+                    <Border Width="34" Height="34" CornerRadius="11" VerticalAlignment="Center">
+                        <Border.Background>
+                            <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                <GradientStop Color="#FF3B6EF6" Offset="0" />
+                                <GradientStop Color="#FF6D8CFF" Offset="0.46" />
+                                <GradientStop Color="#FF16B8A6" Offset="1.3" />
+                            </LinearGradientBrush>
+                        </Border.Background>
+                        <Path Data="M4.2 17.6C8.8 17.4 12 14.6 13.2 9.8c1.2 4.8 4.4 7.6 9 7.8-1.3-5.2-4.9-8.6-9-8.6s-7.7 3.4-9 8.6Z"
+                              Fill="White" Stretch="Uniform" Width="20" Height="20"
+                              HorizontalAlignment="Center" VerticalAlignment="Center" />
                     </Border>
 
-                    <StackPanel Orientation="Horizontal" Margin="26,0,0,0" VerticalAlignment="Center">
-                        <Ellipse x:Name="DotNode" Width="8" Height="8" Fill="{StaticResource Idle}" VerticalAlignment="Center" />
-                        <TextBlock Text="内核" Style="{StaticResource Label}" Margin="6,0,18,0" VerticalAlignment="Center" />
-                        <Ellipse x:Name="DotBridge" Width="8" Height="8" Fill="{StaticResource Idle}" VerticalAlignment="Center" />
-                        <TextBlock Text="桥接" Style="{StaticResource Label}" Margin="6,0,18,0" VerticalAlignment="Center" />
-                        <Ellipse x:Name="DotWechat" Width="8" Height="8" Fill="{StaticResource Idle}" VerticalAlignment="Center" />
-                        <TextBlock x:Name="WechatLabel" Text="微信" Style="{StaticResource Label}" Margin="6,0,0,0" VerticalAlignment="Center" />
+                    <StackPanel Margin="11,0,0,0" VerticalAlignment="Center">
+                        <TextBlock Text="鲸鲸" FontSize="15" FontWeight="Bold" Foreground="{DynamicResource Text}" />
+                        <TextBlock Text="WHALE" FontSize="8" FontWeight="SemiBold"
+                                   Foreground="{DynamicResource Muted}" Margin="0,1,0,0" />
+                    </StackPanel>
+
+                    <Border Background="{DynamicResource Surface3}" CornerRadius="6" Padding="7,3"
+                            Margin="9,0,0,0" VerticalAlignment="Center">
+                        <TextBlock x:Name="VersionText" Text="v4.0.0" Foreground="{DynamicResource Muted}"
+                                   FontSize="10" FontWeight="SemiBold" />
+                    </Border>
+
+                    <Border Width="1" Height="20" Background="{DynamicResource Line}"
+                            Margin="22,0,22,0" VerticalAlignment="Center" />
+
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <Border Style="{StaticResource Chip}">
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <Ellipse x:Name="DotNode" Width="7" Height="7" Fill="{DynamicResource Idle}" />
+                                <TextBlock Text="内核" Style="{StaticResource Label}" Margin="8,0,0,0" VerticalAlignment="Center" />
+                                <TextBlock x:Name="NodeStateText" Text="未启动" Foreground="{DynamicResource Text}"
+                                           FontSize="11.5" FontWeight="SemiBold" Margin="6,0,0,0" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource Chip}">
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <Ellipse x:Name="DotBridge" Width="7" Height="7" Fill="{DynamicResource Idle}" />
+                                <TextBlock Text="桥接" Style="{StaticResource Label}" Margin="8,0,0,0" VerticalAlignment="Center" />
+                                <TextBlock x:Name="BridgeStateText" Text="未启动" Foreground="{DynamicResource Text}"
+                                           FontSize="11.5" FontWeight="SemiBold" Margin="6,0,0,0" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource Chip}">
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <Ellipse x:Name="DotWechat" Width="7" Height="7" Fill="{DynamicResource Idle}" />
+                                <TextBlock x:Name="WechatLabel" Text="微信" Style="{StaticResource Label}"
+                                           Margin="8,0,0,0" VerticalAlignment="Center" />
+                                <TextBlock x:Name="WechatStateText" Text="未登录" Foreground="{DynamicResource Text}"
+                                           FontSize="11.5" FontWeight="SemiBold" Margin="6,0,0,0" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Border>
                     </StackPanel>
                 </StackPanel>
 
-                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center" HorizontalAlignment="Right">
-                    <Button x:Name="BtnRestart" Content="⟳ 重启" Style="{StaticResource TopBtn}" Click="OnRestart" ToolTip="先停内核与桥接，再按固定顺序重启" />
-                    <Button x:Name="BtnToggle" Content="⏻ 停止" Style="{StaticResource TopBtn}" Click="OnToggle" Margin="2,0,0,0" />
-                    <Border Width="1" Height="16" Background="{StaticResource Line}" Margin="6,0" />
-                    <Button x:Name="BtnSettings" Content="⚙" Style="{StaticResource TopBtn}" Click="OnSettings" FontSize="14" ToolTip="设置" />
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button x:Name="BtnTheme" Style="{StaticResource TopBtn}" Width="34" Height="34" Padding="0" AutomationProperties.Name="切换浅色或深色"
+                            Click="OnToggleTheme" ToolTip="切换浅色 / 深色">
+                        <Grid Width="16" Height="16">
+                            <Path x:Name="IconMoon"
+                                  Data="M20.5 14.5A8.5 8.5 0 0 1 9.5 3.5 8.5 8.5 0 1 0 20.5 14.5Z"
+                                  Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                  StrokeThickness="1.7" StrokeLineJoin="Round" Stretch="Uniform" />
+                            <Path x:Name="IconSun" Visibility="Collapsed"
+                                  Data="M12 4v2 M12 18v2 M4 12h2 M18 12h2 M6.3 6.3l1.4 1.4 M16.3 16.3l1.4 1.4 M17.7 6.3l-1.4 1.4 M7.7 16.3l-1.4 1.4 M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z"
+                                  Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                  StrokeThickness="1.7" StrokeStartLineCap="Round" StrokeEndLineCap="Round" Stretch="Uniform" />
+                        </Grid>
+                    </Button>
+                    <Button x:Name="BtnSettings" Style="{StaticResource TopBtn}" Width="34" Height="34" Padding="0" AutomationProperties.Name="设置"
+                            Click="OnSettings" ToolTip="设置">
+                        <Path Data="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 1.56V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.1-1.56 1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.6 8.9a1.7 1.7 0 0 0-.34-1.88l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.56V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.56 1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.12.4.5.86 1.56 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.51 1Z"
+                              Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                              StrokeThickness="1.6" StrokeLineJoin="Round" Width="16" Height="16" Stretch="Uniform" />
+                    </Button>
+                    <Button x:Name="BtnRestart" Style="{StaticResource Ghost}" Margin="6,0,0,0"
+                            Click="OnRestart" ToolTip="先停内核与桥接，再按固定顺序重启">
+                        <StackPanel Orientation="Horizontal">
+                            <Path Data="M20 11a8 8 0 1 0-2.3 5.7 M20 5v6h-6"
+                                  Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                  StrokeThickness="1.8" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                  Width="13" Height="13" Stretch="Uniform" VerticalAlignment="Center" />
+                            <TextBlock Text="重启" Margin="7,0,0,0" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
+                    <Button x:Name="BtnToggle" Style="{StaticResource Primary}" Margin="8,0,0,0" Click="OnToggle">
+                        <StackPanel Orientation="Horizontal">
+                            <Path Data="M12 3v9 M6.3 6.3a8 8 0 1 0 11.4 0"
+                                  Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                  StrokeThickness="1.9" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                  Width="13" Height="13" Stretch="Uniform" VerticalAlignment="Center" />
+                            <TextBlock x:Name="BtnToggleText" Text="停止" Margin="7,0,0,0" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
                 </StackPanel>
             </DockPanel>
         </Border>
@@ -46,15 +134,33 @@
         <!-- 左栏 + 主区 -->
         <Grid Grid.Row="1">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="176" />
+                <ColumnDefinition Width="216" />
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
 
-            <Border Grid.Column="0" Background="{StaticResource BgNav}" BorderBrush="{StaticResource Line}" BorderThickness="0,0,1,0">
-                <DockPanel>
-                    <ListBox x:Name="Nav" DockPanel.Dock="Top" Background="Transparent" BorderThickness="0"
-                             ItemContainerStyle="{StaticResource NavItem}" Margin="0,10,0,0"
-                             SelectionChanged="OnNavChanged" ScrollViewer.HorizontalScrollBarVisibility="Disabled" />
+            <Border Grid.Column="0" Background="{DynamicResource BgNav}"
+                    BorderBrush="{DynamicResource Line}" BorderThickness="0,0,1,0">
+                <DockPanel Margin="14,22,14,16">
+                    <TextBlock DockPanel.Dock="Top" Text="工作台" FontSize="9.5" FontWeight="Bold"
+                               Foreground="{DynamicResource Dim}" Margin="12,0,0,10" />
+                    <ListBox x:Name="Nav" Background="Transparent" BorderThickness="0"
+                             ItemContainerStyle="{StaticResource NavItem}"
+                             IsSynchronizedWithCurrentItem="False"
+                             SelectionChanged="OnNavChanged"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Orientation="Horizontal">
+                                    <Path Data="{Binding Icon}"
+                                          Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ListBoxItem}}"
+                                          StrokeThickness="1.7" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                          StrokeLineJoin="Round" Width="16" Height="16" Stretch="Uniform"
+                                          VerticalAlignment="Center" />
+                                    <TextBlock Text="{Binding Label}" Margin="11,0,0,0" VerticalAlignment="Center" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
                 </DockPanel>
             </Border>
 
@@ -62,13 +168,16 @@
         </Grid>
 
         <!-- 底栏 -->
-        <Border Grid.Row="2" Background="{StaticResource BgTop}" BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,0">
-            <DockPanel Margin="14,0" VerticalAlignment="Center">
-                <TextBlock x:Name="StatusLine" DockPanel.Dock="Left" Text="启动器就绪" Style="{StaticResource Small}" VerticalAlignment="Center" />
+        <Border Grid.Row="2" Background="{DynamicResource BgTop}"
+                BorderBrush="{DynamicResource Line}" BorderThickness="0,1,0,0">
+            <DockPanel Margin="24,0" VerticalAlignment="Center">
+                <TextBlock x:Name="StatusLine" DockPanel.Dock="Left" Text="启动器就绪"
+                           Style="{StaticResource Small}" VerticalAlignment="Center" />
                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                    <Button x:Name="BtnDataDir" Content="数据目录" Style="{StaticResource TopBtn}" FontSize="11" Padding="6,2"
-                            Click="OnOpenData" Cursor="Hand" />
-                    <TextBlock x:Name="FootVersion" Text="v4.0.0-alpha" Style="{StaticResource Small}" Margin="10,0,0,0" VerticalAlignment="Center" />
+                    <Button x:Name="BtnDataDir" Content="数据目录" Style="{StaticResource TopBtn}"
+                            FontSize="10.5" Padding="6,2" Click="OnOpenData" Cursor="Hand" />
+                    <TextBlock x:Name="FootVersion" Text="v4.0.0" Style="{StaticResource Small}"
+                               Margin="10,0,0,0" VerticalAlignment="Center" />
                 </StackPanel>
             </DockPanel>
         </Border>
