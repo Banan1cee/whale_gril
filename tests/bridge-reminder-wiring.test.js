@@ -19,10 +19,14 @@ const src = fs.readFileSync(path.join(root, 'bridge', 'engine.py'), 'utf8');
 
 test('桥接启动调用的是无参闭包版 start_reminder_watch', () => {
   assert.match(src, /def start_reminder_watch\(\):/, 'main() 里的无参闭包版不见了');
-  assert.match(src, /^\s{4}start_reminder_watch\(\)\s*$/m, '启动处应无参调用闭包版');
+  assert.match(
+    src,
+    /REMINDER_RUNNER\s*=\s*start_reminder_watch\(\)/,
+    '启动处应无参调用闭包版并把实例存进 REMINDER_RUNNER',
+  );
   assert.doesNotMatch(
     src,
-    /REMINDER_RUNNER\s*=\s*start_reminder_watch\(/,
+    /start_reminder_watch\(\s*http\s*=/,
     '不要再按模块级签名给闭包版传关键字参数',
   );
 });

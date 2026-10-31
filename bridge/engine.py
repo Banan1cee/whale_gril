@@ -4218,8 +4218,10 @@ def main():
             threading.Thread(target=REMINDER_RUNNER.run, daemon=True,
                              name="reminder-watch").start()
             log("提醒调度已启动（到点准点发）")
+            return REMINDER_RUNNER
         except Exception as e:                       # noqa: BLE001
             log("提醒调度启动失败（提醒停用，不影响收发）：", repr(e))
+            return None
 
     threading.Thread(target=config_watch, daemon=True).start()
     threading.Thread(target=warmup, daemon=True).start()
@@ -4232,7 +4234,8 @@ def main():
     # 这里调用的是本函数内定义的同名启动器（用闭包里的 bot_url/token/send_text），
     # 不是模块顶部从 reminder_watch 导入的那个（它要求 http/base/... 全套注入）。
     # 两者同名，历史上调用处照模块级签名传过关键字参数，启动必抛 TypeError。
-    start_reminder_watch()
+    global REMINDER_RUNNER
+    REMINDER_RUNNER = start_reminder_watch()
     log("已启动。鲸鲸地址：", bot_url)
 
     # 就绪标记：外部（守护脚本 / 自检）据此判断「进程在，但可能卡在初始化」
