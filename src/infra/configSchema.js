@@ -59,14 +59,10 @@ const FIELDS = {
   'links.enabled': { type: 'bool' },
   'links.timeoutMs': { type: 'int', min: 1000, max: 60000 },
   'websearch.enabled': { type: 'bool' },
-  // ---- 消息汇总（把错过的消息推给主人；和 memory.digest 无关）----
   // ---- 提醒（规则字段和 care 对齐，配置独立）----
   'reminder.enabled': { type: 'bool' },
   'reminder.maxPerDay': { type: 'int', min: 0, max: 200 },
   'reminder.quietAfterMinutes': { type: 'int', min: 0, max: 1440 },
-  'digest.enabled': { type: 'bool' },
-  'digest.everyMinutes': { type: 'int', min: 1, max: 1440 },
-  'digest.maxItems': { type: 'int', min: 1, max: 120 },
 
   // ---- 存储 ----
   'storage.mediaKeepDays': { type: 'int', min: 1, max: 365 },

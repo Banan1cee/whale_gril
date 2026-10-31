@@ -136,8 +136,6 @@ const DEFAULT_CONFIG = {
   // 联网：问天气/新闻这类实时问题时现搜。city 用来把「今天天气怎么样」补成「上海 天气」，
   // 搜到的结果准得多；留空就按对方原话搜（也能用，但经常搜到别的城市）。
   websearch: { enabled: true, city: '', timeoutMs: 8000 },
-  // 消息汇总：把「她没接话」的微信消息定时推给主人。和 memory.digest（记忆整理）不是一回事。
-  digest: { enabled: false, everyMinutes: 30, maxItems: 120 },
   // 提醒：规则和 care 同语义（每天上限 / 刚聊过先跳过），配置独立、界面独立。
   // 提醒不设时间段：它是用户指定的准点事件，卡时间窗只会让提醒发不出去。
   reminder: { enabled: true, maxPerDay: 0, quietAfterMinutes: 0 },
@@ -180,8 +178,6 @@ const DEFAULT_CONFIG = {
     timeoutMs: 90000,
     maxSeconds: 120,
   },
-  // 主动分享视频
-  share: { enabled: true, everyMinutes: 120, sources: ['bilibili'] },
   // 主动搭话（没事时她自己来问一句「在干啥 / 累不累」）
   care: {
     // 默认：她自己来找你（只找主人），但绝不进群、也不主动找别人

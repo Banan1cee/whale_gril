@@ -24,7 +24,7 @@ namespace WhaleLauncher
 
         private static readonly string[] NavKeys =
         {
-            "状态", "人设", "记忆", "表情包", "提醒", "微信桥接", "诊断", "设置"
+            "状态", "人设", "记忆", "表情包", "主动与提醒", "微信桥接", "诊断", "设置"
         };
 
         public MainWindow()
@@ -118,7 +118,7 @@ namespace WhaleLauncher
                 case "人设": return new PersonaPage(_sup);
                 case "记忆": return new MemoryPage(_sup);
                 case "表情包": return new StickerPage(_sup);
-                case "提醒": return new ReminderPage(_sup);
+                case "主动与提醒": return new ReminderPage(_sup);
                 case "微信桥接": return new BridgePage(_sup);
                 case "诊断": return new DiagPage(_sup);
                 case "设置": return new SettingsPage(_sup);

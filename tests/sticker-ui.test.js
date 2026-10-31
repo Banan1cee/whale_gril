@@ -114,29 +114,6 @@ test('sticker UI binds once; refresh never sends and one click creates one queue
   assert.equal(h.intervals.size, 1);
 });
 
-test('digest toggle and interval share one feature row; OFF disables frequency; saving never sends', async () => {
-  const h = harness({ digest: false });
-  await h.run('loadFeatures()');
-  const row = h.ids.get('tFeatures').children[0];
-  const box = row.children[1].children[0];
-  const controls = row.children[0].children[2];
-  const minutes = controls.children[0].children[0];
-  const save = controls.children[1];
-  assert.equal(box.dataset.key, 'digest');
-  assert.equal(minutes.disabled, true);
-  assert.equal(save.disabled, true);
-  box.checked = true; await box.dispatch('change');
-  assert.equal(minutes.disabled, false);
-  minutes.value = '0'; await save.click();
-  assert.equal(h.calls.filter((c) => c.url === '/api/config' && c.method === 'POST').length, 0);
-  minutes.value = '12'; await save.click();
-  const call = h.calls.find((c) => c.url === '/api/config' && c.method === 'POST');
-  assert.deepEqual(call.body, { patch: { 'digest.everyMinutes': 12 } });
-  assert.equal(h.calls.some((c) => /webhook|stickers\/test|api\/digest/.test(c.url)), false);
-  box.checked = false; await box.dispatch('change');
-  assert.equal(minutes.disabled, true);
-});
-
 test('deleted game/queue settings stay hidden even if legacy user config retains them', () => {
   const h = harness();
   const html = h.run("fieldsHtml({ gameWhitelist:['game'], awayNotice:true, returnNotice:true, queuedMaxChats:2, queuedMaxAgeSec:300, digestMinutes:30, accountGuard:true }, 'wechat')");

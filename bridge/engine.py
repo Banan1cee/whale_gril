@@ -74,9 +74,6 @@ LOG_LEVEL = "info"
 _LOG_ERROR_HINT = ("错误", "失败", "异常", "超时", "Traceback", "Exception", "Error", "error:", "❌")
 _LOG_DEBUG_HINT = ("跳过", "忽略", "热激活", "布局", "轮询", "重试", "装死", "收到")
 
-# 消息汇总 worker：main() 里构造，config_watch 热更新时直接 configure 它。
-# 没起来时保持 None，reload_config() 可以安全地先跑。
-DIGEST_WORKER = None
 # 提醒调度器：main() 里构造；模块级是为了让退出分支能拿到它
 REMINDER_RUNNER = None
 
@@ -225,9 +222,6 @@ try:
     ACCOUNT_WANTED = str(_wechat.get("account") or "").strip()
     LOW_BATTERY_PCT = float(_wechat.get("lowBatteryPercent", 5))
     GOODNIGHT_TEXT = str(_wechat.get("goodnightText", "晚安，电量快没了，我先睡啦，明天见～"))
-    _share = _cfg.get("share") or {}
-    SHARE_ENABLED = bool(_share.get("enabled", True))
-    SHARE_EVERY = float(_share.get("everyMinutes", 120))
     # 主动搭话（问「在干啥 / 累不累」）。时间窗和频率由服务端 /api/care/due 算，这里只留一个开关和静默期
     _care = _cfg.get("care") or {}
     # 主动搭话：默认跟着 config.js 走（true），且默认只找主人、绝不进群。
@@ -327,7 +321,7 @@ def reload_config(path=None):
     global QUOTE_REPLY, KEYBOARD_FALLBACK, BACKGROUND_SEND, LOW_BATTERY_PCT, GOODNIGHT_TEXT
     global BG_SEND, PIPELINE_WORKERS, PIPELINE_QUEUE_LIMIT
     global ACCOUNT_GUARD, WINDOW_HWND, STICKER_TEST_ON
-    global SHARE_ENABLED, SHARE_EVERY, CARE_ENABLED, CARE_QUIET_MIN
+    global CARE_ENABLED, CARE_QUIET_MIN
     global STALE_AFTER, SYSTEM_SENDER_NAMES, BASE_SYSTEM_SENDERS, MASTER_WXID
     global VOICE_ENABLED, VOICE_BASE_URL, VOICE_MODEL, VOICE_API_KEY, VOICE_TIMEOUT, VOICE_MAX_SECONDS
     target = path or CONFIG_PATH
@@ -376,13 +370,6 @@ def reload_config(path=None):
     # 忽略名单：系统会话是固定底表，配置里的只追加
     SYSTEM_SENDER_NAMES = set(BASE_SYSTEM_SENDERS)
     SYSTEM_SENDER_NAMES |= {str(x).strip() for x in (w.get("ignoreSenders") or []) if str(x).strip()}
-
-    sh = cfg.get("share") or {}
-    SHARE_ENABLED = bool(sh.get("enabled", True))
-    try:
-        SHARE_EVERY = float(sh.get("everyMinutes", 120))
-    except Exception:
-        SHARE_EVERY = 120.0
 
     ca = cfg.get("care") or {}
     global CARE_ENABLED, CARE_ALLOW_GROUPS, CARE_ONLY_MASTER, CARE_ALLOW_OTHERS
@@ -3416,63 +3403,6 @@ def main():
             pass
         return out
 
-    def share_watch():
-        """每隔一段时间自己刷 B 站热门，挑一个没分享过的发到最近活跃的群/私聊。"""
-        state_file = os.path.join(ROOT, "data", "share-state.json")
-        try:
-            with open(state_file, "r", encoding="utf-8") as f:
-                last = float(json.load(f).get("lastTs") or 0)
-        except Exception:
-            last = 0.0
-        if not last:
-            # 首次启动：5 分钟后再发，别一开机就刷屏
-            last = time.time() - SHARE_EVERY * 60 + 60
-        while True:
-            time.sleep(30)
-            if not SHARE_ENABLED:
-                continue
-            if time.time() - last < SHARE_EVERY * 60:
-                continue
-            if foreground_is_fullscreen():
-                continue
-            target = recent_chats(limit=1, within=7200)
-            if not target:
-                log("没有最近活跃的会话，这次先不分享")
-                last = time.time()
-                continue
-            u, name = target[0]
-            try:
-                base = bot_url.rsplit("/webhook", 1)[0]
-                r = LOCAL_HTTP.get(base + "/api/share?chat=" + urllib.parse.quote(u), timeout=40)
-                data = r.json()
-            except Exception as e:
-                log("拉取视频失败：", repr(e))
-                last = time.time()
-                continue
-            video = data.get("video")
-            last = time.time()
-            try:
-                with open(state_file, "w", encoding="utf-8") as f:
-                    json.dump({"lastTs": last}, f)
-            except Exception:
-                pass
-            if not video:
-                log("这次没挑到合适的视频")
-                continue
-            title = str(video.get("title") or "")[:60]
-            link = str(video.get("url") or "")
-            topic = str(data.get("topic") or "").strip()
-            comment = str(data.get("comment") or "").strip()
-            if not comment:
-                comment = random.choice([
-                    "这个看着还行，评论区比视频有意思",
-                    "刚刷到，你们看看",
-                    "有点意思，我接着刷了",
-                ])
-            text = "%s\n%s" % (link, comment)
-            log("主动分享视频 →", name, str(video.get("title"))[:30])
-            send_text(text, name, u)
-
     def care_watch():
         """主动搭话：没事的时候她自己来问一句「在干啥 / 累不累」。
 
@@ -3882,184 +3812,14 @@ def main():
             if reload_config():
                 log("配置已热更新（调试台改完即时生效，不用重启桥接）")
 
-    # ---------- 消息汇总（digest）接线 ----------
-    # 调度/重试/开关代际复核全在 bridge/digest_worker.py；这里只注入桥接现有能力。
-    def digest_resolve_recipient(wxid):
-        """主人 wxid → (canonical_wxid, 会话显示名)；解析不出唯一会话就返回 ''。"""
-        try:
-            # 复用表情包通道那套「唯一精确联系人」解析，不另写搜索逻辑。
-            canonical, _aliases = resolve_sticker_target(db, wxid, wxid)
-        except Exception:
-            return ''
-        if not canonical:
-            return ''
-        try:
-            return (canonical, display_name(canonical))
-        except Exception:
-            return ''
-
-    def digest_can_send():
-        """现在允许定时汇总发出去吗：窗口在 + 账号认得出 + 不是全屏打扰。"""
-        try:
-            return bool(wechat_window_alive()
-                        and account_send_allowed("消息汇总")
-                        and not foreground_is_fullscreen())
-        except Exception:
-            return False
-
-    def start_digest_worker():
-        global DIGEST_WORKER
-        try:
-            try:
-                from .digest_watch import DigestBridge, start_worker
-            except ImportError:
-                from digest_watch import DigestBridge, start_worker
-            bridge = DigestBridge(
-                read_config=read_config,
-                base_url=bot_url.rsplit("/webhook", 1)[0],
-                http_get=LOCAL_HTTP.get,
-                resolve_recipient=digest_resolve_recipient,
-                send_text=send_text,
-                can_send=digest_can_send,
-                account=str((cfg.get("wechat") or {}).get("account") or ""),
-                log=log,
-            )
-        except Exception as e:                 # noqa: BLE001
-            log("消息汇总未接线（不影响普通回复）：", repr(e))
-            return
-        DIGEST_WORKER = bridge.worker
-        try:
-            DIGEST_WORKER.configure(read_config())
-        except Exception:
-            pass
-        start_worker(bridge, log=log)
-
     threading.Thread(target=config_watch, daemon=True).start()
-    # ---------- 联系人清单同步（给启动器的白/黑名单选择器） ----------
-    bridge_headers = {"x-whale-bridge": "1"}
-    if token:
-        bridge_headers["x-bot-token"] = token
-    bridge_base = bot_url.rsplit("/webhook", 1)[0]
-
-    def contacts_sync_once():
-        """核心启动后，**等桥接连上微信**再扫一次联系人（用户要求：只扫这一次）。
-
-        就绪的判断不是「等 8 秒」，而是真的连上了：
-          1. 微信主窗口活着；
-          2. 读到了当前账号 wxid；
-          3. contact.db 能打开（密钥拿到了）。
-        最多等 5 分钟；等不到就放弃，重启核心后才会再扫 —— 不做定时轮询。
-        """
-        try:
-            from contacts_sync import payload as contacts_payload
-        except ImportError:                       # 包方式
-            from .contacts_sync import payload as contacts_payload
-
-        def wechat_ready():
-            try:
-                if not wechat_window_alive():
-                    return False
-            except Exception:
-                return False
-            if not str(getattr(db, "wxid", "") or "").strip():
-                return False
-            try:
-                conn = db._contact_conn()
-                if not conn:
-                    return False
-                conn.close()
-                return True
-            except Exception:
-                return False
-
-        deadline = time.time() + 300
-        while time.time() < deadline:
-            if wechat_ready():
-                break
-            time.sleep(5)
-        else:
-            log("联系人扫描放弃：5 分钟内没等到微信连上（重启核心后会再扫一次）")
-            return
-
-        for attempt in range(3):
-            try:
-                body = contacts_payload(db, int(time.time() * 1000))
-                if body.get("items"):
-                    LOCAL_HTTP.post(bridge_base + "/api/wechat/contacts/sync",
-                                    json=body, headers=bridge_headers, timeout=30)
-                    users = sum(1 for i in body["items"] if not i.get("isGroup"))
-                    log("联系人清单已同步（连上微信后扫描一次）：", users, "个联系人 +",
-                        len(body["items"]) - users, "个群")
-                    return
-                log("联系人清单为空，10 秒后重试 %d/2" % (attempt + 1))
-            except Exception as e:
-                log_throttled("contacts-fail", "联系人扫描失败：%r" % (e,), ttl=900)
-            if attempt < 2:
-                time.sleep(10)
-        log("联系人扫描放弃（这一轮没拿到）；重启核心后会再扫一次")
-
-    # ---------- 提醒：准点发送 ----------
-    def reminder_fetch():
-        r = LOCAL_HTTP.get(bridge_base + "/api/reminders/due", headers=bridge_headers, timeout=10)
-        return r.json() or {}
-
-    def reminder_send(item, text):
-        wxid = str(item.get("wxid") or "").strip()
-        name = str(item.get("name") or wxid).strip()
-        if not wxid:
-            return False
-        # 和主动聊天同一套发送限制：微信窗口在、账号认得出、不是全屏在打扰。
-        # 任何一条不满足就当作这一次没发成，交给服务端 5 分钟后重试一次。
-        try:
-            if not wechat_window_alive():
-                log("提醒暂缓：微信窗口不在（5 分钟后重试一次）")
-                return False
-            if not account_send_allowed("提醒"):
-                log("提醒暂缓：认不出当前是哪个微信号（5 分钟后重试一次）")
-                return False
-            if foreground_is_fullscreen():
-                log("提醒暂缓：你正在全屏用电脑，5 分钟后重试一次")
-                return False
-        except Exception:
-            return False
-        body = text
-        # 群里提醒：在正文前 @ 设定者（真 @ 要 UIA 成员列表，这里用文本兜底）
-        if item.get("chatType") == "group" and item.get("atName"):
-            body = "@" + str(item["atName"]) + " " + text
-        return bool(send_text(body, name, wxid))
-
-    def reminder_ack(item, ok, err):
-        try:
-            LOCAL_HTTP.post(bridge_base + "/api/reminders/ack",
-                            json={"id": item.get("id"), "ok": bool(ok), "error": err or ""},
-                            headers=bridge_headers, timeout=10)
-        except Exception as e:
-            log("提醒回执失败（服务端会超时后重试）：", repr(e))
-
-    def start_reminder_watch():
-        global REMINDER_RUNNER
-        try:
-            try:
-                from reminder_watch import ReminderRunner
-            except ImportError:
-                from .reminder_watch import ReminderRunner
-            REMINDER_RUNNER = ReminderRunner(
-                fetch=reminder_fetch, send=reminder_send, ack=reminder_ack, log=log,
-            )
-            threading.Thread(target=REMINDER_RUNNER.run, name="reminders", daemon=True).start()
-            log("提醒调度已启动（准点发送，失败 5 分钟后重试一次）")
-        except Exception as e:                     # noqa: BLE001
-            log("提醒调度未启动（不影响聊天）：", repr(e))
-
     threading.Thread(target=warmup, daemon=True).start()
     threading.Thread(target=send_watchdog, daemon=True).start()
     threading.Thread(target=battery_watch, daemon=True).start()
-    threading.Thread(target=share_watch, daemon=True).start()
     threading.Thread(target=care_watch, daemon=True).start()
     threading.Thread(target=bridge_heartbeat, daemon=True).start()
     threading.Thread(target=listener_watch, daemon=True).start()
     threading.Thread(target=contacts_sync_once, daemon=True).start()
-    start_digest_worker()
     start_reminder_watch()
     log("已启动。鲸鲸地址：", bot_url)
 

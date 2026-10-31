@@ -96,18 +96,6 @@ namespace WhaleLauncher.Views
                 new FieldSpec { Path = "group.silentMinutes", Label = "冷场多久算话题结束(分钟)", Kind = "num", Min = 1, Max = 10080 },
                 new FieldSpec { Path = "group.muteDefaultMinutes", Label = "免打扰默认时长(分钟)", Kind = "num", Min = 1, Max = 1440 },
             }},
-            new SectionSpec { Title = "主动搭话", Fields =
-            {
-                new FieldSpec { Path = "care.enabled", Label = "没聊时她主动来一句", Kind = "bool" },
-                new FieldSpec { Path = "care.onlyMaster", Label = "只找主人", Kind = "bool" },
-                new FieldSpec { Path = "care.allowGroups", Label = "允许在群里主动", Kind = "bool" },
-                new FieldSpec { Path = "care.allowOthers", Label = "允许主动找别人", Kind = "bool" },
-                new FieldSpec { Path = "care.everyMinutes", Label = "平均间隔(分钟)", Kind = "num", Min = 5, Max = 1440 },
-                new FieldSpec { Path = "care.jitterMinutes", Label = "间隔浮动(分钟)", Kind = "num", Min = 0, Max = 180 },
-                new FieldSpec { Path = "care.maxPerDay", Label = "每天最多几次", Kind = "num", Min = 0, Max = 50 },
-                new FieldSpec { Path = "care.quietAfterMinutes", Label = "刚聊过先跳过(分钟)", Kind = "num", Min = 0, Max = 240 },
-                new FieldSpec { Path = "care.windows", Label = "允许的时间段", Kind = "multiline", Hint = "每行一个，如 09:00-12:00；留空 = 全天" },
-            }},
             new SectionSpec { Title = "记忆", Note = "检索、整理、遗忘都在这。", Fields =
             {
                 new FieldSpec { Path = "memory.maxSessions", Label = "最多记几个会话", Kind = "num", Min = 1, Max = 10000 },
@@ -145,13 +133,7 @@ namespace WhaleLauncher.Views
                 new FieldSpec { Path = "wechat.pipelineWorkers", Label = "同时处理几个会话", Kind = "num", Min = 1, Max = 8 },
                 new FieldSpec { Path = "wechat.pipelineQueueLimit", Label = "单个会话最多积压几条", Kind = "num", Min = 1, Max = 100 },
             }},
-            new SectionSpec { Title = "消息汇总", Note = "把“她没接话”的微信消息定时发给你。和“记忆整理”不是一回事。", Fields =
-            {
-                new FieldSpec { Path = "digest.enabled", Label = "开启消息汇总", Kind = "bool", Hint = "关 = 不采集、不推送，接口 404" },
-                new FieldSpec { Path = "digest.everyMinutes", Label = "每隔多少分钟", Kind = "num", Min = 1, Max = 1440 },
-                new FieldSpec { Path = "digest.maxItems", Label = "一次最多带几条", Kind = "num", Min = 1, Max = 120, Hint = "超出留到下一次" },
-            }},
-            new SectionSpec { Title = "联网与分享", Fields =
+            new SectionSpec { Title = "联网与链接", Fields =
             {
                 new FieldSpec { Path = "websearch.enabled", Label = "联网搜索", Kind = "bool" },
                 new FieldSpec { Path = "websearch.city", Label = "搜索城市", Kind = "text" },
@@ -159,17 +141,17 @@ namespace WhaleLauncher.Views
                 new FieldSpec { Path = "links.enabled", Label = "解析聊天里的链接", Kind = "bool" },
                 new FieldSpec { Path = "links.timeoutMs", Label = "链接超时(毫秒)", Kind = "num", Min = 1000, Max = 30000 },
                 new FieldSpec { Path = "links.cacheMinutes", Label = "链接缓存(分钟)", Kind = "num", Min = 0, Max = 1440 },
-                new FieldSpec { Path = "share.enabled", Label = "定时分享(B站)", Kind = "bool" },
-                new FieldSpec { Path = "share.everyMinutes", Label = "分享间隔(分钟)", Kind = "num", Min = 5, Max = 1440 },
-                new FieldSpec { Path = "share.sources", Label = "分享来源", Kind = "text", Hint = "多个用逗号分隔，例如 bilibili" },
             }},
-            new SectionSpec { Title = "管理员与语音", Fields =
+            new SectionSpec { Title = "管理员权限", Note = "在微信里发一段口令就能临时获得管理员权限（安静、忘掉、重启这类命令）。", Fields =
             {
                 new FieldSpec { Path = "admin.spell", Label = "管理员口令", Kind = "text", Hint = "在微信里发这句获得权限；留空 = 关闭" },
                 new FieldSpec { Path = "admin.minutes", Label = "权限有效期(分钟)", Kind = "num", Min = 1, Max = 1440 },
-                new FieldSpec { Path = "admin.allowAll", Label = "谁发都给权限", Kind = "bool" },
+                new FieldSpec { Path = "admin.allowAll", Label = "谁发都给权限", Kind = "bool", Hint = "关掉 = 只有主人发才给" },
+            }},
+            new SectionSpec { Title = "语音", Note = "别人发语音时先转成文字再回复。", Fields =
+            {
                 new FieldSpec { Path = "voice.enabled", Label = "语音回复", Kind = "bool" },
-                new FieldSpec { Path = "voice.apiKey", Label = "语音接口 Key", Kind = "secret", Hint = "留空表示不改" },
+                new FieldSpec { Path = "voice.apiKey", Label = "语音接口 Key", Kind = "secret", Hint = "留空表示不改；留空则用主模型的 Key" },
                 new FieldSpec { Path = "voice.baseUrl", Label = "语音接口地址", Kind = "text" },
                 new FieldSpec { Path = "voice.model", Label = "语音模型", Kind = "text" },
             }},
@@ -195,7 +177,6 @@ namespace WhaleLauncher.Views
                 new FieldSpec { Path = "features.groupAddressGuard", Label = "群聊分清说话对象", Kind = "bool", Hint = "关掉容易答张三的话给李四" },
                 new FieldSpec { Path = "features.fightQuoteCheck", Label = "还嘴前核对对方原话", Kind = "bool" },
                 new FieldSpec { Path = "features.mediaCleanup", Label = "自动清理媒体缓存", Kind = "bool" },
-                new FieldSpec { Path = "features.digest", Label = "消息汇总（和上面的汇总开关是同一个）", Kind = "bool" },
                 new FieldSpec { Path = "features.memorySnapshot", Label = "自动备份记忆", Kind = "bool" },
             }},
             new SectionSpec { Title = "高级", Fields =
@@ -262,20 +243,6 @@ namespace WhaleLauncher.Views
         {
             var card = Card(spec.Title, spec.Note, out var body);
             foreach (var f in spec.Fields) body.Children.Add(BuildField(f));
-            if (spec.Title == "主动搭话")
-            {
-                body.Children.Add(new Border
-                {
-                    Height = 1,
-                    Background = (Brush)FindResource("Line"),
-                    Margin = new Thickness(0, 12, 0, 12)
-                });
-                body.Children.Add(BuildContactListSelector("care.whitelist",
-                    "白名单", "留空 = 只有主人和文件传输助手", "选择联系人…", allowAllMute: false));
-                body.Children.Add(BuildContactListSelector("group.mutedGroups",
-                    "黑名单（静音）", "留空 = 不静音任何会话；「全部静音（*）」= 所有群都不接",
-                    "选择要静音的…", allowAllMute: true));
-            }
             return card;
         }
 
@@ -632,16 +599,7 @@ namespace WhaleLauncher.Views
                     box.LostFocus += async (s, e) =>
                     {
                         if (_loading) return;
-                        if (f.Path == "share.sources")
-                        {
-                            var parts = (box.Text ?? "").Split(new[] { ',', '，' }, StringSplitOptions.RemoveEmptyEntries)
-                                .Select(x => x.Trim()).Where(x => x.Length > 0).ToArray();
-                            await PatchAsync(f.Path, "[" + string.Join(",", parts.Select(p => "\"" + Api.Esc(p) + "\"")) + "]");
-                        }
-                        else
-                        {
-                            await PatchAsync(f.Path, "\"" + Api.Esc((box.Text ?? "").Trim()) + "\"");
-                        }
+                        await PatchAsync(f.Path, "\"" + Api.Esc((box.Text ?? "").Trim()) + "\"");
                     };
                     _loaders[f.Path] = v =>
                     {
