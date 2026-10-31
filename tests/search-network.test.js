@@ -262,10 +262,14 @@ test('named models survive cleaning and are never replaced by generic lineup que
 
 test('weather geocoding and forecast use one total deadline', async (t) => {
   const calls = fakeHttps(t, (call) => call.url.includes('geocoding-api')
-    ? { delay: 25, body: JSON.stringify({ results: [{ name: '北京', latitude: 39.9, longitude: 116.4 }] }) }
+    ? { delay: 60, body: JSON.stringify({ results: [{ name: '北京', latitude: 39.9, longitude: 116.4 }] }) }
     : { drip: true });
   const started = Date.now();
-  assert.equal(await web.weatherText('北京', { timeoutMs: 50 }), '');
+  assert.equal(await web.weatherText('北京', { timeoutMs: 300 }), '');
   assert.equal(calls.length, 2);
-  assert.ok(Date.now() - started < 150);
+  const elapsed = Date.now() - started;
+  // 要证明的是「两步共用一份预算」，不是「跑得快」：
+  // 共用 → 约 300ms 收工；各等一个完整超时 → 600ms 起步。
+  // 阈值取 500（离 600 有明显距离），给并行跑测试文件时卡顿的 CI 留余量。
+  assert.ok(elapsed < 500, `共享预算失效：耗时 ${elapsed}ms（两步各等一个超时会是 600ms+）`);
 });
