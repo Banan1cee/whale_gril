@@ -3,6 +3,9 @@
 const features = require('../infra/features');
 const { clampInt } = require('./text');
 
+/** 读布尔开关：兼容老配置里的字符串 "false" / "0"（configSchema 允许这种写法） */
+const toBool = features.toBool;
+
 /**
  * 触发判断：这条群消息到底要不要接。
  * 纯逻辑 + 对 state 的少量写入（静默期/接话窗口），不调用模型、不写记忆。
@@ -57,7 +60,7 @@ function computeTrigger(bot, { msg, atMe, clean, isGroup, state, nowMs, isMaster
   if (Number(state.silentUntil) > nowMs) {
     return { wake: false, reason: 'silent' };
   }
-  if (isMaster && bot.config.group.masterAlwaysReply) return { wake: true, reason: 'master' };
+  if (isMaster && toBool(bot.config.group.masterAlwaysReply, true)) return { wake: true, reason: 'master' };
   if (Number(state.engagedUntil) > nowMs) {
     const txt = String(clean.text || '');
     const sameSender = String(msg.senderId || '') === String(state.engagedBy || '');
@@ -112,10 +115,12 @@ function computeTrigger(bot, { msg, atMe, clean, isGroup, state, nowMs, isMaster
   // 以前 case 2 直接 return wake:true，等于让概率设置完全失效（用户以为没保存）。
   const interjectChance = clampInt(Number(g.freeChatChance) * 1000, 0, 1000, 60) / 1000;
   const interject = !tooSoon && interjectChance > 0 && bot.rng() < interjectChance;
-  if (g.requireAt === false) {
+  // 开关一律走 toBool：老配置里可能是字符串 "false"（configSchema 明确允许），
+  // 直接 `=== false` / 真值判断会让「关掉的开关」继续生效。
+  if (!toBool(g.requireAt, true)) {
     return interject ? { wake: true, reason: 'free_chat' } : { wake: false, reason: 'not_addressed' };
   }
-  if (g.freeChat && interject) return { wake: true, reason: 'free_chat' };
+  if (toBool(g.freeChat, false) && interject) return { wake: true, reason: 'free_chat' };
   return { wake: false, reason: clean.text ? 'not_addressed' : 'no_text' };
 }
 
