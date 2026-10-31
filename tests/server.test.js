@@ -9,6 +9,9 @@ const path = require('node:path');
 
 const { startServer } = require('../server');
 
+// 网页聊天入口已下线：/api/chat 现在只认桥接 token
+const TOKEN = 'test-token';
+
 /** 起一个临时目录 + 临时端口的服务 */
 async function boot(configPatch = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-srv-'));
@@ -16,6 +19,7 @@ async function boot(configPatch = {}) {
   // 测试固定主人和魔咒，不依赖开源默认值
   cfg.persona = { ...(cfg.persona || {}), master: (cfg.persona && cfg.persona.master) || { names: ['Master'], wxids: ['wxid_test_master'] } };
   cfg.admin = { minutes: 30, ...(cfg.admin || {}), spell: (cfg.admin && cfg.admin.spell) || 'test-spell' };
+  cfg.gateway = { ...(cfg.gateway || {}), wechat: { inboundToken: TOKEN, ...((cfg.gateway && cfg.gateway.wechat) || {}) } };
   fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify(cfg));
   const instance = await startServer({ root, env: { WHALE_LOG_FILE: '' }, port: 0, openBrowser: false });
   instance.runtime.bot.mockChunkDelayMs = 0;
@@ -25,7 +29,7 @@ async function boot(configPatch = {}) {
 async function collectSse(url, payload) {
   const res = await fetch(url, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', 'x-bot-token': TOKEN },
     body: JSON.stringify(payload),
   });
   assert.match(res.headers.get('content-type') || '', /text\/event-stream/);
@@ -48,6 +52,20 @@ test('状态接口：默认是演示模式，两个网关都在', async () => {
   assert.equal(data.name, '鲸鲸');
   assert.ok(Array.isArray(data.gateways) && data.gateways.length === 2);
   assert.ok(data.webhookPaths.includes('/webhook/wechat'));
+  await app.close();
+});
+
+test('网页聊天入口已关闭：不带桥接 token 一律 404', async () => {
+  const app = await boot();
+  const res = await fetch(app.url + '/api/chat', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ text: '在吗', mode: 'private', sessionId: 'web-off' }),
+  });
+  assert.equal(res.status, 404, '浏览器那边不该还能聊');
+  const data = await res.json();
+  assert.equal(data.ok, false);
+  assert.match(data.error, /网页聊天已下线/);
   await app.close();
 });
 
@@ -74,7 +92,7 @@ test('网页群聊：没被 @ 返回 ignore，被 @ 才回复', async () => {
   const app = await boot();
   const res = await fetch(app.url + '/api/chat', {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', 'x-bot-token': TOKEN },
     body: JSON.stringify({ text: '今天加班好累', mode: 'group', sessionId: 'test2', senderName: '阿螈' }),
   });
   const data = await res.json();
