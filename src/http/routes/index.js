@@ -5,7 +5,6 @@ const { Router } = require('../router');
 const modules = [
   require('./status'),
   require('./features'),
-  require('./memory'),
   require('./settings'),
   require('./vision'),
   require('./persona'),

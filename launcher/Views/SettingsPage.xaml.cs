@@ -79,9 +79,6 @@ namespace WhaleLauncher.Views
                 new FieldSpec { Path = "chat.privateMaxChars", Label = "私聊每条最多几个字", Kind = "num", Min = 40, Max = 800 },
                 new FieldSpec { Path = "chat.groupMaxChars", Label = "群聊每条最多几个字", Kind = "num", Min = 20, Max = 300 },
                 new FieldSpec { Path = "chat.maxBubbles", Label = "最多分几条消息", Kind = "num", Min = 1, Max = 8, Hint = "长回复才拆，短句仍然一条" },
-                new FieldSpec { Path = "chat.historyTurns", Label = "私聊带几轮历史", Kind = "num", Min = 4, Max = 400 },
-                new FieldSpec { Path = "chat.groupHistoryTurns", Label = "群聊带几轮历史", Kind = "num", Min = 2, Max = 300 },
-                new FieldSpec { Path = "chat.discussionMaxChars", Label = "认真讨论时最多几个字", Kind = "num", Min = 80, Max = 1200 },
                 new FieldSpec { Path = "chat.emojiChance", Label = "颜文字概率", Kind = "num", Min = 0, Max = 1, IsInt = false },
             }},
             new SectionSpec { Title = "群聊", Fields =
@@ -95,16 +92,6 @@ namespace WhaleLauncher.Views
                 new FieldSpec { Path = "group.engagedMinutes", Label = "接话后保持参与(分钟)", Kind = "num", Min = 1, Max = 1440 },
                 new FieldSpec { Path = "group.silentMinutes", Label = "冷场多久算话题结束(分钟)", Kind = "num", Min = 1, Max = 10080 },
                 new FieldSpec { Path = "group.muteDefaultMinutes", Label = "免打扰默认时长(分钟)", Kind = "num", Min = 1, Max = 1440 },
-            }},
-            new SectionSpec { Title = "记忆", Note = "检索、整理、遗忘都在这。", Fields =
-            {
-                new FieldSpec { Path = "memory.maxSessions", Label = "最多记几个会话", Kind = "num", Min = 1, Max = 10000 },
-                new FieldSpec { Path = "memory.maxMessages", Label = "每个会话留多少条消息", Kind = "num", Min = 2, Max = 800 },
-                new FieldSpec { Path = "memory.maxNotesPerUser", Label = "每人留几条记忆", Kind = "num", Min = 1, Max = 50 },
-                new FieldSpec { Path = "memory.digest", Label = "自动整理(摘要+抽事实)", Kind = "bool", Hint = "攒够一批消息调一次模型" },
-                new FieldSpec { Path = "memory.digestEvery", Label = "攒多少条整理一次", Kind = "num", Min = 4, Max = 100 },
-                new FieldSpec { Path = "memory.semantic", Label = "语义检索(让模型挑记忆)", Kind = "bool", Hint = "关掉只按字面挑，快但会漏" },
-                new FieldSpec { Path = "memory.semanticMinCandidates", Label = "候选几条才走语义", Kind = "num", Min = 2, Max = 10 },
             }},
             new SectionSpec { Title = "表情包", Fields =
             {

@@ -1,5 +1,8 @@
 'use strict';
 
+/**
+ * v2 物理存储：一个 chat 一个目录、原文追加、checkpoint、重启恢复、删除隔离。
+ */
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -7,115 +10,120 @@ const os = require('node:os');
 const path = require('node:path');
 
 const { Store } = require('../src/memory/store');
+const { chatHash, personHash } = require('../src/memory/hash');
 
-function tempStore(limits = {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-store-'));
-  const file = path.join(dir, 'store.json');
-  const store = new Store({ file, limits });
-  return { store, file, dir };
+function tempStore() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-mem-v2-'));
+  const file = path.join(dir, 'data', 'store.json');
+  const store = new Store({ file, logger: null });
+  return { store, dir, file, memoryDir: path.join(dir, 'data', 'memory') };
 }
 
-test('写入/读取消息并保持顺序', () => {
-  const { store, dir } = tempStore();
-  store.ensureSession('k', { platform: 'web', chatId: 'c', chatType: 'private' });
-  store.appendMessage('k', { role: 'user', name: '小海', text: '在吗' });
-  store.appendMessage('k', { role: 'assistant', name: '鲸鲸', text: '在的~' });
-  const msgs = store.messages('k', 10);
-  assert.equal(msgs.length, 2);
-  assert.equal(msgs[0].text, '在吗');
-  assert.equal(msgs[1].role, 'assistant');
-  store.close();
-  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
-});
+function cleanup(dir) {
+  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 60 });
+}
 
-test('消息数量有上限：已被摘要覆盖的才删，未摘要的留到硬上限', () => {
-  const { store, dir } = tempStore({ maxMessages: 4 });
-  // 1) 没有任何摘要覆盖时：不删未整理的对话，最多涨到 2 倍上限（硬上限）
-  for (let i = 0; i < 10; i++) {
-    store.appendMessage('k', { role: 'user', name: 'u', text: 'm' + i });
-  }
-  let msgs = store.messages('k', 100);
-  assert.equal(msgs.length, 8, '硬上限 = maxMessages × 2');
-  assert.equal(msgs[msgs.length - 1].text, 'm9');
-
-  // 2) 有摘要覆盖之后：超出的部分从「已摘要」的一头删，保到上限
-  store.setSummary('k', '这段的摘要', { upto: 8 });
-  store.appendMessage('k', { role: 'user', name: 'u', text: 'm10' });
-  msgs = store.messages('k', 100);
-  assert.equal(msgs.length, 4, '删掉已摘要的旧消息，回到 maxMessages');
-  assert.equal(msgs[msgs.length - 1].text, 'm10');
-  store.close();
-  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
-});
-
-test('去重 id 记住最近的消息', () => {
-  const { store, dir } = tempStore();
-  store.markSeen('k', 'm1');
-  assert.equal(store.isDuplicate('k', 'm1'), true);
-  assert.equal(store.isDuplicate('k', 'm2'), false);
-  store.close();
-  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
-});
-
-test('用户画像、昵称和笔记', () => {
-  const { store, dir } = tempStore({ maxNotesPerUser: 3 });
-  store.profile('k', 'u1', '小明');
-  store.addNote('k', 'u1', '喜欢猫');
-  store.addNote('k', 'u1', '喜欢猫'); // 重复不叠加
-  store.addNote('k', 'u1', '怕黑');
-  store.addNote('k', 'u1', '爱吃辣');
-  store.addNote('k', 'u1', '住海边');
-  const listed = store.listNotes('k');
-  assert.equal(listed.length, 1);
-  assert.ok(listed[0].notes.length <= 3);
-  assert.ok(listed[0].notes.includes('怕黑'));
-
-  store.profile('k', 'u1', '小明明');
-  assert.equal(store.profile('k', 'u1').name, '小明明');
-
-  const removed = store.removeNote('k', 'u1', '怕黑');
-  assert.equal(removed.removed, 1);
-  assert.ok(!store.listNotes('k')[0].notes.includes('怕黑'));
-  store.close();
-  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
-});
-
-test('记忆落盘后能重新读回来', () => {
-  const { store, file, dir } = tempStore();
-  store.appendMessage('k', { role: 'user', name: '阿螈', text: '记住我' });
-  store.addNote('k', 'u1', '是只海马');
+test('布局：data/memory/chats/<chatHash>/，没有全局用户目录', () => {
+  const { store, memoryDir, dir } = tempStore();
+  store.ensureSession('wechat:u:wxid_a', { platform: 'wechat', chatType: 'private' });
+  store.appendMessage('wechat:u:wxid_a', { role: 'user', name: '小海', uid: 'u-a', text: '在吗' });
   store.flush();
+
+  const hash = chatHash('wechat:u:wxid_a');
+  const chatDir = path.join(memoryDir, 'chats', hash);
+  assert.ok(fs.existsSync(path.join(chatDir, 'meta.json')), '要有 meta.json');
+  assert.ok(fs.existsSync(path.join(chatDir, 'messages.jsonl')), '要有 messages.jsonl');
+  assert.ok(fs.existsSync(path.join(chatDir, 'summary.json')), '要有 summary.json');
+  const meta = JSON.parse(fs.readFileSync(path.join(chatDir, 'meta.json'), 'utf8'));
+  assert.equal(meta.chatId, 'wechat:u:wxid_a', 'meta 保留原始 chatId');
+  assert.ok(fs.existsSync(path.join(memoryDir, 'manifest.json')));
+  assert.ok(!fs.existsSync(path.join(memoryDir, 'global')), '不能有全局记忆目录');
+  assert.equal(personHash('u-a').length, 16);
+  store.close();
+  cleanup(dir);
+});
+
+test('用户消息先落盘：append 后立刻能在 jsonl 里读到', () => {
+  const { store, memoryDir, dir } = tempStore();
+  store.appendMessage('wechat:u:wxid_a', { role: 'user', name: '小海', uid: 'u-a', text: '先落盘再回复' });
+  const file = path.join(memoryDir, 'chats', chatHash('wechat:u:wxid_a'), 'messages.jsonl');
+  const raw = fs.readFileSync(file, 'utf8');
+  assert.match(raw, /先落盘再回复/);
+  store.close();
+  cleanup(dir);
+});
+
+test('每条消息 seq 递增，restart 后继续接上', () => {
+  const { store, file, dir } = tempStore();
+  store.appendMessage('k', { role: 'user', name: 'u', text: '一' });
+  store.appendMessage('k', { role: 'assistant', name: '鲸鲸', text: '二' });
+  assert.deepEqual(store.messages('k', 10).map((m) => m.seq), [1, 2]);
   store.close();
 
-  const store2 = new Store({ file });
-  const msgs = store2.messages('k', 10);
-  assert.equal(msgs.length, 1);
-  assert.equal(msgs[0].text, '记住我');
-  assert.equal(store2.listNotes('k')[0].notes[0], '是只海马');
+  const store2 = new Store({ file, logger: null });
+  store2.appendMessage('k', { role: 'user', name: 'u', text: '三' });
+  assert.deepEqual(store2.messages('k', 10).map((m) => m.seq), [1, 2, 3]);
+  assert.equal(store2.messages('k', 10)[2].text, '三');
   store2.close();
-  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
+  cleanup(dir);
 });
 
-test('重置会话只清空指定聊天', () => {
-  const { store, dir } = tempStore();
-  store.appendMessage('a', { role: 'user', name: 'u', text: 'hi' });
-  store.appendMessage('b', { role: 'user', name: 'u', text: 'hi' });
-  store.resetSession('a');
-  assert.equal(store.messages('a', 10).length, 0);
-  assert.equal(store.messages('b', 10).length, 1);
-  store.close();
-  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
-});
-
-test('会话数量超限时会淘汰最久未活跃的', () => {
-  const { store, dir } = tempStore({ maxSessions: 12 });
-  for (let i = 0; i < 40; i++) {
-    store.ensureSession('s' + i);
-    store.appendMessage('s' + i, { role: 'user', name: 'u', text: 'x' });
+test('checkpoint 每轮一份，且只留最近 50 份', () => {
+  const { store, memoryDir, dir } = tempStore();
+  for (let i = 0; i < 60; i += 1) {
+    store.appendMessage('k', { role: 'user', name: 'u', text: 'm' + i });
+    store.checkpoint('k');
   }
-  const summary = store.summary();
-  assert.ok(summary.sessions <= 40);
-  assert.ok(store.sessions.size <= 12);
+  const ckDir = path.join(memoryDir, 'chats', chatHash('k'), 'checkpoints');
+  const files = fs.readdirSync(ckDir);
+  assert.ok(files.length >= 1);
+  assert.ok(files.length <= 50, 'checkpoint 不能无限涨：' + files.length);
+  const payload = JSON.parse(fs.readFileSync(path.join(ckDir, files.sort().pop()), 'utf8'));
+  assert.equal(payload.seq, 60);
+  assert.equal(payload.chatId, 'k');
   store.close();
-  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
+  cleanup(dir);
+});
+
+test('重启恢复：消息、人物卡、昵称都在', async () => {
+  const { store, file, dir } = tempStore();
+  store.appendMessage('wechat:u:a', { role: 'user', name: '小海', uid: 'u-a', text: '记住我' });
+  store.profile('wechat:u:a', 'u-a', '小海');
+  store.addNote('wechat:u:a', 'u-a', '是只海马');
+  store.setNickname('wechat:u:a', 'u-a', '小海豚');
+  await store.drain();
+  store.close();
+
+  const store2 = new Store({ file, logger: null });
+  assert.equal(store2.messages('wechat:u:a', 10)[0].text, '记住我');
+  assert.equal(store2.listNotes('wechat:u:a')[0].notes[0], '是只海马');
+  assert.equal(store2.displayName('wechat:u:a', 'u-a'), '小海豚');
+  store2.close();
+  cleanup(dir);
+});
+
+test('损坏的半截行不会让整个聊天读不出来', () => {
+  const { store, memoryDir, file, dir } = tempStore();
+  store.appendMessage('k', { role: 'user', name: 'u', text: '完整的一条' });
+  store.close();
+  const target = path.join(memoryDir, 'chats', chatHash('k'), 'messages.jsonl');
+  fs.appendFileSync(target, '{"seq":999,"role":"user"', 'utf8');
+
+  const store2 = new Store({ file, logger: null });
+  assert.equal(store2.messages('k', 5)[0].text, '完整的一条');
+  store2.close();
+  cleanup(dir);
+});
+
+test('resetSession 只删指定 chat 的物理目录', () => {
+  const { store, memoryDir, dir } = tempStore();
+  store.appendMessage('wechat:u:a', { role: 'user', name: 'u', text: 'a' });
+  store.appendMessage('wechat:u:b', { role: 'user', name: 'u', text: 'b' });
+  store.resetSession('wechat:u:a');
+  assert.ok(!fs.existsSync(path.join(memoryDir, 'chats', chatHash('wechat:u:a'))));
+  assert.ok(fs.existsSync(path.join(memoryDir, 'chats', chatHash('wechat:u:b'))));
+  assert.equal(store.messages('wechat:u:a', 10).length, 0);
+  assert.equal(store.messages('wechat:u:b', 10).length, 1);
+  store.close();
+  cleanup(dir);
 });

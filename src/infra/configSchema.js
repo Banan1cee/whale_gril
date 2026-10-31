@@ -45,9 +45,9 @@ const FIELDS = {
   'group.engagedMinutes': { type: 'int', min: 1, max: 1440 },
   'group.masterAlwaysReply': { type: 'bool' },
 
-  // ---- 记忆 ----
+  // ---- 记忆（旧键，运行时只读 constants.js）----
   'memory.maxSessions': { type: 'int', min: 1, max: 10000 },
-  'memory.maxMessages': { type: 'int', min: 2, max: 800 },
+  'memory.maxMessages': { type: 'int', min: 2, max: 2000 },
   'memory.maxNotesPerUser': { type: 'int', min: 0, max: 200 },
 
   // ---- 管理员 / 主动搭话 ----

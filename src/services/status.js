@@ -1,11 +1,30 @@
 'use strict';
 
 const { resolveRuntime, maskKey } = require('../infra/config');
+const { LIMITS } = require('../memory/constants');
 
 /** 状态接口用的精简记忆统计 */
 function storeSummary(runtime) {
   const s = runtime.store.summary();
   return { sessions: s.sessions, messages: s.messages, notes: s.notes, totalMessages: s.totalMessages, totalReplies: s.totalReplies };
+}
+
+/**
+ * 单轮预算（只给内部 status / 调试台计数；不接 UI、不提供预算接口）。
+ * system 只测量，不参与裁剪。
+ */
+function budgetSnapshot(runtime) {
+  const b = runtime && runtime.bot && runtime.bot.lastBudget;
+  return {
+    systemTokens: b ? b.systemTokens : 0,
+    dialogueBudget: b ? b.dialogueBudget : LIMITS.dialogueBudget,
+    estimatedInputTokens: b ? b.estimatedInputTokens : LIMITS.dialogueBudget,
+    hardTotalTokens: b ? b.hardTotalTokens : LIMITS.hardTotalTokens,
+    memoryTokens: b ? b.memoryTokens : 0,
+    summaryTokens: b ? b.summaryTokens : 0,
+    recentTokens: b ? b.recentTokens : 0,
+    lastUsage: (runtime && runtime.bot && runtime.bot.lastUsage) || null,
+  };
 }
 
 function statusPayload(runtime) {
@@ -27,6 +46,7 @@ function statusPayload(runtime) {
     hasKey: Boolean(rt.apiKey),
     temperature: llm.temperature,
     memory: storeSummary(runtime),
+    budget: budgetSnapshot(runtime),
     group: {
       requireAt: config.group.requireAt,
       freeChat: config.group.freeChat,
@@ -70,4 +90,4 @@ function replyChannelLabel(config) {
   return '本地桥接（要另开一个「启动微信桥接.bat」窗口，回复才发得出去）';
 }
 
-module.exports = { storeSummary, statusPayload, recentSenders, replyChannelLabel };
+module.exports = { storeSummary, statusPayload, recentSenders, replyChannelLabel, budgetSnapshot };

@@ -1,114 +1,135 @@
 'use strict';
 
+/**
+ * 人物卡：偏好/性格/事件/threads 的合并、纠正、容量和忘记。
+ */
 const test = require('node:test');
-const assert = require('node:assert');
+const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const forget = require('../src/memory/forget');
+const personCard = require('../src/memory/personCard');
+const { LIMITS } = require('../src/memory/constants');
 const { Store } = require('../src/memory/store');
 
-const DAY = 86400000;
 const NOW = 1_700_000_000_000;
+const DAY = 86400000;
 
-function note(over = {}) {
-  return { text: 'x', kind: 'fact', createdAt: NOW - 10 * DAY, lastMentionedAt: 0, mentions: 0, importance: 1, ...over };
+function newCard(chatId = 'wechat:u:a', uid = 'u1') {
+  return personCard.newCard({ chatId, uid, name: '小海', now: NOW });
 }
 
-function tempStore(limits = {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-forget-'));
-  const store = new Store({ file: path.join(dir, 'memory.json'), limits });
-  return { store, dir };
-}
-
-test('decayScore：同年龄下，承诺 > 偏好 > 普通事实', () => {
-  const a = forget.decayScore(note({ kind: 'promise' }), NOW);
-  const b = forget.decayScore(note({ kind: 'preference' }), NOW);
-  const c = forget.decayScore(note({ kind: 'fact' }), NOW);
-  assert.ok(a > b && b > c, `${a} > ${b} > ${c}`);
+test('偏好：重复不叠加，近似合并', () => {
+  const card = newCard();
+  personCard.addPreference(card, { text: '喜欢猫', confidence: 0.8, source: 'm1' }, { chatId: card.chatId, now: NOW });
+  personCard.addPreference(card, { text: '喜欢猫', confidence: 0.9, source: 'm2' }, { chatId: card.chatId, now: NOW });
+  personCard.addPreference(card, { text: '喜欢猫的', confidence: 0.8, source: 'm3' }, { chatId: card.chatId, now: NOW });
+  assert.equal(personCard.activePreferences(card).length, 1);
+  assert.equal(personCard.activePreferences(card)[0].confidence, 0.9);
 });
 
-test('decayScore：越老越低，最近被想起会回升', () => {
-  const fresh = forget.decayScore(note({ createdAt: NOW - 1 * DAY }), NOW);
-  const old = forget.decayScore(note({ createdAt: NOW - 200 * DAY }), NOW);
-  assert.ok(fresh > old, '新记忆分更高');
-  const oldButUsed = forget.decayScore(note({ createdAt: NOW - 200 * DAY, lastMentionedAt: NOW - 1 * DAY }), NOW);
-  assert.ok(oldButUsed > old, '刚被用到过，应该回升');
+test('纠正：旧值 superseded，新值置信度 1.0', () => {
+  const card = newCard();
+  personCard.addPreference(card, { text: '住在杭州', key: 'city', confidence: 0.8, source: 'm1' }, { chatId: card.chatId, now: NOW });
+  personCard.addPreference(card, {
+    text: '住在上海', key: 'city', confidence: 1, source: 'm2', explicit: true, supersedes: ['杭州'],
+  }, { chatId: card.chatId, now: NOW });
+  const active = personCard.activePreferences(card);
+  assert.equal(active.length, 1);
+  assert.equal(active[0].text, '住在上海');
+  assert.equal(active[0].confidence, 1);
 });
 
-test('pickEvictions：超限时扔分低的，承诺和雷区最后才动', () => {
-  const notes = [
-    note({ kind: 'promise', createdAt: NOW - 300 * DAY, importance: 1 }), // 最老，但受保护
-    note({ kind: 'fact', createdAt: NOW - 300 * DAY }),                   // 该走
-    note({ kind: 'fact', createdAt: NOW - 1 * DAY }),                     // 该留
-  ];
-  const idx = forget.pickEvictions(notes, 2, NOW);
-  assert.deepEqual(idx, [1], '要走的是分数最低的普通事实，不是受保护的承诺');
+test('跨聊天写卡直接拒绝', () => {
+  const card = newCard('wechat:u:a');
+  assert.throws(
+    () => personCard.addPreference(card, { text: '喜欢猫' }, { chatId: 'wechat:g:g1', now: NOW }),
+    /跨聊天/,
+  );
+  assert.throws(
+    () => personCard.addEvent(card, {
+      title: 'x', summary: 'y', source: { chatId: 'wechat:g:g1', messageIds: [] },
+    }, { chatId: 'wechat:g:g1', now: NOW }),
+    /跨聊天/,
+  );
 });
 
-test('shouldArchive：老 + 没被想起 + 不重要的才沉底；承诺永不沉底', () => {
-  assert.equal(forget.shouldArchive(note({ createdAt: NOW - 90 * DAY }), NOW), true);
-  assert.equal(forget.shouldArchive(note({ kind: 'promise', createdAt: NOW - 900 * DAY }), NOW), false);
-  assert.equal(forget.shouldArchive(note({ createdAt: NOW - 90 * DAY, lastMentionedAt: NOW - 2 * DAY }), NOW), false, '刚提过不能沉');
-  assert.equal(forget.shouldArchive(note({ createdAt: NOW - 3 * DAY }), NOW), false, '太新不能沉');
+test('性格：少于 2 条证据不写；单次情绪不进卡', () => {
+  const card = newCard();
+  assert.equal(personCard.addTrait(card, { text: '压力大时不想被说教', confidence: 0.8, evidence: ['m1'] }, { chatId: card.chatId, now: NOW }), null);
+  const added = personCard.addTrait(card, {
+    text: '压力大时不想被说教', confidence: 0.8, evidence: ['m1', 'm2'],
+  }, { chatId: card.chatId, now: NOW });
+  assert.ok(added);
+  assert.equal(personCard.activeTraits(card).length, 1);
 });
 
-test('trimArchive：归档也有上限，超了按时间扔最老的', () => {
-  const entries = Array.from({ length: 5 }, (_, i) => ({ archivedAt: i, text: 't' + i }));
-  const { kept, dropped } = forget.trimArchive(entries, 3);
-  assert.equal(kept.length, 3);
-  assert.equal(dropped.length, 2);
-  assert.deepEqual(dropped.map((x) => x.text), ['t0', 't1']);
-});
-
-test('store.sweep：老记忆沉到归档文件，主存里不再有', () => {
-  const { store } = tempStore({ maxNotesPerUser: 6 });
-  const p = store.profile('k', 'u1');
-  p.notes = [
-    { text: '很久以前说过怕黑', kind: 'fact', createdAt: NOW - 200 * DAY, lastMentionedAt: 0, importance: 1 },
-    { text: '答应过周末去医院', kind: 'promise', createdAt: NOW - 200 * DAY, lastMentionedAt: 0, importance: 1 },
-  ];
-  const out = store.sweep(NOW);
-  assert.equal(out.archived, 1, '只沉普通事实，承诺不动');
-  const notes = store.ensureSession('k').profiles.u1.notes;
-  assert.equal(notes.length, 1);
-  assert.equal(notes[0].text, '答应过周末去医院');
-  assert.equal(store.archiveCount(), 1);
-  const archived = store.archive[store.archive.length - 1];
-  assert.equal(archived.note.text, '很久以前说过怕黑');
-  assert.equal(archived.reason, 'archive');
-});
-
-test('store.addNote：超上限按分数淘汰，被淘汰的进归档', () => {
-  const { store } = tempStore({ maxNotesPerUser: 2 });
-  store.profile('k', 'u1');
-  const now = Date.now();
-  store.addNote('k', 'u1', '很早以前的小事', { kind: 'fact' });
-  const p = store.ensureSession('k').profiles.u1;
-  p.notes[0].createdAt = now - 500 * DAY;      // 把它变老
-  store.addNote('k', 'u1', '答应过陪你看电影', { kind: 'promise' });
-  store.addNote('k', 'u1', '今天新知道的事', { kind: 'fact' });
-  const notes = store.ensureSession('k').profiles.u1.notes;
-  assert.equal(notes.length, 2);
-  assert.ok(notes.some((n) => n.text === '答应过陪你看电影'), '承诺不能被淘汰');
-  assert.ok(notes.some((n) => n.text === '今天新知道的事'));
-  assert.equal(store.archiveCount(), 1);
-  assert.equal(store.archive[store.archive.length - 1].note.text, '很早以前的小事');
-});
-
-test('消息：只删已经被摘要覆盖的那部分', () => {
-  const { store } = tempStore({ maxMessages: 4 });
-  const p = store.ensureSession('k');
-  for (let i = 0; i < 6; i += 1) {
-    store.appendMessage('k', { role: 'user', name: '小海', uid: 'u1', text: 'm' + i, ts: Date.now() + i });
+test('性格上限 12 条，按置信度淘汰', () => {
+  const card = newCard();
+  for (let i = 0; i < 15; i += 1) {
+    personCard.addTrait(card, {
+      text: '标签' + i, confidence: 0.66 + i * 0.01, evidence: ['a' + i, 'b' + i],
+    }, { chatId: card.chatId, now: NOW });
   }
-  // 没有摘要覆盖 → 一条都不该删（硬上限之前）
-  assert.equal(store.ensureSession('k').messages.length, 6);
-  store.setSummary('k', '摘要', { upto: 2 });
-  store.appendMessage('k', { role: 'user', name: '小海', uid: 'u1', text: 'm6', ts: Date.now() + 10 });
-  const sess = store.ensureSession('k');
-  assert.equal(sess.messages.length, 5, '7 条里只有 2 条被摘要覆盖，所以只删得动 2 条');
-  assert.equal(sess.messages[0].text, 'm2');
-  assert.equal(sess.summaryUpto, 0);
+  assert.ok(personCard.activeTraits(card).length <= LIMITS.maxTraitsPerPerson);
+  assert.ok(personCard.activeTraits(card).some((t) => t.text === '标签14'));
+});
+
+test('threads：开/关，上限 10，最久没提的先关', () => {
+  const card = newCard();
+  for (let i = 0; i < 12; i += 1) {
+    personCard.addThread(card, { text: '未完成话题' + i }, { chatId: card.chatId, now: NOW + i });
+  }
+  assert.ok(personCard.openThreads(card).length <= LIMITS.maxThreadsPerPerson);
+  assert.ok(personCard.openThreads(card).some((t) => t.text === '未完成话题11'));
+  personCard.closeThread(card, '未完成话题11', NOW + 100);
+  assert.ok(!personCard.openThreads(card).some((t) => t.text === '未完成话题11'));
+});
+
+test('忘记：软删除 fact/event/thread，不物理删文件', () => {
+  const card = newCard();
+  personCard.addPreference(card, { text: '怕黑', confidence: 0.8 }, { chatId: card.chatId, now: NOW });
+  personCard.addEvent(card, {
+    title: '体检', summary: '明天去体检', participants: ['u1'], source: { chatId: card.chatId, messageIds: ['m1'] },
+  }, { chatId: card.chatId, now: NOW });
+  const removed = personCard.forget(card, '体检', NOW);
+  assert.equal(removed, 1);
+  assert.equal(personCard.activeEvents(card).length, 0);
+  assert.ok(card.events[0].deleted, '软删除标记还在，方便审计');
+});
+
+test('Store：事件过期只淘汰 365 天前的，thread 60 天没提自动关', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-forget-v2-'));
+  const store = new Store({ file: path.join(dir, 'data', 'store.json'), logger: null });
+  store.appendMessage('wechat:u:a', { role: 'user', name: '小海', uid: 'u1', text: '在吗', ts: NOW });
+  const chat = store.chatStore.chats.get('wechat:u:a');
+  const card = store.chatStore.ensurePerson(chat, 'u1', '小海');
+  personCard.addEvent(card, {
+    date: '2021-01-01', title: '很老的事', summary: '两年前的旧事', participants: ['u1'],
+    source: { chatId: chat.chatId, messageIds: ['m1'] },
+  }, { chatId: chat.chatId, now: NOW });
+  personCard.addThread(card, { text: '很久没提的坑' }, { chatId: chat.chatId, now: NOW - 100 * DAY });
+  card.threads[0].lastMentionedAt = NOW - 100 * DAY;
+  store.chatStore.saveCard(chat, card);
+
+  const out = store.sweep(NOW);
+  assert.ok(out.evicted >= 1);
+  assert.equal(personCard.activeEvents(card).length, 0);
+  assert.equal(personCard.openThreads(card).length, 0, '60 天没提的 thread 要关掉');
+  store.close();
+  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 60 });
+});
+
+test('Store：removeNote 只影响这个 chat 的这个人', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-forget-s-'));
+  const store = new Store({ file: path.join(dir, 'data', 'store.json'), logger: null });
+  store.addNote('wechat:u:a', 'u1', '怕黑');
+  store.addNote('wechat:u:b', 'u1', '怕黑');
+  const r = store.removeNote('wechat:u:a', 'u1', '怕黑');
+  assert.equal(r.removed, 1);
+  assert.equal(store.listNotes('wechat:u:a').length, 0);
+  assert.equal(store.listNotes('wechat:u:b').length, 1);
+  store.close();
+  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 60 });
 });

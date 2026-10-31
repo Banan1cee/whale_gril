@@ -120,6 +120,8 @@ class DeepSeekClient {
     // OpenCode Go 要求客户端自报身份 + 一个稳定的会话号（用于路由和 prompt 缓存）。
     // 同一进程内保持不变，等于「这一个对话」的 session。
     this.sessionId = 'whale-girl-' + crypto.randomBytes(12).toString('hex');
+    // 最近一次 API 返回的 usage，供 Bot 对比估算误差（只记计数）
+    this.lastUsage = null;
     this.reload();
   }
 
@@ -146,6 +148,18 @@ class DeepSeekClient {
   get isMock() {
     // 本地模型（Ollama 等）不需要 Key；需要 Key 的服务没填 Key 就走演示模式
     return this.mock || (this.needsKey && !this.apiKey);
+  }
+
+  /** 记下 API 返回的 usage（不打印内容，只记数字） */
+  _recordUsage(json) {
+    const u = json && json.usage;
+    if (!u) return;
+    this.lastUsage = {
+      promptTokens: Number(u.prompt_tokens) || 0,
+      completionTokens: Number(u.completion_tokens) || 0,
+      totalTokens: Number(u.total_tokens) || (Number(u.prompt_tokens) || 0) + (Number(u.completion_tokens) || 0),
+      at: Date.now(),
+    };
   }
 
   /**
@@ -238,6 +252,9 @@ class DeepSeekClient {
     // 惩罚项会逼模型避开常用词，是「乱说话」的元凶之一；跑飞重试时一律不带
     if (!safe && this.frequencyPenalty) payload.frequency_penalty = this.frequencyPenalty;
     if (!safe && this.presencePenalty) payload.presence_penalty = this.presencePenalty;
+    // DeepSeek 流式默认不回 usage；显式要一下，用来校准 token 估算。
+    // 其它兼容服务不认这个字段，别硬塞。
+    if (stream && this.provider === 'deepseek') payload.stream_options = { include_usage: true };
     return payload;
   }
 
@@ -376,6 +393,7 @@ class DeepSeekClient {
 
   /** 非流式，返回完整文本 */
   async complete({ system, turns, maxTokens, signal }) {
+    this.lastUsage = null;
     let lastErr = null;
     let sawDegenerate = false;
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -393,6 +411,7 @@ class DeepSeekClient {
         } catch {
           throw new LlmError(FRIENDLY.empty, { code: 'bad_json', detail: 'invalid json: ' + raw.slice(0, 200) });
         }
+        this._recordUsage(json);
         const choice = (json && json.choices && json.choices[0]) || {};
         const text = String((choice.message && choice.message.content) || '').trim();
         if (!text) throw new LlmError(FRIENDLY.empty, { code: 'empty' });
@@ -460,9 +479,58 @@ class DeepSeekClient {
   }
 
   /**
+   * 用当前模型的官方 tokenizer 精确数一次 prompt token（只在人设保存/导入时用，不进热路径）。
+   *
+   * 不引本地词表：给服务商发一条 max_tokens 很小、temperature=0 的请求，读 usage.prompt_tokens。
+   * 为了扣掉 chat 模板固定开销，先用空 system 量一次，再用目标 system 量一次，取差值。
+   * 失败返回 null，由调用方退回本地估算。
+   */
+  async countPromptTokens(systemText, { timeoutMs = 6000 } = {}) {
+    if (!this || this.isMock) return null;
+    const measure = async (system) => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), Math.max(1000, Number(timeoutMs) || 6000));
+      try {
+        const payload = this.buildPayload({
+          system,
+          turns: [{ role: 'user', content: '。' }],
+          stream: false,
+          maxTokens: 4,
+        });
+        payload.temperature = 0;
+        const { res } = await this._open(payload, { stream: false, signal: controller.signal });
+        if (res.statusCode !== 200) throw await this._errorFrom(res, { signal: controller.signal });
+        const raw = await this._readAll(res, { signal: controller.signal });
+        const json = JSON.parse(raw);
+        const n = Number(json && json.usage && json.usage.prompt_tokens);
+        return Number.isFinite(n) && n > 0 ? n : null;
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+    const full = await measure(String(systemText || ''));
+    if (full == null) return null;
+    let base = 0;
+    try {
+      base = (await measure('')) || 0;
+    } catch {
+      base = 0;
+    }
+    return {
+      tokens: Math.max(0, full - base),
+      promptTokens: full,
+      basePromptTokens: base,
+      model: this.model,
+      provider: this.provider,
+      at: Date.now(),
+    };
+  }
+
+  /**
    * 流式，异步生成器，每次 yield 一段新增文本。
    */
   async *stream({ system, turns, signal }) {
+    this.lastUsage = null;
     const payload = this.buildPayload({ system, turns, stream: true });
     const { req, res } = await this._open(payload, { signal, stream: true });
     if (res.statusCode !== 200) throw await this._errorFrom(res);
@@ -491,6 +559,7 @@ class DeepSeekClient {
           if (json?.error) {
             throw new LlmError(FRIENDLY.default, { code: 'stream_error', detail: String(json.error.message || '') });
           }
+          if (json && json.usage) this._recordUsage(json);
           const delta = json?.choices?.[0]?.delta;
           const piece = delta?.content;
           if (piece) {
