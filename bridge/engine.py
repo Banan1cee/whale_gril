@@ -85,6 +85,11 @@ MASTER_WXID = ''
 # 超过这么多秒的旧消息直接不回，避免“回上一条”
 STALE_AFTER = float(os.environ.get("WHALE_STALE_AFTER", "4"))
 
+# 微信 4.2 的群消息正文会带发送者前缀：「wxid_xxx:\n正文」。
+# 私聊没有这层前缀，所以只在群聊里剥；剥掉之后 @ 判定、重复检查和模型看到的内容才干净。
+# (?!/) 是防误伤：正文直接以 https:// 开头时不能被当成前缀吃掉。
+_GROUP_SENDER_PREFIX_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_\-]{3,}:(?!/)\s*")
+
 # 主动搭话（care）的开关：先给默认值，下面读 config 时再覆盖。
 # 保底：只要启动时配置解析失败，这些名字也必须存在，否则后台线程会 NameError 退出。
 CARE_ENABLED = False
@@ -3146,6 +3151,11 @@ def main():
             # 图片/语音/表情的 content 已经被上面替换成描述，别再重置回原始 XML
             if mtype == "文本":
                 content = (msg.get("content") or "").strip()
+                # 微信 4.2 的群消息正文前带着发送者前缀（"wxid_xxx:\n正文"）。
+                # 不剥掉的话：模型看到的是一串 wxid、@ 判定和重复检查也跟着错，
+                # 而且私聊没有这个前缀 —— 表现就是「私聊正常、群聊怪怪的」。
+                if username.endswith("@chatroom"):
+                    content = _GROUP_SENDER_PREFIX_RE.sub("", content, count=1).strip()
             if not content or content.startswith("<"):
                 return
             sender = msg.get("sender_username") or ""
