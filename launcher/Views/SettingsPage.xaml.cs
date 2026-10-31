@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using Microsoft.Win32;
 
 namespace WhaleLauncher.Views
 {
@@ -50,6 +51,7 @@ namespace WhaleLauncher.Views
         private DateTime _lastLoad = DateTime.MinValue;
         private string _configFile = "";
         private string _dataDir = "";
+        private readonly List<Border> _sectionCards = new List<Border>();
 
         // 白名单 / 静音黑名单
         private readonly Dictionary<string, ContactInfo> _contactCache = new Dictionary<string, ContactInfo>();
@@ -68,7 +70,12 @@ namespace WhaleLauncher.Views
             InitializeComponent();
             _sup = sup;
             BuildOnce();
-            Loaded += async (_, __) => { MainScroll.ScrollToTop(); await RefreshAsync(); };
+            Loaded += async (_, __) =>
+            {
+                if (SettingsNav.SelectedIndex != 0) SettingsNav.SelectedIndex = 0;
+                MainScroll.ScrollToTop();
+                await RefreshAsync();
+            };
         }
 
         // ── 全部设置清单（启动器是唯一界面）────────────────────────
@@ -193,10 +200,153 @@ namespace WhaleLauncher.Views
         private void BuildOnce()
         {
             SectionsHost.Children.Clear();
-            SectionsHost.Children.Add(BuildModelSection());
-            SectionsHost.Children.Add(BuildVisionSection());
-            foreach (var spec in Specs()) SectionsHost.Children.Add(BuildSection(spec));
-            SectionsHost.Children.Add(BuildAboutSection());
+            SettingsNav.Items.Clear();
+            _sectionCards.Clear();
+
+            AddSection("模型与 Key", BuildModelSection());
+            AddSection("看图（视觉模型）", BuildVisionSection());
+            foreach (var spec in Specs()) AddSection(spec.Title, BuildSection(spec));
+            AddSection("路径", BuildAboutSection());
+            AddSection("外观", BuildAppearanceSection());
+
+            SettingsNav.SelectedIndex = 0;
+        }
+
+        private void AddSection(string navTitle, Border card)
+        {
+            SettingsNav.Items.Add(navTitle);
+            _sectionCards.Add(card);
+            card.Tag = navTitle;
+            SectionsHost.Children.Add(card);
+        }
+
+        private void OnSettingsNavChanged(object sender, SelectionChangedEventArgs e)
+        {
+            var i = SettingsNav.SelectedIndex;
+            if (i < 0 || i >= _sectionCards.Count) return;
+            try
+            {
+                var y = _sectionCards[i].TranslatePoint(new Point(0, 0), SectionsHost).Y;
+                MainScroll.ScrollToVerticalOffset(Math.Max(0, y - 4));
+            }
+            catch { }
+        }
+
+        // ── 外观：深浅色 + 背景图（只影响启动器）────────────────
+        private Border BuildAppearanceSection()
+        {
+            var card = Card("外观", "只影响启动器界面：深浅色和背景图。不会写进 config.json，也不影响她的人设和聊天。", out var body);
+
+            var dark = new CheckBox
+            {
+                Content = "深色模式（关掉就是浅色）",
+                IsChecked = Appearance.IsDark,
+                HorizontalAlignment = HorizontalAlignment.Left,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            dark.Click += (_, __) => Appearance.SetTheme(dark.IsChecked == true ? "dark" : "light");
+            body.Children.Add(Row("主题", dark, "顶栏右上角的太阳 / 月亮也能快速切换"));
+
+            var preview = new Border
+            {
+                Width = 216,
+                Height = 116,
+                CornerRadius = new CornerRadius(12),
+                BorderThickness = new Thickness(1),
+                ClipToBounds = true,
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Margin = new Thickness(0, 0, 0, 8)
+            };
+            preview.SetResourceReference(Border.BackgroundProperty, "Surface3");
+            preview.SetResourceReference(Border.BorderBrushProperty, "CardBorder");
+            var img = new Image { Stretch = Stretch.UniformToFill };
+            var empty = new TextBlock
+            {
+                Text = "未设置背景图",
+                Style = (Style)FindResource("Small"),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            var previewGrid = new Grid();
+            previewGrid.Children.Add(img);
+            previewGrid.Children.Add(empty);
+            preview.Child = previewGrid;
+
+            var pathText = new TextBlock
+            {
+                Style = (Style)FindResource("Small"),
+                TextWrapping = TextWrapping.Wrap,
+                HorizontalAlignment = HorizontalAlignment.Left,
+                MaxWidth = 560,
+                Margin = new Thickness(0, 0, 0, 8)
+            };
+            var pick = new Button { Content = "选择图片…", Style = (Style)FindResource("Ghost") };
+            var clear = new Button { Content = "清除背景", Style = (Style)FindResource("Ghost"), Margin = new Thickness(8, 0, 0, 0) };
+            var actions = new WrapPanel { HorizontalAlignment = HorizontalAlignment.Left };
+            actions.Children.Add(pick);
+            actions.Children.Add(clear);
+
+            var hint = new TextBlock
+            {
+                Style = (Style)FindResource("Small"),
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 8, 0, 0)
+            };
+
+            var panel = new StackPanel();
+            panel.Children.Add(preview);
+            panel.Children.Add(pathText);
+            panel.Children.Add(actions);
+            panel.Children.Add(hint);
+            body.Children.Add(Row("背景图片", panel,
+                "支持 JPG / PNG / BMP，会自动压一层主题蒙版并模糊。浅色模式建议配浅色图，深色模式建议配深色图，文字更清楚。", true));
+
+            void Refresh()
+            {
+                dark.IsChecked = Appearance.IsDark;
+                var bmp = Appearance.LoadBackdrop();
+                img.Source = bmp;
+                img.Visibility = bmp == null ? Visibility.Collapsed : Visibility.Visible;
+                empty.Visibility = bmp == null ? Visibility.Visible : Visibility.Collapsed;
+                clear.IsEnabled = !string.IsNullOrEmpty(Appearance.Backdrop);
+                pathText.Text = string.IsNullOrEmpty(Appearance.Backdrop)
+                    ? "当前使用纯色背景。"
+                    : "当前：" + Appearance.Backdrop;
+            }
+
+            pick.Click += (_, __) =>
+            {
+                var dlg = new OpenFileDialog
+                {
+                    Title = "选择背景图片",
+                    Filter = "图片文件|*.jpg;*.jpeg;*.png;*.bmp|所有文件|*.*",
+                    CheckFileExists = true
+                };
+                if (dlg.ShowDialog() != true) return;
+                if (Appearance.TrySetBackdrop(dlg.FileName, out var err))
+                {
+                    hint.Text = "已应用。";
+                    hint.Foreground = (Brush)FindResource("Dim");
+                }
+                else
+                {
+                    hint.Text = err;
+                    hint.Foreground = (Brush)FindResource("Bad");
+                }
+                Refresh();
+            };
+
+            clear.Click += (_, __) =>
+            {
+                Appearance.ClearBackdrop();
+                hint.Text = "已恢复纯色背景。";
+                hint.Foreground = (Brush)FindResource("Dim");
+                Refresh();
+            };
+
+            Appearance.Changed += Refresh;
+            Refresh();
+            return card;
         }
 
         // ── 卡片与行 ────────────────────────────────────────────
@@ -218,7 +368,7 @@ namespace WhaleLauncher.Views
             return border;
         }
 
-        private Grid Row(string label, FrameworkElement control, string hint)
+        private Grid Row(string label, FrameworkElement control, string hint, bool top = false)
         {
             var grid = new Grid { Margin = new Thickness(0, 0, 0, 8) };
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(210) });
@@ -227,10 +377,11 @@ namespace WhaleLauncher.Views
             {
                 Text = label,
                 Style = (Style)FindResource("Label"),
-                VerticalAlignment = VerticalAlignment.Center,
+                VerticalAlignment = top ? VerticalAlignment.Top : VerticalAlignment.Center,
+                Margin = top ? new Thickness(0, 2, 0, 0) : new Thickness(0),
                 TextWrapping = TextWrapping.Wrap
             });
-            var right = new StackPanel();
+            var right = new StackPanel { HorizontalAlignment = HorizontalAlignment.Stretch };
             right.Children.Add(control);
             if (!string.IsNullOrEmpty(hint))
                 right.Children.Add(new TextBlock { Text = hint, Style = (Style)FindResource("Small"), Margin = new Thickness(0, 3, 0, 0), TextWrapping = TextWrapping.Wrap });
@@ -408,15 +559,16 @@ namespace WhaleLauncher.Views
                 TextTrimming = TextTrimming.CharacterEllipsis,
                 MaxWidth = 240
             });
-            return new Border
+            var chip = new Border
             {
-                Background = new SolidColorBrush(Color.FromRgb(0x2E, 0x32, 0x38)),
                 CornerRadius = new CornerRadius(5),
                 Padding = new Thickness(8, 4, 8, 4),
                 Margin = new Thickness(0, 2, 6, 2),
                 ToolTip = id,
                 Child = stack
             };
+            chip.SetResourceReference(Border.BackgroundProperty, "Surface3");
+            return chip;
         }
 
         private void SetListError(string configPath, string text)
@@ -793,7 +945,7 @@ namespace WhaleLauncher.Views
         {
             if (!_sup.NodeRunning)
             {
-                KernelHint.Text = "内核没起，设置读不到也存不了。点顶栏 ⏻ 启动。";
+                KernelHint.Text = "内核没起，配置项读不到也存不了；外观（主题 / 背景图）仍然可用。点顶栏 ⏻ 启动。";
                 return;
             }
             KernelHint.Text = "改完立即写回 config.json（密钥留空表示不改）";

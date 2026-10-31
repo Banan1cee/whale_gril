@@ -1,8 +1,8 @@
 <UserControl x:Class="WhaleLauncher.Views.MemoryPage"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             Background="{StaticResource Bg}">
-    <Grid Margin="20,16,20,14">
+             Background="Transparent">
+    <Grid Margin="28,24,32,20">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
@@ -21,19 +21,19 @@
             <WrapPanel>
                 <StackPanel Margin="0,0,36,0">
                     <TextBlock Text="会话" Style="{StaticResource Label}" />
-                    <TextBlock x:Name="StatSessions" Text="—" FontSize="20" FontWeight="SemiBold" Foreground="{StaticResource Text}" />
+                    <TextBlock x:Name="StatSessions" Text="—" FontSize="20" FontWeight="SemiBold" Foreground="{DynamicResource Text}" />
                 </StackPanel>
                 <StackPanel Margin="0,0,36,0">
                     <TextBlock Text="消息" Style="{StaticResource Label}" />
-                    <TextBlock x:Name="StatMessages" Text="—" FontSize="20" FontWeight="SemiBold" Foreground="{StaticResource Text}" />
+                    <TextBlock x:Name="StatMessages" Text="—" FontSize="20" FontWeight="SemiBold" Foreground="{DynamicResource Text}" />
                 </StackPanel>
                 <StackPanel Margin="0,0,36,0">
                     <TextBlock Text="笔记" Style="{StaticResource Label}" />
-                    <TextBlock x:Name="StatNotes" Text="—" FontSize="20" FontWeight="SemiBold" Foreground="{StaticResource Text}" />
+                    <TextBlock x:Name="StatNotes" Text="—" FontSize="20" FontWeight="SemiBold" Foreground="{DynamicResource Text}" />
                 </StackPanel>
                 <StackPanel>
                     <TextBlock Text="快照" Style="{StaticResource Label}" />
-                    <TextBlock x:Name="StatBackups" Text="—" FontSize="20" FontWeight="SemiBold" Foreground="{StaticResource Text}" />
+                    <TextBlock x:Name="StatBackups" Text="—" FontSize="20" FontWeight="SemiBold" Foreground="{DynamicResource Text}" />
                 </StackPanel>
             </WrapPanel>
         </Border>
@@ -74,10 +74,10 @@
                                             </Border>
                                             <ControlTemplate.Triggers>
                                                 <Trigger Property="IsMouseOver" Value="True">
-                                                    <Setter TargetName="b" Property="Background" Value="#FF272B31" />
+                                                    <Setter TargetName="b" Property="Background" Value="{DynamicResource Hover}" />
                                                 </Trigger>
                                                 <Trigger Property="IsSelected" Value="True">
-                                                    <Setter TargetName="b" Property="Background" Value="{StaticResource AccentDim}" />
+                                                    <Setter TargetName="b" Property="Background" Value="{DynamicResource AccentDim}" />
                                                 </Trigger>
                                             </ControlTemplate.Triggers>
                                         </ControlTemplate>
@@ -88,7 +88,7 @@
                         <ListBox.ItemTemplate>
                             <DataTemplate>
                                 <StackPanel>
-                                    <TextBlock Text="{Binding Title}" Foreground="{StaticResource Text}" FontSize="12.5" TextTrimming="CharacterEllipsis" />
+                                    <TextBlock Text="{Binding Title}" Foreground="{DynamicResource Text}" FontSize="12.5" TextTrimming="CharacterEllipsis" />
                                     <TextBlock Text="{Binding Sub}" Style="{StaticResource Small}" Margin="0,3,0,0" TextTrimming="CharacterEllipsis" />
                                 </StackPanel>
                             </DataTemplate>

@@ -1,8 +1,8 @@
 <UserControl x:Class="WhaleLauncher.Views.ReminderPage"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             Background="{StaticResource Bg}">
-    <Grid Margin="20,16,20,14">
+             Background="Transparent">
+    <Grid Margin="28,24,32,20">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
@@ -119,7 +119,7 @@
                     <ItemsControl x:Name="ReminderList">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
-                                <Border Background="#FF20242A" BorderBrush="{StaticResource Line}"
+                                <Border Background="{DynamicResource Surface3}" BorderBrush="{DynamicResource Line}"
                                         BorderThickness="1" CornerRadius="6" Padding="10,8" Margin="0,0,0,8">
                                     <Grid>
                                         <Grid.ColumnDefinitions>
@@ -129,7 +129,7 @@
                                         </Grid.ColumnDefinitions>
 
                                         <StackPanel VerticalAlignment="Top">
-                                            <TextBlock Text="{Binding Time}" Foreground="{StaticResource Text}"
+                                            <TextBlock Text="{Binding Time}" Foreground="{DynamicResource Text}"
                                                        FontSize="13" FontWeight="SemiBold" />
                                             <TextBlock Text="{Binding Status}" Foreground="{Binding StatusBrush}"
                                                        FontSize="11" Margin="0,4,0,0" />
@@ -137,16 +137,16 @@
 
                                         <StackPanel Grid.Column="1" Margin="12,0,10,0">
                                             <StackPanel Orientation="Horizontal">
-                                                <TextBlock Text="{Binding Name}" Foreground="{StaticResource Text}"
+                                                <TextBlock Text="{Binding Name}" Foreground="{DynamicResource Text}"
                                                            FontSize="12" FontWeight="SemiBold"
                                                            TextTrimming="CharacterEllipsis" />
                                                 <TextBlock Text="{Binding Wxid}" Style="{StaticResource Small}"
                                                            Margin="8,0,0,0" VerticalAlignment="Center"
                                                            TextTrimming="CharacterEllipsis" />
                                             </StackPanel>
-                                            <TextBlock Text="{Binding Text}" Foreground="{StaticResource Muted}"
+                                            <TextBlock Text="{Binding Text}" Foreground="{DynamicResource Muted}"
                                                        FontSize="12" TextWrapping="Wrap" Margin="0,4,0,0" />
-                                            <TextBlock Text="{Binding Error}" Foreground="{StaticResource Bad}"
+                                            <TextBlock Text="{Binding Error}" Foreground="{DynamicResource Bad}"
                                                        FontSize="11" TextWrapping="Wrap" Margin="0,4,0,0"
                                                        Visibility="{Binding ErrorVisibility}" />
                                         </StackPanel>
