@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const features = require('../infra/features');
 const actionEvents = require('../core/events');
+const { LIMITS } = require('../memory/constants');
 
 /**
  * 鲸鲸的人设：系统提示词、心情、演示模式台词、消息切分。
@@ -462,7 +463,10 @@ function buildSystem({ config, msg, profile, notes = [], noteReminders = [], ses
   const mood = moodFor(now);
   const activity = activityFor(now);
   const discussing = Boolean(msg.discussion);
-  const maxChars = discussing ? (config.chat.discussionMaxChars || 400) : (isGroup ? config.chat.groupMaxChars : config.chat.privateMaxChars);
+  // 输出上限写死：普通 100 字、认真讨论 400 字；配置只能往小调，不能突破
+  const maxChars = discussing
+    ? Math.min(Number(config.chat.discussionMaxChars) || LIMITS.maxOutputDiscussion, LIMITS.maxOutputDiscussion)
+    : Math.min(Number(isGroup ? config.chat.groupMaxChars : config.chat.privateMaxChars) || LIMITS.maxOutputNormal, LIMITS.maxOutputNormal);
   const userName = msg.senderName || (isGroup ? '群友' : '你');
   // 主人想让她怎么称呼自己：config.persona.ownerName（网页设置里的「怎么称呼你」会同步到这里）
   const ownerName = String((config.persona && config.persona.ownerName) || '主人').trim() || '主人';

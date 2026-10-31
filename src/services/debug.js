@@ -1,12 +1,12 @@
 'use strict';
 
+const path = require('node:path');
 const { resolveRuntime, maskKey } = require('../infra/config');
 const persona = require('../persona');
 const personaStore = require('../persona/store');
 const { matchMaster, masterWarnings } = require('../core/master');
 const links = require('../adapters/links');
-const { recentSenders } = require('./status');
-const { noteText } = require('../memory/recall');
+const { recentSenders, budgetSnapshot } = require('./status');
 
 function debugState(runtime) {
   const { config, llm, gateways, store } = runtime;
@@ -77,7 +77,9 @@ function debugState(runtime) {
     },
     gateways: [...gateways.values()].map((g) => g.status()),
     memory: store.summary(),
+    budget: budgetSnapshot(runtime),
     paths: {
+      memoryDir: path.join(config.root, 'data', 'memory'),
       storeFile: config.paths.storeFile,
       configFile: config.paths.configFile,
       settingsFile: config.paths.settingsFile,
@@ -87,17 +89,25 @@ function debugState(runtime) {
 
 function debugSessions(runtime) {
   const list = [];
-  for (const [key, sess] of runtime.store.sessions) {
+  for (const chat of runtime.store.chatStore.chats.values()) {
+    // 调试台只给计数，不给记忆正文（用户看不到任何记忆）
+    let people = 0;
+    let events = 0;
+    for (const card of chat.people.values()) {
+      people += 1;
+      events += (card.events || []).filter((e) => !e.deleted).length;
+    }
     list.push({
-      key,
-      platform: sess.platform,
-      chatType: sess.chatType,
-      title: sess.title,
-      lastActiveAt: sess.lastActiveAt,
-      messageCount: sess.messages.length,
-      adminUntil: sess.state.adminUntil || 0,
-      profiles: Object.values(sess.profiles).map((p) => ({ uid: p.uid, name: p.name, nickname: p.nickname, notes: (p.notes || []).map((n) => noteText(n)) })),
-      messages: sess.messages.slice(-8).map((m) => ({ role: m.role, name: m.name, text: m.text, ts: m.ts })),
+      key: chat.chatId,
+      platform: chat.platform,
+      chatType: chat.chatType,
+      title: chat.title,
+      lastActiveAt: chat.lastActiveAt,
+      messageCount: chat.messages.length,
+      peopleCount: people,
+      eventCount: events,
+      episodeId: chat.meta.episode ? chat.meta.episode.id : '',
+      adminUntil: chat.meta.state.adminUntil || 0,
     });
   }
   list.sort((a, b) => b.lastActiveAt - a.lastActiveAt);
