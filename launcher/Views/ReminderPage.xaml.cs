@@ -95,6 +95,7 @@ namespace WhaleLauncher.Views
                     EmptyText.Visibility = Visibility.Collapsed;
                 }
                 LoadRules(res.Prop("rules"));
+                await LoadCareAsync();
                 StatusText.Text = "共 " + rows.Count + " 条 · " + DateTime.Now.ToString("HH:mm:ss") + " 刷新";
             }
             catch (Exception ex)
@@ -141,6 +142,102 @@ namespace WhaleLauncher.Views
 
 
         // ── 提醒规则（和主动搭话同语义，配置独立）──────────────
+        // ── 主动搭话（同一页，配置独立）────────────────────────
+        private async Task LoadCareAsync()
+        {
+            var cfg = await Api.Get(_sup.Url, "/api/config");
+            if (!cfg.Ok || cfg.Prop("config").ValueKind != JsonValueKind.Object) return;
+            if (!cfg.Prop("config").TryGetProperty("care", out var care) || care.ValueKind != JsonValueKind.Object)
+                return;
+            ChkCareEnabled.IsChecked = Flag(care, "enabled");
+            ChkCareOnlyMaster.IsChecked = Flag(care, "onlyMaster");
+            ChkCareGroups.IsChecked = Flag(care, "allowGroups");
+            ChkCareOthers.IsChecked = Flag(care, "allowOthers");
+            TxtCareEvery.Text = Num(care, "everyMinutes", 90);
+            TxtCareJitter.Text = Num(care, "jitterMinutes", 25);
+            TxtCareMax.Text = Num(care, "maxPerDay", 0);
+            TxtCareQuiet.Text = Num(care, "quietAfterMinutes", 0);
+            TxtCareWindows.Text = JoinLines(care, "windows");
+            TxtCareWhitelist.Text = JoinLines(care, "whitelist");
+            if (cfg.Prop("config").TryGetProperty("group", out var g) && g.ValueKind == JsonValueKind.Object)
+                TxtCareMuted.Text = JoinLines(g, "mutedGroups");
+            CareStatus.Text = "";
+        }
+
+        private async void OnSaveCare(object sender, RoutedEventArgs e)
+        {
+            if (!IntOr(TxtCareEvery.Text, 90, 5, 1440, out var every, "平均间隔")
+                || !IntOr(TxtCareJitter.Text, 25, 0, 180, out var jitter, "间隔浮动")
+                || !IntOr(TxtCareMax.Text, 0, 0, 50, out var max, "每天最多几次")
+                || !IntOr(TxtCareQuiet.Text, 0, 0, 240, out var quiet, "刚聊过先跳过"))
+                return;
+
+            BtnSaveCare.IsEnabled = false;
+            try
+            {
+                var json = "{\"patch\":{" +
+                    "\"care.enabled\":" + (ChkCareEnabled.IsChecked == true ? "true" : "false") + "," +
+                    "\"care.onlyMaster\":" + (ChkCareOnlyMaster.IsChecked == true ? "true" : "false") + "," +
+                    "\"care.allowGroups\":" + (ChkCareGroups.IsChecked == true ? "true" : "false") + "," +
+                    "\"care.allowOthers\":" + (ChkCareOthers.IsChecked == true ? "true" : "false") + "," +
+                    "\"care.everyMinutes\":" + every + "," +
+                    "\"care.jitterMinutes\":" + jitter + "," +
+                    "\"care.maxPerDay\":" + max + "," +
+                    "\"care.quietAfterMinutes\":" + quiet + "," +
+                    "\"care.windows\":" + Lines(TxtCareWindows) + "," +
+                    "\"care.whitelist\":" + Lines(TxtCareWhitelist) + "," +
+                    "\"group.mutedGroups\":" + Lines(TxtCareMuted) +
+                    "}}";
+                var res = await Api.Post(_sup.Url, "/api/config", json);
+                if (!res.Ok)
+                {
+                    CareStatus.Text = "保存失败：" + (res.Error.Length > 0 ? res.Error : Detail(res));
+                    return;
+                }
+                CareStatus.Text = "已保存 " + DateTime.Now.ToString("HH:mm:ss");
+            }
+            finally
+            {
+                BtnSaveCare.IsEnabled = true;
+            }
+        }
+
+        private bool IntOr(string raw, int fallback, int min, int max, out int value, string label)
+        {
+            var text = (raw ?? "").Trim();
+            if (text.Length == 0) text = fallback.ToString();
+            if (!int.TryParse(text, out value) || value < min || value > max)
+            {
+                CareStatus.Text = label + " 要填 " + min + "～" + max + " 的整数";
+                return false;
+            }
+            return true;
+        }
+
+        private static bool Flag(JsonElement obj, string name)
+            => obj.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.True;
+
+        private static string Num(JsonElement obj, string name, int fallback)
+            => obj.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number
+                ? v.GetInt32().ToString() : fallback.ToString();
+
+        private static string JoinLines(JsonElement obj, string name)
+        {
+            if (!obj.TryGetProperty(name, out var v) || v.ValueKind != JsonValueKind.Array) return "";
+            return string.Join("\n", v.EnumerateArray()
+                .Where(x => x.ValueKind == JsonValueKind.String)
+                .Select(x => x.GetString() ?? "")
+                .Where(x => x.Length > 0));
+        }
+
+        private static string Lines(System.Windows.Controls.TextBox box)
+        {
+            var items = (box.Text ?? "").Split('\n')
+                .Select(x => x.Trim()).Where(x => x.Length > 0)
+                .Select(x => "\"" + Api.Esc(x) + "\"");
+            return "[" + string.Join(",", items) + "]";
+        }
+
         private void LoadRules(JsonElement rules)
         {
             if (rules.ValueKind != JsonValueKind.Object) return;

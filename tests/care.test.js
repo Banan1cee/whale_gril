@@ -225,7 +225,7 @@ test('默认配置里有 care 段，且调试台能编辑时间窗与频率', ()
     assert.ok(html.includes("'" + key + "'"), '调试台缺少字段 ' + key);
   }
   assert.match(html, /care: '主动找你聊天/, '调试台要有分组标题');
-  assert.match(html, /'share', 'care'/, 'care 要排在 share 后面');
+  assert.match(html, /'links', 'care'/, 'care 要排在 links 后面');
 });
 
 test('桥接里接了定时器，且判断交给服务端', () => {

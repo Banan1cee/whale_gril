@@ -27,7 +27,6 @@ const { matchMaster } = require('../core/master');
 const links = require('../adapters/links');
 const websearch = require('../adapters/websearch');
 const searchRouter = require('../adapters/searchRouter');
-const { DigestService } = require('../services/digestService');
 const { LlmError } = require('../llm/client');
 const { saveSettings } = require('../infra/config');
 const personaStore = require('../persona/store');
@@ -54,9 +53,6 @@ class Bot {
     this.logger = logger;
     this.now = now;
     this.rng = rng;
-    // 消息汇总（把错过的消息推给主人）：内存态队列，开关关着不采集。
-    // 注意跟 memory/digest.js（整理记忆）不是一个东西。
-    this.digestService = new DigestService(config, { now: () => this.now().getTime() });
     this.mockChunkDelayMs = mockChunkDelayMs;
     this.linkReader = linkReader || ((url) => links.describeLink(url, { timeoutMs: (config.links && config.links.timeoutMs) || 6000 }));
     this.startedAt = Date.now();
@@ -214,16 +210,7 @@ class Bot {
    * 判断并准备好这次回复（不调用模型）。返回 decision。
    */
   async decide(rawMsg) {
-    const digestOn = this.digestService.reconcile();
-    const digestGeneration = this.digestService.generation;
-    const decision = await this._decide(rawMsg);
-    // 只收「错过」的普通微信消息：命令、重复、系统通知、被静默、已经回过的都不收。
-    const missed = new Set(['addressed_to_other', 'not_addressed', 'silent', 'engaged_side_chatter', 'hourly_cap', 'cooldown']);
-    if (digestOn && this.digestService.reconcile() && this.digestService.generation === digestGeneration
-      && decision.action === 'ignore' && missed.has(decision.reason)) {
-      this.digestService.collect(decision.msg);
-    }
-    return decision;
+    return this._decide(rawMsg);
   }
 
   async _decide(rawMsg) {

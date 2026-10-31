@@ -8,7 +8,6 @@ const modules = [
   require('./memory'),
   require('./settings'),
   require('./vision'),
-  require('./share'),
   require('./persona'),
   require('./wechat'),
   require('./config'),
@@ -17,7 +16,6 @@ const modules = [
   require('./chat'),
   require('./bridge'),
   require('./stickers'),
-  require('./digest'),
   require('./reminders'),
 ];
 

@@ -47,10 +47,6 @@
                                     <RowDefinition Height="Auto" />
                                     <RowDefinition Height="Auto" />
                                     <RowDefinition Height="Auto" />
-                                    <RowDefinition Height="Auto" />
-                                    <RowDefinition Height="Auto" />
-                                    <RowDefinition Height="Auto" />
-                                    <RowDefinition Height="Auto" />
                                 </Grid.RowDefinitions>
 
                                 <TextBlock Text="名字" Style="{StaticResource Label}" VerticalAlignment="Center" />
@@ -74,20 +70,42 @@
                                 <TextBox x:Name="TxtPrompt" Grid.Row="7" Grid.Column="1" Margin="0,8,0,0" MinHeight="80"
                                          TextWrapping="Wrap" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" LostFocus="OnFieldLostFocus" />
 
-                                <TextBlock Grid.Row="8" Text="别名 / 外号" Style="{StaticResource Label}" VerticalAlignment="Top" Margin="0,8,0,0" />
-                                <TextBox x:Name="TxtAliases" Grid.Row="8" Grid.Column="1" Margin="0,8,0,0" MinHeight="56"
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 主人身份 -->
+                    <Border Style="{StaticResource Card}" Padding="16,14" Margin="0,0,0,12">
+                        <StackPanel>
+                            <TextBlock Text="主人身份" Style="{StaticResource H2}" />
+                            <TextBlock Text="谁算主人：填了就算。昵称谁都能改，wxid 最可靠；两个都填时任一命中即可。"
+                                       Style="{StaticResource Small}" TextWrapping="Wrap" Margin="0,6,0,10" />
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="96" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+
+                                <TextBlock Text="别名 / 外号" Style="{StaticResource Label}" VerticalAlignment="Top" />
+                                <TextBox x:Name="TxtAliases" Grid.Column="1" MinHeight="56"
                                          TextWrapping="Wrap" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" LostFocus="OnFieldLostFocus"
                                          ToolTip="一行一个；群里喊这些也算叫她" />
-                                <TextBlock Grid.Row="9" Text="主人名单（昵称）" Style="{StaticResource Label}" VerticalAlignment="Top" Margin="0,8,0,0" />
-                                <TextBox x:Name="TxtMasterNames" Grid.Row="9" Grid.Column="1" Margin="0,8,0,0" MinHeight="44"
+                                <TextBlock Grid.Row="1" Text="主人名单（昵称）" Style="{StaticResource Label}" VerticalAlignment="Top" Margin="0,8,0,0" />
+                                <TextBox x:Name="TxtMasterNames" Grid.Row="1" Grid.Column="1" Margin="0,8,0,0" MinHeight="44"
                                          TextWrapping="Wrap" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" LostFocus="OnFieldLostFocus"
                                          ToolTip="一行一个。微信里改昵称就能冒充，建议同时填下面的 wxid" />
-                                <TextBlock Grid.Row="10" Text="主人名单（wxid）" Style="{StaticResource Label}" VerticalAlignment="Top" Margin="0,8,0,0" />
-                                <TextBox x:Name="TxtMasterWxids" Grid.Row="10" Grid.Column="1" Margin="0,8,0,0" MinHeight="44"
+                                <TextBlock Grid.Row="2" Text="主人名单（wxid）" Style="{StaticResource Label}" VerticalAlignment="Top" Margin="0,8,0,0" />
+                                <TextBox x:Name="TxtMasterWxids" Grid.Row="2" Grid.Column="1" Margin="0,8,0,0" MinHeight="44"
                                          TextWrapping="Wrap" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" LostFocus="OnFieldLostFocus"
-                                         ToolTip="一行一个 wxid_xxx，最可靠；「最近说过话的人」里能抄" />
-                                <TextBlock Grid.Row="11" Text="主人骂她时允许还嘴" Style="{StaticResource Label}" VerticalAlignment="Center" Margin="0,8,0,0" />
-                                <CheckBox x:Name="ChkRoast" Grid.Row="11" Grid.Column="1" Content="允许还嘴（关掉 = 只委屈不顶嘴）"
+                                         ToolTip="一行一个 wxid_xxx，最可靠" />
+                                <TextBlock Grid.Row="3" Text="主人骂她时允许还嘴" Style="{StaticResource Label}" VerticalAlignment="Center" Margin="0,8,0,0" />
+                                <CheckBox x:Name="ChkRoast" Grid.Row="3" Grid.Column="1" Content="允许还嘴（关掉 = 只委屈不顶嘴）"
                                           Margin="0,8,0,0" VerticalAlignment="Center" Click="OnToggleField" />
                             </Grid>
                         </StackPanel>

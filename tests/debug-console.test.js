@@ -113,19 +113,6 @@ test('group.maxRepliesPerHour 真的限流', async () => {
   }
 });
 
-test('share.sources 真的决定来源（填别的不会偷偷去抓 B 站）', async () => {
-  const app = await boot();
-  try {
-    await patch(app, { 'share.sources': ['douyin'] });
-    const out = await fetch(app.url + '/api/share?chat=grp_x').then((r) => r.json());
-    assert.equal(out.ok, true);
-    assert.equal(out.video, null, '没有可用来源时不该有视频');
-    assert.equal(out.reason, 'no_source');
-    assert.deepEqual(out.sources, ['douyin']);
-  } finally {
-    await app.close();
-  }
-});
 
 test('桥接会热更新配置（调试台改完不用重启）', () => {
   assert.match(bridge, /def reload_config/, '要有热更新函数');
@@ -135,7 +122,7 @@ test('桥接会热更新配置（调试台改完不用重启）', () => {
   // 关键开关必须在热更新里被重新赋值（global 声明）
   const fn = bridge.slice(bridge.indexOf('def reload_config'));
   const body = fn.slice(0, fn.indexOf('\n# 系统 / 公众号'));
-  for (const k of ['CARE_ENABLED', 'SHARE_ENABLED', 'KEYBOARD_FALLBACK', 'BACKGROUND_SEND']) {
+  for (const k of ['CARE_ENABLED', 'KEYBOARD_FALLBACK', 'BACKGROUND_SEND']) {
     assert.match(body, new RegExp('global[^\\n]*' + k + '|' + k + ' = '), k + ' 要在热更新里刷新');
   }
   // 「打游戏就休息 / 离开回来打招呼 / 忙时排队」整组已删除，守住反向约束：别再加回来

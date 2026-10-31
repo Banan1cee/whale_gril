@@ -12,7 +12,7 @@
         </Grid.RowDefinitions>
 
         <DockPanel Grid.Row="0" LastChildFill="False">
-            <TextBlock DockPanel.Dock="Left" Text="提醒" Style="{StaticResource H1}" VerticalAlignment="Center" />
+            <TextBlock DockPanel.Dock="Left" Text="主动与提醒" Style="{StaticResource H1}" VerticalAlignment="Center" />
             <Button x:Name="BtnRefresh" DockPanel.Dock="Right" Content="⟳ 刷新"
                     Style="{StaticResource Ghost}" HorizontalAlignment="Right" Click="OnRefresh" />
         </DockPanel>
@@ -22,7 +22,8 @@
                    Style="{StaticResource Small}" Margin="0,6,0,10" TextWrapping="Wrap" />
 
         <!-- 提醒规则：字段语义和「主动搭话」一致，但这是提醒自己的配置 -->
-        <Border Grid.Row="2" Style="{StaticResource Card}" Padding="12" Margin="0,0,0,12">
+        <StackPanel Grid.Row="2">
+        <Border Style="{StaticResource Card}" Padding="12" Margin="0,0,0,12">
             <StackPanel>
                 <TextBlock Text="提醒规则" Style="{StaticResource H2}" Margin="0,0,0,6" />
                 <TextBlock Text="和主动搭话同一套规则语义，但配置独立：当日次数用完、或刚聊过（按下面设置）就不发，也不会推迟补发。提醒不限制时间段 —— 你定几点就几点发。"
@@ -53,6 +54,64 @@
                 </DockPanel>
             </StackPanel>
         </Border>
+
+        <!-- 主动搭话：和提醒同一页，省得在两处来回对规则 -->
+        <Border Style="{StaticResource Card}" Padding="12" Margin="0,0,0,12">
+            <StackPanel>
+                <TextBlock Text="主动搭话" Style="{StaticResource H2}" Margin="0,0,0,6" />
+                <TextBlock Text="没聊的时候她自己来一句。判定只在服务端做一次：时间窗、频率、每日上限、白名单、下面三个开关都算在内。"
+                           Style="{StaticResource Small}" TextWrapping="Wrap" Margin="0,0,0,10" />
+
+                <CheckBox x:Name="ChkCareEnabled" Content="开启主动搭话" Margin="0,0,0,8" />
+
+                <WrapPanel>
+                    <StackPanel Margin="0,0,18,0">
+                        <TextBlock Text="平均间隔（分钟）" Style="{StaticResource Small}" Margin="0,0,0,4" />
+                        <TextBox x:Name="TxtCareEvery" Width="96" HorizontalAlignment="Left" />
+                    </StackPanel>
+                    <StackPanel Margin="0,0,18,0">
+                        <TextBlock Text="间隔浮动（分钟）" Style="{StaticResource Small}" Margin="0,0,0,4" />
+                        <TextBox x:Name="TxtCareJitter" Width="96" HorizontalAlignment="Left" />
+                    </StackPanel>
+                    <StackPanel Margin="0,0,18,0">
+                        <TextBlock Text="每天最多几次（0 = 不限）" Style="{StaticResource Small}" Margin="0,0,0,4" />
+                        <TextBox x:Name="TxtCareMax" Width="96" HorizontalAlignment="Left" />
+                    </StackPanel>
+                    <StackPanel>
+                        <TextBlock Text="刚聊过先跳过（分钟）" Style="{StaticResource Small}" Margin="0,0,0,4" />
+                        <TextBox x:Name="TxtCareQuiet" Width="96" HorizontalAlignment="Left" />
+                    </StackPanel>
+                </WrapPanel>
+
+                <TextBlock Text="允许的时间段（每行一个，如 09:00-12:00；跨零点也认；留空 = 全天）"
+                           Style="{StaticResource Small}" Margin="0,10,0,4" />
+                <TextBox x:Name="TxtCareWindows" MinHeight="48" TextWrapping="Wrap" AcceptsReturn="True"
+                         VerticalScrollBarVisibility="Auto" />
+
+                <WrapPanel Margin="0,10,0,0">
+                    <CheckBox x:Name="ChkCareOnlyMaster" Content="只找主人" Margin="0,0,18,0" />
+                    <CheckBox x:Name="ChkCareGroups" Content="允许在群里主动" Margin="0,0,18,0" />
+                    <CheckBox x:Name="ChkCareOthers" Content="允许主动找别人" />
+                </WrapPanel>
+
+                <TextBlock Text="白名单（wxid 一行一个；留空 = 主人 + 文件传输助手）"
+                           Style="{StaticResource Small}" Margin="0,10,0,4" />
+                <TextBox x:Name="TxtCareWhitelist" MinHeight="44" TextWrapping="Wrap" AcceptsReturn="True"
+                         VerticalScrollBarVisibility="Auto" />
+
+                <TextBlock Text="黑名单（静音的群/人，wxid 或名字一行一个；* = 全部静音）"
+                           Style="{StaticResource Small}" Margin="0,8,0,4" />
+                <TextBox x:Name="TxtCareMuted" MinHeight="44" TextWrapping="Wrap" AcceptsReturn="True"
+                         VerticalScrollBarVisibility="Auto" />
+
+                <WrapPanel Margin="0,10,0,0">
+                    <Button x:Name="BtnSaveCare" Content="保存主动搭话" Style="{StaticResource Primary}" Click="OnSaveCare" />
+                    <TextBlock x:Name="CareStatus" Style="{StaticResource Small}" Margin="10,0,0,0"
+                               VerticalAlignment="Center" TextWrapping="Wrap" />
+                </WrapPanel>
+            </StackPanel>
+        </Border>
+        </StackPanel>
 
         <Border Grid.Row="3" Style="{StaticResource Card}" Padding="10">
             <Grid>
