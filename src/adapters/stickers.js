@@ -76,19 +76,46 @@ function isInside(root, file) {
  */
 function linkedPath(file) {
   try {
-    const literal = path.resolve(file);
     // Windows junction 在部分 Node 版本里 isSymbolicLink() 为 false、JS 版 realpath
     // 也原样返回；只有 native realpath 会真正解析到目标。
     const resolve = fs.realpathSync.native || fs.realpathSync;
-    const real = resolve(file);
-    return literal.toLowerCase() !== real.toLowerCase();
+    const literal = path.resolve(file);
+    const expected = path.join(resolve(path.dirname(literal)), path.basename(literal));
+    const real = resolve(literal);
+    // 用「父目录解析结果 + 文件名」比，而不是比字面路径：
+    // runner 的临时目录可能带 8.3 短名（RUNNER~1），字面路径与解析路径本来就不同，
+    // 直接比会把所有正常目录都判成链接。
+    return expected.toLowerCase() !== real.toLowerCase();
   } catch {
     return true;
   }
 }
+/**
+ * 库根路径上是否有一级是链接/目录联接（例如 data 整体被 junction 到别处）。
+ * 结果按根路径缓存：同一进程内目录结构不会频繁变；不存在的前缀直接放过，
+ * 交给 safeDirectory 在创建时再判。
+ */
+const ancestorLinkCache = new Map();
+function rootHasLinkedAncestor(root) {
+  const abs = path.resolve(root);
+  if (ancestorLinkCache.has(abs)) return ancestorLinkCache.get(abs);
+  let bad = false;
+  const parsed = path.parse(abs);
+  let cur = parsed.root;
+  for (const part of abs.slice(parsed.root.length).split(path.sep).filter(Boolean)) {
+    cur = path.join(cur, part);
+    try {
+      if (!fs.existsSync(cur)) break;
+      if (linkedPath(cur)) { bad = true; break; }
+    } catch { bad = true; break; }
+  }
+  ancestorLinkCache.set(abs, bad);
+  return bad;
+}
 function regularFile(file, root) {
   try {
     if (!isInside(root, file)) return false;
+    if (rootHasLinkedAncestor(root)) return false;
     // lstat each component: do not follow junctions or symbolic links out of the library.
     const absolute = path.resolve(root);
     const anchor = path.parse(absolute).root;
@@ -110,6 +137,7 @@ function regularFile(file, root) {
 }
 function listImages(dir, { recursive = true, root = dir, depth = 0, result = [] } = {}) {
   if (depth > 3 || result.length >= MAX_FILES) return result;
+  if (rootHasLinkedAncestor(root)) return result;
   let entries;
   try {
     if (fs.lstatSync(dir).isSymbolicLink() || linkedPath(dir)) return result;
