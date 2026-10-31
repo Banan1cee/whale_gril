@@ -375,9 +375,12 @@ class TransportTest(unittest.TestCase):
         short_root = self.directory
         long_dir = tempfile.TemporaryDirectory()
         self.addCleanup(long_dir.cleanup)
-        long_file = str(Path(long_dir.name) / 'test.png')
+        # 两个目标都必须用 realpath 展开后的前缀，否则「同一个目录」在假
+        # realpath 下反而对不齐——CI 的 TEMP 本身就在短名路径里。
+        long_root = os.path.realpath(long_dir.name)
+        long_file = os.path.join(long_root, 'test.png')
         Path(long_file).write_bytes(Path(self.path).read_bytes())
-        mapping = {short_root: long_dir.name, self.path: long_file}
+        mapping = {short_root: long_root, self.path: long_file}
         realpath = os.path.realpath
 
         def fake_realpath(value):

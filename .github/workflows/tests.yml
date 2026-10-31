@@ -61,7 +61,20 @@ jobs:
       # 自检会把它当成「泄露个人信息」误报。
       - name: 发布自检
         if: always()
-        run: node scripts/release-check.js
+        shell: pwsh
+        # 失败项也打成注解，不用登录也能看到是哪一条没过。
+        run: |
+          node scripts/release-check.js *> release-check.log
+          $code = $LASTEXITCODE
+          Get-Content release-check.log
+          if ($code -ne 0) {
+            $text = Get-Content -Raw -Encoding utf8 release-check.log
+            $bad = ($text -split "`n") | Where-Object { $_ -match '✗' -or $_ -match '^\s+- ' } | Select-Object -First 20
+            $msg = ((($bad -join "`n")) -replace '%', '%25' -replace "`r", '' -replace "`n", '%0A')
+            if (-not $msg) { $msg = 'release-check failed' }
+            Write-Output "::error title=release-check::$msg"
+            exit $code
+          }
 
       - name: Node 单元测试（不需要装任何依赖）
         if: always()
