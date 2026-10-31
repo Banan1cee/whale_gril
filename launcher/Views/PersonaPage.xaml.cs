@@ -22,14 +22,12 @@ namespace WhaleLauncher.Views
         private readonly DispatcherTimer _saveTimer;
         private bool _loading;
         private bool _loaded;
-        private readonly string[] _sections = { "身份", "说话方式", "群聊", "情绪与主动", "预设", "实验开关" };
 
         public PersonaPage(RuntimeSupervisor sup)
         {
             InitializeComponent();
             _sup = sup;
 
-            foreach (var s in _sections) SubNav.Items.Add(s);
             foreach (var e in new[] { "关", "少", "正常", "多" }) CmbEmoji.Items.Add(e);
 
             _saveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(450) };
@@ -45,23 +43,7 @@ namespace WhaleLauncher.Views
         public async Task RefreshAsync()
         {
             if (!_sup.NodeRunning || _loaded) return;
-            if (SubNav.SelectedIndex < 0) SubNav.SelectedIndex = 0;
             await LoadAsync();
-        }
-
-        private void OnSubNav(object sender, SelectionChangedEventArgs e)
-        {
-            var i = SubNav.SelectedIndex;
-            FrameworkElement target = i switch
-            {
-                1 => SecTalk,
-                2 => SecGroup,
-                3 => SecMood,
-                4 => SecPreset,
-                5 => SecFlags,
-                _ => SecIdentity
-            };
-            try { target.BringIntoView(); } catch { }
         }
 
         private async Task LoadAsync()
