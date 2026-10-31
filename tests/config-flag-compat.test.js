@@ -36,15 +36,29 @@ test('care.enabled 写成字符串 "false" 必须真的关掉（Boolean("false")
   }
 });
 
+/**
+ * care 的默认时间窗是 09:00–23:00（按**本机时区**算）。
+ * 这里必须显式给一个全开的时间窗：CI 跑在 UTC，本地跑在 UTC+8，
+ * 同一个 now 会落在窗内/窗外两种结果 —— 这正是仓库以前红过一次的原因
+ * （b42b4da「care 用例时间窗设成全开」）。这两条用例只关心开关解析，不关心窗。
+ */
+const CARE_DAY_OPEN = ['00:00-23:59'];
+
 test('care.enabled 写成字符串 "true" / 数字 1 / "开" 仍然算开（别把兼容改坏）', () => {
   for (const on of ['true', '1', 'yes', '开', true, 1]) {
-    const out = care.careDue({ care: { enabled: on, everyMinutes: 1 } }, { lastSentTs: 0, sentToday: 0, now: NOW });
+    const out = care.careDue(
+      { care: { enabled: on, everyMinutes: 1, windows: CARE_DAY_OPEN } },
+      { lastSentTs: 0, sentToday: 0, now: NOW }
+    );
     assert.equal(out.due, true, `care.enabled=${JSON.stringify(on)} 应该当开处理`);
   }
 });
 
 test('care 段没写 enabled 时仍然是开（默认值不能被兼容逻辑带偏）', () => {
-  const out = care.careDue({ care: { everyMinutes: 1 } }, { lastSentTs: 0, sentToday: 0, now: NOW });
+  const out = care.careDue(
+    { care: { everyMinutes: 1, windows: CARE_DAY_OPEN } },
+    { lastSentTs: 0, sentToday: 0, now: NOW }
+  );
   assert.equal(out.due, true);
 });
 
