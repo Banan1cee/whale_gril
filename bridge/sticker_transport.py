@@ -98,7 +98,7 @@ def validate_path(path, root, image_check=None):
     echoed to the result (a job can originate in an untrusted webhook response).
 
     注意：不能要求「abspath 必须等于 realpath」。Windows 的 8.3 短名
-    （C:\\Users\\RUNNER~1\\...）和 junction 都会让两者不同，而它们本身不是链接；
+    （用户名那种短名目录）和 junction 都会让两者不同，而它们本身不是链接；
     以前按这个相等性判断，导致 TEMP 带短名的机器上一张表情包也发不出去。
     链接/重解析点改由下面的 lstat 逐级检查负责。
     """
