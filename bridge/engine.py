@@ -950,9 +950,9 @@ def ensure_ffmpeg_env():
 
 
 try:
-    from .msg_pipeline import MessagePipeline
+    from .msg_pipeline import MessagePipeline, MessageBatches, split_runs, mergeable
 except ImportError:                                  # 以脚本方式跑（bridge/ 在 sys.path 上）
-    from msg_pipeline import MessagePipeline
+    from msg_pipeline import MessagePipeline, MessageBatches, split_runs, mergeable
 
 def _bg_cli(argv=None):
     """零焦点通道的命令行自检 / 发送。
@@ -3171,13 +3171,10 @@ def main():
             sender = msg.get("sender_username") or ""
             if sender == me:
                 return  # 自己发的
-            create_time = float(msg.get("create_time") or 0)
-            if create_time and create_time < START_TS - SKIP_OLDER_THAN:
-                return
-            # 已经放了太久的消息（比如前面堵着几条），不再回
-            if create_time and (time.time() - create_time) > STALE_AFTER:
-                log("跳过过期消息（%.0fs 前）：%s" % (time.time() - create_time, content[:20]))
-                return
+            # 「这条是不是放太久了」不再在这里判：这里已经是出队执行的时候，
+            # 同一会话连发的第二条要等第一条跑完（10~30 秒）才走到这儿，
+            # 一判就是过期、直接丢掉 —— 用户看到的就是「连发两条只回一条」。
+            # 现在收到那一刻就判一次（见 on_message），进了队列就一定会回。
 
             is_group = username.endswith("@chatroom")
             nickname = ""
@@ -3345,7 +3342,10 @@ def main():
         per_chat_limit=PIPELINE_QUEUE_LIMIT,
         log=log,
     )
-    log("消息调度：%d 个 worker（同一会话串行、跨会话并发）" % PIPELINE_WORKERS)
+    # 同一个会话在一轮里攒下的消息：等上一轮跑完再整批交给 on_message_inner。
+    # 上限给队列上限的两倍（至少 4）：正常连发两三条都装得下。
+    batches = MessageBatches(limit=max(4, PIPELINE_QUEUE_LIMIT * 2), log=log)
+    log("消息调度：%d 个 worker（同一会话串行、跨会话并发，连发的几条合并成一次）" % PIPELINE_WORKERS)
 
     def sticker_test_loop():
         """常驻但默认休眠：关闭时不访问任何表情包接口、文件或窗口，也不打印日志。"""
@@ -3369,11 +3369,77 @@ def main():
     threading.Thread(target=sticker_test_loop, daemon=True).start()
 
 
-    def on_message(msg, listener):
-        # 收（Listener 线程）→ 判（这里，按会话排队）→ 发（send_text 内部串行）
-        # 以前是 max_workers=1：一张长截图的 OCR 能把后面所有消息堵几分钟。
+    def merge_text_batch(run, username):
+        """同一个人连发的一串纯文本 → 合成一条消息交给服务端。
+
+        只合并正文和消息 id；发送者、会话、shard 沿用最后一条。
+        群消息正文前面带的 "wxid_xxx:" 前缀要先逐条剥掉，不然合并后
+        模型会看到一串 wxid（原来每条各自剥，合并后只剥一次就漏了）。
+        """
+        merged = dict(run[-1])
+        parts = []
+        ids = []
+        for m in run:
+            text = (m.get("content") or "").strip()
+            if username.endswith("@chatroom"):
+                text = _GROUP_SENDER_PREFIX_RE.sub("", text, count=1).strip()
+            if text:
+                parts.append(text)
+            ids.append(str(m.get("local_id")))
+        if not parts:
+            return [run[-1]]
+        merged["content"] = "\n".join(parts)
+        merged["local_id"] = "|".join(ids)
+        log("合并 %d 条连发消息一起回：%s" % (len(run), " / ".join(parts)[:60]))
+        return [merged]
+
+    def flush_chat(chat, listener):
+        """这个会话的上一轮跑完了：把攒下的消息取走，逐组处理。
+
+        同一轮里同一个人连发的几条合成一条（只调一次模型、只发一次），
+        不同人的消息分开回，顺序不乱。
+        """
         try:
-            pipeline.submit(msg.get("username") or "unknown", on_message_inner, msg, listener)
+            items = batches.take(chat)
+        except Exception as e:                     # noqa: BLE001
+            log("取消息批次失败：", repr(e))
+            return
+        if not items:
+            return
+        for run in split_runs(items):
+            username = (run[0] or {}).get("username") or ""
+            todo = merge_text_batch(run, username) if mergeable(run) else run
+            for msg in todo:
+                try:
+                    on_message_inner(msg, listener)
+                except Exception as e:             # noqa: BLE001
+                    log("处理消息异常：", repr(e))
+
+    def on_message(msg, listener):
+        # 收（Listener 线程）→ 攒（按会话）→ 判（worker，同一会话串行）→ 发（send_lock 串行）
+        # 以前是 max_workers=1：一张长截图的 OCR 能把后面所有消息堵几分钟。
+        #
+        # 「过期」判断必须放在这里（收到的那一刻），不能放到 worker 里：
+        # 同一会话连发两条时，第二条要等第一条生成+发送 10~30 秒才出队，
+        # 到那时候再判就已经是「过期消息」，于是被静默丢掉。
+        try:
+            username = msg.get("username") or ""
+            create_time = float(msg.get("create_time") or 0)
+            if create_time and create_time < START_TS - SKIP_OLDER_THAN:
+                return
+            if create_time and (time.time() - create_time) > STALE_AFTER:
+                log("跳过过期消息（%.0fs 前）：%s"
+                    % (time.time() - create_time, (msg.get("content") or "")[:20]))
+                return
+            chat = username or "unknown"
+            if batches.push(chat, msg):
+                try:
+                    queued = pipeline.submit(chat, flush_chat, chat, listener)
+                except Exception:                  # noqa: BLE001
+                    queued = False
+                if not queued:
+                    # 没投进去就别留着「已排 flush」的标记，否则这一批永远没人来取
+                    batches.release(chat)
         except Exception as e:
             log("提交消息处理失败：", repr(e))
 

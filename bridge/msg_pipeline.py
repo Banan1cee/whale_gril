@@ -18,12 +18,114 @@
 实现：固定大小线程池 + 每个会话一条 FIFO。只有队首那条真正占线程，
 后面排队的不会白占 worker（否则 4 个慢会话就能把池子占满）。
 
+上面是「谁来跑」。`MessageBatches` 管的是「跑之前攒什么」：同一会话在
+上一轮还没跑完时又来的消息，先攒着，等这轮结束一起处理。这样连发两三条
+不会再变成「第一条回完、第二条已经过期被丢掉」。
+
 这个文件不依赖 wechatauto / win32，可以单独跑
 `python scripts/bridge-pipeline-selftest.py` 验证。
 """
 
 import threading
 from concurrent.futures import ThreadPoolExecutor
+
+
+def split_runs(items, key="sender_username"):
+    """把一批消息按「同一个人连着说」切成若干段。
+
+    同一个群里张三说完李四接着说，不能并成一条 —— 并了就把话算到一个人头上，
+    回复也会张冠李戴。只合并「相邻 + 同一发送者」的消息。
+    """
+    runs = []
+    for it in items:
+        who = (it or {}).get(key) or ""
+        if runs and ((runs[-1][0] or {}).get(key) or "") == who:
+            runs[-1].append(it)
+        else:
+            runs.append([it])
+    return runs
+
+
+def mergeable(messages):
+    """这几条能不能合成一次请求：都是纯文本。
+
+    （发送者是否相同由 split_runs 保证；图片/语音的正文是识别结果，
+    混在一起会分不清哪句话配哪张图，所以不合并。）
+    """
+    return len(messages) > 1 and all((m.get("type") or "") == "文本" for m in messages)
+
+
+class MessageBatches:
+    """按会话攒消息：等这个会话的上一轮跑完，再整批交出去。
+
+    为什么需要它：同一会话是串行的。第一条正在生成/发送时，后面连发的几条
+    只能排队；旧实现是**出队时**按 `create_time` 判「过期」，于是第二条要等
+    10~30 秒才出队，一出队就已经是「过期消息」被丢掉 —— 表现就是
+    「连发两三条，她只回第一条」。现在过期只在**收到那一刻**判一次
+    （见 engine.on_message），进了这个队列就一定会被处理；同一轮攒下的几条
+    合并成一次生成，不会一人一句连回三遍。
+
+    与 MessagePipeline 的分工：本类只管「攒什么」，Pipeline 管「谁来跑、按什么
+    顺序跑」。push 返回 True 时，调用方才需要向 Pipeline 投一次 flush。
+    """
+
+    def __init__(self, limit=8, log=None):
+        self.limit = max(1, int(limit))
+        self.log = log or (lambda *a: None)
+        self._guard = threading.Lock()
+        self._pending = {}          # chat -> [msg]
+        self._flush_queued = set()  # 已经排了 flush、还没被 take 的会话
+        self.stats = {"in": 0, "batches": 0, "merged": 0, "dropped": 0}
+
+    def push(self, chat, item):
+        """攒一条。返回 True 表示这个会话还没有排队的 flush，调用方要投一个。"""
+        chat = chat or "_"
+        with self._guard:
+            q = self._pending.setdefault(chat, [])
+            q.append(item)
+            self.stats["in"] += 1
+            if len(q) > self.limit:
+                # 极端刷屏（一轮里攒了几十条）：留最新的，丢最早的，
+                # 但要记账 —— 以前是静默丢，用户只知道「她漏回了」。
+                q.pop(0)
+                self.stats["dropped"] += 1
+                self.log("会话 %s 一轮攒了超过 %d 条，丢掉最早的一条" % (chat, self.limit))
+            if chat not in self._flush_queued:
+                self._flush_queued.add(chat)
+                return True
+            return False
+
+    def take(self, chat):
+        """取走这个会话攒下的全部消息（取走即清空，并把 flush 标记清掉）。
+
+        标记要在**开始处理时**清，不能等处理完：处理期间新来的消息必须能
+        再排一次 flush，否则它们会一直躺在待处理里没人管。
+        """
+        chat = chat or "_"
+        with self._guard:
+            self._flush_queued.discard(chat)
+            items = self._pending.pop(chat, [])
+            if items:
+                self.stats["batches"] += 1
+                self.stats["merged"] += max(0, len(items) - 1)
+        return items
+
+    def release(self, chat):
+        """放弃「已排 flush」的标记（投递失败时用）。消息仍留在待处理里。"""
+        with self._guard:
+            self._flush_queued.discard(chat or "_")
+
+    def pending(self, chat):
+        with self._guard:
+            return len(self._pending.get(chat or "_", []))
+
+    def status(self):
+        with self._guard:
+            return dict(
+                self.stats,
+                chats=len(self._pending),
+                queued=sum(len(v) for v in self._pending.values()),
+            )
 
 
 class MessagePipeline:
@@ -48,8 +150,9 @@ class MessagePipeline:
             q = self._queues.setdefault(chat, [])
             q.append((fn, args))
             if len(q) > self.per_chat_limit:
-                # 同一会话积压太多：丢最旧的。那条多半已经过期了
-                # （服务端还有 STALE_AFTER 兜底），留着只会让她回上一句。
+                # 同一会话积压太多：丢最旧的。这是安全网 —— 正常情况下走不到：
+                # engine 每个会话同时只排一个 flush 任务，消息本身由
+                # MessageBatches 攒着，不占这里的队列额度。
                 q.pop(0)
                 self.stats["dropped"] += 1
                 self.log("会话积压超过 %d 条，丢掉最早的一条：%s"
