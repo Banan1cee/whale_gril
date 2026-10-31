@@ -132,7 +132,7 @@ const DEFAULT_CONFIG = {
     // 主人骂她时能不能还嘴（默认关：只许委屈不许骂回去）
     masterRoast: false,
   },
-  chat: { privateMaxChars: 140, groupMaxChars: 70, historyTurns: 200, groupHistoryTurns: 150, maxBubbles: 2, discussionMaxChars: 600, emojiChance: 0 },
+  chat: { privateMaxChars: 100, groupMaxChars: 70, historyTurns: 120, groupHistoryTurns: 100, maxBubbles: 2, discussionMaxChars: 400, emojiChance: 0 },
   // 联网：问天气/新闻这类实时问题时现搜。city 用来把「今天天气怎么样」补成「上海 天气」，
   // 搜到的结果准得多；留空就按对方原话搜（也能用，但经常搜到别的城市）。
   websearch: { enabled: true, city: '', timeoutMs: 8000 },
@@ -205,7 +205,8 @@ const DEFAULT_CONFIG = {
     maxRepliesPerHour: 1000,
     muteDefaultMinutes: 30,
   },
-  memory: { maxSessions: 200, maxMessages: 400, maxNotesPerUser: 6, digestEvery: 12, digest: true, semantic: true, semanticMinCandidates: 3 },
+  // 记忆参数已移到 src/memory/constants.js（写死，不提供 UI/接口）；
+  // config.json 里旧的 memory.* 会被忽略，不再参与运行时。
   // 微信桥接：account = 固定用哪个微信号（微信双开时必填）。网页「设置 → 微信账号」会直接写这里，
   // 一般不用手改；留空 = 按「最近活跃」自动选（双开时可能选到大号）。
   wechat: {

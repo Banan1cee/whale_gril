@@ -217,7 +217,7 @@ test('认真讨论时允许更长回复，并带观点/例子要求', () => {
   });
   assert.match(sys, /认真讨论模式/);
   assert.match(sys, /可以有立场/);
-  assert.match(sys, /600/);
+  assert.match(sys, /400/);
   const plain = persona.buildSystem({
     config,
     msg: { chatType: 'private', senderName: '小海' },

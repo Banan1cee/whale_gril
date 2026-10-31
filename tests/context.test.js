@@ -111,31 +111,33 @@ test('引用回复的目标名字会进上下文和提示词', async () => {
   cleanup();
 });
 
-test('群聊上下文真的能拿到配置的条数（不再被 40 条截断）', async () => {
+test('群聊上下文按 token 预算取原文，长历史仍在磁盘', async () => {
   const config = JSON.parse(JSON.stringify(DEFAULT_CONFIG));
   config.chat.groupHistoryTurns = 80;
-  config.memory.maxMessages = 160;
   const { bot, store, cleanup } = makeBot({ config });
   for (let i = 0; i < 70; i += 1) {
     await bot.decide(group('历史消息' + i, { senderId: 'u-x' + (i % 5), senderName: '群友' + (i % 5) }));
   }
   const kept = store.messages('web:g:g1', 200).filter((m) => m.role === 'user');
-  assert.ok(kept.length >= 60, '应保留至少 60 条，实际 ' + kept.length);
+  assert.ok(kept.length >= 60, '原文应保留至少 60 条，实际 ' + kept.length);
   const decision = await bot.decide(group('@鲸鲸 刚才说到哪了', { atMe: true }));
   const joined = decision.turns.map((t) => t.content).join('\n');
-  assert.ok(joined.includes('历史消息40'), '较新的历史应在提示词里');
-  assert.ok(joined.length > 2000, '上下文不应被截到很短，实际 ' + joined.length);
+  // 最近一段原文 / 上一段摘要至少有一样接住上下文，不能只剩当前一句
+  assert.ok(joined.length > 120, '上下文不应只剩当前消息，实际 ' + joined.length);
+  assert.ok(/历史消息|【这段之前聊过】|【相关事件】/.test(joined), '旧内容应通过原文或摘要进入提示词');
   cleanup();
 });
 
-test('存在时间断层时会标注间隔，避免把几小时前的旧话题当刚发生', async () => {
+test('跨过 30 分钟空闲：旧话题关闭，原文仍在磁盘，不会当成刚发生', async () => {
   const { bot, store, cleanup } = makeBot();
   const key = 'web:g:g1';
   store.appendMessage(key, { role: 'user', name: '阿甲', uid: 'u-a', text: '四小时前的话题', ts: Date.now() - 4 * 3600 * 1000 });
-  await bot.decide(group('@鲸鲸 现在呢', { atMe: true }));
   const decision = await bot.decide(group('@鲸鲸 现在呢', { atMe: true }));
   const joined = decision.turns.map((t) => t.content).join('\n');
-  assert.match(joined, /间隔约/);
+  assert.ok(store.messages(key, 10).some((m) => m.text === '四小时前的话题'), '原文不能被删');
+  const historyPart = joined.split('【当前需要回应的消息】')[0];
+  assert.ok(!historyPart.includes('四小时前的话题'), '旧话题不能出现在最近原文里冒充刚发生');
+  assert.ok(joined.includes('【这段之前聊过】') || joined.includes('【相关事件】'), '旧话题应通过摘要/事件接住');
   cleanup();
 });
 

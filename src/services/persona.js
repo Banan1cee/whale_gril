@@ -2,10 +2,11 @@
 
 const { saveSettings } = require('../infra/config');
 const personaStore = require('../persona/store');
+const { checkPersonaTokens, PERSONA_MAX_TOKENS } = require('../persona/tokenCheck');
 
 /* ---------------- 人设调教（浏览器表单用） ---------------- */
 
-function applyPersonaPatch(runtime, body) {
+async function applyPersonaPatch(runtime, body) {
   if (body && body.reset) {
     personaStore.clear(runtime.config);
     runtime.logger.info('人设调教：恢复默认');
@@ -33,6 +34,19 @@ function applyPersonaPatch(runtime, body) {
   if (Array.isArray(body.mutedGroups)) patch.mutedGroups = body.mutedGroups.map((x) => String(x).trim()).filter(Boolean).slice(0, 30);
   // 记住「这一版是从哪个预设载入的」，页面上能直接显示当前生效的是哪一版
   if (body.sourcePreset !== undefined) patch.sourcePreset = str(body.sourcePreset, 80);
+  // 人设保存/导入时才做精确 token 校验；每轮聊天仍然用轻量估算。
+  const tokenCheck = await checkPersonaTokens(runtime, patch);
+  if (tokenCheck.overLimit) {
+    runtime.logger.warn(
+      `人设太长，拒绝保存：${tokenCheck.tokens} token（上限 ${PERSONA_MAX_TOKENS}，${tokenCheck.exact ? '官方计数' : '估算'}）`
+    );
+    return {
+      ok: false,
+      error: `人设太长：约 ${tokenCheck.tokens} token，超过上限 ${PERSONA_MAX_TOKENS}。`
+        + '单人设（system）不计入对话预算，但单轮合计不能超过 32,000 token，请精简设定或自定义提示词。',
+      tokenCheck,
+    };
+  }
   personaStore.save(runtime.config, patch);
   if (body.model) {
     try {
@@ -43,9 +57,13 @@ function applyPersonaPatch(runtime, body) {
     }
   }
   runtime.logger.info('人设调教：已保存 ' + Object.keys(patch).join(','));
+  runtime.logger.info(
+    `人设 token：${tokenCheck.tokens}（${tokenCheck.exact ? '官方计数' : '估算'}，上限 ${PERSONA_MAX_TOKENS}）`
+  );
   return {
     ok: true,
     persona: personaStore.summary(runtime.config),
+    tokenCheck,
     llm: {
       provider: runtime.llm.provider,
       providerLabel: runtime.llm.providerLabel,
