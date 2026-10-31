@@ -2,7 +2,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="选择联系人" Height="600" Width="560" MinHeight="420" MinWidth="460"
-        Background="{StaticResource Bg}" WindowStartupLocation="CenterOwner" ShowInTaskbar="False"
+        Background="{DynamicResource Bg}" Foreground="{DynamicResource Text}" FontSize="12.5" WindowStartupLocation="CenterOwner" ShowInTaskbar="False"
         FontFamily="Microsoft YaHei UI, Segoe UI" UseLayoutRounding="True"
         TextOptions.TextFormattingMode="Display">
     <Grid Margin="16,14,16,14">
@@ -16,7 +16,7 @@
 
         <StackPanel Grid.Row="0">
             <TextBlock x:Name="HeaderText" Text="选择联系人" FontSize="16" FontWeight="SemiBold"
-                       Foreground="{StaticResource Text}" />
+                       Foreground="{DynamicResource Text}" />
             <TextBlock x:Name="SubText" Style="{StaticResource Small}" TextWrapping="Wrap" Margin="0,5,0,0" />
         </StackPanel>
 
@@ -40,7 +40,7 @@
 
         <StackPanel x:Name="AllMuteHost" Grid.Row="2" Margin="0,10,0,0" Visibility="Collapsed">
             <CheckBox x:Name="AllMuteCheck" Content="全部静音（*）" />
-            <TextBlock x:Name="AllMuteHint" Style="{StaticResource Small}" Foreground="{StaticResource Warn}"
+            <TextBlock x:Name="AllMuteHint" Style="{StaticResource Small}" Foreground="{DynamicResource Warn}"
                        TextWrapping="Wrap" Margin="21,4,0,0" />
         </StackPanel>
 
@@ -75,12 +75,12 @@
                                               VerticalAlignment="Center" />
                                     <StackPanel Grid.Column="1" Margin="10,0,0,0">
                                         <StackPanel Orientation="Horizontal">
-                                            <TextBlock Text="{Binding Display}" Foreground="{StaticResource Text}"
+                                            <TextBlock Text="{Binding Display}" Foreground="{DynamicResource Text}"
                                                        FontSize="12" />
-                                            <Border Background="#FF2E3238" CornerRadius="3" Padding="5,1"
+                                            <Border Background="{DynamicResource Surface3}" CornerRadius="3" Padding="5,1"
                                                     Margin="7,0,0,0" VerticalAlignment="Center"
                                                     Visibility="{Binding GroupBadgeVisibility}">
-                                                <TextBlock Text="群" Foreground="{StaticResource Accent}" FontSize="10" />
+                                                <TextBlock Text="群" Foreground="{DynamicResource Accent}" FontSize="10" />
                                             </Border>
                                         </StackPanel>
                                         <TextBlock Text="{Binding Sub}" Style="{StaticResource Small}" Margin="0,2,0,0" />
