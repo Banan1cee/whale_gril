@@ -78,9 +78,23 @@ jobs:
 
       - name: Node 单元测试（不需要装任何依赖）
         if: always()
+        shell: pwsh
         # 注意：pwsh 不会展开引号里的通配符，所以走 npm test（内部是
         # node --test "tests/*.test.js"，由 Node 自己展开），和本地执行完全一致。
-        run: npm test
+        # 失败时把失败行打成注解，方便没有仓库权限时定位。
+        run: |
+          npm test *> node-tests.log
+          $code = $LASTEXITCODE
+          Get-Content node-tests.log
+          if ($code -ne 0) {
+            $bad = (Get-Content -Encoding utf8 node-tests.log) |
+              Select-String -Pattern 'not ok|✖|AssertionError|Error:|ℹ fail' |
+              Select-Object -First 15
+            $msg = (@($bad | ForEach-Object { $_.Line }) -join "`n") -replace '%', '%25' -replace "`r", '' -replace "`n", '%0A'
+            if (-not $msg) { $msg = 'node tests failed' }
+            Write-Output "::error title=node-tests::$msg"
+            exit $code
+          }
 
       - name: Python 单元测试
         if: always()

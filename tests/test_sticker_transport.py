@@ -369,7 +369,7 @@ class TransportTest(unittest.TestCase):
 
     def test_short_name_root_is_accepted_like_any_normal_path(self):
         # 现场真凶（CI 上每张表情包都发不出去）：Windows 的 8.3 短名路径
-        # C:\Users\RUNNER~1\... 经 realpath 展开成 C:\Users\runneradmin\...，
+        # （用户名那种带 ~1 的形式）经 realpath 会展开成长名，两个字符串因此不同，
         # 旧代码要求「abspath 必须等于 realpath」，于是合法路径被判成链接。
         # 短名不是链接，只有真正的软链接/重解析点才该拒绝。
         short_root = self.directory
