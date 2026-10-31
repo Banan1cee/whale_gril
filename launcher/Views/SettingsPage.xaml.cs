@@ -88,7 +88,7 @@ namespace WhaleLauncher.Views
             {
                 new FieldSpec { Path = "group.requireAt", Label = "必须 @ 她才回", Kind = "bool", Hint = "关掉 = 群里不 @ 也会接，但按下面的插话概率抽，不是每条都回" },
                 new FieldSpec { Path = "group.freeChat", Label = "允许她自己插话", Kind = "bool", Hint = "开着时没点名的消息也按概率抽一句；@ 她的不受影响" },
-                new FieldSpec { Path = "group.freeChatChance", Label = "插话概率", Kind = "num", Min = 0, Max = 1, IsInt = false, Hint = "0~1，0.06 = 6%；未点名的消息都按它抽" },
+                new FieldSpec { Path = "group.freeChatChance", Label = "插话概率（0.06=6%，1=每条都回）", Kind = "num", Min = 0, Max = 1, IsInt = false, Hint = "没点名的消息按这个概率接一句；默认 0.06 约等于 16 条回 1 条。填 1 = 每条都回，仍受冷却和每小时上限约束" },
                 new FieldSpec { Path = "group.cooldownSec", Label = "两次回复冷却(秒)", Kind = "num", Min = 0, Max = 3600 },
                 new FieldSpec { Path = "group.maxRepliesPerHour", Label = "每小时最多回几条", Kind = "num", Min = 1, Max = 200 },
                 new FieldSpec { Path = "group.masterAlwaysReply", Label = "主人在群里说话永远回", Kind = "bool" },
