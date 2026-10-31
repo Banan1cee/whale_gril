@@ -19,7 +19,7 @@ for _p in (os.path.join(_ROOT, "bridge"), _ROOT):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from msg_pipeline import MessagePipeline  # noqa: E402
+from msg_pipeline import MessagePipeline, MessageBatches, split_runs, mergeable  # noqa: E402
 
 FAILED = []
 N = [0]
@@ -127,6 +127,66 @@ def test_status():
     check("workers", st["workers"], 2)
 
 
+def test_batches_merge():
+    print("[batch] same chat bursts into one turn, nothing dropped")
+    b = MessageBatches(limit=8)
+    check("first push queues a flush", b.push("A", "m1"), True)
+    check("second rides the same flush", b.push("A", "m2"), False)
+    check("third too", b.push("A", "m3"), False)
+    check("one batch keeps all three in order", b.take("A"), ["m1", "m2", "m3"])
+    check("dropped", b.stats["dropped"], 0)
+    check("batches", b.stats["batches"], 1)
+    check("merged", b.stats["merged"], 2)
+    check("after take a new push queues again", b.push("A", "m4"), True)
+    check("take again", b.take("A"), ["m4"])
+
+
+def test_batches_overflow():
+    print("[batch] flood keeps the newest and counts the loss")
+    b = MessageBatches(limit=3)
+    for i in range(5):
+        b.push("A", i)
+    check("dropped", b.stats["dropped"], 2)
+    check("kept newest", b.take("A"), [2, 3, 4])
+
+
+def test_batches_release():
+    print("[batch] release lets the next push flush again")
+    b = MessageBatches()
+    check("push", b.push("A", 1), True)
+    b.release("A")
+    check("push after release", b.push("A", 2), True)
+    check("both kept", b.take("A"), [1, 2])
+
+
+def test_batches_isolation():
+    print("[batch] chats do not share a batch")
+    b = MessageBatches()
+    check("A flush", b.push("A", "a1"), True)
+    check("B flush", b.push("B", "b1"), True)
+    check("A2 rides", b.push("A", "a2"), False)
+    check("take A", b.take("A"), ["a1", "a2"])
+    check("take B", b.take("B"), ["b1"])
+
+
+def test_split_runs():
+    print("[batch] only adjacent messages from the same sender merge")
+    msgs = [
+        {"sender_username": "a", "content": "1"},
+        {"sender_username": "a", "content": "2"},
+        {"sender_username": "b", "content": "3"},
+        {"sender_username": "a", "content": "4"},
+    ]
+    check("group sizes", [len(r) for r in split_runs(msgs)], [2, 1, 1])
+
+
+def test_mergeable():
+    print("[batch] only plain text merges")
+    check("text+text", mergeable([{"type": "文本"}, {"type": "文本"}]), True)
+    check("text+image", mergeable([{"type": "文本"}, {"type": "图片"}]), False)
+    check("single", mergeable([{"type": "文本"}]), False)
+
+
 def main():
     test_same_chat_order()
     test_cross_chat_parallel()
@@ -134,6 +194,12 @@ def main():
     test_exception_does_not_stop()
     test_close()
     test_status()
+    test_batches_merge()
+    test_batches_overflow()
+    test_batches_release()
+    test_batches_isolation()
+    test_split_runs()
+    test_mergeable()
     print()
     if FAILED:
         print("FAILED %d/%d" % (len(FAILED), N[0]))
