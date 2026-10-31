@@ -67,6 +67,7 @@ namespace WhaleLauncher.Views
             BuildTabs();
             RenderGrid(res);
             DirHint.Text = "目录：" + res.Str("dir");
+            if (string.IsNullOrWhiteSpace(TxtTestChat.Text)) TxtTestChat.Text = res.Str("testChat");
 
             var pending = res.Long("pending");
             QueueInfo.Text = pending > 0 ? $"排队中 {pending} 张" : "队列空";
@@ -376,10 +377,14 @@ namespace WhaleLauncher.Views
         private async void OnTestSend(object sender, RoutedEventArgs e)
         {
             if (string.IsNullOrEmpty(_current)) return;
-            var res = await Api.Post(_sup.Url, "/api/stickers/test", $"{{\"emotion\":\"{Api.Esc(_current)}\"}}");
+            var chat = (TxtTestChat.Text ?? "").Trim();
+            var body = "{\"emotion\":\"" + Api.Esc(_current) + "\""
+                + (chat.Length > 0 ? ",\"chat\":\"" + Api.Esc(chat) + "\"" : "") + "}";
+            var res = await Api.Post(_sup.Url, "/api/stickers/test", body);
             QueueInfo.Text = res.Ok ? "已排队 1 张" : "排队失败";
             StatusText.Text = res.Ok
-                ? "已排队。真正发出去的时机由桥接掌握：微信窗口在前台、账号校验通过才会发。"
+                ? "已排队，接收会话：" + (chat.Length > 0 ? chat : "（配置里的默认会话）")
+                  + "。真正发出去的时机由桥接掌握：微信窗口在前台、账号校验通过才会发。"
                 : "排队失败：" + (res.Error.Length > 0 ? res.Error : res.Raw);
         }
 

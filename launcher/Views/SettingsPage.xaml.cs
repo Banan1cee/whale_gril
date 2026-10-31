@@ -182,14 +182,6 @@ namespace WhaleLauncher.Views
                 new FieldSpec { Path = "gateway.douyin.inboundToken", Label = "抖音 token", Kind = "secret", Hint = "留空表示不改" },
                 new FieldSpec { Path = "gateway.douyin.outboundUrl", Label = "抖音出站地址", Kind = "text" },
             }},
-            new SectionSpec { Title = "模型参数", Note = "模型和 Key 在下面的「模型与 Key」卡片里；这里调她的说话风格与长度。", Fields =
-            {
-                new FieldSpec { Path = "deepseek.temperature", Label = "温度", Kind = "num", Min = 0, Max = 2, IsInt = false, Hint = "越大越放得开；超过 1.2 容易越聊越离谱" },
-                new FieldSpec { Path = "deepseek.maxTokens", Label = "单次最多生成多少 token", Kind = "num", Min = 16, Max = 32768 },
-                new FieldSpec { Path = "deepseek.frequencyPenalty", Label = "频率惩罚（减少复读）", Kind = "num", Min = -2, Max = 2, IsInt = false },
-                new FieldSpec { Path = "deepseek.presencePenalty", Label = "在场惩罚（鼓励换话题）", Kind = "num", Min = -2, Max = 2, IsInt = false },
-                new FieldSpec { Path = "deepseek.timeoutMs", Label = "请求超时(毫秒)", Kind = "num", Min = 1000, Max = 600000 },
-            }},
             new SectionSpec { Title = "看图与语音", Note = "看图 Key 在下面的「看图」卡片里。", Fields =
             {
                 new FieldSpec { Path = "vision.baseUrl", Label = "看图接口地址", Kind = "text" },
@@ -206,19 +198,12 @@ namespace WhaleLauncher.Views
                 new FieldSpec { Path = "features.digest", Label = "消息汇总（和上面的汇总开关是同一个）", Kind = "bool" },
                 new FieldSpec { Path = "features.memorySnapshot", Label = "自动备份记忆", Kind = "bool" },
             }},
-            new SectionSpec { Title = "主人身份", Note = "谁算主人：填了就算，两个都填要同时对上更安全。", Fields =
-            {
-                new FieldSpec { Path = "persona.aliases", Label = "别名 / 外号", Kind = "multiline", Hint = "一行一个；群里喊这些也算叫她" },
-                new FieldSpec { Path = "persona.masterRoast", Label = "主人骂她时允许还嘴", Kind = "bool", Hint = "关掉 = 只委屈不顶嘴" },
-                new FieldSpec { Path = "persona.master.names", Label = "主人名单（微信昵称）", Kind = "multiline", Hint = "一行一个；微信里改昵称就能冒充，建议同时填 wxid" },
-                new FieldSpec { Path = "persona.master.wxids", Label = "主人名单（wxid）", Kind = "multiline", Hint = "一行一个 wxid_xxx，最可靠" },
-            }},
             new SectionSpec { Title = "高级", Fields =
             {
                 new FieldSpec { Path = "server.host", Label = "监听地址", Kind = "text", Hint = "只给本机用就 127.0.0.1；0.0.0.0 = 同 WiFi 也能连（改完重启）" },
                 new FieldSpec { Path = "server.openBrowser", Label = "启动时自动开浏览器", Kind = "bool" },
                 new FieldSpec { Path = "server.port", Label = "本机端口", Kind = "num", Min = 1024, Max = 65535, Hint = "改完重启生效" },
-                new FieldSpec { Path = "log.level", Label = "日志级别", Kind = "select", Options = new[] { "info", "debug" } },
+                new FieldSpec { Path = "log.level", Label = "日志级别（debug=详细 / info=常规 / error=仅错误）", Kind = "select", Options = new[] { "debug", "info", "error" }, Hint = "每次启动的日志都会归档到 data/logs，保留最近 5 次" },
                 new FieldSpec { Path = "storage.mediaKeepDays", Label = "媒体缓存保留几天", Kind = "num", Min = 0, Max = 90 },
                 new FieldSpec { Path = "storage.mediaMaxMB", Label = "媒体缓存上限(MB)", Kind = "num", Min = 0, Max = 10000 },
             }},
@@ -708,6 +693,13 @@ namespace WhaleLauncher.Views
             body.Children.Add(Row("API Key", key, "留空表示不改；已存的这里不会显示"));
             body.Children.Add(Row("演示模式", mock, "不连模型，用内置台词"));
             body.Children.Add(Row("她怎么叫你", owner, ""));
+
+            // 采样参数也放这张卡：以前只在网页里能改，启动器用户根本看不到。
+            body.Children.Add(BuildField(new FieldSpec { Path = "deepseek.temperature", Label = "温度", Kind = "num", Min = 0, Max = 2, IsInt = false, Hint = "越大越放得开；超过 1.2 容易越聊越离谱" }));
+            body.Children.Add(BuildField(new FieldSpec { Path = "deepseek.maxTokens", Label = "单次最多生成多少 token", Kind = "num", Min = 16, Max = 32768, Hint = "默认 700；具体字数因模型而异" }));
+            body.Children.Add(BuildField(new FieldSpec { Path = "deepseek.frequencyPenalty", Label = "频率惩罚（减少复读）", Kind = "num", Min = -2, Max = 2, IsInt = false }));
+            body.Children.Add(BuildField(new FieldSpec { Path = "deepseek.presencePenalty", Label = "在场惩罚（鼓励换话题）", Kind = "num", Min = -2, Max = 2, IsInt = false }));
+            body.Children.Add(BuildField(new FieldSpec { Path = "deepseek.timeoutMs", Label = "请求超时(毫秒)", Kind = "num", Min = 1000, Max = 600000 }));
 
             var buttons = new WrapPanel { Margin = new Thickness(0, 10, 0, 0) };
             var save = new Button { Content = "保存", Style = (Style)FindResource("Primary") };

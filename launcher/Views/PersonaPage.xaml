@@ -47,6 +47,10 @@
                                     <RowDefinition Height="Auto" />
                                     <RowDefinition Height="Auto" />
                                     <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
                                 </Grid.RowDefinitions>
 
                                 <TextBlock Text="名字" Style="{StaticResource Label}" VerticalAlignment="Center" />
@@ -69,6 +73,22 @@
                                 <TextBlock Grid.Row="7" Text="自定义提示词" Style="{StaticResource Label}" VerticalAlignment="Top" Margin="0,8,0,0" />
                                 <TextBox x:Name="TxtPrompt" Grid.Row="7" Grid.Column="1" Margin="0,8,0,0" MinHeight="80"
                                          TextWrapping="Wrap" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" LostFocus="OnFieldLostFocus" />
+
+                                <TextBlock Grid.Row="8" Text="别名 / 外号" Style="{StaticResource Label}" VerticalAlignment="Top" Margin="0,8,0,0" />
+                                <TextBox x:Name="TxtAliases" Grid.Row="8" Grid.Column="1" Margin="0,8,0,0" MinHeight="56"
+                                         TextWrapping="Wrap" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" LostFocus="OnFieldLostFocus"
+                                         ToolTip="一行一个；群里喊这些也算叫她" />
+                                <TextBlock Grid.Row="9" Text="主人名单（昵称）" Style="{StaticResource Label}" VerticalAlignment="Top" Margin="0,8,0,0" />
+                                <TextBox x:Name="TxtMasterNames" Grid.Row="9" Grid.Column="1" Margin="0,8,0,0" MinHeight="44"
+                                         TextWrapping="Wrap" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" LostFocus="OnFieldLostFocus"
+                                         ToolTip="一行一个。微信里改昵称就能冒充，建议同时填下面的 wxid" />
+                                <TextBlock Grid.Row="10" Text="主人名单（wxid）" Style="{StaticResource Label}" VerticalAlignment="Top" Margin="0,8,0,0" />
+                                <TextBox x:Name="TxtMasterWxids" Grid.Row="10" Grid.Column="1" Margin="0,8,0,0" MinHeight="44"
+                                         TextWrapping="Wrap" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" LostFocus="OnFieldLostFocus"
+                                         ToolTip="一行一个 wxid_xxx，最可靠；「最近说过话的人」里能抄" />
+                                <TextBlock Grid.Row="11" Text="主人骂她时允许还嘴" Style="{StaticResource Label}" VerticalAlignment="Center" Margin="0,8,0,0" />
+                                <CheckBox x:Name="ChkRoast" Grid.Row="11" Grid.Column="1" Content="允许还嘴（关掉 = 只委屈不顶嘴）"
+                                          Margin="0,8,0,0" VerticalAlignment="Center" Click="OnToggleField" />
                             </Grid>
                         </StackPanel>
                     </Border>

@@ -108,6 +108,17 @@ namespace WhaleLauncher.Views
                 if (cfg.Ok && cfg.Prop("config").ValueKind == JsonValueKind.Object &&
                     cfg.Prop("config").TryGetProperty("group", out var g) && g.ValueKind == JsonValueKind.Object)
                     ChkRequireAt.IsChecked = B(g, "requireAt");
+                if (cfg.Ok && cfg.Prop("config").ValueKind == JsonValueKind.Object &&
+                    cfg.Prop("config").TryGetProperty("persona", out var pcfg) && pcfg.ValueKind == JsonValueKind.Object)
+                {
+                    TxtAliases.Text = JoinLines(pcfg, "aliases");
+                    ChkRoast.IsChecked = B(pcfg, "masterRoast");
+                    if (pcfg.TryGetProperty("master", out var m) && m.ValueKind == JsonValueKind.Object)
+                    {
+                        TxtMasterNames.Text = JoinLines(m, "names");
+                        TxtMasterWxids.Text = JoinLines(m, "wxids");
+                    }
+                }
 
                 UpdateHints();
             }
@@ -275,8 +286,14 @@ namespace WhaleLauncher.Views
             var owner = TxtOwner.Text.Trim();
             if (owner.Length > 0)
                 await Api.Post(_sup.Url, "/api/settings", $"{{\"userName\":\"{Api.Esc(owner)}\"}}");
-            await Api.Post(_sup.Url, "/api/config",
-                $"{{\"patch\":{{\"group\":{{\"requireAt\":{(ChkRequireAt.IsChecked == true ? "true" : "false")}}}}}}}");
+            var patch = "{\"patch\":{" +
+                "\"group.requireAt\":" + (ChkRequireAt.IsChecked == true ? "true" : "false") + "," +
+                "\"persona.masterRoast\":" + (ChkRoast.IsChecked == true ? "true" : "false") + "," +
+                "\"persona.aliases\":" + Lines(TxtAliases) + "," +
+                "\"persona.master.names\":" + Lines(TxtMasterNames) + "," +
+                "\"persona.master.wxids\":" + Lines(TxtMasterWxids) +
+                "}}";
+            await Api.Post(_sup.Url, "/api/config", patch);
 
             SaveState.Text = okText + " · " + DateTime.Now.ToString("HH:mm:ss");
         }
@@ -293,6 +310,26 @@ namespace WhaleLauncher.Views
             PresetResult.Text = "已导入 " + p.Label + "，下面的字段已换成这一版。";
             _loaded = false;
             await LoadAsync();
+        }
+
+        /// <summary>JSON 数组 → 一行一个（给多行输入框用）</summary>
+        private static string JoinLines(JsonElement parent, string name)
+        {
+            if (parent.ValueKind != JsonValueKind.Object || !parent.TryGetProperty(name, out var v)
+                || v.ValueKind != JsonValueKind.Array) return "";
+            return string.Join("\n", v.EnumerateArray()
+                .Where(x => x.ValueKind == JsonValueKind.String)
+                .Select(x => x.GetString() ?? "")
+                .Where(x => x.Length > 0));
+        }
+
+        /// <summary>多行输入框 → JSON 数组字面量</summary>
+        private static string Lines(System.Windows.Controls.TextBox box)
+        {
+            var items = (box.Text ?? "").Split('\n')
+                .Select(x => x.Trim()).Where(x => x.Length > 0)
+                .Select(x => "\"" + Api.Esc(x) + "\"");
+            return "[" + string.Join(",", items) + "]";
         }
 
         private static string S(JsonElement e, string n)
