@@ -96,7 +96,7 @@ jobs:
           if ($code -ne 0) {
             $bad = (Get-Content -Encoding utf8 node-tests.log) |
               Select-String -Pattern 'not ok|✖|AssertionError|Error:|ℹ fail' |
-              Select-Object -First 15
+              Select-Object -First 40
             $msg = (@($bad | ForEach-Object { $_.Line }) -join "`n") -replace '%', '%25' -replace "`r", '' -replace "`n", '%0A'
             if (-not $msg) { $msg = 'node tests failed' }
             Write-Output "::error title=node-tests::$msg"
