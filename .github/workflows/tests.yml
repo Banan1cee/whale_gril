@@ -76,6 +76,13 @@ jobs:
             exit $code
           }
 
+      # release-check 里已经包含同一套规则；单独再跑一次是为了名字明确——
+      # 失败时一眼能看出是隐私扫描挂了，而不是别的问题。
+      # 只扫工作树，历史里的旧提交不在这里的覆盖范围内。
+      - name: 隐私扫描（文本 + 二进制）
+        if: always()
+        run: node scripts/privacy-scan.js .
+
       - name: Node 单元测试（不需要装任何依赖）
         if: always()
         shell: pwsh

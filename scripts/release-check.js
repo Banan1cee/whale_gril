@@ -144,59 +144,17 @@ try {
   check('package.json 可解析', false, e.message);
 }
 
-// 8) 不能把自己的隐私带进包里：密钥、真实 wxid、带中文用户名的绝对路径
-//    以前这三样都漏过（BUGS.md 写了真实路径、手册列了禁用串、出包脚本默认目录写死用户名），
-//    所以做成硬检查：命中就不许出包。
+// 8) 不能把自己的隐私带进包里：密钥、真实 wxid、账号目录名、群号、手机号、邮箱、
+//    本机用户名路径，以及 exe/dll 里的调试路径。
+//    这些以前都漏过：BUGS.md 写了真实路径、真实小号目录名进了测试、带 PDB 路径的 exe
+//    进了仓库。规则与遍历统一收在 scripts/privacy-scan.js，这里只把它接进自检。
 try {
-  const SKIP_DIRS = new Set(['node_modules', '.git', 'data', 'runtime', 'backup', '__pycache__', 'wechatauto_db', 'wechatauto_logs']);
-  // 构建产物也要跳过：launcher/obj 里的 FileListAbsolute.txt 记着本机的绝对路径，
-  // 不跳过的话「刚编译完再跑自检」必然误报成泄露个人信息（.gitignore 里已有这些目录，
-  // 这里按相对路径前缀对齐，避免把别处的普通 bin/obj 一并跳过）。
-  const SKIP_PREFIX = ['launcher/bin/', 'launcher/obj/', 'launcher/publish/', 'dist/', 'release/', '.tools/', 'artifacts/', 'tests/launcher/Checks/bin/', 'tests/launcher/Checks/obj/', 'tests/launcher/FakeBridge/bin/', 'tests/launcher/FakeBridge/obj/', '.venv/', 'venv/'];
-  const SKIP_FILES = /(^|\/)(config\.json|settings\.json|.*\.log|.*\.bak.*|.*\.zip)$/;
-  const walk = (dir) => {
-    const out = [];
-    for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
-      const full = path.join(dir, ent.name);
-      const rel = path.relative(root, full).split(path.sep).join('/');
-      if (ent.isDirectory()) {
-        if (SKIP_DIRS.has(ent.name) || SKIP_PREFIX.some((p) => rel.startsWith(p))) continue;
-        out.push(...walk(full));
-      } else if (!SKIP_FILES.test(rel)) {
-        out.push(rel);
-      }
-    }
-    return out;
-  };
-  const files = walk(root).filter((f) => /\.(js|json|md|py|ps1|bat|html|css|txt|yml|yaml)$/i.test(f));
-  // 只认「本机上真实存在的东西」：占位示例（张三、wxid_xxxxxxxx）不该误报。
-  const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const names = new Set(
-    [process.env.USERNAME, (process.env.USERPROFILE || '').split(/[\\/]/).pop()]
-      .filter((s) => s && s.length >= 2),
-  );
-  const rules = [
-    { name: '密钥', re: /\bsk-[A-Za-z0-9]{16,}/g },
-    // 占位符形如 wxid_xxxxxxxx（同一个字符重复），真 wxid 不会这样
-    { name: '真实 wxid', re: /\bwxid_[a-z0-9]{12,}\b/g, keep: (m) => !/^wxid_(.)\1+$/.test(m) },
-    ...[...names].map((n) => ({
-      name: `本机用户名路径（${n}）`,
-      re: new RegExp('C:\\\\Users\\\\' + esc(n) + '\\\\', 'gi'),
-    })),
-  ];
-  const found = [];
-  for (const rel of files) {
-    let text = '';
-    try { text = fs.readFileSync(path.join(root, rel), 'utf8'); } catch { continue; }
-    for (const r of rules) {
-      r.re.lastIndex = 0;
-      const all = text.match(r.re) || [];
-      const hits = r.keep ? all.filter(r.keep) : all;
-      if (hits.length) found.push(`${rel}（${r.name}×${hits.length}）`);
-    }
-  }
-  check('没有个人信息（密钥 / 真实 wxid / 本机用户名）', found.length === 0,
-    found.length ? found.slice(0, 4).join('、') : `${files.length} 个文件干净`);
+  const privacy = require('./privacy-scan');
+  const result = privacy.scan(root);
+  const brief = result.findings.slice(0, 4).map((f) => `${f.file}（${f.rule}）`).join('、');
+  check('没有个人信息（密钥 / 真实 wxid / 群号 / 手机号 / 邮箱 / 本机用户名 / 二进制路径）',
+    result.findings.length === 0,
+    result.findings.length ? brief : `${result.files} 个文本 + ${result.binaries} 个二进制干净`);
 } catch (e) {
   check('个人信息检查可运行', false, e.message);
 }

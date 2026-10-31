@@ -12,6 +12,7 @@
         "check-layers": "node scripts/check-layers.js",
         "smoke": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke.ps1",
         "release-check": "node scripts/release-check.js --release",
+        "privacy": "node scripts/privacy-scan.js .",
         "deploy": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/deploy.ps1",
         "release": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-release.ps1",
         "bump": "node scripts/bump-version.js",

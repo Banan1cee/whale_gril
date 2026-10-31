@@ -193,14 +193,22 @@ test('版本号工具存在，且 release-check 会拦「重复/跳号/空条目
  * 维护手册把禁用串原文列了出来、出包脚本默认目录写死用户名。
  * 现在做成硬检查，命中就不许出包。
  */
-test('发布自检会扫个人信息（密钥 / 真实 wxid / 本机用户名）', () => {
+test('发布自检会扫个人信息（密钥 / 真实 wxid / 群号 / 手机号 / 邮箱 / 二进制路径）', () => {
   const rc = fs.readFileSync(path.join(root, 'scripts', 'release-check.js'), 'utf8');
   assert.match(rc, /没有个人信息/, '要有这项检查');
-  assert.match(rc, /sk-\[A-Za-z0-9\]\{16,\}/, '密钥要扫');
-  assert.match(rc, /wxid_\[a-z0-9\]\{12,\}/, '真实 wxid 要扫');
-  assert.match(rc, /process\.env\.USERNAME/, '按本机真实用户名判断，别把所有中文都算泄漏');
-  assert.match(rc, /USERPROFILE/, 'USERPROFILE 的目录名也算');
-  assert.match(rc, /wxid_\(\.\)\\1\+/, '占位符 wxid_xxxxxxxx 要跳过');
+  assert.match(rc, /require\('\.\/privacy-scan'\)/, '规则统一放 privacy-scan，别在自检里另写一份');
+
+  const ps = fs.readFileSync(path.join(root, 'scripts', 'privacy-scan.js'), 'utf8');
+  assert.match(ps, /sk-\[A-Za-z0-9\]\{16,\}/, '密钥要扫');
+  assert.match(ps, /wxid_\[a-z0-9\]\{12,\}/, '裸 wxid 要扫');
+  assert.match(ps, /wxid_\[a-z0-9\]\{6,\}_\[a-z0-9\]\{4\}/, '带 4 位目录后缀的小号目录名要扫');
+  assert.match(ps, /\\d\{9,\}@chatroom/, '真实群号要扫');
+  assert.match(ps, /1\[3-9\]\\d\{9\}/, '手机号要扫');
+  assert.match(ps, /process\.env\.USERNAME/, '按本机真实用户名判断，别把所有中文都算泄漏');
+  assert.match(ps, /USERPROFILE/, 'USERPROFILE 的目录名也算');
+  assert.match(ps, /looksPlanted/, '占位 wxid 要跳过，否则 CI 必红');
+  assert.match(ps, /C:\\\\Users\\\\/, '二进制里的调试路径要扫');
+  assert.match(ps, /raw\\.githubusercontent/, '二进制里的源码托管链接要扫');
 });
 
 test('引用回复默认关闭（开着的话每条要多走一遍 UI，回复明显变慢）', () => {
