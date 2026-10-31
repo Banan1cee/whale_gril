@@ -115,6 +115,29 @@ jobs:
             exit $code
           }
 
+      # 这两个自检是纯逻辑的（不连微信、不要密钥），3.56/3.57 里就是拿它们
+      # 验证「零焦点发送」和「按会话串行、跨会话并发」的，但一直只在开发机上手动跑。
+      # 不进 CI 的后果是：谁动了 bridge/ 的编码或调度，只有真机才会发现。
+      - name: 桥接自检（零焦点发送 / 消息调度）
+        if: always()
+        shell: pwsh
+        run: |
+          $failed = @()
+          foreach ($script in @('scripts/bg-selftest.py', 'scripts/bridge-pipeline-selftest.py')) {
+            Write-Output "===== $script ====="
+            python $script *> selftest.log
+            $code = $LASTEXITCODE
+            Get-Content selftest.log
+            if ($code -ne 0) {
+              $text = Get-Content -Raw -Encoding utf8 selftest.log
+              if ($text.Length -gt 3000) { $text = $text.Substring(0, 3000) }
+              $msg = $text -replace '%', '%25' -replace "`r", '' -replace "`n", '%0A'
+              Write-Output "::error title=$script::$msg"
+              $failed += $script
+            }
+          }
+          if ($failed.Count -gt 0) { exit 1 }
+
       - name: 启动器编译
         if: always()
         run: dotnet build launcher/WhaleLauncher.csproj -c Release --nologo

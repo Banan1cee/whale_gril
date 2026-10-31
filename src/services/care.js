@@ -1,5 +1,8 @@
 'use strict';
 
+// 读布尔开关：兼容老配置里的字符串 "false"（Boolean("false") 会被当成开）
+const { toBool } = require('../infra/features');
+
 /**
  * 主动搭话（care）：没事的时候她自己来找你说句话，问问「在干啥 / 累不累」。
  *
@@ -84,7 +87,7 @@ function normalizeCare(config) {
   const maxPerDay = Number(c.maxPerDay);
   const quiet = Number(c.quietAfterMinutes);
   return {
-    enabled: c.enabled === undefined ? true : Boolean(c.enabled),
+    enabled: toBool(c.enabled, true),
     windows: parseWindows(c.windows),
     everyMinutes: Number.isFinite(every) && every > 0 ? every : 90,
     jitterMinutes: Number.isFinite(jitter) && jitter >= 0 ? jitter : 25,
