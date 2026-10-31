@@ -21,6 +21,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 
+const { toBool } = require('../infra/features');
+
 const MAX_TOTAL = 500;
 const MAX_ACTIVE_PER_CHAT = 20;
 const RETRY_DELAY_MS = 5 * 60 * 1000;
@@ -44,7 +46,8 @@ function normalizeRules(config) {
   const maxPerDay = Number(r.maxPerDay);
   const quiet = Number(r.quietAfterMinutes);
   return {
-    enabled: r.enabled === undefined ? true : Boolean(r.enabled),
+    // 老配置里可能是字符串 "false"（configSchema 允许），Boolean("false") 会当成开
+    enabled: toBool(r.enabled, true),
     dailyCap: Number.isFinite(maxPerDay) && maxPerDay > 0 ? Math.floor(maxPerDay) : 0,
     quietAfterMinutes: Number.isFinite(quiet) && quiet > 0 ? Math.floor(quiet) : 0,
   };
