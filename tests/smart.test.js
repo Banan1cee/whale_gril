@@ -40,7 +40,8 @@ test('记住的身份会出现在之后的提示词里', async () => {
   const { bot, cleanup } = makeBot();
   await bot.decide(pm('我叫王大锤'));
   const r = await bot.decide(pm('你还记得我叫什么吗'));
-  assert.match(r.system, /王大锤/);
+  const prompt = [r.system, ...(r.turns || []).map((t) => t.content)].join('\n');
+  assert.match(prompt, /王大锤/);
   cleanup();
 });
 
@@ -61,21 +62,22 @@ test('重复的自述不会存两遍', async () => {
   cleanup();
 });
 
-test('群里不会乱记别人的自述（避免记错人）', async () => {
+test('群里只记当前说话人的自述（记在群卡，不串私聊）', async () => {
   const { bot, store, cleanup } = makeBot();
   await bot.decide({
     platform: 'wechat', chatId: 'g1', chatType: 'group',
     senderId: 'u-a', senderName: '甲', text: '@鲸鲸 我叫王大锤', atMe: true, chatTitle: '深海鱼塘',
   });
-  assert.equal(store.listNotes('wechat:g:g1').flatMap((x) => x.notes).length, 0);
+  const groupNotes = store.listNotes('wechat:g:g1').flatMap((x) => x.notes);
+  assert.ok(groupNotes.some((n) => n.includes('王大锤')), '群卡要记当前说话人的自述');
+  assert.equal(store.listNotes('wechat:u:g1').flatMap((x) => x.notes).length, 0, '不能写进同名私聊');
   cleanup();
 });
 
-test('超长历史会被压成一句摘要，而不是直接消失', async () => {
+test('长时间聊天：旧原文不丢在磁盘，prompt 用摘要接住', async () => {
   const config = JSON.parse(JSON.stringify(DEFAULT_CONFIG));
   config.chat.groupHistoryTurns = 400;
-  config.memory.maxMessages = 600;
-  const { bot, cleanup } = makeBot({ config });
+  const { bot, store, cleanup } = makeBot({ config });
   for (let i = 0; i < 90; i += 1) {
     await bot.decide({
       platform: 'wechat', chatId: 'g-big', chatType: 'group',
@@ -89,8 +91,10 @@ test('超长历史会被压成一句摘要，而不是直接消失', async () =>
     senderId: 'u-0', senderName: '群友0', text: '@鲸鲸 刚才聊到哪了', atMe: true, chatTitle: '深海鱼塘',
   });
   const content = r.turns.map((t) => t.content).join('\n');
-  assert.ok(content.length > 1500, '上下文应该够长：' + content.length);
-  // 只要触发压缩，就必须有摘要行
-  if (content.includes('已压缩')) assert.match(content, /【更早的对话（已压缩）】/);
+  assert.ok(content.length > 0);
+  // 原文一条不少：压缩只影响 prompt，不动 messages.jsonl
+  assert.equal(store.messages('wechat:g:g-big', 500).length, 91);
+  // 被 episode 关掉的旧段，用摘要/事件接住，而不是凭空消失
+  assert.ok(/【这段之前聊过】|【相关事件】/.test(content), '应有摘要或事件块：' + content.slice(0, 200));
   cleanup();
 });

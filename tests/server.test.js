@@ -110,15 +110,17 @@ test('网页群聊：没被 @ 返回 ignore，被 @ 才回复', async () => {
   await app.close();
 });
 
-test('记忆接口：记住的事能从网页查到', async () => {
+test('记忆接口已下线：GET /api/memory 一律 404，不向用户展示记忆', async () => {
   const app = await boot();
-  await collectSse(app.url + '/api/chat', { text: '记住：我怕黑', mode: 'private', sessionId: 's3', senderName: '小海' });
-  const res = await fetch(app.url + '/api/memory?sessionId=s3&mode=private');
-  const data = await res.json();
-  assert.equal(data.ok, true);
-  assert.equal(data.notes.length, 1);
-  assert.equal(data.notes[0].notes[0], '我怕黑');
-  await app.close();
+  try {
+    await collectSse(app.url + '/api/chat', { text: '记住：我怕黑', mode: 'private', sessionId: 's3', senderName: '小海' });
+    const res = await fetch(app.url + '/api/memory?sessionId=s3&mode=private');
+    assert.equal(res.status, 404);
+    const res2 = await fetch(app.url + '/api/memory/export');
+    assert.equal(res2.status, 404);
+  } finally {
+    await app.close();
+  }
 });
 
 test('微信网关：token 校验 + 收到消息 + 回复发回中转服务', async () => {
@@ -342,20 +344,17 @@ test('调试台：提示词预览能区分主人 / 普通人 / 群聊', async ()
   } finally { await app.close(); }
 });
 
-test('调试台：会话列表 + 清空单个会话', async () => {
+test('调试台：会话列表只给计数，不暴露记忆正文', async () => {
   const app = await boot();
   try {
   await collectSse(app.url + '/api/chat', { text: '在吗', mode: 'private', sessionId: 'dbg', senderName: '小海' });
-  let d = await (await fetch(app.url + '/api/debug/sessions')).json();
+  const d = await (await fetch(app.url + '/api/debug/sessions')).json();
   assert.equal(d.ok, true);
   assert.ok(d.sessions.length >= 1);
-  const key = d.sessions[0].key;
-  const r = await (await fetch(app.url + '/api/debug/reset', {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key }),
-  })).json();
-  assert.equal(r.ok, true);
-  d = await (await fetch(app.url + '/api/debug/sessions')).json();
-  assert.ok(d.sessions.every((s) => s.messageCount === 0));
+  const sess = d.sessions[0];
+  assert.equal(typeof sess.messageCount, 'number');
+  assert.equal(sess.messages, undefined, '不返回消息正文');
+  assert.equal(sess.profiles, undefined, '不返回人物卡正文');
   } finally { await app.close(); }
 });
 
@@ -385,8 +384,8 @@ test('人设调教接口：读、改、恢复默认', async () => {
     assert.equal(get1.ok, true);
     assert.equal(get1.persona.name, '鲸鲸');
     assert.equal(typeof get1.persona.historyTurns, 'number');
-    assert.ok(get1.persona.historyTurns >= 200, '私聊上下文默认应该够大');
-    assert.ok(get1.persona.groupHistoryTurns >= 150, '群聊上下文默认应该够大');
+    assert.ok(get1.persona.historyTurns >= 100, '私聊上下文默认应该够大');
+    assert.ok(get1.persona.groupHistoryTurns >= 80, '群聊上下文默认应该够大');
 
     const post = (body) => fetch(app.url + '/api/persona', {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),

@@ -18,10 +18,6 @@
  * }
  */
 const persona = require('../persona');
-const recall = require('../memory/recall');
-const _digestInFlight = new Set();
-const memoryDigest = require('../memory/digest');
-const memorySemantic = require('../memory/semantic');
 const features = require('../infra/features');
 const { matchMaster } = require('../core/master');
 const links = require('../adapters/links');
@@ -35,12 +31,13 @@ const trigger = require('../core/trigger');
 const { INSULT_RE, INSULT_LOOSE_RE, namedHerIn } = require('../core/trigger');
 const context = require('../core/context');
 const { isEcho } = require('../core/echo');
-const { extractSelfFacts } = require('../core/facts');
 const { extractMentionNames } = require('../core/mentions');
 const { COMMAND_HELP, extractCommand } = require('../core/commands');
 const { cannedReply } = require('./stages/canned');
 const reminderCore = require('../core/reminder');
 const stickers = require('../adapters/stickers');
+const { LIMITS } = require('../memory/constants');
+const memoryBudget = require('../memory/budget');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -56,6 +53,8 @@ class Bot {
     this.mockChunkDelayMs = mockChunkDelayMs;
     this.linkReader = linkReader || ((url) => links.describeLink(url, { timeoutMs: (config.links && config.links.timeoutMs) || 6000 }));
     this.startedAt = Date.now();
+    this.lastBudget = null;
+    this.lastUsage = null;
   }
 
   sessionKey(msg) {
@@ -202,8 +201,8 @@ class Bot {
     };
   }
 
-  buildTurns(msg, history) {
-    return context.buildTurns(msg, history);
+  buildTurns(msg, history, memoryBlock) {
+    return context.buildTurns(msg, history, memoryBlock);
   }
 
   /**
@@ -317,8 +316,9 @@ class Bot {
     }
 
     const hasText = Boolean(clean.text);
+    let appended = null;
     if (hasText) {
-      this.store.appendMessage(key, {
+      appended = this.store.appendMessage(key, {
         role: 'user',
         name: msg.senderName,
         uid: msg.senderId,
@@ -333,13 +333,10 @@ class Bot {
       });
     }
     const profile = this.store.profile(key, msg.senderId, msg.senderName);
-    // 自动记一点关于这个人的事实，下次不用重新问（只认明确的自述句）
-    if (hasText && !isGroup) {
-      try {
-        const facts = extractSelfFacts(clean.text);
-        for (const fact of facts) this.store.addNote(key, msg.senderId, fact);
-      } catch { /* ignore */ }
-    }
+    // 群里用微信昵称区分说话人，避免用户改 profile.nickname 造成冒名；私聊仍沿用自报昵称。
+    const displayName = isGroup ? (msg.senderName || profile.nickname) : (profile.nickname || msg.senderName);
+    // 自述 / 纠正 / 手动记住的抽取在 Store.appendMessage 里同步完成：
+    // 只写「当前 chat + 当前说话人」的卡，跨 chat 写入会直接抛错。
     const state = session.state;
     const muted = state.mutedUntil > nowMs;
 
@@ -651,49 +648,26 @@ class Bot {
     if (discussion) state.discussUntil = nowMs + 10 * 60000; // 聊到一个话题就连续 10 分钟算讨论
     msg.discussion = discussion;
 
-    // 6) 组装提示词
-    // 按这句话挑最该被想起的几条（不再把全部便签一股脑塞进去）。
-    // 挑中的会记一次「刚提过」，避免她接下来几条反复念同一件事。
-    const noteLimit = Math.max(3, Number(this.config.memory.maxNotesPerUser) || 6);
-    // 先按字面/同义词多取几条当候选，再让模型判断相关性（关掉开关就直接用字面结果）
-    let pickedNotes = recall.pickNotes(profile.notes, clean.text, {
+    // 6) 组装提示词：只加载「当前 chat + 当前说话人」的卡，绝不跨聊天取。
+    // 记忆块（人物卡 + 相关事件 + 摘要）放进最后一条 user 消息，进 system 会打断前缀缓存。
+    const mem = this.store.buildContext({
+      key,
+      uid: msg.senderId,
+      name: displayName,
+      query: clean.text,
       now: nowMs,
-      limit: Math.max(noteLimit + 2, 8),
+      isGroup,
     });
-    // 候选太少时不值得多一次模型调用（只有一两条直接给它）
-    const minCand = Math.max(2, Number(this.config.memory.semanticMinCandidates) || 3);
-    if (features.isOn(this.config, 'memorySemantic')) {
-      // 字面没命中的记忆进不了候选（比如记忆写「要去体检」、对方问「医院」），
-      // 所以语义检索这一层直接给它较大的一批：最多 10 条，让模型自己挑。
-      const all = (profile.notes || [])
-        .map((n) => recall.normalizeNote(n, nowMs))
-        .filter(Boolean)
-        .slice(0, memorySemantic.MAX_CANDIDATES);
-      const candidates = all.length > pickedNotes.length ? all : pickedNotes;
-      if (candidates.length >= minCand) {
-        const keep = await memorySemantic.rerank(this.llm, clean.text, candidates, {
-          limit: noteLimit,
-          logger: this.logger,
-        });
-        pickedNotes = Array.isArray(keep)
-          ? keep.map((i) => candidates[i]).filter(Boolean)
-          : candidates.slice(0, noteLimit);
-      }
-    }
-    const notes = pickedNotes.map((n) => n.text);
-    // 一天以上的「承诺 / 近况」可以在合适的时候被顺口提起
-    const noteReminders = pickedNotes
-      .filter((n) => (n.kind === 'promise' || n.kind === 'recent') && nowMs - n.createdAt > recall.DAY)
-      .slice(0, 2)
-      .map((n) => n.text);
+    const notes = mem.notes || [];
     if (notes.length && msg.senderId) {
       this.store.touchNotes(key, msg.senderId, notes, nowMs);
     }
-    // 群里用微信昵称区分说话人，避免用户改 profile.nickname 造成冒名；私聊仍沿用自报昵称。
-    const displayName = isGroup ? (msg.senderName || profile.nickname) : (profile.nickname || msg.senderName);
-    // 刚写入的当前消息是 history 的最后一条，先去掉，由 buildTurns 统一拼一次
-    const histTurns = isGroup ? (this.config.chat.groupHistoryTurns || 6) : this.config.chat.historyTurns;
-    const history = this.store.messages(key, histTurns);
+    // mem.recent 已经按 3,200 token 预算裁过；刚写入的当前消息先去掉，由 buildTurns 统一拼一次
+    const history = mem.recent || [];
+    const currentSeq = appended && appended.seq;
+    const historyForTurns = (currentSeq && history.length && history[history.length - 1].seq === currentSeq)
+      ? history.slice(0, -1)
+      : history;
     const groupParticipants = isGroup
       ? [...new Set(history.filter((m) => m.role === 'user' && m.name).map((m) => String(m.name)))].slice(-16)
       : [];
@@ -767,15 +741,42 @@ class Bot {
       config: this.config,
       msg: { ...msg, senderName: displayName, chatTitle: msg.chatTitle || session.title, isMaster, atMe, addressedToBot: Boolean(atMe || msg.replyToBot), mentionedNames, groupParticipants, linkText, discussion, model: this.llm.model, provider: this.llm.providerLabel, groupStyleText, webText, fight, fightDirty, fightOnMaster },
       profile,
-      notes,
-      noteReminders,
-      sessionSummary: (session && session.summary) || '',
+      // 记忆不再进 system：人物卡/事件/摘要统一放最后一条 user 消息（mem.block）
+      notes: [],
+      noteReminders: [],
+      sessionSummary: '',
       // 外部动作账本：她做过什么（发表情包、交给桥接、读链接、联网），
       // 不塞进去她就永远不知道自己的副作用，只能编。
       events: this.store.events(key, 12),
       now,
     });
-    const turns = this.buildTurns(msg, hasText ? history.slice(0, -1) : history);
+    const turns = this.buildTurns(msg, historyForTurns, mem.block);
+
+    // 预算：system 只测量，不裁剪；对话预算是固定 5,500（memory+summary+recent+reserve）。
+    // 只有 system + dialogue 超过 32,000 才拒绝，且明确报错，不静默截断。
+    let promptBudget;
+    try {
+      promptBudget = memoryBudget.assertWithinHardLimit(memoryBudget.buildBudget(system));
+    } catch (err) {
+      this.logger && this.logger.error(
+        `单轮输入超硬上限，拒绝调用模型：system≈${err.budget ? err.budget.systemTokens : '?'} token`
+      );
+      return { action: 'ignore', reason: 'input_budget_exceeded', key, msg, atMe };
+    }
+    // 只把计数挂到 decision / Bot 上，供日志和内部 status 用；不打印记忆正文
+    this.lastBudget = {
+      ...promptBudget,
+      memoryTokens: mem.memoryTokens || 0,
+      summaryTokens: mem.summaryTokens || 0,
+      recentTokens: mem.recentTokens || 0,
+    };
+    promptBudget = this.lastBudget;
+    if (this.logger) {
+      this.logger.debug(
+        `记忆预算：system=${promptBudget.systemTokens} dialogue=${promptBudget.dialogueBudget} `
+        + `input=${promptBudget.estimatedInputTokens} recent=${promptBudget.recentTokens}`
+      );
+    }
 
     // 对喷的台词交给模型自己现编；只有没配 Key 的演示模式才用本地库顶着
     if (fight && this.llm.isMock) {
@@ -784,7 +785,7 @@ class Bot {
       if (first) {
         const combo = this.rng() < 0.6 ? persona.clapbackPick(['反问', '爹味'], this.rng) : '';
         const text = combo && combo !== first ? first + '，' + combo : first;
-        return { action: 'reply', key, msg, atMe, canned: text, reason: 'clapback', system, turns };
+        return { action: 'reply', key, msg, atMe, canned: text, reason: 'clapback', system, turns, budget: promptBudget };
       }
     }
 
@@ -796,9 +797,9 @@ class Bot {
         notes,
         rng: this.rng,
       });
-      return { action: 'reply', key, msg, atMe, system, turns, mock: true, text, reason: trigger.reason };
+      return { action: 'reply', key, msg, atMe, system, turns, mock: true, text, reason: trigger.reason, budget: promptBudget };
     }
-    return { action: 'reply', key, msg, atMe, system, turns, mock: false, reason: trigger.reason };
+    return { action: 'reply', key, msg, atMe, system, turns, mock: false, reason: trigger.reason, budget: promptBudget };
   }
 
   computeTrigger(args) {
@@ -1104,22 +1105,13 @@ class Bot {
         this.store.resetSession(key);
         return finish('呜…刚才的聊天人家忘掉啦（只清掉这个聊天框的记忆哦）🫧');
       }
-      case 'memory': {
-        const rows = this.store.listNotes(key);
-        const mine = profile.notes || [];
-        if (!rows.length && !mine.length) {
-          return finish('人家还什么都没记住呢。想让我记住就说「记住：你怕黑」这种，我就能记好久…大概。');
-        }
-        const parts = rows.map((r) => `${r.name}——${r.notes.join('；')}`);
-        return finish(`本鲸的小本本：${parts.join('｜')}`.slice(0, 400));
-      }
       case 'remember': {
         if (!command.arg) return finish('记住什么呀？说「记住：你爱吃辣」这样，人家才记得住 (｡•̀ᴗ-)✧');
         const kind = /答应|明天|后天|下周|要记着|别忘|提醒/.test(command.arg)
           ? 'promise'
           : (/不喜欢|讨厌|别|怕|雷/.test(command.arg) ? 'taboo' : 'fact');
-        const notes = this.store.addNote(key, msg.senderId, command.arg, { kind });
-        return finish(`记住啦：${command.arg}。本鲸的记忆有 ${notes.length} 格，还够用~`);
+        const notes = this.store.addNote(key, msg.senderId, command.arg, { kind, confidence: 1, explicit: true });
+        return finish(`记住啦：${command.arg}。`);
       }
       case 'forget': {
         const { removed } = this.store.removeNote(key, msg.senderId, command.arg);
@@ -1168,6 +1160,7 @@ class Bot {
     for await (const piece of this.llm.stream({ system: decision.system, turns: decision.turns, signal })) {
       yield piece;
     }
+    this.compareUsage(decision.budget);
   }
 
   /** 偶尔在句尾补一个 emoji 或颜文字（由「颜文字用量」档位决定概率） */
@@ -1316,10 +1309,14 @@ class Bot {
       ts: this.now().getTime(),
       error,
     });
+    // 每轮一个 checkpoint：重启后能知道停在哪、episode 有没有关
+    this.store.checkpoint(decision.key);
     const isGroup = msg.chatType === 'group';
     if (decision.action === 'command') return [text];
     const maxBubbles = Math.max(1, Number(this.config.chat.maxBubbles) || 2);
-    const maxChars = msg.discussion ? (this.config.chat.discussionMaxChars || 400) : (isGroup ? this.config.chat.groupMaxChars : this.config.chat.privateMaxChars);
+    const maxChars = msg.discussion
+      ? Math.min(Number(this.config.chat.discussionMaxChars) || LIMITS.maxOutputDiscussion, LIMITS.maxOutputDiscussion)
+      : Math.min(Number(isGroup ? this.config.chat.groupMaxChars : this.config.chat.privateMaxChars) || LIMITS.maxOutputNormal, LIMITS.maxOutputNormal);
     let bubbles;
     if (decision.action === 'reply') {
       // 按逗号/句号拆成几条短消息，每条不带标点
@@ -1369,6 +1366,7 @@ class Bot {
       return { action: 'ignore', reason: 'error' };
     }
     if (decision.action === 'ignore') {
+      try { this.store.checkpoint(decision.key); } catch { /* 忽略的消息也要留断点 */ }
       return { action: 'ignore', reason: decision.reason };
     }
     if (decision.action === 'command') {
@@ -1446,6 +1444,7 @@ class Bot {
       }
     }
     text = String(text == null ? '' : text).trim();
+    this.compareUsage(decision.budget);
     const bubbles = this.finalize(decision, text);
     if (!bubbles.length) return { action: 'ignore', reason: 'empty_reply' };
     // 群里骂人时要真 @ 到对方：优先用靶子，其次看正文开头有没有 @名字
@@ -1453,8 +1452,6 @@ class Bot {
     const atMatch = finalText.match(/^@\s*([^\s，,：:！!？?。]+)/);
     const mention = (decision.msg && decision.msg.fightTarget && decision.msg.fightTarget.name)
       || (atMatch ? atMatch[1] : '');
-    // 攒够一批消息就让后台整理记忆（摘要 + 抽事实），不阻塞这条回复
-    this.maybeDigest(decision.key, (decision.msg && decision.msg.senderId) || '');
     return {
       action: 'reply',
       reply: finalText,
@@ -1465,18 +1462,27 @@ class Bot {
     };
   }
 
-  /** 记忆整理：攒够一批消息就压摘要 + 抽事实，异步跑，失败不影响聊天 */
-  maybeDigest(key, uid) {
-    if (!this.llm || this.llm.isMock) return;
-    if (!features.isOn(this.config, 'memoryDigest')) return;
-    if (_digestInFlight.has(key)) return;
-    _digestInFlight.add(key);
-    const every = Number(this.config.memory && this.config.memory.digestEvery) || 12;
-    Promise.resolve()
-      .then(() => memoryDigest.digest(this.store, this.llm, key, { uid, logger: this.logger, every }))
-      .then((done) => { if (done) this.store.sweep(); })
-      .catch(() => null)
-      .then(() => _digestInFlight.delete(key));
+  /** 用 API usage 校准 token 估算（只记计数；误差 >15% 记 warning） */
+  compareUsage(budget) {
+    if (!budget || budget._compared || !this.llm) return null;
+    const usage = this.llm.lastUsage;
+    if (!usage) return null;
+    budget._compared = true;
+    const cmp = memoryBudget.compareUsage(budget, usage);
+    if (!cmp) return null;
+    this.lastUsage = {
+      promptTokens: cmp.actualPromptTokens,
+      completionTokens: Number(usage.completionTokens) || 0,
+      estimatedInputTokens: cmp.estimatedInputTokens,
+      errorRatio: cmp.errorRatio,
+      at: Date.now(),
+    };
+    if (cmp.warn && this.logger) {
+      this.logger.warn(
+        `token 估算偏差 ${(cmp.errorRatio * 100).toFixed(1)}%（估算 ${cmp.estimatedInputTokens} / 实际 ${cmp.actualPromptTokens}），已记录用于校准`
+      );
+    }
+    return this.lastUsage;
   }
 
   /** 切换 API Key 后调用 */

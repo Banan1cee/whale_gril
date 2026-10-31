@@ -35,7 +35,6 @@ namespace WhaleLauncher
         {
             new NavEntry { Key = "状态", Label = "状态", Icon = Geometry.Parse("M4 4h7v7H4z M13 4h7v4h-7z M13 10h7v10h-7z M4 13h7v7H4z") },
             new NavEntry { Key = "人设", Label = "人设", Icon = Geometry.Parse("M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z M4 21c0-4.4 3.6-7 8-7s8 2.6 8 7") },
-            new NavEntry { Key = "记忆", Label = "记忆", Icon = Geometry.Parse("M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5V5.5Z M4 20.5A2.5 2.5 0 0 1 6.5 18H20 M8 7h8") },
             new NavEntry { Key = "表情包", Label = "表情包", Icon = Geometry.Parse("M4 4h16v16H4z M8.5 9a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z M20 16l-4.6-4.6L7 20") },
             new NavEntry { Key = "主动与提醒", Label = "主动与提醒", Icon = Geometry.Parse("M18 8a6 6 0 0 0-12 0c0 7-3 8-3 8h18s-3-1-3-8 M10.5 20a2 2 0 0 0 3 0") },
             new NavEntry { Key = "微信桥接", Label = "微信桥接", Icon = Geometry.Parse("M21 11.5a8.4 8.4 0 0 1-9 8.4 9.9 9.9 0 0 1-4-.9L3 21l1.9-3.5a8.4 8.4 0 1 1 16.1-6Z M8 10h8 M8 13h5") },
@@ -186,7 +185,6 @@ namespace WhaleLauncher
             {
                 case "状态": return new StatusPage(_sup);
                 case "人设": return new PersonaPage(_sup);
-                case "记忆": return new MemoryPage(_sup);
                 case "表情包": return new StickerPage(_sup);
                 case "主动与提醒": return new ReminderPage(_sup);
                 case "微信桥接": return new BridgePage(_sup);
