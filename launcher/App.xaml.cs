@@ -68,7 +68,12 @@ namespace WhaleLauncher
             {
                 foreach (var f in Directory.GetFiles(AppContext.BaseDirectory, "*.old-*"))
                 {
-                    try { File.Delete(f); } catch { }
+                    // 上一个实例可能刚退出、句柄还没完全释放，重试几次
+                    for (var i = 0; i < 5; i++)
+                    {
+                        try { File.Delete(f); break; }
+                        catch { Thread.Sleep(200); }
+                    }
                 }
             }
             catch { }

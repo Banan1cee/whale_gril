@@ -993,6 +993,9 @@ function Swap-AppExe {
         throw
     }
     Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue
+    # 旧 exe：没进程占着就当场删掉（从 bat 更新、启动器本来就关着的情况）；
+    # 占着（启动器还开着）删不掉，留成 .old-*，下次启动 / 下次更新再清。
+    try { Remove-Item -LiteralPath $old -Force -ErrorAction Stop } catch { }
     # 以前留下的 .old-*：那时候的进程已经退了，删得掉就删
     Get-ChildItem -LiteralPath $AppRoot -Filter ($ExeName + '.old-*') -File -ErrorAction SilentlyContinue |
         Where-Object { $_.FullName -ne $old } |

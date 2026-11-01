@@ -195,6 +195,16 @@ test('更新完把这次的 zip 留在 cache 里（下次差分要用）', () =>
   assert.ok(!/if \(-not \$KeepZip\) \{ Remove-Item -LiteralPath \$zipPath/.test(ps1), '不能下完就把 zip 删掉');
 });
 
+test('换完 exe 要把旧的删干净，不能越更新越占地方', () => {
+  const ps1 = readPs1();
+  // 运行中删不掉（OS 限制）→ 留 .old-*；但只要没进程占着就必须当场删掉
+  assert.match(ps1, /Remove-Item -LiteralPath \$old -Force -ErrorAction Stop/, '没被占用时要当场删掉旧 exe');
+  assert.match(ps1, /Filter \(\$ExeName \+ '\.old-\*'\)/, '历史 .old-* 也要顺手清');
+  const app = fs.readFileSync(path.join(root, 'launcher', 'App.xaml.cs'), 'utf8');
+  assert.match(app, /GetFiles\(AppContext\.BaseDirectory, "\*\.old-\*"\)/, '启动时要扫一遍 .old-*');
+  assert.match(app, /for \(var i = 0; i < 5; i\+\+\)/, '刚退出的旧实例可能还没释放句柄，要重试');
+});
+
 test('启动器重启用真实路径，并等旧实例退出再抢单实例锁', () => {
   const main = fs.readFileSync(path.join(root, 'launcher', 'MainWindow.xaml.cs'), 'utf8');
   const app = fs.readFileSync(path.join(root, 'launcher', 'App.xaml.cs'), 'utf8');
