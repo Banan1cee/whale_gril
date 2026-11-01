@@ -115,6 +115,9 @@ module.exports = function register(router) {
         const label = stickers.cleanCategoryLabel(body && body.label);
         if (!label) return json(res, 400, { ok: false, error: '分类名不能为空，也不能带 / \\ : * ? " < > |' });
         if (Object.values(stickers.EMOTIONS).includes(label)) {
+          if (action === 'remove') {
+            return json(res, 400, { ok: false, error: '内置分类「' + label + '」不能删除；文件夹被删了会自动补回来' });
+          }
           return json(res, 400, { ok: false, error: '内置分类已经有「' + label + '」了' });
         }
         const extra = stickers.readExtraCategories(config, config.root);

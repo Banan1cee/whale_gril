@@ -94,7 +94,7 @@ namespace WhaleLauncher.Views
             _loaded = true;
         }
 
-        /// <summary>目录和三类概率存在 config 里；原来在「设置 → 表情包」，现在归位到本页。</summary>
+        /// <summary>目录存在 config 里；发哪一类由模型标记决定，页面不再提供概率。</summary>
         private async Task LoadSettingsAsync()
         {
             var cfg = await Api.Get(_sup.Url, "/api/config");
@@ -104,27 +104,13 @@ namespace WhaleLauncher.Views
             if (!c.TryGetProperty("sticker", out var st) || st.ValueKind != JsonValueKind.Object) return;
 
             if (!TxtDir.IsKeyboardFocusWithin) TxtDir.Text = St(st, "dir");
-            if (st.TryGetProperty("chances", out var ch) && ch.ValueKind == JsonValueKind.Object)
-            {
-                if (!TxtCute.IsKeyboardFocusWithin) TxtCute.Text = Nm(ch, "cute");
-                if (!TxtAngry.IsKeyboardFocusWithin) TxtAngry.Text = Nm(ch, "angry");
-                if (!TxtOther.IsKeyboardFocusWithin) TxtOther.Text = Nm(ch, "other");
-            }
         }
 
         private async void OnSaveStickerSettings(object sender, RoutedEventArgs e)
         {
             if (_loading || !_sup.NodeRunning) return;
-            if (!Prob(TxtCute.Text, out var cute) || !Prob(TxtAngry.Text, out var angry) || !Prob(TxtOther.Text, out var other))
-            {
-                StatusText.Text = "概率要填 0～1 之间的数（留空按 0）";
-                return;
-            }
             var body = "{\"patch\":{"
-                + "\"sticker.dir\":\"" + Api.Esc(TxtDir.Text.Trim()) + "\","
-                + "\"sticker.chances.cute\":" + cute.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture) + ","
-                + "\"sticker.chances.angry\":" + angry.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture) + ","
-                + "\"sticker.chances.other\":" + other.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)
+                + "\"sticker.dir\":\"" + Api.Esc(TxtDir.Text.Trim()) + "\""
                 + "}}";
             var res = await Api.Post(_sup.Url, "/api/config", body);
             StatusText.Text = res.Ok
@@ -134,21 +120,6 @@ namespace WhaleLauncher.Views
 
         private static string St(JsonElement o, string name)
             => o.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? (v.GetString() ?? "") : "";
-
-        private static string Nm(JsonElement o, string name)
-        {
-            if (!o.TryGetProperty(name, out var v) || v.ValueKind != JsonValueKind.Number) return "";
-            return v.GetDouble().ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
-        }
-
-        private static bool Prob(string raw, out double value)
-        {
-            value = 0;
-            var t = (raw ?? "").Trim();
-            if (t.Length == 0) return true;
-            if (!double.TryParse(t, out value)) return false;
-            return value >= 0 && value <= 1;
-        }
 
         private long CountOf(ApiResult res, string key)
         {

@@ -10,6 +10,7 @@
  */
 const http = require('node:http');
 const https = require('node:https');
+const dns = require('node:dns');
 const { URL } = require('node:url');
 
 const URL_RE = /https?:\/\/[^\s<>"'（）()【】\[\]\u4e00-\u9fa5]+/g;
@@ -110,10 +111,14 @@ function isPrivateHost(hostname) {
   return false;
 }
 
-function fetchUrl(urlString, { timeoutMs = 6000, maxBytes = 700 * 1024, redirects = 4, allowPrivate = false } = {}) {
+function fetchUrl(urlString, { timeoutMs = 6000, maxBytes = 700 * 1024, redirects = 4, allowPrivate = false, deadline = 0 } = {}) {
   return new Promise((resolve) => {
     let settled = false;
     const done = (v) => { if (!settled) { settled = true; resolve(v); } };
+    // 整条重定向链共用一个总预算：以前每跳都重新计时，4 跳最坏 6×4=24 秒
+    const budget = Number(deadline) > 0 ? Number(deadline) : Date.now() + Math.max(1, Number(timeoutMs) || 6000);
+    const remaining = () => Math.max(1, budget - Date.now());
+    if (Date.now() >= budget) return done({ ok: false, error: 'timeout' });
     let parsed;
     try {
       parsed = new URL(urlString);
@@ -124,55 +129,67 @@ function fetchUrl(urlString, { timeoutMs = 6000, maxBytes = 700 * 1024, redirect
     if (!allowPrivate && isPrivateHost(parsed.hostname)) {
       return done({ ok: false, error: 'private_host' });
     }
-    const mod = parsed.protocol === 'http:' ? http : https;
-    const req = mod.request(
-      {
-        protocol: parsed.protocol,
-        hostname: parsed.hostname,
-        port: parsed.port || (parsed.protocol === 'http:' ? 80 : 443),
-        path: parsed.pathname + parsed.search,
-        method: 'GET',
-        headers: {
-          'User-Agent':
-            'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
-          Accept: 'text/html,application/xhtml+xml,*/*;q=0.8',
-          'Accept-Language': 'zh-CN,zh;q=0.9',
+
+    const start = () => {
+      const mod = parsed.protocol === 'http:' ? http : https;
+      const req = mod.request(
+        {
+          protocol: parsed.protocol,
+          hostname: parsed.hostname,
+          port: parsed.port || (parsed.protocol === 'http:' ? 80 : 443),
+          path: parsed.pathname + parsed.search,
+          method: 'GET',
+          headers: {
+            'User-Agent':
+              'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+            Accept: 'text/html,application/xhtml+xml,*/*;q=0.8',
+            'Accept-Language': 'zh-CN,zh;q=0.9',
+          },
         },
-      },
-      (res) => {
-        const status = res.statusCode || 0;
-        if (status >= 300 && status < 400 && res.headers.location && redirects > 0) {
-          res.resume();
-          const next = new URL(res.headers.location, parsed).toString();
-          fetchUrl(next, { timeoutMs, maxBytes, redirects: redirects - 1, allowPrivate }).then(done);
-          return;
-        }
-        const chunks = [];
-        let size = 0;
-        res.on('data', (c) => {
-          size += c.length;
-          if (size > maxBytes) {
-            res.destroy();
-            done({ ok: false, error: 'too_large', status });
+        (res) => {
+          const status = res.statusCode || 0;
+          if (status >= 300 && status < 400 && res.headers.location && redirects > 0) {
+            res.resume();
+            const next = new URL(res.headers.location, parsed).toString();
+            fetchUrl(next, { timeoutMs, maxBytes, redirects: redirects - 1, allowPrivate, deadline: budget }).then(done);
             return;
           }
-          chunks.push(c);
-        });
-        res.on('end', () => {
-          done({
-            ok: true,
-            status,
-            finalUrl: parsed.toString(),
-            contentType: String(res.headers['content-type'] || ''),
-            body: Buffer.concat(chunks).toString('utf8'),
+          const chunks = [];
+          let size = 0;
+          res.on('data', (c) => {
+            size += c.length;
+            if (size > maxBytes) {
+              res.destroy();
+              done({ ok: false, error: 'too_large', status });
+              return;
+            }
+            chunks.push(c);
           });
-        });
-        res.on('error', () => done({ ok: false, error: 'read_error', status }));
-      }
-    );
-    req.setTimeout(timeoutMs, () => { req.destroy(); done({ ok: false, error: 'timeout' }); });
-    req.on('error', (e) => done({ ok: false, error: (e && e.code) || 'network' }));
-    req.end();
+          res.on('end', () => {
+            done({
+              ok: true,
+              status,
+              finalUrl: parsed.toString(),
+              contentType: String(res.headers['content-type'] || ''),
+              body: Buffer.concat(chunks).toString('utf8'),
+            });
+          });
+          res.on('error', () => done({ ok: false, error: 'read_error', status }));
+        }
+      );
+      req.setTimeout(remaining(), () => { req.destroy(); done({ ok: false, error: 'timeout' }); });
+      req.on('error', (e) => done({ ok: false, error: (e && e.code) || 'network' }));
+      req.end();
+    };
+
+    if (allowPrivate) return start();
+    // 普通域名也要解析一次：防止 DNS 指向 127.0.0.1 / 内网网段绕过上面的字面量检查
+    dns.lookup(parsed.hostname, (err, address) => {
+      if (err) return done({ ok: false, error: (err && err.code) || 'network' });
+      if (isPrivateHost(address)) return done({ ok: false, error: 'private_host' });
+      if (Date.now() >= budget) return done({ ok: false, error: 'timeout' });
+      start();
+    });
   });
 }
 
@@ -285,4 +302,4 @@ function formatForPrompt(info) {
 }
 
 module.exports = {
-  isPrivateHost, extractUrls, describeLink, parsePage, formatForPrompt, kindOf, stripTags, decodeEntities, cleanVideoDesc };
+  isPrivateHost, extractUrls, fetchUrl, describeLink, parsePage, formatForPrompt, kindOf, stripTags, decodeEntities, cleanVideoDesc };

@@ -5,16 +5,18 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const features = require('../infra/features');
-const EMOTIONS = Object.freeze({ cute: '傲娇', angry: '炸毛', other: '其他' });
+const EMOTIONS = Object.freeze({ cute: '傲娇', angry: '炸毛', happy: '开心' });
 const EMOTION_LABELS = EMOTIONS;
 const GENERIC = '通用';
 // Legacy keys remain accepted by the API, but are never exposed as extra cards.
-const ALIASES = Object.freeze({ cute: 'cute', angry: 'angry', other: 'other',
-  happy: 'other', meh: 'other', bored: 'other' });
+// 旧的「其他」及其别名统一并到内置的「开心」：不再有单独的其他分类。
+const ALIASES = Object.freeze({ cute: 'cute', angry: 'angry', happy: 'happy',
+  other: 'happy', meh: 'happy', bored: 'happy' });
 const FOLDERS = Object.freeze({
   cute: ['傲娇', 'cute', '撒娇'],
   angry: ['炸毛', 'angry'],
-  other: ['其他', 'other', '开心', 'happy', '嫌弃', 'meh', '敷衍', 'bored', '通用'],
+  // 「开心」是硬编码内置分类；旧版本的 其他/通用 等目录里的图也归到这一类，不丢图
+  happy: ['开心', 'happy', '通用', '其他', 'other', '嫌弃', 'meh', '敷衍', 'bored'],
 });
 const EXTRA_PREFIX = 'x:';
 
@@ -41,12 +43,8 @@ const EXTS = ['.gif', '.png', '.jpg', '.jpeg', '.webp'];
 const MAX_FILE_BYTES = 64 * 1024 * 1024;   // 只防内存炸，不是业务限制
 const MAX_UPLOAD_FILES = 50;
 const MAX_FILES = 5000;
-const RULES = [
-  ['angry', /(傻逼|蠢货|废物|垃圾|滚|你妈|妈的|弱智|脑残|智障|去死|闭嘴|别烦|走开|胖|肥|笨|丑|菜鸡|菜鸟)/],
-  ['cute', /(乖|宝贝|抱抱|摸摸|喜欢你|想你|对不起|抱歉|好啦|别气)/],
-  ['happy', /(可爱|厉害|好棒|牛逼|牛啊|爱了|绝了|哈哈|笑死)/],
-  ['meh', /(？{2,}|什么鬼|离谱|无语|服了|呵呵|行吧|就这)/],
-];
+// 中文展示名 → 内部 key（模型可能直接写「傲娇」而不是 cute）
+const LABEL_TO_KEY = Object.freeze({ 傲娇: 'cute', 炸毛: 'angry', 开心: 'happy', 其他: 'happy' });
 function fail(message, statusCode = 400) { return Object.assign(new Error(message), { statusCode }); }
 function hasEmotion(value) { return Boolean(normalizeEmotion(value)); }
 
@@ -280,23 +278,6 @@ function writeExtraCategories(config, root, list) {
 }
 
 function isOn(config) { return features.isOn(config, 'stickers'); }
-function detectEmotion(text, hour = new Date().getHours()) {
-  for (const [emotion, re] of RULES) if (re.test(String(text || ''))) return emotion;
-  return hour >= 23 || hour < 6 ? 'bored' : 'happy';
-}
-function chanceFor(config, emotion) {
-  const cfg = config?.sticker || {};
-  const key = normalizeEmotion(emotion);
-  if (key.startsWith(EXTRA_PREFIX)) {
-    const label = key.slice(EXTRA_PREFIX.length);
-    const found = readExtraCategories(config, config.root).find((c) => c.label === label);
-    const n = Number(found && found.chance);
-    return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 0.25;
-  }
-  const raw = cfg.chances?.[key] ?? cfg.genericChance ?? 0.25;
-  const n = Number(raw);
-  return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 0;
-}
 function choose(pool, rng = Math.random, recent = []) {
   const fresh = pool.filter((f) => !recent.includes(f));
   const options = fresh.length ? fresh : (pool.length > 1 ? pool.filter((f) => f !== recent.at(-1)) : pool);
@@ -305,7 +286,7 @@ function choose(pool, rng = Math.random, recent = []) {
   const index = Math.min(options.length - 1, Math.max(0, Math.floor((Number.isFinite(random) ? random : 0) * options.length)));
   return options[index];
 }
-// 没有冷却、也不按会话类型限制：总开关开着就按概率（或对方明确要）发。
+// 分类由模型在回复里决定（[[sticker:分类]]），这里只负责把名字认成 key、取一张图。
 // 同一个会话同时只会存在一个待发任务，避免连发刷屏。
 const WANT_RE = /(发|来|甩|扔|给|丢|整|弄|上)(一?个|一?张|一?只|点)?\s*(表情包?|动图|贴纸|梗图|meme)/i;
 const WANT_BARE_RE = /^\s*(表情包|表情)(呗|吧|啊|呀|嘛|啦)?[！!？?~～。]*\s*$/;
@@ -314,25 +295,55 @@ function isStickerRequest(value) {
   if (/(不要|别|不用|不想|不会|不能|不许|不准|停止)[^，。！？!?]{0,12}(发|来|给|整|弄|甩|扔|上).{0,6}(表情|动图|贴纸|梗图|meme)/i.test(text)) return false;
   return WANT_RE.test(text) || WANT_BARE_RE.test(text);
 }
-const STRONG_ANGRY = /(气死|烦死|滚[！!]|闭嘴|傻逼|去死|你有病|别烦我|火大)/;
-const STRONG_CUTE = /(抱抱|亲亲|想你|可爱|陪我|喜欢你|摸摸|亲一下|撒娇|傲娇)/;
-function strongEmotion(value) {
-  // Classify the bot's reply (not the user's mood). Avoid broad "骂/过分" and
-  // negated requests such as "别骂人", which previously became false angry hits.
-  const s = String(value ?? '').replace(/(别|不要|不会|不想|不许|不准)(再|老是|一直)?(骂人?|生气|滚|气死|烦死|闭嘴|去死)/g, '');
-  if (STRONG_ANGRY.test(s) || /^\s*滚[！!。]*\s*$/.test(s)) return 'angry';
-  if (STRONG_CUTE.test(s)) return 'cute';
-  return '';
+/** 模型给的分类名 → 内部 key（cute / angry / other / x:标签）；认不出返回 '' */
+function categoryFromName(config, value) {
+  const raw = String(value == null ? '' : value).trim();
+  if (!raw) return '';
+  const direct = normalizeEmotion(raw);
+  if (direct) return hasCategory(config, direct) ? direct : '';
+  const byLabel = LABEL_TO_KEY[raw];
+  if (byLabel) return byLabel;
+  const key = extraKey(raw);
+  return key && hasCategory(config, key) ? key : '';
 }
-function randomPool(dir) { return categoryImages(dir, 'other'); }
-function pick({ config, root, text = '', request = '', recent = [], rng = Math.random } = {}) {
-  if (!isOn(config)) return null;
-  const emotion = strongEmotion(text || request) || 'other';
-  const want = isStickerRequest(request); // Never force-send from the bot's own reply.
-  if (!want && !(rng() < chanceFor(config, emotion))) return null;
+
+/** 给提示词用：可用分类 + 各自张数（内置三类在前，自定义分类在后） */
+function promptCategories(config, root) {
   const dir = stickerDir(config, root);
-  // Empty other MUST stay empty. Never borrow angry/cute, even for an explicit
-  // request; otherwise default chat still sends the two excluded categories.
+  const out = Object.keys(EMOTIONS).map((key) => ({
+    key, label: EMOTIONS[key], count: categoryImages(dir, key).length,
+  }));
+  for (const cat of readExtraCategories(config, root)) {
+    const label = cleanCategoryLabel(cat && cat.label);
+    const key = extraKey(label);
+    if (!key) continue;
+    out.push({ key, label, count: categoryImages(dir, key).length });
+  }
+  return out;
+}
+
+/** 内置分类的文件夹是硬编码的：被删掉就补回来（只补缺失的，不动已有内容） */
+function ensureBuiltinDirs(config, root) {
+  const dir = stickerDir(config, root);
+  const created = [];
+  for (const label of Object.values(EMOTIONS)) {
+    const target = path.join(dir, label);
+    if (fs.existsSync(target)) continue;
+    fs.mkdirSync(target, { recursive: true });
+    created.push(label);
+  }
+  return created;
+}
+
+/**
+ * 挑一张表情包。分类完全由调用方（模型标记）决定：
+ * 没给分类、分类不存在、该分类没有图 → 一律不发，不再自己猜情绪、不再掷概率。
+ */
+function pick({ config, root, category = '', recent = [], rng = Math.random } = {}) {
+  if (!isOn(config)) return null;
+  const emotion = categoryFromName(config, category);
+  if (!emotion) return null;
+  const dir = stickerDir(config, root);
   const file = choose(categoryImages(dir, emotion), rng, recent);
   return file ? { emotion, path: file } : null;
 }
@@ -395,6 +406,6 @@ function upload(config, root, emotion, files) {
   }
   return uploaded;
 }
-module.exports = { EMOTIONS, EMOTION_LABELS, EXTRA_PREFIX, cleanCategoryLabel, extraKey, hasCategory, readExtraCategories, writeExtraCategories, categoryFile, normalizeEmotion, GENERIC, EXTS, MAX_FILE_BYTES, MAX_UPLOAD_FILES,
-  hasEmotion, resolveImage, safeDirectory, migrateLegacy, stickerDir, regularFile, listImages, categoryImages, imagesFor, anyImages, isOn,
-  detectEmotion, chanceFor, choose, pick, isStickerRequest, strongEmotion, randomPool, imageType, upload };
+module.exports = { EMOTIONS, EMOTION_LABELS, EXTRA_PREFIX, cleanCategoryLabel, extraKey, hasCategory, readExtraCategories, writeExtraCategories, categoryFile, normalizeEmotion, categoryFromName, promptCategories, GENERIC, EXTS, MAX_FILE_BYTES, MAX_UPLOAD_FILES,
+  hasEmotion, resolveImage, safeDirectory, migrateLegacy, ensureBuiltinDirs, stickerDir, regularFile, listImages, categoryImages, imagesFor, anyImages, isOn,
+  choose, pick, isStickerRequest, imageType, upload };

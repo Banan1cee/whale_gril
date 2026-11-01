@@ -164,8 +164,8 @@ test('表情包从排队到确认只留一行，并写进同一个会话', (t) =
   const store = makeStore(t);
   const service = new StickerService(config, { store, rng: () => 0.5 });
   const msg = { platform: 'wechat', chatId: 'wxid_chat', chatType: 'private', chatTitle: '阿螈' };
-  const job = service.plan(msg, '哈哈哈');
-  assert.ok(job, '有图、概率满、没在飞的任务，应该能挑到一张');
+  const job = service.plan(msg, '其他');
+  assert.ok(job, '有图、指定了分类、没有在飞的任务，应该能挑到一张');
   const key = 'wechat:u:wxid_chat';
   assert.equal(store.events(key).length, 1);
   assert.equal(store.events(key)[0].status, 'queued');

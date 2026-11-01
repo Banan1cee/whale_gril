@@ -256,29 +256,6 @@ class Bot {
       return { action: 'ignore', reason: 'system_notice', key, msg, atMe };
     }
 
-    // 消息里有链接 → 读一下标题/摘要（短视频平台只读得到文案，读不到画面）
-    let linkText = '';
-    if (clean.text && (!this.config.links || this.config.links.enabled !== false)) {
-      const urls = links.extractUrls(clean.text);
-      if (urls.length) {
-        try {
-          const info = await this.linkReader(urls[0]);
-          linkText = links.formatForPrompt(info);
-          this.logger && this.logger.info(`读取链接：${urls[0]} → ${info && info.ok ? 'ok' : (info && info.error) || 'failed'}`);
-          const title = String((info && (info.title || info.site)) || '').slice(0, 60);
-          this.store.appendEvent(key, {
-            type: 'link',
-            detail: title ? `${urls[0].slice(0, 80)} → ${title}` : urls[0].slice(0, 120),
-            status: info && info.ok ? 'ok' : 'failed',
-          });
-        } catch (err) {
-          linkText = `对方发了一个链接（${urls[0]}），但读取失败。`;
-          this.logger && this.logger.warn('读取链接失败：' + (err && err.message));
-          this.store.appendEvent(key, { type: 'link', detail: urls[0].slice(0, 120), status: 'failed' });
-        }
-      }
-    }
-
     const session = this.store.ensureSession(key, {
       platform: msg.platform,
       chatId: msg.chatId,
@@ -585,6 +562,11 @@ class Bot {
     // 路由、定位、天气/热榜及补搜共享预算，不能每一步重新等一个完整超时。
     const webDeadline = Date.now() + Math.max(1, Number(webCfg.timeoutMs) || 8000);
     const webRemaining = () => Math.max(0, webDeadline - Date.now());
+    // 触发判定通过之后才读链接：群里没叫她的消息不白抓一遍；读链接与联网搜索并行，
+    // 组提示词前一起 await，总耗时取两者较大的（共用 webDeadline）。
+    const linkUrls = (this.config.links && this.config.links.enabled === false)
+      ? [] : links.extractUrls(clean.text || '');
+    const linkTask = linkUrls.length ? this.readLink(linkUrls[0], key) : Promise.resolve('');
     // 注意：以前只认「查一下/最新/多少钱」这类词。用户问「苹果出到几了」「现在几代」这种
     // 口语问题时匹配不上，她就拿训练数据里的旧型号回答（实测把 iPhone 18 说成 16）。
     const searchPattern = new RegExp(
@@ -628,28 +610,34 @@ class Bot {
         const siteDomain = { bilibili: 'bilibili.com', weibo: 'weibo.com', toutiao: 'toutiao.com' }[site];
         if (isWeather) {
           // 天气走专门的接口（open-meteo）：Bing 摘要常常只有「多云」没温度，还爱串城市。
-          // 对方话里没提城市就用配置里的 city；都没配就退回搜索引擎。
-          const city = String(webCfg.city || '').trim();
-          const hasCity = /(北京|上海|天津|重庆|广州|深圳|杭州|南京|成都|武汉|西安|苏州|长沙|郑州|青岛|沈阳|大连|厦门|福州|济南|合肥|昆明|南宁|贵阳|太原|A 城市|哈尔滨|长春|兰州|银川|西宁|乌鲁木齐|呼和浩特|拉萨|海口|三亚|宁波|无锡|东莞|佛山|温州|珠海|中山|惠州|台州|常州|徐州|烟台|洛阳|保定|唐山|香港|澳门|台北|[\u4e00-\u9fa5]{2,4}市)/;
-          let weatherCity = '';
-          const hit = String(clean.text).match(hasCity);
-          if (hit) weatherCity = hit[0].replace(/市$/, '');
-          if (!weatherCity && city) weatherCity = city;
+          // 城市来源顺序：模型从这句话里抄的地名 → 配置 websearch.city → 去掉天气词后的原句
+          // 交给 geocodeCity 解析 → 最后才按本机公网 IP 猜。不再用正则穷举城市。
+          let weatherCity = String(route.city || '').trim();
+          if (!weatherCity) weatherCity = String(webCfg.city || '').trim();
           if (!weatherCity && webRemaining() > 0) {
-            // 话里没说、配置也没填 → 按本机公网 IP 猜一下（否则会搜到随机城市，
-            // 比如人在A 城市却答「B 城市今天晴」）。
+            const place = String(clean.text || '')
+              .replace(/(今天|明天|后天|大后天|现在|这几天|周末|早上|上午|中午|下午|晚上|夜里)/g, ' ')
+              .replace(/(天气|气温|温度|怎么样|如何|多少度|冷不冷|热不热|下雨|下雪|台风|雾霾|空气质量|要不要带伞|带伞)/g, ' ')
+              .replace(/[?？!！。，,、\s]+/g, ' ')
+              .trim();
+            if (place && place.length <= 40) {
+              try {
+                const placeHit = await websearch.geocodeCity(place, webRemaining());
+                if (placeHit && placeHit.name) weatherCity = placeHit.name;
+              } catch { /* 解析不出来就继续往下走 */ }
+            }
+          }
+          if (!weatherCity && webRemaining() > 0) {
             try { weatherCity = await websearch.ipCity(webRemaining()); } catch { /* 忽略 */ }
           }
           if (weatherCity && webRemaining() > 0) {
             try {
               webText = await websearch.weatherText(weatherCity, { timeoutMs: webRemaining() });
-              if (webText && this.logger) {
-                this.logger.info('天气查询：' + weatherCity);
-              }
+              if (webText && this.logger) this.logger.info('天气查询：' + weatherCity);
             } catch { /* 落到搜索引擎 */ }
           }
           if (!webText) {
-            if (!hit && city) q = city + ' 天气';
+            if (weatherCity) q = weatherCity + ' 天气';
             else if (!/天气/.test(q)) q = q + ' 天气';
           }
         }
@@ -671,9 +659,13 @@ class Bot {
         }
         if (!webText && webRemaining() > 0) {
           if (siteDomain) q = q + ' site:' + siteDomain;
+          // 时效由模型判：strict=90 天 / normal=365 天 / any=不限
+          const freshAge = route.failed ? undefined
+            : ({ strict: 90, normal: 365, any: null }[route.fresh] ?? 365);
           webText = await websearch.searchText(q || String(clean.text).slice(0, 100), {
             limit: 4,
             timeoutMs: webRemaining(),
+            maxAgeDays: freshAge,
           });
         }
         if (webText) this.logger && this.logger.info('联网搜索：' + String(clean.text).slice(0, 30));
@@ -686,6 +678,8 @@ class Bot {
         });
       } catch { /* ignore */ }
     }
+    const linkText = await linkTask;
+    msg.linkText = linkText;
     // 搜到的东西必须真的送进提示词。以前只赋给局部变量、写了个日志就完事，
     // msg 上从没挂过 webText，于是 persona 里那段「【刚联网搜到的资料】」永远是空——
     // 表现就是「问她天气她不知道」，明明日志里已经搜到了。
@@ -1259,11 +1253,14 @@ class Bot {
    * 总闸关着直接返回 null，调用方不用判断。
    * @returns {{emotion: string, path: string}|null}
    */
-  stickerFor(decision, text, request = '') {
+  stickerFor(decision, text) {
     if (!stickers.isOn(this.config) || !this.stickerService) return null;
+    // 分类只来自 finalize() 从正文里剥出来的 [[sticker:分类]]；没有就是不发。
+    const category = decision && decision.stickerCategory;
+    if (!category) return null;
     const msg = (decision && decision.msg) || {};
     try {
-      return this.stickerService.plan(msg, text, request);
+      return this.stickerService.plan(msg, category);
     } catch (err) {
       if (this.logger) this.logger.warn('挑表情包失败：' + (err && err.message ? err.message : err));
       return null;
@@ -1272,6 +1269,16 @@ class Bot {
 
   finalize(decision, text, { error = false } = {}) {
     text = String(text == null ? '' : text).trim();
+    // 表情包标记 [[sticker:分类]]：发哪一类由模型决定。标记必须从正文里剥干净，
+    // 没闭合的半截也要清掉，绝不能漏给用户看到。
+    const mark = text.match(/\[\[\s*sticker\s*[:：]\s*([^\]\n]{1,40}?)\s*\]\]/i);
+    if (mark && decision) decision.stickerCategory = String(mark[1] || '').trim();
+    if (/\[\[\s*sticker/i.test(text)) {
+      text = text
+        .replace(/\[\[\s*sticker\s*[:：][^\]\n]*\]\]/gi, '')
+        .replace(/\[\[\s*sticker[\s\S]*$/i, '')
+        .trim();
+    }
     // 正文里的 emoji 剥出来，单独发一条
     const emojiRe = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{1F1E6}-\u{1F1FF}\u{FE0F}]/gu;
     const foundEmoji = (text.match(emojiRe) || []).join('');
@@ -1458,6 +1465,26 @@ class Bot {
     }
   }
 
+  /** 读一个链接并记账；失败也返回一句说明，绝不把异常抛给主流程 */
+  async readLink(url, key) {
+    try {
+      const info = await this.linkReader(url);
+      const text = links.formatForPrompt(info);
+      this.logger && this.logger.info(`读取链接：${url} → ${info && info.ok ? 'ok' : (info && info.error) || 'failed'}`);
+      const title = String((info && (info.title || info.site)) || '').slice(0, 60);
+      this.store.appendEvent(key, {
+        type: 'link',
+        detail: title ? `${url.slice(0, 80)} → ${title}` : url.slice(0, 120),
+        status: info && info.ok ? 'ok' : 'failed',
+      });
+      return text;
+    } catch (err) {
+      this.logger && this.logger.warn('读取链接失败：' + (err && err.message));
+      this.store.appendEvent(key, { type: 'link', detail: url.slice(0, 120), status: 'failed' });
+      return `对方发了一个链接（${url}），但读取失败。`;
+    }
+  }
+
   /** handle 的实际处理体，由 handle() 按会话串行调用（不同会话仍然并发） */
   async _handleOnce(rawMsg, { signal } = {}) {
     let decision;
@@ -1565,6 +1592,8 @@ class Bot {
       mention: decision.msg && decision.msg.chatType === 'group' ? mention : '',
       reason: decision.reason,
       mock: decision.mock,
+      // 表情包分类由模型写在正文里的标记决定，这里带出去给网关排队
+      ...(decision.stickerCategory ? { stickerCategory: decision.stickerCategory } : {}),
     };
   }
 

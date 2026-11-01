@@ -148,12 +148,18 @@ function isTimeSensitive(query) {
   return TIME_SENSITIVE_RE.test(String(query || ''));
 }
 
-function dropStaleResults(query, results, { maxAgeDays = 550 } = {}) {
-  if (!TIME_SENSITIVE_RE.test(String(query || ''))) return results;
+function dropStaleResults(query, results, { maxAgeDays } = {}) {
+  // maxAgeDays = null / Infinity 表示「不限时效」（模型判的 any）
+  if (maxAgeDays === null || maxAgeDays === Infinity) return results;
+  const explicit = maxAgeDays !== undefined;
+  const limit = explicit ? Number(maxAgeDays) : 550;
+  if (!Number.isFinite(limit)) return results;
+  // 没显式给预算时沿用旧口径：只有时效性问题才过滤
+  if (!explicit && !TIME_SENSITIVE_RE.test(String(query || ''))) return results;
   const fresh = [];
   for (const r of results) {
     const age = parseSnippetAgeDays(r.snippet || r.title || '');
-    if (age !== null && age > maxAgeDays) continue; // 明显过期，丢掉
+    if (age !== null && age > limit) continue; // 明显过期，丢掉
     fresh.push(r);
   }
   // 全被判过期（说明判断依据不可靠）就保留原始结果，别把她弄成「搜不到」
@@ -251,7 +257,7 @@ function cleanQuery(query) {
   return text || String(query || '').trim();
 }
 
-async function search(query, { limit = 5, timeoutMs = 8000 } = {}) {
+async function search(query, { limit = 5, timeoutMs = 8000, maxAgeDays } = {}) {
   const rawQuery = String(query || '').trim();
   if (!rawQuery) return [];
   const siteFilter = (rawQuery.match(/\bsite:[a-z0-9.-]+/i) || [''])[0];
@@ -282,7 +288,7 @@ async function search(query, { limit = 5, timeoutMs = 8000 } = {}) {
     const merged0 = [...official, ...first].filter((item, i, all) => all.findIndex((x) => x.url === item.url) === i);
     first.splice(0, first.length, ...merged0);
   }
-  if (first.length >= 2) return dropStaleResults(q, first).slice(0, limit);
+  if (first.length >= 2) return dropStaleResults(q, first, { maxAgeDays }).slice(0, limit);
   // 结果跑题或太少：归一化检索式、词块各重搜一次（纠错，不是重试）。
   const attempts = [...new Set([cleanQuery(q), queryTokens(q).join(' ')])]
     .filter((term) => term && term !== q).slice(0, 2);
@@ -292,7 +298,7 @@ async function search(query, { limit = 5, timeoutMs = 8000 } = {}) {
     if (extra.length >= 2) break;
   }
   const merged = [...first, ...extra].filter((item, i, all) => all.findIndex((x) => x.url === item.url) === i);
-  return dropStaleResults(q, merged).slice(0, limit);
+  return dropStaleResults(q, merged, { maxAgeDays }).slice(0, limit);
 }
 
 async function searchText(query, opts = {}) {

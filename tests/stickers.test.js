@@ -53,12 +53,16 @@ test('表情包：开关在调试台登记表最前面，并标着 experimental'
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test('表情包：旧关键词辅助函数保持兼容（选图只用三分类）', () => {
-  assert.equal(stickers.detectEmotion('你个傻逼', 12), 'angry');
-  assert.equal(stickers.detectEmotion('你好可爱啊', 12), 'happy');
-  assert.equal(stickers.detectEmotion('主人抱抱', 12), 'cute');
-  assert.equal(stickers.detectEmotion('？？？', 12), 'meh');
-  assert.equal(stickers.detectEmotion('随便聊聊', 2), 'bored');
+test('表情包：分类名认得出英文 key、中文标签和自定义标签', () => {
+  const root = makeRoot(['炸毛/a.gif']);
+  const cfg = cfgOn(root);
+  assert.equal(stickers.categoryFromName(cfg, 'cute'), 'cute');
+  assert.equal(stickers.categoryFromName(cfg, '傲娇'), 'cute');
+  assert.equal(stickers.categoryFromName(cfg, '炸毛'), 'angry');
+  assert.equal(stickers.categoryFromName(cfg, 'x:猫猫'), '', '没登记的自定义分类不认');
+  assert.equal(stickers.categoryFromName(cfg, '随便写'), '');
+  assert.equal(stickers.categoryFromName(cfg, ''), '');
+  fs.rmSync(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 80 });
 });
 
 test('表情包：按情绪找文件夹（中文/英文都认），没图回落通用', () => {
@@ -73,72 +77,67 @@ test('表情包：按情绪找文件夹（中文/英文都认），没图回落�
   fs.rmSync(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 80 });
 });
 
-test('表情包：「发个表情」必发；开启后没有冷却，私聊群聊都按概率发', () => {
+test('表情包：没有分类标记就绝对不发（不再猜情绪、不再掷概率）', () => {
   const root = makeRoot(['炸毛/a.gif', '其他/o.gif']);
-  const cfg = cfgOn(root, { chances: { angry: 0, other: 0 } });
-  // 概率 0 → 普通消息不该发
-  assert.equal(stickers.pick({ config: cfg, root, key: 'g:1', text: '你个傻逼', rng: () => 0.99 }), null);
-  // 明确要表情 → 必发
-  const forced = stickers.pick({ config: cfg, root, key: 'g:1', text: '发个表情', request: '发个表情', rng: () => 0.99 });
-  assert.ok(forced && forced.path, '「发个表情」应该必发');
-  // 紧接着再要一次也发：没有任何时间间隔限制
-  const again = stickers.pick({ config: cfg, root, key: 'g:1', text: '发个表情', request: '发个表情', rng: () => 0.99 });
-  assert.ok(again && again.path, '不应有冷却');
-  // 私聊场景（同一个 key 反复）也照概率发
-  cfg.sticker.chances.angry = 1;
-  for (let i = 0; i < 3; i += 1) {
-    assert.ok(stickers.pick({ config: cfg, root, key: 'u:1', text: '你个傻逼', rng: () => 0.01 }));
-  }
+  // 概率字段全拉满也没用：发不发只看有没有模型给的分类
+  const cfg = cfgOn(root, { chances: { angry: 1, cute: 1, other: 1 }, genericChance: 1 });
+  assert.equal(stickers.pick({ config: cfg, root, key: 'u:1', text: '你个傻逼', rng: () => 0 }), null);
+  assert.equal(stickers.pick({ config: cfg, root, key: 'u:1', text: '发个表情包', request: '发个表情包', rng: () => 0 }), null);
+  assert.equal(stickers.pick({ config: cfg, root, key: 'u:1' }), null);
   fs.rmSync(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 80 });
 });
 
-test('表情包：概率命中才发（rng 可控）', () => {
-  const root = makeRoot(['开心/h.gif']);
-  // 现在普通发言按「通用」概率算（强信号才走分类），所以这里给 genericChance
-  const cfg = cfgOn(root, { chances: { other: 0.5 }, genericChance: 0.5 });
-  const hit = stickers.pick({ config: cfg, root, key: 'u:1', text: '今天星期三', rng: () => 0.1 });
-  assert.ok(hit && hit.path, '概率命中就该发一张（没有强情绪信号时全库随机）');
-  const miss = stickers.pick({ config: cfg, root, key: 'u:2', text: '今天星期三', rng: () => 0.9 });
-  assert.equal(miss, null);
+test('表情包：模型指定哪个分类就发哪个分类，跟概率字段无关', () => {
+  const root = makeRoot(['炸毛/a.gif', '撒娇/c.gif', '其他/o.gif']);
+  const cfg = cfgOn(root, { chances: { angry: 0, cute: 0, other: 0 }, genericChance: 0 });
+  const angry = stickers.pick({ config: cfg, root, category: '炸毛', rng: () => 0 });
+  assert.equal(angry.emotion, 'angry');
+  assert.match(angry.path, /炸毛/);
+  const cute = stickers.pick({ config: cfg, root, category: 'cute', rng: () => 0 });
+  assert.equal(cute.emotion, 'cute');
+  assert.match(cute.path, /撒娇/);
+  fs.rmSync(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 80 });
+});
+
+test('表情包：分类不存在或该分类没图，一律不发', () => {
+  const root = makeRoot(['其他/o.gif']);
+  const cfg = cfgOn(root);
+  assert.equal(stickers.pick({ config: cfg, root, category: '不存在' }), null);
+  assert.equal(stickers.pick({ config: cfg, root, category: '炸毛' }), null, '炸毛目录不存在');
+  assert.ok(stickers.pick({ config: cfg, root, category: '其他' }), '有图的分类正常发');
+  fs.rmSync(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 80 });
+});
+
+test('表情包：自定义分类登记后能按标签或 x: 选中', () => {
+  const root = makeRoot(['猫猫/c1.gif', '猫猫/c2.gif']);
+  const cfg = cfgOn(root);
+  stickers.writeExtraCategories(cfg, root, [{ label: '猫猫' }]);
+  const byLabel = stickers.pick({ config: cfg, root, category: '猫猫', rng: () => 0 });
+  assert.equal(byLabel.emotion, 'x:猫猫');
+  assert.match(byLabel.path, /猫猫/);
+  const byKey = stickers.pick({ config: cfg, root, category: 'x:猫猫', rng: () => 0 });
+  assert.equal(byKey.emotion, 'x:猫猫');
+  assert.equal(stickers.pick({ config: cfg, root, category: 'x:没登记' }), null);
   fs.rmSync(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 80 });
 });
 
 test('表情包：目录里没有图时安静返回 null（不崩、不刷日志）', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-sticker-empty-'));
   const cfg = cfgOn(root);
-  assert.equal(stickers.pick({ config: cfg, root, key: 'k', text: '你个傻逼' }), null);
+  assert.equal(stickers.pick({ config: cfg, root, category: '其他' }), null);
   assert.deepEqual(stickers.listImages(path.join(root, 'data', 'stickers')), []);
   fs.rmSync(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 80 });
 });
 
-test('普通发言只在 开心/嫌弃/敷衍 里随机，不会抽到炸毛和撒娇', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-pool-'));
-  const mk = (emo, n) => {
-    const d = path.join(root, 'data/stickers', emo);
-    fs.mkdirSync(d, { recursive: true });
-    for (let i = 0; i < n; i += 1) fs.writeFileSync(path.join(d, emo + i + '.gif'), 'x');
-  };
-  mk('开心', 2); mk('嫌弃', 2); mk('敷衍', 2); mk('炸毛', 3); mk('撒娇', 3);
-  const cfg = cfgOn(root, { chances: {}, genericChance: 1 });
-  const seen = new Set();
-  for (let i = 0; i < 300; i += 1) {
-    const hit = stickers.pick({ config: cfg, root, key: 'k', text: '今天星期三', rng: Math.random });
-    if (hit && hit.path) seen.add(path.basename(path.dirname(hit.path)));
-  }
-  assert.deepEqual([...seen].sort(), ['开心', '嫌弃', '敷衍'].sort(), '只有这三类会被随机选中');
-  fs.rmSync(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 80 });
-});
-
-test('骂人和撒娇仍然只走对应分类', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-pool2-'));
-  const mk = (emo) => { const d = path.join(root, 'data/stickers', emo); fs.mkdirSync(d, { recursive: true }); fs.writeFileSync(path.join(d, 'a.gif'), 'x'); };
-  mk('开心'); mk('炸毛'); mk('撒娇');
-  const cfg = cfgOn(root, { chances: { angry: 1, cute: 1 }, genericChance: 1 });
-  for (let i = 0; i < 20; i += 1) {
-    const a = stickers.pick({ config: cfg, root, key: 'k', text: '气死我了', rng: Math.random });
-    assert.equal(path.basename(path.dirname(a.path)), '炸毛');
-    const c = stickers.pick({ config: cfg, root, key: 'k', text: '抱抱我', rng: Math.random });
-    assert.equal(path.basename(path.dirname(c.path)), '撒娇');
-  }
+test('表情包：提示词用的分类清单带中文名和张数（含自定义分类）', () => {
+  const root = makeRoot(['炸毛/a.gif', '炸毛/b.gif', '猫猫/c.gif']);
+  const cfg = cfgOn(root);
+  stickers.writeExtraCategories(cfg, root, [{ label: '猫猫' }, { label: '空分类' }]);
+  const byKey = Object.fromEntries(stickers.promptCategories(cfg, root).map((c) => [c.key, c]));
+  assert.equal(byKey.angry.count, 2);
+  assert.equal(byKey.angry.label, '炸毛');
+  assert.equal(byKey.cute.count, 0);
+  assert.equal(byKey['x:猫猫'].count, 1);
+  assert.equal(byKey['x:空分类'].count, 0);
   fs.rmSync(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 80 });
 });
