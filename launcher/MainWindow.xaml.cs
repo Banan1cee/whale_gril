@@ -89,6 +89,7 @@ namespace WhaleLauncher
                 };
                 once.Start();
             };
+            Closing += OnClosingDuringUpdate;
             Closed += (_, __) =>
             {
                 Appearance.Changed -= OnAppearanceChanged;
@@ -189,18 +190,22 @@ namespace WhaleLauncher
             var answer = MessageBox.Show(
                 "发现新版本 v" + r.Latest + "（当前 v" + r.Current + "）。\n\n" +
                 "更新会先备份，再覆盖代码；data\\ 和 config.json 不会被改动。\n" +
-                "更新完会自动重启启动器（内核会先停）。\n\n现在更新吗？",
+                "更新完会自动重启启动器（内核会先停）。更新期间关掉窗口也不要紧——" +
+                "脚本会在后台跑完，结束后自己把启动器重新拉起来。\n\n现在更新吗？",
                 "检查更新", MessageBoxButton.YesNo, MessageBoxImage.Question);
             if (answer != MessageBoxResult.Yes) return;
 
             _updating = true;
             BtnUpdate.IsEnabled = false;
-            StatusLine.Text = "正在更新，别关窗口…";
+            ShowUpdateProgress("正在更新…", -1);
             try
             {
-                var err = await UpdateService.ApplyAsync(_sup.BaseDir);
+                // 脚本每吐一行进度就回传一次（Progress<T> 会切回 UI 线程）
+                var prog = new Progress<UpdateService.Progress>((p) => ShowUpdateProgress(p.Text, p.Percent));
+                var err = await UpdateService.ApplyAsync(_sup.BaseDir, prog);
                 if (err.Length > 0)
                 {
+                    HideUpdateProgress();
                     StatusLine.Text = "更新失败：" + err;
                     MessageBox.Show("更新失败：" + err + "\n\n再点一次「检查更新」可以重试（失败会自动回滚）。",
                         "检查更新", MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -208,12 +213,18 @@ namespace WhaleLauncher
                 }
 
                 // 更新完必须重启：跑着的还是旧镜像，旧 exe 也只有等本进程退出才删得掉。
-                // 重启交给 --replace：新实例等本进程退出 → 抢单实例锁 → 顺手清 *.old-*。
-                SetUpdateButton(false);
                 StatusLine.Text = "已更新到 v" + r.Latest + "，正在重启…";
-                await Task.Delay(900);
-                if (!RestartSelf(out var restartErr))
+                await Task.Delay(800);
+
+                // 脚本收尾时会自己把启动器拉起来（带 --replace 本进程 PID）：
+                // 它已经在了就只关自己；没在（老脚本）才自己起一个。
+                if (AnotherInstanceRunning())
                 {
+                    Application.Current.Shutdown();
+                }
+                else if (!RestartSelf(out var restartErr))
+                {
+                    HideUpdateProgress();
                     StatusLine.Text = "已更新到 v" + r.Latest + "，请手动重新打开";
                     MessageBox.Show(
                         "更新完成，但自动重启失败：" + restartErr + "\n\n请手动关掉再打开启动器（新版要重启才生效）。",
@@ -225,6 +236,54 @@ namespace WhaleLauncher
                 _updating = false;
                 BtnUpdate.IsEnabled = true;
             }
+        }
+
+        /// <summary>进度条 + 一句话。Percent &lt; 0 时走不确定态（解压/备份这种没有百分比的步骤）。</summary>
+        private void ShowUpdateProgress(string text, double percent)
+        {
+            if (!string.IsNullOrEmpty(text)) StatusLine.Text = text;
+            UpdateBar.Visibility = Visibility.Visible;
+            if (percent < 0)
+            {
+                UpdateBar.IsIndeterminate = true;
+                UpdatePct.Visibility = Visibility.Collapsed;
+            }
+            else
+            {
+                UpdateBar.IsIndeterminate = false;
+                UpdateBar.Value = Math.Max(0, Math.Min(100, percent));
+                UpdatePct.Text = (int)percent + "%";
+                UpdatePct.Visibility = Visibility.Visible;
+            }
+        }
+
+        private void HideUpdateProgress()
+        {
+            UpdateBar.Visibility = Visibility.Collapsed;
+            UpdatePct.Visibility = Visibility.Collapsed;
+        }
+
+        /// <summary>是不是已经有新实例被脚本拉起来了（含自己）。</summary>
+        private static bool AnotherInstanceRunning()
+        {
+            try
+            {
+                var name = Path.GetFileNameWithoutExtension(Environment.ProcessPath ?? "");
+                if (string.IsNullOrEmpty(name)) return false;
+                return Process.GetProcessesByName(name).Length > 1;
+            }
+            catch { return false; }
+        }
+
+        /// <summary>更新中关窗口：说清楚关掉也不会中断，让用户自己决定。</summary>
+        private void OnClosingDuringUpdate(object sender, System.ComponentModel.CancelEventArgs e)
+        {
+            if (!_updating) return;
+            var ans = MessageBox.Show(
+                "更新还在进行。\n\n" +
+                "关掉窗口不会中断更新：脚本会继续在后台跑完，结束后自动把启动器重新打开。\n\n现在关吗？",
+                "更新进行中", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+            if (ans != MessageBoxResult.Yes) e.Cancel = true;
         }
 
         /// <summary>
@@ -473,7 +532,8 @@ namespace WhaleLauncher
                 }
                 if (s.NodeUp && s.NeedsKey && !s.HasKey) parts.Add("还没填 Key");
                 if (s.StFailed > 0) parts.Add($"发送失败 {s.StFailed}");
-                StatusLine.Text = parts.Count > 0 ? string.Join(" · ", parts) : "启动器就绪";
+                // 更新期间这行归更新流程管，别被两秒一次的刷新覆盖掉
+                if (!_updating) StatusLine.Text = parts.Count > 0 ? string.Join(" · ", parts) : "启动器就绪";
 
                 if (Host.Content is IRefreshable r) await r.RefreshAsync();
             }

@@ -93,7 +93,11 @@ function Emit-Json {
 # 5.1 在输出被重定向时读写 console buffer 会抛 Win32 0x5，进度条一律加开关
 function Update-Progress {
     param([string]$Activity, [string]$Status = '', [int]$Percent = -1, [switch]$Done)
-    if (-not $script:UseProgress) { return }
+    if (-not $script:UseProgress) {
+        # 输出被重定向 = 启动器在读 stdout：吐一行机器可读的，界面自己画进度条
+        if (-not $Done -and $Percent -ge 0) { [Console]::Out.WriteLine('P ' + $Percent + ' ' + $Status) }
+        return
+    }
     if ($Done) { Write-Progress -Activity $Activity -Completed; return }
     if ($Percent -ge 0) {
         Write-Progress -Activity $Activity -Status $Status -PercentComplete $Percent
@@ -951,15 +955,44 @@ function Test-FileWritable {
 # 安装目录里正在运行的那个 exe（不写死名字：以后改名叫什么都行）
 function Get-RunningExeName {
     param([string]$AppRoot)
+    $p = Get-RunningExeProcess -AppRoot $AppRoot
+    if (-not $p) { return '' }
+    return (Split-Path -Leaf $p.Path)
+}
+
+# 同上，但返回进程对象（要 PID 用）
+function Get-RunningExeProcess {
+    param([string]$AppRoot)
     $root = $AppRoot.TrimEnd('\')
     foreach ($p in @(Get-Process -ErrorAction SilentlyContinue)) {
         $exe = ''
         try { $exe = $p.Path } catch { }
         if (-not $exe) { continue }
         $dir = Split-Path -Parent $exe
-        if ($dir -and ($dir.TrimEnd('\') -ieq $root)) { return (Split-Path -Leaf $exe) }
+        if ($dir -and ($dir.TrimEnd('\') -ieq $root)) { return $p }
     }
-    return ''
+    return $null
+}
+
+# 更新完把启动器拉起来：
+#   还开着 → 起一个新实例带 --replace <旧 PID>，等旧进程退出后接管（旧窗口自己会关）；
+#   已经关了（更新期间被关窗口）→ 直接起一个，这就是"关窗口也不会烂尾"的兜底。
+# -OnlyIfGone：只在确实没人跑的时候才拉（失败回滚用，别打扰还开着的窗口）。
+function Start-LauncherAfterUpdate {
+    param([string]$AppRoot, [string]$ExeName, [switch]$OnlyIfGone)
+    if (-not $ExeName) { return '' }
+    $exe = Join-Path $AppRoot $ExeName
+    if (-not (Test-Path -LiteralPath $exe)) { return '' }
+    $running = Get-RunningExeProcess -AppRoot $AppRoot
+    try {
+        if ($running) {
+            if ($OnlyIfGone) { return '' }
+            Start-Process -FilePath $exe -WorkingDirectory $AppRoot -ArgumentList @('--replace', [string]$running.Id) | Out-Null
+            return 'replace'
+        }
+        Start-Process -FilePath $exe -WorkingDirectory $AppRoot | Out-Null
+        return 'gone'
+    } catch { return '' }
 }
 
 # 运行中的 exe：不能写、不能删，但可以改名——这是自更新的标准解法。
@@ -1590,6 +1623,20 @@ try {
         }
     }
 
+    # ---- 拉起启动器 ----
+    # 从启动器里点更新（-Yes）时：还开着就起个新实例等它退出后接管；
+    # 更新期间窗口被关掉了，就直接把它重新打开——这样"关了窗口也不会烂尾"。
+    if ($Yes -and $exeName) {
+        $launched = ''
+        try { $launched = Start-LauncherAfterUpdate -AppRoot $script:appRoot -ExeName $exeName } catch { }
+        if ($launched -eq 'gone') {
+            $exeLine = '更新期间窗口被关掉了，已替你重新打开启动器'
+            Say ('  ✅ ' + $exeLine) 'Green'
+        } elseif ($launched -eq 'replace') {
+            Say '  已起新实例，等当前窗口退出后接管。' 'DarkGray'
+        }
+    }
+
     # ---- 收尾 ----
     # 这次的 zip 留在 cache 里：下次更新可以拿它做差分（只留最新一份，旧的清掉）
     if (-not $KeepZip) {
@@ -1629,6 +1676,8 @@ try {
             [void](Stop-AppForUpdate -AppRoot $script:appRoot)
             Restore-Backup -AppRoot $script:appRoot -BackupDir $script:lastBackup
             $v = Get-AppVersion $script:appRoot
+            # 回滚成功但窗口已经被关了：把人叫回来（还开着就不打扰）
+            if ($Yes -and $exeName) { try { [void](Start-LauncherAfterUpdate -AppRoot $script:appRoot -ExeName $exeName -OnlyIfGone) } catch { } }
             Show-Result -Kind 'rolled' -Message ('更新失败，已自动回滚到 ' + $v) -Detail @(
                 ('原因：' + $err),
                 ('备份：' + $script:lastBackup),

@@ -194,6 +194,13 @@
             <DockPanel Margin="24,0" VerticalAlignment="Center">
                 <TextBlock x:Name="StatusLine" DockPanel.Dock="Left" Text="启动器就绪"
                            Style="{StaticResource Small}" VerticalAlignment="Center" />
+                <!-- 更新进度：平时收起，点「现在更新」才出现 -->
+                <TextBlock x:Name="UpdatePct" DockPanel.Dock="Right" Text="" Visibility="Collapsed"
+                           Style="{StaticResource Small}" VerticalAlignment="Center" Margin="10,0,0,0" />
+                <ProgressBar x:Name="UpdateBar" DockPanel.Dock="Right" Width="180" Height="4"
+                             Minimum="0" Maximum="100" IsIndeterminate="True" Visibility="Collapsed"
+                             VerticalAlignment="Center" BorderThickness="0"
+                             Background="{DynamicResource LineSoft}" Foreground="{DynamicResource Accent}" />
             </DockPanel>
         </Border>
     </Grid>
