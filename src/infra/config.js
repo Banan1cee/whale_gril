@@ -16,38 +16,53 @@ const path = require('node:path');
  */
 const PROVIDERS = {
   deepseek: {
-    label: 'DeepSeek 官方（效果最好，按量付费）',
+    label: 'DeepSeek 官方（V4.1 Flash / V4 Pro）',
     baseUrl: 'https://api.deepseek.com',
-    model: 'deepseek-chat',
+    model: 'deepseek-flash',
     needsKey: true,
-    hint: '在 platform.deepseek.com 创建 Key，几块钱能用很久',
-    models: ['deepseek-chat', 'deepseek-reasoner'],
+    hint: '在 platform.deepseek.com 创建 Key。deepseek-flash 便宜且支持看图，deepseek-v4-pro 更强但只收文本；旧名 deepseek-chat / deepseek-reasoner 已于 2026-07-24 停用',
+    models: ['deepseek-flash', 'deepseek-v4-pro'],
+    // deepseek-flash 在官方文档里 Vision 一栏是 ✓（V4 Pro 明确不支持）
+    visionModels: ['deepseek-flash'],
   },
   zhipu: {
-    label: '智谱 GLM-4-Flash（免费）',
+    label: '智谱 GLM（含免费文本 / 免费视觉）',
     baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
-    model: 'glm-4-flash',
+    model: 'glm-4.7-flash',
     needsKey: true,
-    hint: '去 bigmodel.cn 注册拿 Key，GLM-4-Flash 免费，中文效果不错',
-    models: ['glm-4-flash', 'glm-4-flash-250414', 'glm-4-air', 'glm-4-plus'],
+    hint: 'bigmodel.cn 注册拿 Key。默认免费文本 glm-4.7-flash，旗舰 glm-5.3（只收文本）；免费视觉 glm-4.6v-flash，原生多模态的 glm-5.3-flash 也能当聊天模型',
+    models: ['glm-4.7-flash', 'glm-5.3', 'glm-4.7', 'glm-4.5-air', 'glm-4.6v-flash', 'glm-5.3-flash'],
+    // 这些模型本身就能收图片：选中它们当聊天模型时，看图模型自动同步成同一个，
+    // 不用再手动去「看图」里改一遍（启动器会显示当前跟随的是哪个）。
+    // glm-4.6v-flash 是免费视觉；glm-5.3-flash 是 GLM-5 系列首个原生多模态模型。
+    visionModels: ['glm-4.6v-flash', 'glm-5.3-flash'],
   },
   siliconflow: {
     label: '硅基流动 SiliconFlow（有免费额度）',
     baseUrl: 'https://api.siliconflow.cn/v1',
-    model: 'Qwen/Qwen2.5-7B-Instruct',
+    model: 'deepseek-ai/DeepSeek-V4.1-Flash',
     needsKey: true,
-    hint: '注册送额度，Qwen 等开源模型都有；模型名里带斜杠',
-    models: ['Qwen/Qwen2.5-7B-Instruct', 'Qwen/Qwen2.5-14B-Instruct', 'THUDM/glm-4-9b-chat', 'deepseek-ai/DeepSeek-V3'],
+    hint: '注册送额度，模型名里带斜杠；例如 deepseek-ai/DeepSeek-V4.1-Flash',
+    models: [
+      'deepseek-ai/DeepSeek-V4.1-Flash',
+      'deepseek-ai/DeepSeek-V4-Pro',
+      'Qwen/Qwen3.8-27B',
+      'zai-org/GLM-5.3-Flash',
+      'moonshotai/Kimi-K2.7-Code',
+    ],
+    // 官方模型页：Qwen3.8-27B 是原生视觉语言模型，GLM-5.3-Flash 原生多模态
+    visionModels: ['Qwen/Qwen3.8-27B', 'zai-org/GLM-5.3-Flash'],
   },
   qwen: {
     label: '通义千问 DashScope（有免费额度）',
     baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-    // 默认用 qwen-flash：qwen-turbo 的免费额度在不少账号上已经用完，
-    // 一上来就 429 会让人以为「Key 不能用」。qwen-flash / qwen-plus 实测都能通。
-    model: 'qwen-flash',
+    // 默认用免费额度最稳的 flash 档；plus / max 作为能力升级项。
+    model: 'qwen3.8-flash',
     needsKey: true,
-    hint: '阿里云百炼开通后拿 Key（sk- 开头）。报 429 就是该模型的额度/频率用完，换 qwen-flash 或 qwen-plus',
-    models: ['qwen-flash', 'qwen-plus', 'qwen-plus-latest', 'qwen-turbo', 'qwen-max'],
+    hint: '阿里云百炼开通后拿 Key（sk- 开头）。默认 qwen3.8-flash（只收文本）；要更强还要能看图选 qwen3.7-plus 或 qwen3.8-max。报 429 就是额度/频率用完',
+    models: ['qwen3.8-flash', 'qwen3.7-flash', 'qwen3.7-plus', 'qwen3.8-max'],
+    // 百炼「视觉理解」列表里 qwen3.8-max / qwen3.7-plus 都在；qwen3.8-flash 只在文本生成里
+    visionModels: ['qwen3.8-max', 'qwen3.7-plus'],
   },
   tju: {
     label: '天津大学 智能体广场（仅校内网）',
@@ -60,10 +75,10 @@ const PROVIDERS = {
   ollama: {
     label: '本地 Ollama（完全免费、可离线）',
     baseUrl: 'http://127.0.0.1:11434/v1',
-    model: 'qwen2.5:7b',
+    model: 'qwen3:8b',
     needsKey: false,
-    hint: '装 Ollama 后跑 ollama pull qwen2.5:7b；数据不出本机，不用 Key',
-    models: ['qwen2.5:7b', 'qwen2.5:14b', 'qwen3:8b', 'deepseek-r1:7b', 'glm4:9b', 'llama3.1:8b'],
+    hint: '装 Ollama 后跑 ollama pull qwen3:8b；数据不出本机，不用 Key',
+    models: ['qwen3:8b', 'llama3.1:8b'],
   },
   custom: {
     label: '自定义（任意 OpenAI 兼容接口）',
@@ -85,15 +100,23 @@ const PROVIDERS = {
     models: [
       'deepseek-v4.1-flash',
       'deepseek-v4-pro',
+      'glm-5.3',
       'glm-5.3-flash',
       'glm-5.2',
+      'kimi-k3.1-pro',
       'kimi-k3',
+      'qwen3.8-max',
       'qwen3.8-flash',
-      'minimax-m3.1-flash',
-      'longcat-2.0',
-      'mimo-v2.6-flash',
+      'qwen3.7-plus',
+      'hy4-preview',
       'hy3',
+      'step-5-preview',
+      'minimax-m3.1-flash',
+      'mimo-v2.6-flash',
+      'longcat-2.0',
     ],
+    // 代理的是各家原厂模型：DeepSeek flash / GLM-5.3-Flash / Kimi K3 系列 / Qwen max、plus 官方都支持图片输入
+    visionModels: ['deepseek-v4.1-flash', 'glm-5.3-flash', 'kimi-k3.1-pro', 'kimi-k3', 'qwen3.8-max', 'qwen3.7-plus'],
   },
 };
 
@@ -104,7 +127,7 @@ const DEFAULT_CONFIG = {
     provider: 'deepseek',
     apiKey: '',
     baseUrl: 'https://api.deepseek.com',
-    model: 'deepseek-chat',
+    model: 'deepseek-flash',
     // 采样参数：以前是 temperature 1.15 + frequency_penalty 0.35 + presence_penalty 0.25。
     // 惩罚项会强迫模型避开常用词，温度又高，于是它去挑生僻搭配 —— 语法还是中文，
     // 语义全散了：句子开头通顺、越说越离谱、越说越长，最后撞上 max_tokens 被截断。
@@ -168,7 +191,7 @@ const DEFAULT_CONFIG = {
     mediaMaxMB: 500,
   },
 
-  vision: { apiKey: '', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4v-flash', timeoutMs: 30000 },
+  vision: { apiKey: '', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4.6v-flash', timeoutMs: 30000 },
   // 语音识别：默认阿里云百炼 qwen3-asr-flash，apiKey 留空则用 settings.json / deepseek.apiKey
   voice: {
     enabled: true,
@@ -440,6 +463,31 @@ function saveSettings(cfg, patch) {
 }
 
 /**
+ * 看图（视觉）最终生效的地址与模型：面板设置（data/settings.json）> config.json > 默认。
+ * 面板里存 visionModel 是为了「聊天模型能看图时自动跟随」——以前只有 config.json 的
+ * vision.model 一个来源，自动跟随就没地方落盘。
+ */
+function resolveVisionConfig(cfg) {
+  const c = cfg || {};
+  // 单元测试会直接传一个只有 vision 段的假 config（没有 paths），别因为读不到
+  // settings.json 就抛错——看图应该退回 config 里的值继续工作。
+  const settings = c.paths && c.paths.settingsFile ? loadSettings(c) : {};
+  const v = c.vision || {};
+  const hasModel = Boolean(String(settings.visionModel || '').trim());
+  // manual=true 表示用户自己选过看图模型；false 表示「自动跟随聊天模型」。
+  // 自动跟随时 visionModel 也有值，所以要看 visionManual 这个显式标记；
+  // 没有这个标记的老设置（只写了 visionModel）按手动处理。
+  const manual = settings.visionManual === true || (hasModel && settings.visionManual === undefined);
+  return {
+    ...v,
+    model: String(settings.visionModel || v.model || 'glm-4.6v-flash').trim(),
+    baseUrl: String(settings.visionBaseUrl || v.baseUrl || 'https://open.bigmodel.cn/api/paas/v4').trim(),
+    manual,
+    auto: settings.visionAuto === true,
+  };
+}
+
+/**
  * 计算最终生效的运行参数：面板设置 > config.json > 环境变量 > 服务预设。
  */
 function resolveRuntime(cfg) {
@@ -528,6 +576,7 @@ module.exports = {
   loadSettings,
   saveSettings,
   resolveRuntime,
+  resolveVisionConfig,
   maskKey,
   deepMerge,
   readJson,

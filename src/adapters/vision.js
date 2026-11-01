@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * 图片理解：把图片交给视觉模型（默认智谱 GLM-4V-Flash，免费）。
+ * 图片理解：把图片交给视觉模型（默认智谱 GLM-4.6V-Flash，免费）。
  * 返回详细描述（截图会逐条转写文字），交给聊天模型接着聊。
  *
  * Key 的查找顺序（以前只认第一个，导致「网页里填了却一直说没配」）：
@@ -14,6 +14,7 @@
 const fs = require('node:fs');
 const http = require('node:http');
 const https = require('node:https');
+const { resolveVisionConfig } = require('../infra/config');
 
 /** 64x64 纯色 PNG，用来做「测试看图」（不联网也能构造，不依赖外部资源） */
 const TEST_IMAGE = 'iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAeklEQVR4nO3PUQkAIBTAwBfRYAYzliH8OITBAtxm7fN1wwUNaEEDWtCAFjSgBQ1oQQNa0IAWNKAFDWhBA1rQgBY0oAUNaEEDWtCAFjSgBQ1oQQNa0IAWNKAFDWhBA1rQgBY0oAUNaEEDWtCAFjSgBQ1oQQNa0IAWPHYBzStBhzKy9ToAAAAASUVORK5CYII=';
@@ -32,10 +33,15 @@ function settingsKeys(config) {
     if (!file) return {};
     const st = JSON.parse(String(fs.readFileSync(file, 'utf8')).replace(/^\uFEFF/, '')) || {};
     const keys = st.keys || {};
+    const provider = String(st.provider || '').trim();
     return {
       visionApiKey: String(st.visionApiKey || '').trim(),
       vision: String(keys.vision || '').trim(),
       zhipu: String(keys.zhipu || '').trim(),
+      provider,
+      providerKey: provider ? String(keys[provider] || '').trim() : '',
+      // visionAuto=true：看图模型是自动跟随聊天模型的，Key 也该用同一家的
+      auto: st.visionAuto === true,
     };
   } catch {
     return {};
@@ -45,9 +51,12 @@ function settingsKeys(config) {
 /** 真正生效的看图 Key */
 function resolveKey(config) {
   const v = (config && config.vision) || {};
+  const st = settingsKeys(config);
+  // 跟随聊天模型时优先用同一家服务商的 Key：DeepSeek / 千问 / 硅基都有自己的看图模型，
+  // 拿智谱的 Key 去打它们只会 401。
+  if (st.auto && st.providerKey) return st.providerKey;
   const fromConfig = String(v.apiKey || '').trim();
   if (fromConfig) return fromConfig;
-  const st = settingsKeys(config);
   if (st.visionApiKey) return st.visionApiKey;
   if (st.vision) return st.vision;
   const env = (config && config.env) || process.env || {};
@@ -58,18 +67,23 @@ function resolveKey(config) {
 
 /** 给网页/状态接口看的摘要（绝不返回明文 Key） */
 function status(config) {
-  const v = (config && config.vision) || {};
+  const v = resolveVisionConfig(config);
   const key = resolveKey(config);
   const baseUrl = String(v.baseUrl || 'https://open.bigmodel.cn/api/paas/v4');
   return {
     configured: Boolean(key),
     keyMasked: maskKey(key),
-    model: String(v.model || 'glm-4v-flash'),
+    model: String(v.model || 'glm-4.6v-flash'),
     baseUrl,
-    // 用 DeepSeek 的 Key 看图是通不了的：DeepSeek 没有视觉接口
+    // manual=false：没手动选过，正在跟随聊天模型（聊天模型能看图时用它）。
+    manual: Boolean(v.manual),
+    // 用 DeepSeek 的 Key 看图是通不了的（旧版 DeepSeek 没有视觉接口）；现在 flash 能看图，
+    // 跟随模式下会自动用聊天模型那家服务商的 Key。
     hint: /bigmodel\.cn/i.test(baseUrl)
-      ? '默认智谱 GLM-4V-Flash（open.bigmodel.cn 的 Key，免费额度够用）'
-      : '按接口地址填对应服务商的 Key',
+      ? '默认智谱 GLM-4.6V-Flash（open.bigmodel.cn 的 Key，免费额度够用）'
+      : v.manual
+        ? '按接口地址填对应服务商的 Key'
+        : '自动跟随聊天模型：用同一家服务商的 Key（' + baseUrl + '）',
   };
 }
 
@@ -152,16 +166,16 @@ function sniffMime(imageBase64) {
 }
 
 async function describe(config, { imageBase64, mime = 'image/jpeg', prompt = '' } = {}) {
-  const v = (config && config.vision) || {};
+  const v = resolveVisionConfig(config);
   const baseUrl = String(v.baseUrl || 'https://open.bigmodel.cn/api/paas/v4').replace(/\/+$/, '');
   const apiKey = resolveKey(config);
-  const model = String(v.model || 'glm-4v-flash').trim();
+  const model = String(v.model || 'glm-4.6v-flash').trim();
   if (!imageBase64) throw new Error('没有图片数据');
   if (!apiKey) {
     throw new Error(
-      '看图没有 Key：网页右上角「设置」→ 填「看图 API Key」' +
-      '（默认智谱 GLM-4V-Flash，Key 在 open.bigmodel.cn 申请，免费额度够用；' +
-      'DeepSeek 的 Key 不能看图）'
+      '看图没有 Key：在「模型与 Key」里把聊天模型换成能看图的（deepseek-flash / glm-4.6v-flash / ' +
+      'qwen3.8-max 等），或者到网页设置里填「看图 API Key」' +
+      '（默认智谱 GLM-4.6V-Flash，Key 在 open.bigmodel.cn 申请，免费额度够用）'
     );
   }
   // 以真实文件头为准；wxgf（微信 HEVC 容器）视觉接口不认，提前说清楚
@@ -191,9 +205,9 @@ async function describe(config, { imageBase64, mime = 'image/jpeg', prompt = '' 
   const resp = await postJson(baseUrl + '/chat/completions', body, { Authorization: 'Bearer ' + apiKey }, Number(v.timeoutMs) || 30000);
   if (resp.status !== 200) {
     const msg = (resp.json && resp.json.error && (resp.json.error.message || resp.json.error.code)) || ('HTTP ' + resp.status);
-    // 401/403 基本都是 Key 不对。很多人把 DeepSeek 的 Key 填到这里——DeepSeek 没有看图接口
+    // 401/403 基本都是 Key 不对：跟随模式下要用聊天模型那家服务商的 Key
     const hint = resp.status === 401 || resp.status === 403
-      ? '（Key 无效或没有看图权限：这里要 open.bigmodel.cn 的智谱 Key，DeepSeek 的 Key 不支持看图）'
+      ? '（Key 无效或没有看图权限：跟随聊天模型时要用同一家服务商的 Key；手动指定智谱视觉模型则要 open.bigmodel.cn 的 Key）'
       : '';
     throw new Error('视觉模型返回：' + msg + hint);
   }

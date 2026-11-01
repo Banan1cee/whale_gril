@@ -887,7 +887,7 @@ class Bot {
       this.logger && this.logger.info(`[admin] 主人 ${msg.senderName} 获得管理员权限 ${minutes} 分钟（会话 ${key}）`);
       const warn = msg.chatType === 'group' ? '（群里别人也能看到魔咒，下次建议私聊发）' : '';
       return say(
-        `（魔咒生效）管理员权限 ${minutes} 分钟。可以发：状态 / 改模型 deepseek-reasoner / 演示模式 开|关 / 群聊主动接话 开|关 / 重置记忆 / 清空所有记忆 / 退出管理${warn}`,
+        `（魔咒生效）管理员权限 ${minutes} 分钟。可以发：状态 / 改模型 deepseek-v4-pro / 演示模式 开|关 / 群聊主动接话 开|关 / 重置记忆 / 清空所有记忆 / 退出管理${warn}`,
         'admin_spell'
       );
     }
@@ -1122,7 +1122,7 @@ class Bot {
     if (pm) {
       const target = providerAlias[pm[1].toLowerCase()] || providerAlias[pm[1]];
       if (target) {
-        const preset = { deepseek: ['https://api.deepseek.com', 'deepseek-chat'], qwen: ['https://dashscope.aliyuncs.com/compatible-mode/v1', 'qwen-plus'], zhipu: ['https://open.bigmodel.cn/api/paas/v4', 'glm-4-flash'], siliconflow: ['https://api.siliconflow.cn/v1', 'Qwen/Qwen2.5-7B-Instruct'], ollama: ['http://127.0.0.1:11434/v1', 'qwen2.5:7b'] }[target];
+        const preset = { deepseek: ['https://api.deepseek.com', 'deepseek-flash'], qwen: ['https://dashscope.aliyuncs.com/compatible-mode/v1', 'qwen3.8-flash'], zhipu: ['https://open.bigmodel.cn/api/paas/v4', 'glm-4.7-flash'], siliconflow: ['https://api.siliconflow.cn/v1', 'deepseek-ai/DeepSeek-V4.1-Flash'], ollama: ['http://127.0.0.1:11434/v1', 'qwen3:8b'] }[target];
         try { saveSettings(this.config, { provider: target, baseUrl: preset[0], model: preset[1], mock: false }); } catch { /* ignore */ }
         this.llm.reload();
         this.logger && this.logger.info(`[admin] 切到服务商 ${target}`);

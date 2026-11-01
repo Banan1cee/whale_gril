@@ -18,6 +18,8 @@ function getSettings(runtime) {
       needsKey: p.needsKey,
       hint: p.hint,
       models: p.models || [],
+      // 能收图片的聊天模型：启动器据此决定「看图模型」要不要跟随 chat 模型
+      visionModels: p.visionModels || [],
     };
   }
   return {
@@ -44,6 +46,54 @@ function getSettings(runtime) {
     configFile: config.paths.configFile,
     dataDir: config.paths.dataDir,
   };
+}
+
+/**
+ * 看图模型该不该跟着聊天模型走。
+ *
+ * - 用户显式传了 visionModel：空串 = 回到「自动」，非空 = 手动钉死；
+ * - 没传，且新聊天模型自己能看图，且用户没手动钉过：跟随它；
+ * - 没传，且从「能看图的聊天模型」切走了：解除跟随，回落默认看图模型。
+ * 返回要合并进 settings.json 的字段；没有变化返回 null。
+ */
+function decideVisionPatch({ preset, nextModel, saved = {}, manualValue = null } = {}) {
+  const capable = ((preset && preset.visionModels) || []).includes(nextModel);
+  // 空串表示「自动」：先解除手动钉住，再交给下面的跟随规则
+  const wantsAuto = typeof manualValue === 'string' && manualValue.trim() === '';
+  if (typeof manualValue === 'string' && manualValue.trim()) {
+    const vm = manualValue.trim().slice(0, 80);
+    if (!/^[a-zA-Z0-9._\-\/:]{1,80}$/.test(vm)) {
+      throw new Error('看图模型名只能包含字母、数字和 . _ - / :');
+    }
+    // 手动钉死的模型可能属于别家（比如跟随 DeepSeek 之后改回 glm-4.6v-flash）：
+    // 能认出是哪家的就把接口地址一起换过去，认不出就清空、让 config.json 的 vision.baseUrl 生效。
+    const owner = Object.entries(PROVIDERS).find(([, p]) => (p.visionModels || []).includes(vm));
+    return {
+      visionModel: vm,
+      visionManual: true,
+      visionAuto: false,
+      visionBaseUrl: owner && owner[1].baseUrl ? owner[1].baseUrl : '',
+    };
+  }
+  const manual = wantsAuto ? false : saved.visionManual === true;
+  if (capable && !manual) {
+    if (!wantsAuto && saved.visionModel === nextModel) return null;
+    return {
+      visionModel: nextModel,
+      visionManual: false,
+      visionAuto: true,
+      ...(preset && preset.baseUrl ? { visionBaseUrl: preset.baseUrl } : {}),
+    };
+  }
+  // 选回「自动」但当前聊天模型不能看图：把之前手动钉的值清掉，回默认视觉模型
+  if (wantsAuto && saved.visionModel) {
+    return { visionModel: '', visionManual: false, visionAuto: false, visionBaseUrl: '' };
+  }
+  // 从「能看图的聊天模型」切走了：解除跟随，回落默认看图模型
+  if (!capable && saved.visionAuto === true && !manual) {
+    return { visionModel: '', visionAuto: false, visionBaseUrl: '' };
+  }
+  return null;
 }
 
 async function applySettings(runtime, body) {
@@ -92,6 +142,22 @@ async function applySettings(runtime, body) {
       throw new Error('看图 API Key 看起来不太对：不能有空格，长度 8~300');
     }
     if (vk) patch.visionApiKey = vk;
+  }
+  // 看图模型：聊天模型本身能看图时自动跟随它（用户手动选过就以手动为准）。
+  // 以前只有 config.json 的 vision.model，切到能看图的聊天模型后还要再去「看图」里改一遍，
+  // 忘了改就会出现「聊天模型是 GLM-4.6V、看图还在用别的模型」。
+  {
+    const nextProvider = patch.provider || current.provider;
+    const nextModel = patch.model || current.model;
+    const nextPreset = PROVIDERS[nextProvider] || PROVIDERS.custom;
+    const savedSettings = loadSettings(config);
+    const vp = decideVisionPatch({
+      preset: nextPreset,
+      nextModel,
+      saved: savedSettings,
+      manualValue: typeof body.visionModel === 'string' ? body.visionModel : null,
+    });
+    if (vp) Object.assign(patch, vp);
   }
   if (typeof body.mock === 'boolean') patch.mock = body.mock;
   // 「怎么称呼你」：以前只存在浏览器 localStorage 里，换设备就丢；现在写进 data/settings.json
@@ -174,4 +240,4 @@ async function applySettings(runtime, body) {
   };
 }
 
-module.exports = { getSettings, applySettings };
+module.exports = { getSettings, applySettings, decideVisionPatch };

@@ -104,7 +104,7 @@
         </div>
         <div class="field">
           <label for="model">模型名</label>
-          <input id="model" type="text" list="modelList" spellcheck="false" placeholder="deepseek-chat" />
+          <input id="model" type="text" list="modelList" spellcheck="false" placeholder="deepseek-flash" />
           <datalist id="modelList"></datalist>
         </div>
       </div>
@@ -117,7 +117,7 @@
       <div class="field">
         <label for="visionApiKey">图片识别 · 看图 API Key <span class="val" id="visionState"></span></label>
         <input id="visionApiKey" type="password" autocomplete="off" spellcheck="false" placeholder="智谱 open.bigmodel.cn 的 Key（GLM-4V-Flash 免费额度够用）" />
-        <p class="field-help" id="visionHelp">收到图片时用来看图。留空 = 沿用主模型里存过的智谱 Key；DeepSeek 的 Key 不能看图。</p>
+        <p class="field-help" id="visionHelp">收到图片时用来看图。留空 = 跟随聊天模型（聊天模型能看图就用它那家服务商的 Key；否则沿用主模型里存过的智谱 Key）。</p>
       </div>
 
       <div class="test-row">

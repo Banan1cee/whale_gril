@@ -263,7 +263,7 @@ test('设置接口：能切换到本地 Ollama，不需要 Key', async () => {
   assert.equal(data.ok, true);
   assert.equal(data.settings.provider, 'ollama');
   assert.equal(data.settings.needsKey, false);
-  assert.equal(data.settings.model, 'qwen2.5:7b');
+  assert.equal(data.settings.model, 'qwen3:8b');
   assert.equal(data.settings.baseUrl, 'http://127.0.0.1:11434/v1');
   assert.equal(data.settings.mock, false);
 
