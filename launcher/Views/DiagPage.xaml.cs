@@ -1,11 +1,18 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Security.Principal;
 using System.Text;
+using System.Text.Encodings.Web;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -333,94 +340,643 @@ namespace WhaleLauncher.Views
             catch { }
         }
 
+        private void OnOpenDataDir(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                Process.Start(new ProcessStartInfo("explorer.exe", "\"" + _sup.DataDir + "\"") { UseShellExecute = true });
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("打开数据目录失败：" + ex.Message, "数据目录");
+            }
+        }
+
         private async void OnRecheck(object sender, RoutedEventArgs e)
         {
             var s = await _sup.ProbeAsync();
             await CheckAsync(s);
         }
 
-        // ── 日志导出（最近三次启动） ─────────────────────────────
+        // ── 日志导出（debug 日志包） ────────────────────────────
+        // 顶栏按钮只负责弹浮窗；浮窗里两个选项各自选时间范围，然后走同一个导出流程。
+        private enum LogRange { Recent10Min, ThisRun }
+
+        private static readonly string[] LogFiles = { "launcher.log", "bridge.log", "kernel.log", "whale.log" };
+
+        // 日志行首时间戳：whale.log 是 [yyyy-MM-dd HH:mm:ss]，启动器自己写的是裸 HH:mm:ss
+        private static readonly Regex StampFull = new Regex(@"^\[?(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})", RegexOptions.Compiled);
+        private static readonly Regex StampClock = new Regex(@"^\[?(\d{2}:\d{2}:\d{2})", RegexOptions.Compiled);
+
+        // 脱敏用：键名命中这些词的，值一律换成 "***"（结构保留）
+        private static readonly Regex SecretKey =
+            new Regex("apiKey|apikey|key|token|secret|password|cookie|session", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+        private bool _exporting;
+
+        /// <summary>顶栏「导出日志」：在按钮下方弹出浮窗。</summary>
         private void OnExport(object sender, RoutedEventArgs e)
         {
+            // StaysOpen=False 会先因这次点击把浮窗关掉，所以这里直接置 true（重复点击就是重新展开）
+            ExportPopup.IsOpen = true;
+        }
+
+        private async void OnExportRecent10(object sender, RoutedEventArgs e)
+        {
+            ExportPopup.IsOpen = false;
+            await ExportAsync(LogRange.Recent10Min);
+        }
+
+        private async void OnExportThisRun(object sender, RoutedEventArgs e)
+        {
+            ExportPopup.IsOpen = false;
+            await ExportAsync(LogRange.ThisRun);
+        }
+
+        /// <summary>
+        /// 导出流程：UI 线程只做 await，重活（读日志、跑 doctor、压 zip）都在后台线程，别把界面冻住。
+        /// </summary>
+        private async Task ExportAsync(LogRange range)
+        {
+            if (_exporting) return;
+            _exporting = true;
+            BtnExport.IsEnabled = false;
             try
             {
-                var name = "logs-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".zip";
-                var path = Path.Combine(_sup.DataDir, name);
-                Directory.CreateDirectory(_sup.DataDir);
+                await LoadVersionsAsync();                       // node / python 版本，内部有缓存
+                var probe = await _sup.ProbeAsync();             // 内核/桥接在线情况
+                var status = await Api.Get(_sup.Url, "/api/status");
+                var settings = await Api.Get(_sup.Url, "/api/settings");
+                var doctor = await RunDoctorAsync();             // 15 秒超时，失败只写原因
 
-                var runs = new List<string>();
-                var logsRoot = Path.Combine(_sup.DataDir, "logs");
-                if (Directory.Exists(logsRoot))
-                    runs.AddRange(Directory.GetDirectories(logsRoot, "run-*")
-                        .OrderByDescending(d => d).Take(3));
-
-                var sb = new StringBuilder();
-                sb.AppendLine("鲸鲸 4.0 日志包（最近三次启动）");
-                sb.AppendLine("时间: " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
-                sb.AppendLine("安装目录: " + _sup.BaseDir);
-                sb.AppendLine("管理员: " + IsAdmin());
-                sb.AppendLine("内核: " + _sup.NodeRunning + "  桥接: " + _sup.BridgeRunning + "  端口: " + _sup.Port);
-                sb.AppendLine("日志级别: " + ReadLogLevel());
-                sb.AppendLine("归档的启动次数: " + runs.Count);
-                sb.AppendLine("不含 config.json（里面是 Key）。");
-                sb.AppendLine();
-                sb.AppendLine("目录说明：logs/run-*/ 是历史启动，logs/current/ 是这次正在跑的。");
-
-                using (var zip = ZipFile.Open(path, ZipArchiveMode.Create))
-                {
-                    void AddText(string entry, string content)
-                    {
-                        var item = zip.CreateEntry(entry, CompressionLevel.Optimal);
-                        using var w = new StreamWriter(item.Open(), new UTF8Encoding(false));
-                        w.Write(content);
-                    }
-                    void AddFile(string entry, string file)
-                    {
-                        try
-                        {
-                            if (File.Exists(file) && new FileInfo(file).Length > 0)
-                                zip.CreateEntryFromFile(file, entry, CompressionLevel.Optimal);
-                        }
-                        catch { /* 正在写的文件可能被占用，跳过就好 */ }
-                    }
-
-                    AddText("info.txt", sb.ToString());
-                    foreach (var run in runs)
-                    {
-                        var tag = "logs/" + Path.GetFileName(run) + "/";
-                        foreach (var f in Directory.GetFiles(run))
-                            AddFile(tag + Path.GetFileName(f), f);
-                    }
-                    foreach (var f in new[] { "launcher.log", "bridge.log", "kernel.log", "whale.log" })
-                        AddFile("logs/current/" + f, Path.Combine(_sup.DataDir, f));
-
-                    // wechatauto 库自己的日志：最近两天的也带上，桥接层的错常在这里露出
-                    var wa = Path.Combine(_sup.BaseDir, "wechatauto_logs");
-                    if (Directory.Exists(wa))
-                        foreach (var f in Directory.GetFiles(wa, "*.log").OrderByDescending(x => x).Take(2))
-                            AddFile("wechatauto_logs/" + Path.GetFileName(f), f);
-                }
+                var path = await Task.Run(() => WritePackage(range, probe, status, settings, doctor));
                 Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{path}\"") { UseShellExecute = true });
             }
             catch (Exception ex)
             {
                 MessageBox.Show("导出失败：" + ex.Message, "日志包");
             }
+            finally
+            {
+                BtnExport.IsEnabled = true;
+                _exporting = false;
+            }
         }
 
-        private string ReadLogLevel()
+        /// <summary>在后台线程组装 zip。返回 zip 的绝对路径。</summary>
+        private string WritePackage(LogRange range, Snapshot probe, ApiResult status, ApiResult settings, string doctor)
+        {
+            var name = "logs-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".zip";
+            var path = Path.Combine(_sup.DataDir, name);
+            Directory.CreateDirectory(_sup.DataDir);
+
+            var skipped = new List<string>();
+
+            // 先收集日志和配置（info.txt 里要写「哪些文件读失败了」，所以得排在 info.txt 之前）
+            var logs = CollectLogs(range, skipped);
+            var config = RedactedJson(Path.Combine(_sup.BaseDir, "config.json"), skipped);
+            var settingsRedacted = RedactedJson(Path.Combine(_sup.DataDir, "settings.json"), skipped);
+            var waFiles = WechatAutoLogs();
+
+            using (var zip = ZipFile.Open(path, ZipArchiveMode.Create))
+            {
+                AddText(zip, "README.txt", BuildReadme(range));
+                AddText(zip, "info.txt", BuildInfo(range, probe, skipped));
+                AddText(zip, "status.json", BuildStatus(status, settings));
+                AddText(zip, "doctor.txt", doctor);
+                if (config != null) AddText(zip, "config.redacted.json", config);
+                if (settingsRedacted != null) AddText(zip, "settings.redacted.json", settingsRedacted);
+
+                foreach (var (entry, text) in logs)
+                    AddText(zip, entry, text);
+
+                // wechatauto 库自己的日志：最近两天的也带上，桥接层的错常在这里露出
+                foreach (var f in waFiles)
+                {
+                    try { zip.CreateEntryFromFile(f, "wechatauto_logs/" + Path.GetFileName(f), CompressionLevel.Optimal); }
+                    catch (Exception ex) { skipped.Add(Path.GetFileName(f) + "：" + ex.Message); }
+                }
+            }
+
+            return path;
+        }
+
+        // ── 日志收集 ────────────────────────────────────────────
+        private List<(string Entry, string Text)> CollectLogs(LogRange range, List<string> skipped)
+        {
+            var result = new List<(string, string)>();
+
+            void AddCurrentFull(string file)
+            {
+                var text = ReadShared(file, skipped);
+                if (!string.IsNullOrEmpty(text)) result.Add(("logs/current/" + Path.GetFileName(file), text));
+            }
+
+            if (range == LogRange.ThisRun)
+            {
+                // 当前这次启动的日志就写在 data/ 下四个文件里。
+                // 不在运行时，这四个文件就是「最近一次启动」的；四个都空（刚启动还没写）才退回归档目录。
+                var anyContent = LogFiles.Any(f => FileLen(Path.Combine(_sup.DataDir, f)) > 0);
+                if (anyContent || _sup.NodeRunning || _sup.BridgeRunning)
+                {
+                    foreach (var f in LogFiles) AddCurrentFull(Path.Combine(_sup.DataDir, f));
+                }
+                else
+                {
+                    var latest = LatestRunDir();
+                    if (latest == null)
+                    {
+                        foreach (var f in LogFiles) AddCurrentFull(Path.Combine(_sup.DataDir, f));
+                    }
+                    else
+                    {
+                        foreach (var f in SafeFiles(latest))
+                        {
+                            var text = ReadShared(f, skipped);
+                            if (!string.IsNullOrEmpty(text))
+                                result.Add(("logs/" + Path.GetFileName(latest) + "/" + Path.GetFileName(f), text));
+                        }
+                    }
+                }
+                return result;
+            }
+
+            // 最近 10 分钟：当前四个文件 + 所有 run-* 归档，按行首时间戳过滤
+            var cutoff = DateTime.Now.AddMinutes(-10);
+            foreach (var f in LogFiles)
+                AddRecent(result, "logs/current/" + f, Path.Combine(_sup.DataDir, f), cutoff, skipped);
+            foreach (var run in RunDirs())
+                foreach (var f in SafeFiles(run))
+                    AddRecent(result, "logs/" + Path.GetFileName(run) + "/" + Path.GetFileName(f), f, cutoff, skipped);
+
+            return result;
+        }
+
+        /// <summary>最近 10 分钟模式：留时间戳在窗口内的行；解析不出时间戳的行原样留在文件里。</summary>
+        private static void AddRecent(List<(string, string)> target, string entry, string file, DateTime cutoff, List<string> skipped)
+        {
+            if (!File.Exists(file)) return;
+            DateTime mtime;
+            try { mtime = File.GetLastWriteTime(file); } catch { mtime = DateTime.Now; }
+
+            try
+            {
+                using var fs = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                using var sr = new StreamReader(fs, Encoding.UTF8, true);
+                var kept = new StringBuilder();
+                var inWindow = 0;                 // 窗口内的行数：一行都没有且文件早就不动了，整个文件跳过
+                string line;
+                while ((line = sr.ReadLine()) != null)
+                {
+                    var at = ParseStamp(line, mtime.Date);
+                    if (at.HasValue)
+                    {
+                        if (at.Value < cutoff) continue;
+                        inWindow++;
+                    }
+                    kept.AppendLine(line);
+                }
+                if (inWindow == 0 && mtime < cutoff) return;
+                if (kept.Length == 0) return;
+                target.Add((entry, kept.ToString()));
+            }
+            catch (Exception ex)
+            {
+                skipped.Add(Path.GetFileName(file) + "：" + ex.Message);
+            }
+        }
+
+        private static DateTime? ParseStamp(string line, DateTime fileDate)
+        {
+            if (string.IsNullOrEmpty(line)) return null;
+            var s = line.TrimStart('\uFEFF', ' ', '\t');
+            var m = StampFull.Match(s);
+            if (m.Success && DateTime.TryParseExact(m.Groups[1].Value + " " + m.Groups[2].Value,
+                    "yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture, DateTimeStyles.None, out var at))
+                return at;
+            var c = StampClock.Match(s);
+            if (c.Success && TimeSpan.TryParse(c.Groups[1].Value, CultureInfo.InvariantCulture, out var ts))
+                return fileDate.Add(ts);
+            return null;
+        }
+
+        /// <summary>共享读：正在被内核/桥接写的日志也能读，读不到就记一笔跳过，不让整个导出失败。</summary>
+        private static string ReadShared(string file, List<string> skipped)
+        {
+            if (!File.Exists(file)) return null;
+            try
+            {
+                using var fs = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                using var sr = new StreamReader(fs, Encoding.UTF8, true);
+                return sr.ReadToEnd();
+            }
+            catch (Exception ex)
+            {
+                skipped.Add(Path.GetFileName(file) + "：" + ex.Message);
+                return null;
+            }
+        }
+
+        private static long FileLen(string file)
+        {
+            try { return File.Exists(file) ? new FileInfo(file).Length : 0; } catch { return 0; }
+        }
+
+        private static string[] SafeFiles(string dir)
+        {
+            try { return Directory.GetFiles(dir); } catch { return Array.Empty<string>(); }
+        }
+
+        private string LatestRunDir()
         {
             try
             {
-                var file = Path.Combine(_sup.BaseDir, "config.json");
-                if (!File.Exists(file)) return "info";
-                using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(file));
-                if (doc.RootElement.TryGetProperty("log", out var log)
-                    && log.TryGetProperty("level", out var lv) && lv.ValueKind == System.Text.Json.JsonValueKind.String)
-                    return lv.GetString() ?? "info";
+                var root = Path.Combine(_sup.DataDir, "logs");
+                if (!Directory.Exists(root)) return null;
+                return Directory.GetDirectories(root, "run-*")
+                    .OrderByDescending(d => Path.GetFileName(d), StringComparer.OrdinalIgnoreCase)
+                    .FirstOrDefault();
+            }
+            catch { return null; }
+        }
+
+        private IEnumerable<string> RunDirs()
+        {
+            try
+            {
+                var root = Path.Combine(_sup.DataDir, "logs");
+                if (Directory.Exists(root))
+                    return Directory.GetDirectories(root, "run-*")
+                        .OrderByDescending(d => Path.GetFileName(d), StringComparer.OrdinalIgnoreCase)
+                        .ToList();
             }
             catch { }
-            return "info";
+            return Array.Empty<string>();
+        }
+
+        private List<string> WechatAutoLogs()
+        {
+            var list = new List<string>();
+            try
+            {
+                var wa = Path.Combine(_sup.BaseDir, "wechatauto_logs");
+                if (!Directory.Exists(wa)) return list;
+                var since = DateTime.Now.AddDays(-2);
+                list.AddRange(Directory.GetFiles(wa, "*.log")
+                    .Where(f => File.GetLastWriteTime(f) >= since)
+                    .OrderByDescending(File.GetLastWriteTime)
+                    .Take(20));
+            }
+            catch { }
+            return list;
+        }
+
+        // ── zip 内容 ────────────────────────────────────────────
+        private static void AddText(ZipArchive zip, string entry, string content)
+        {
+            var item = zip.CreateEntry(entry, CompressionLevel.Optimal);
+            using var w = new StreamWriter(item.Open(), new UTF8Encoding(false));   // UTF-8 无 BOM
+            w.Write(content ?? "");
+        }
+
+        private static string BuildReadme(LogRange range)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("鲸鲸 · debug 日志包");
+            sb.AppendLine("==================================================");
+            sb.AppendLine("这是排查问题用的 debug 日志包，不是给日常使用的日志。");
+            sb.AppendLine("时间范围：" + (range == LogRange.Recent10Min ? "最近 10 分钟" : "当次启动（含本次启动的全部日志）"));
+            sb.AppendLine();
+            sb.AppendLine("包含内容：");
+            sb.AppendLine("  README.txt            本文件");
+            sb.AppendLine("  info.txt              运行环境、内核/桥接状态、各项大小与磁盘剩余");
+            sb.AppendLine("  config.redacted.json  config.json 的完整副本，敏感值已脱敏");
+            sb.AppendLine("  settings.redacted.json data/settings.json 的副本，敏感值已脱敏");
+            sb.AppendLine("  status.json           /api/status 与 /api/settings 的原始返回");
+            sb.AppendLine("  doctor.txt            node server.js --doctor 的输出（尽力而为）");
+            sb.AppendLine("  logs/                 各日志文件（logs/current/ 是这一次，logs/run-*/ 是历史启动）");
+            sb.AppendLine("  wechatauto_logs/      微信自动化库最近两天的日志");
+            sb.AppendLine();
+            sb.AppendLine("关于脱敏：");
+            sb.AppendLine("  键名匹配 apiKey / key / token / secret / password / cookie / session 的值都换成了 \"***\"，");
+            sb.AppendLine("  配置结构、非敏感字段和模型名都原样保留，方便对齐配置。日志正文没有做脱敏处理。");
+            sb.AppendLine();
+            sb.AppendLine("遇到问题时，把整个 zip 原样发给对方即可，不用自己挑文件。");
+            return sb.ToString();
+        }
+
+        private string BuildInfo(LogRange range, Snapshot probe, List<string> skipped)
+        {
+            var (level, fileLevel) = ReadLogLevels();
+            var (provider, model, vision) = ReadModelInfo();
+            if (provider.Length == 0) provider = probe?.Provider ?? "";
+            if (model.Length == 0) model = probe?.Model ?? "";
+
+            var sb = new StringBuilder();
+            sb.AppendLine("鲸鲸 debug 日志包 · info");
+            sb.AppendLine("==================================================");
+            sb.AppendLine("导出时间        : " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + "（时区 " + TimeZoneInfo.Local.Id + "）");
+            sb.AppendLine("导出范围        : " + (range == LogRange.Recent10Min ? "最近 10 分钟" : "当次启动"));
+            sb.AppendLine("启动器版本      : " + LauncherVersion());
+            sb.AppendLine("操作系统        : " + SafeOsText());
+            sb.AppendLine("系统架构        : " + RuntimeInformation.OSArchitecture + " / 进程 " + RuntimeInformation.ProcessArchitecture
+                          + (Environment.Is64BitProcess ? "（64 位进程）" : "（32 位进程）"));
+            sb.AppendLine(".NET 运行时     : " + RuntimeInformation.FrameworkDescription + "（Environment.Version " + Environment.Version + "）");
+            sb.AppendLine("内核            : " + (probe?.NodeUp == true ? "运行中" : "未运行") + "，端口 " + _sup.Port);
+            sb.AppendLine("桥接            : " + (probe?.BrOnline == true ? "在线"
+                                  : probe?.BridgeUp == true ? "已启动但没心跳" : "未运行"));
+            sb.AppendLine("管理员          : " + (IsAdmin() ? "是" : "否"));
+            sb.AppendLine("日志级别        : log.level=" + level + "，log.fileLevel=" + (fileLevel.Length > 0 ? fileLevel : "未配置"));
+            sb.AppendLine("当前模型服务    : " + (provider.Length > 0 ? provider : "未知"));
+            sb.AppendLine("当前模型名      : " + (model.Length > 0 ? model : "未知"));
+            sb.AppendLine("看图模型名      : " + (vision.Length > 0 ? vision : "未知"));
+            sb.AppendLine("Node            : " + VersionOrUnknown(_nodeVersion));
+            sb.AppendLine("Python          : " + VersionOrUnknown(_pythonVersion));
+            sb.AppendLine("安装目录        : " + _sup.BaseDir);
+            sb.AppendLine("数据目录        : " + _sup.DataDir);
+            sb.AppendLine();
+            sb.AppendLine("各日志文件大小：");
+            foreach (var f in LogFiles)
+                sb.AppendLine("  data/" + f.PadRight(16) + SizeText(FileLen(Path.Combine(_sup.DataDir, f))));
+            sb.AppendLine("  data/wechat-bridge-4x.log  " + SizeText(FileLen(Path.Combine(_sup.DataDir, "wechat-bridge-4x.log"))));
+            sb.AppendLine("磁盘剩余        : " + DiskFreeText());
+            sb.AppendLine("run-* 归档数量  : " + RunDirs().Count() + " 份（data/logs 下，启动器保留最近 5 份）");
+            sb.AppendLine();
+            if (skipped.Count == 0)
+            {
+                sb.AppendLine("读取失败 / 跳过的文件：无");
+            }
+            else
+            {
+                sb.AppendLine("读取失败 / 跳过的文件：");
+                foreach (var s in skipped.Distinct()) sb.AppendLine("  - " + s);
+            }
+            return sb.ToString();
+        }
+
+        private string BuildStatus(ApiResult status, ApiResult settings)
+        {
+            var root = new JsonObject
+            {
+                ["exportedAt"] = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                ["status"] = ToJsonNode(status),
+                ["settings"] = ToJsonNode(settings)
+            };
+            return root.ToJsonString(new JsonSerializerOptions
+            {
+                WriteIndented = true,
+                Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+            }) + Environment.NewLine;
+        }
+
+        private static JsonNode ToJsonNode(ApiResult r)
+        {
+            if (r == null) return JsonValue.Create("（没有返回）");
+            if (!string.IsNullOrWhiteSpace(r.Raw))
+            {
+                try { return JsonNode.Parse(r.Raw); } catch { return JsonValue.Create(r.Raw); }
+            }
+            var err = "错误" + (r.StatusCode > 0 ? "（HTTP " + r.StatusCode + "）" : "") + "：" + (string.IsNullOrEmpty(r.Error) ? "空返回" : r.Error);
+            return JsonValue.Create(err);
+        }
+
+        private string LauncherVersion()
+        {
+            // 和 MainWindow 读版本的方式一致：优先 package.json，没有再退回程序集版本
+            try
+            {
+                var vp = Path.Combine(_sup.BaseDir, "package.json");
+                if (File.Exists(vp))
+                {
+                    var m = Regex.Match(File.ReadAllText(vp), "\"version\"\\s*:\\s*\"([^\"]+)\"");
+                    if (m.Success) return "v" + m.Groups[1].Value + "-alpha";
+                }
+            }
+            catch { }
+            try
+            {
+                var v = typeof(DiagPage).Assembly.GetName().Version;
+                return v != null ? v.ToString() : "未知";
+            }
+            catch { return "未知"; }
+        }
+
+        private static string SafeOsText()
+        {
+            try { return RuntimeInformation.OSDescription; } catch { return Environment.OSVersion.ToString(); }
+        }
+
+        private static string VersionOrUnknown(string v)
+            => string.IsNullOrWhiteSpace(v) || v == "?" || v.Contains("未找到", StringComparison.Ordinal) ? "未知" : v;
+
+        private static string SizeText(long bytes)
+        {
+            if (bytes <= 0) return "0 字节（不存在或为空）";
+            if (bytes < 1024) return bytes + " 字节";
+            return bytes < 1024 * 1024
+                ? (bytes / 1024.0).ToString("0.0", CultureInfo.InvariantCulture) + " KB"
+                : (bytes / 1024.0 / 1024.0).ToString("0.0", CultureInfo.InvariantCulture) + " MB";
+        }
+
+        private string DiskFreeText()
+        {
+            try
+            {
+                var rootPath = Path.GetPathRoot(Path.GetFullPath(_sup.DataDir));
+                var d = new DriveInfo(rootPath);
+                return (d.AvailableFreeSpace / 1024.0 / 1024.0 / 1024.0).ToString("0.0", CultureInfo.InvariantCulture)
+                    + " GB 可用 / 共 " + (d.TotalSize / 1024.0 / 1024.0 / 1024.0).ToString("0.0", CultureInfo.InvariantCulture)
+                    + " GB（" + d.Name + "）";
+            }
+            catch (Exception ex) { return "未知（" + ex.Message + "）"; }
+        }
+
+        // ── doctor / 脱敏 / 配置读取 ─────────────────────────────
+        /// <summary>尽力而为：有 node 就跑 server.js --doctor，15 秒超时，失败只写原因。</summary>
+        private async Task<string> RunDoctorAsync()
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("$ node server.js --doctor");
+            sb.AppendLine("工作目录: " + _sup.BaseDir);
+            sb.AppendLine(new string('-', 60));
+
+            var candidates = new List<string>();
+            var local = Path.Combine(_sup.BaseDir, "runtime", "node.exe");
+            if (File.Exists(local)) candidates.Add(local);
+            candidates.Add("node");   // PATH 里的 node
+
+            foreach (var exe in candidates)
+            {
+                try
+                {
+                    var psi = new ProcessStartInfo(exe, "server.js --doctor")
+                    {
+                        WorkingDirectory = _sup.BaseDir,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                        StandardOutputEncoding = Encoding.UTF8,
+                        StandardErrorEncoding = Encoding.UTF8
+                    };
+                    using var p = new Process { StartInfo = psi };
+                    p.Start();
+
+                    // 两路一起读，避免缓冲区写满卡住子进程
+                    var stdout = p.StandardOutput.ReadToEndAsync();
+                    var stderr = p.StandardError.ReadToEndAsync();
+
+                    var exited = true;
+                    using (var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15)))
+                    {
+                        try { await p.WaitForExitAsync(cts.Token); }
+                        catch (OperationCanceledException) { exited = false; }
+                    }
+                    if (!exited)
+                    {
+                        try { p.Kill(true); } catch { }
+                        sb.AppendLine("【超时】15 秒内没跑完，已终止（doctor 本身卡住也是有用信息）。");
+                    }
+
+                    var so = "";
+                    var se = "";
+                    try { so = await stdout.WaitAsync(TimeSpan.FromSeconds(5)); } catch { so = "（读 stdout 超时）"; }
+                    try { se = await stderr.WaitAsync(TimeSpan.FromSeconds(5)); } catch { se = "（读 stderr 超时）"; }
+
+                    sb.AppendLine("--- stdout ---");
+                    sb.AppendLine(so);
+                    sb.AppendLine("--- stderr ---");
+                    sb.AppendLine(se);
+                    if (exited)
+                    {
+                        try { sb.AppendLine("退出码: " + p.ExitCode); } catch { }
+                    }
+                    return sb.ToString();
+                }
+                catch (Exception ex)
+                {
+                    sb.AppendLine("用 " + exe + " 启动失败：" + ex.Message);
+                }
+            }
+
+            sb.AppendLine("没找到可用的 node（runtime\\node.exe 与 PATH 都没有），doctor 跳过。");
+            return sb.ToString();
+        }
+
+        /// <summary>读 JSON 并递归脱敏，写回格式化文本；文件不存在返回 null。</summary>
+        private static string RedactedJson(string file, List<string> skipped)
+        {
+            if (!File.Exists(file)) return null;
+            var text = ReadShared(file, skipped);
+            if (string.IsNullOrWhiteSpace(text)) return null;
+            try
+            {
+                var node = JsonNode.Parse(text);
+                if (node == null) return null;
+                RedactNode(node);
+                return node.ToJsonString(new JsonSerializerOptions
+                {
+                    WriteIndented = true,
+                    Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+                }) + Environment.NewLine;
+            }
+            catch (Exception ex)
+            {
+                skipped.Add(Path.GetFileName(file) + "（脱敏失败）：" + ex.Message);
+                return null;
+            }
+        }
+
+        /// <summary>递归把敏感键的值换成 "***"。对象/数组继续往下走，结构不动。</summary>
+        private static void RedactNode(JsonNode node)
+        {
+            if (node is JsonObject obj)
+            {
+                foreach (var kv in obj.ToList())
+                {
+                    if (SecretKey.IsMatch(kv.Key))
+                    {
+                        if (kv.Value is JsonObject || kv.Value is JsonArray) RedactNode(kv.Value);
+                        else obj[kv.Key] = "***";
+                    }
+                    else if (kv.Value != null)
+                    {
+                        RedactNode(kv.Value);
+                    }
+                }
+            }
+            else if (node is JsonArray arr)
+            {
+                foreach (var item in arr)
+                    if (item != null) RedactNode(item);
+            }
+        }
+
+        private (string Level, string FileLevel) ReadLogLevels()
+        {
+            var level = "info";
+            var fileLevel = "";
+            try
+            {
+                var file = Path.Combine(_sup.BaseDir, "config.json");
+                if (!File.Exists(file)) return (level, fileLevel);
+                using var doc = JsonDocument.Parse(File.ReadAllText(file));
+                if (doc.RootElement.TryGetProperty("log", out var log) && log.ValueKind == JsonValueKind.Object)
+                {
+                    if (log.TryGetProperty("level", out var lv) && lv.ValueKind == JsonValueKind.String)
+                        level = lv.GetString() ?? level;
+                    if (log.TryGetProperty("fileLevel", out var fl) && fl.ValueKind == JsonValueKind.String)
+                        fileLevel = fl.GetString() ?? "";
+                }
+            }
+            catch { }
+            return (level, fileLevel);
+        }
+
+        private (string Provider, string Model, string Vision) ReadModelInfo()
+        {
+            var provider = "";
+            var model = "";
+            var vision = "";
+            try
+            {
+                // 面板设置（data/settings.json）优先：换服务商 / 模型都存在这里，
+                // 只看 config.json 会写出「界面上明明换过了、日志包里还是旧模型」。
+                var settingsFile = Path.Combine(_sup.DataDir, "settings.json");
+                if (File.Exists(settingsFile))
+                {
+                    using var sdoc = JsonDocument.Parse(File.ReadAllText(settingsFile));
+                    var sroot = sdoc.RootElement;
+                    provider = JsonStr(sroot, "provider");
+                    model = JsonStr(sroot, "model");
+                    vision = JsonStr(sroot, "visionModel");
+                }
+                var file = Path.Combine(_sup.BaseDir, "config.json");
+                if (!File.Exists(file))
+                {
+                    if (vision.Length == 0) vision = "glm-4.6v-flash";
+                    return (provider, model, vision);
+                }
+                using var doc = JsonDocument.Parse(File.ReadAllText(file));
+                var root = doc.RootElement;
+                if (provider.Length == 0) provider = JsonStr(root, "provider");
+                if (model.Length == 0 && provider.Length > 0 && root.TryGetProperty(provider, out var sec))
+                    model = JsonStr(sec, "model");
+                if (model.Length == 0) model = JsonStr(JsonProp(root, "chat"), "model");
+                if (vision.Length == 0) vision = JsonStr(JsonProp(root, "vision"), "model");
+                if (vision.Length == 0) vision = "glm-4.6v-flash";
+            }
+            catch { }
+            return (provider, model, vision);
+        }
+
+        private static JsonElement JsonProp(JsonElement e, string name)
+            => e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out var v) ? v : default;
+
+        private static string JsonStr(JsonElement e, string name)
+        {
+            if (e.ValueKind != JsonValueKind.Object || !e.TryGetProperty(name, out var v)) return "";
+            return v.ValueKind == JsonValueKind.String ? (v.GetString() ?? "") : "";
         }
     }
 }

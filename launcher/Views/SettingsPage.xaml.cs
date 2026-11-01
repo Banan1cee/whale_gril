@@ -51,8 +51,6 @@ namespace WhaleLauncher.Views
         private bool _configLoaded;      // 已经成功全量回填过一次（M30：周期刷新据此判断要不要补）
         private bool _loadingConfig;     // 全量回填在途，防止载入和定时器双跑
         private DateTime _lastLoad = DateTime.MinValue;
-        private readonly List<Border> _sectionCards = new List<Border>();
-
         public SettingsPage(RuntimeSupervisor sup)
         {
             InitializeComponent();
@@ -60,7 +58,6 @@ namespace WhaleLauncher.Views
             BuildOnce();
             Loaded += async (_, __) =>
             {
-                if (SettingsNav.SelectedIndex != 0) SettingsNav.SelectedIndex = 0;
                 MainScroll.ScrollToTop();
                 await LoadConfigAsync();   // 页面载入才全量回填（M30）
             };
@@ -69,15 +66,6 @@ namespace WhaleLauncher.Views
         // ── 全部设置清单（启动器是唯一界面）────────────────────────
         private static List<SectionSpec> Specs() => new List<SectionSpec>
         {
-            new SectionSpec { Title = "语音", Note = "别人发语音时先转成文字再回复；超时和时长上限也在这张卡里。", Fields =
-            {
-                new FieldSpec { Path = "voice.enabled", Label = "语音回复", Kind = "bool" },
-                new FieldSpec { Path = "voice.apiKey", Label = "语音接口 Key", Kind = "secret", Hint = "留空表示不改；留空则用主模型的 Key" },
-                new FieldSpec { Path = "voice.baseUrl", Label = "语音接口地址", Kind = "text" },
-                new FieldSpec { Path = "voice.model", Label = "语音模型", Kind = "text" },
-                new FieldSpec { Path = "voice.timeoutMs", Label = "语音识别超时(毫秒)", Kind = "num", Min = 1000, Max = 300000 },
-                new FieldSpec { Path = "voice.maxSeconds", Label = "超过多少秒的语音不转", Kind = "num", Min = 1, Max = 600 },
-            }},
             new SectionSpec { Title = "群聊", Fields =
             {
                 new FieldSpec { Path = "group.requireAt", Label = "必须 @ 她才回", Kind = "bool", Hint = "关掉 = 群里不 @ 也会接，但按下面的插话概率抽，不是每条都回" },
@@ -110,7 +98,7 @@ namespace WhaleLauncher.Views
             new SectionSpec { Title = "高级", Note = "改完要重启的项都在这里；管理员口令也归这一组，平时不用碰。", Fields =
             {
                 new FieldSpec { Path = "server.host", Label = "监听地址", Kind = "text", Hint = "只给本机用就 127.0.0.1；0.0.0.0 = 同 WiFi 也能连（改完重启）" },
-                new FieldSpec { Path = "server.port", Label = "本机端口", Kind = "num", Min = 1024, Max = 65535, Hint = "改完重启生效" },
+                new FieldSpec { Path = "server.port", Label = "本机端口", Kind = "selectnum", Options = new[] { "8787", "9191", "1919", "7878" }, Hint = "默认 8787；只在这四个里选，改完重启内核生效" },
                 new FieldSpec { Path = "log.level", Label = "日志级别（界面 / 控制台）", Kind = "select", Options = new[] { "debug", "info", "error" }, Hint = "只影响界面和启动器控制台；日志文件始终记 debug 全量（data/whale.log、data/wechat-bridge-4x.log），改完重启生效" },
                 new FieldSpec { Path = "storage.mediaKeepDays", Label = "媒体缓存保留几天", Kind = "num", Min = 0, Max = 90 },
                 new FieldSpec { Path = "storage.mediaMaxMB", Label = "媒体缓存上限(MB)", Kind = "num", Min = 0, Max = 10000 },
@@ -123,35 +111,75 @@ namespace WhaleLauncher.Views
         private void BuildOnce()
         {
             SectionsHost.Children.Clear();
-            SettingsNav.Items.Clear();
-            _sectionCards.Clear();
 
-            AddSection("模型与 Key", BuildModelSection());
-            AddSection("看图（视觉模型）", BuildVisionSection());
-            foreach (var spec in Specs()) AddSection(spec.Title, BuildSection(spec));
-            AddSection("外观", BuildAppearanceSection());
-
-            SettingsNav.SelectedIndex = 0;
+            AddSection(BuildModelSection());
+            AddSection(BuildAdvancedSection());
+            AddSection(BuildAppearanceSection());
         }
 
-        private void AddSection(string navTitle, Border card)
+        /// <summary>卡片直接按顺序堆进单列滚动区。</summary>
+        private void AddSection(Border card)
         {
-            SettingsNav.Items.Add(navTitle);
-            _sectionCards.Add(card);
-            card.Tag = navTitle;
+            card.Margin = new Thickness(0, 0, 0, 14);
             SectionsHost.Children.Add(card);
         }
 
-        private void OnSettingsNavChanged(object sender, SelectionChangedEventArgs e)
+        /// <summary>
+        /// 高级模式：四个胶囊页签直接摆出来，点了才展开那一组；再点同一个页签收起。
+        /// 没有「展开高级设置」这种中间按钮，少一次点击。
+        /// </summary>
+        private Border BuildAdvancedSection()
         {
-            var i = SettingsNav.SelectedIndex;
-            if (i < 0 || i >= _sectionCards.Count) return;
-            try
+            var card = Card("高级模式", "群聊、微信数据与管道、联网与链接、服务端口。平时不用动，点一下对应页签再改。", out var body);
+
+            var strip = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 0) };
+            body.Children.Add(strip);
+
+            var specs = Specs();
+            var tabs = new Button[specs.Count];
+            var panels = new StackPanel[specs.Count];
+            var active = -1;
+
+            void Select(int idx)
             {
-                var y = _sectionCards[i].TranslatePoint(new Point(0, 0), SectionsHost).Y;
-                MainScroll.ScrollToVerticalOffset(Math.Max(0, y - 4));
+                if (active == idx)
+                {
+                    panels[idx].Visibility = Visibility.Collapsed;
+                    MarkTab(tabs[idx], false);
+                    active = -1;
+                    return;
+                }
+                for (var i = 0; i < panels.Length; i++)
+                {
+                    panels[i].Visibility = i == idx ? Visibility.Visible : Visibility.Collapsed;
+                    MarkTab(tabs[i], i == idx);
+                }
+                active = idx;
             }
-            catch { }
+
+            for (var i = 0; i < specs.Count; i++)
+            {
+                var spec = specs[i];
+                var tab = MakeTab(spec.Title, out var _);
+                var panel = new StackPanel { Visibility = Visibility.Collapsed, Margin = new Thickness(0, 12, 0, 0) };
+                if (!string.IsNullOrEmpty(spec.Note))
+                    panel.Children.Add(new TextBlock
+                    {
+                        Text = spec.Note,
+                        Style = (Style)FindResource("Small"),
+                        TextWrapping = TextWrapping.Wrap,
+                        Margin = new Thickness(0, 0, 0, 8),
+                    });
+                foreach (var f in spec.Fields) panel.Children.Add(BuildField(f));
+                tabs[i] = tab;
+                panels[i] = panel;
+                strip.Children.Add(tab);
+                body.Children.Add(panel);
+                var idx = i;
+                tab.Click += (s, e) => Select(idx);
+            }
+
+            return card;
         }
 
         // ── 外观：深浅色 + 背景图（只影响启动器）────────────────
@@ -290,10 +318,10 @@ namespace WhaleLauncher.Views
             return border;
         }
 
-        private Grid Row(string label, FrameworkElement control, string hint, bool top = false)
+        private Grid Row(string label, FrameworkElement control, string hint, bool top = false, double labelWidth = 210)
         {
             var grid = new Grid { Margin = new Thickness(0, 0, 0, 8) };
-            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(210) });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(labelWidth) });
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             grid.Children.Add(new TextBlock
             {
@@ -320,8 +348,9 @@ namespace WhaleLauncher.Views
         }
 
         // ── 单个字段 ────────────────────────────────────────────
-        private FrameworkElement BuildField(FieldSpec f)
+        private FrameworkElement BuildField(FieldSpec f, bool compact = false)
         {
+            var labelWidth = compact ? 108.0 : 210.0;
             switch (f.Kind)
             {
                 case "bool":
@@ -333,7 +362,7 @@ namespace WhaleLauncher.Views
                         await PatchAsync(f.Path, ((CheckBox)s).IsChecked == true ? "true" : "false");
                     };
                     _loaders[f.Path] = v => { if (chk.IsKeyboardFocusWithin) return; _loading = true; chk.IsChecked = v.ValueKind == JsonValueKind.True; _loading = false; };
-                    return Row(f.Label, chk, f.Hint);
+                    return Row(f.Label, chk, f.Hint, false, labelWidth);
                 }
                 case "select":
                 {
@@ -350,7 +379,27 @@ namespace WhaleLauncher.Views
                         cmb.SelectedItem = v.ValueKind == JsonValueKind.String ? v.GetString() : null;
                         _loading = false;
                     };
-                    return Row(f.Label, cmb, f.Hint);
+                    return Row(f.Label, cmb, f.Hint, false, labelWidth);
+                }
+                case "selectnum":
+                {
+                    // 端口这类「只能从固定几项里挑」的数字：下拉显示，写回仍是数字
+                    var cmb = new ComboBox { Height = 26, ItemsSource = f.Options, MinWidth = 140, HorizontalAlignment = HorizontalAlignment.Left };
+                    cmb.SelectionChanged += async (s, e) =>
+                    {
+                        if (_loading || cmb.SelectedItem == null) return;
+                        await PatchAsync(f.Path, (string)cmb.SelectedItem);
+                    };
+                    _loaders[f.Path] = v =>
+                    {
+                        if (cmb.IsKeyboardFocusWithin) return;
+                        _loading = true;
+                        var cur = v.ValueKind == JsonValueKind.Number ? v.GetInt32().ToString()
+                            : (v.ValueKind == JsonValueKind.String ? v.GetString() : null);
+                        if (cur != null && (f.Options ?? new string[0]).Contains(cur)) cmb.SelectedItem = cur;
+                        _loading = false;
+                    };
+                    return Row(f.Label, cmb, f.Hint, false, labelWidth);
                 }
                 case "secret":
                 {
@@ -360,7 +409,7 @@ namespace WhaleLauncher.Views
                         if (_loading || pwd.Password.Length == 0) return;
                         if (await PatchAsync(f.Path, "\"" + Api.Esc(pwd.Password.Trim()) + "\"")) pwd.Password = "";
                     };
-                    return Row(f.Label, pwd, f.Hint);
+                    return Row(f.Label, pwd, f.Hint, false, labelWidth);
                 }
                 case "multiline":
                 {
@@ -380,7 +429,7 @@ namespace WhaleLauncher.Views
                             : (v.ValueKind == JsonValueKind.String ? (v.GetString() ?? "") : "");
                         _loading = false;
                     };
-                    return Row(f.Label, box, f.Hint);
+                    return Row(f.Label, box, f.Hint, false, labelWidth);
                 }
                 case "num":
                 {
@@ -407,7 +456,7 @@ namespace WhaleLauncher.Views
                             : "";
                         _loading = false;
                     };
-                    return Row(f.Label, box, f.Hint);
+                    return Row(f.Label, box, f.Hint, false, labelWidth);
                 }
                 case "slider":
                 {
@@ -458,7 +507,7 @@ namespace WhaleLauncher.Views
                     var panel = new WrapPanel { HorizontalAlignment = HorizontalAlignment.Left };
                     panel.Children.Add(slider);
                     panel.Children.Add(readout);
-                    return Row(f.Label, panel, f.Hint);
+                    return Row(f.Label, panel, f.Hint, false, labelWidth);
                 }
                 default:
                 {
@@ -476,7 +525,7 @@ namespace WhaleLauncher.Views
                             : (v.ValueKind == JsonValueKind.Array ? string.Join(",", v.EnumerateArray().Select(x => x.ToString())) : "");
                         _loading = false;
                     };
-                    return Row(f.Label, box, f.Hint);
+                    return Row(f.Label, box, f.Hint, false, labelWidth);
                 }
             }
         }
@@ -491,17 +540,151 @@ namespace WhaleLauncher.Views
             return res.Ok;
         }
 
-        // ── 模型 / 看图 / 关于 ───────────────────────────────────
+        // ── 模型 / 看图（一张卡，两组用页签切换）────────────────────
+        private const string AutoVision = "自动（跟随聊天模型）";
+
+        private Button MakeTab(string text, out TextBlock badge)
+        {
+            badge = new TextBlock { FontSize = 10, Margin = new Thickness(6, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
+            badge.SetResourceReference(TextBlock.ForegroundProperty, "Dim");
+            var stack = new StackPanel { Orientation = Orientation.Horizontal };
+            stack.Children.Add(new TextBlock { Text = text, VerticalAlignment = VerticalAlignment.Center });
+            stack.Children.Add(badge);
+            return new Button
+            {
+                Height = 30,
+                Padding = new Thickness(12, 0, 12, 0),
+                Margin = new Thickness(0, 0, 6, 0),
+                BorderThickness = new Thickness(1),
+                Cursor = System.Windows.Input.Cursors.Hand,
+                FocusVisualStyle = null,
+                Content = stack,
+                Style = (Style)FindResource("Ghost"),
+            };
+        }
+
+        private static void MarkTab(Button btn, bool active)
+        {
+            btn.SetResourceReference(Button.BackgroundProperty, active ? "AccentSoft" : "Transparent");
+            btn.SetResourceReference(Button.BorderBrushProperty, active ? "Accent" : "Line");
+            btn.SetResourceReference(Button.ForegroundProperty, active ? "Accent" : "Muted");
+            btn.FontWeight = active ? FontWeights.SemiBold : FontWeights.Normal;
+        }
+
+        /// <summary>两列并排；right 为空时只占左半列。</summary>
+        private static FrameworkElement TwoCol(FrameworkElement left, FrameworkElement right)
+        {
+            var g = new Grid();
+            g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(18) });
+            g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            g.Children.Add(left);
+            if (right != null)
+            {
+                Grid.SetColumn(right, 2);
+                g.Children.Add(right);
+            }
+            return g;
+        }
+
         private Border BuildModelSection()
         {
-            var card = Card("模型与 Key", "选哪家模型、用哪把钥匙。", out var body);
+            var card = Card("模型", "聊天、看图、语音分三页签。聊天模型自己能看图时，看图模型自动跟随；手动指定过就以手动为准。", out var body);
+
+            var chatTab = MakeTab("聊天（文本）", out var chatBadge);
+            var visionTab = MakeTab("看图（视觉）", out var visionBadge);
+            var voiceTab = MakeTab("语音", out var voiceBadge);
+            var strip = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 14) };
+            strip.Children.Add(chatTab);
+            strip.Children.Add(visionTab);
+            strip.Children.Add(voiceTab);
+            body.Children.Add(strip);
+
+            var chatPanel = new StackPanel();
+            var visionPanel = new StackPanel { Visibility = Visibility.Collapsed };
+            var voicePanel = new StackPanel { Visibility = Visibility.Collapsed };
+            body.Children.Add(chatPanel);
+            body.Children.Add(visionPanel);
+            body.Children.Add(voicePanel);
+
+            var tabs = new[] { chatTab, visionTab, voiceTab };
+            var panels = new[] { chatPanel, visionPanel, voicePanel };
+            void SelectTab(int idx)
+            {
+                for (var i = 0; i < panels.Length; i++)
+                {
+                    panels[i].Visibility = i == idx ? Visibility.Visible : Visibility.Collapsed;
+                    MarkTab(tabs[i], i == idx);
+                }
+            }
+            chatTab.Click += (s, e) => SelectTab(0);
+            visionTab.Click += (s, e) => SelectTab(1);
+            voiceTab.Click += (s, e) => SelectTab(2);
+            SelectTab(0);
+
+            // 两组控件先都建出来：换聊天模型时要同步刷新看图的提示和角标
             var items = new List<ProviderItem>();
             var cmb = new ComboBox { Height = 28, DisplayMemberPath = "Label", MinWidth = 320, HorizontalAlignment = HorizontalAlignment.Left };
             var baseUrl = new TextBox();
-            var model = new TextBox();
+            var model = new ComboBox { Height = 28, IsEditable = true, MinWidth = 320, HorizontalAlignment = HorizontalAlignment.Left };
             var key = new PasswordBox();
             var mock = new CheckBox();
-            var result = new TextBlock { Style = (Style)FindResource("Small"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 0) };
+            var chatResult = new TextBlock { Style = (Style)FindResource("Small"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 0) };
+
+            var visionModel = new ComboBox { Height = 28, MinWidth = 320, HorizontalAlignment = HorizontalAlignment.Left };
+            var visionTip = new TextBlock { Style = (Style)FindResource("Small"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 3, 0, 0) };
+            var visionBox = new StackPanel();
+            visionBox.Children.Add(visionModel);
+            visionBox.Children.Add(visionTip);
+            var visionKey = new PasswordBox();
+            var visionHint = new TextBlock { Style = (Style)FindResource("Small"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) };
+            var visionEndpoint = new TextBlock { Style = (Style)FindResource("Small"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) };
+            var visionResult = new TextBlock { Style = (Style)FindResource("Small"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 0) };
+
+            void FillOptions(JsonElement pv)
+            {
+                var chat = new List<string>();
+                var sight = new List<string> { AutoVision };
+                if (pv.ValueKind == JsonValueKind.Object)
+                {
+                    if (pv.TryGetProperty("models", out var arr) && arr.ValueKind == JsonValueKind.Array)
+                        foreach (var it in arr.EnumerateArray())
+                            if (it.ValueKind == JsonValueKind.String) chat.Add(it.GetString());
+                    if (pv.TryGetProperty("visionModels", out var varr) && varr.ValueKind == JsonValueKind.Array)
+                        foreach (var it in varr.EnumerateArray())
+                            if (it.ValueKind == JsonValueKind.String) sight.Add(it.GetString());
+                }
+                model.ItemsSource = chat;
+                var keep = visionModel.SelectedItem as string;
+                visionModel.ItemsSource = sight;
+                if (keep != null && sight.Contains(keep)) visionModel.SelectedItem = keep;
+                else visionModel.SelectedItem = AutoVision;   // 换服务商后原来的钉值不在了，回自动
+            }
+
+            void SyncVisionToChat()
+            {
+                var picked = model.SelectedItem as string ?? model.Text;
+                var capable = false;
+                if (visionModel.ItemsSource is List<string> sight && !string.IsNullOrWhiteSpace(picked))
+                {
+                    foreach (var s in sight)
+                        if (s == picked && s != AutoVision) { capable = true; break; }
+                }
+                var sel = visionModel.SelectedItem as string ?? AutoVision;
+                if (sel == AutoVision)
+                {
+                    visionTip.Text = capable
+                        ? "自动跟随聊天模型：" + picked
+                        : "自动：聊天模型不能看图时用默认视觉模型（glm-4.6v-flash）";
+                    visionBadge.Text = capable ? "跟随中" : "";
+                }
+                else
+                {
+                    visionTip.Text = "已手动指定：" + sel + "（换聊天模型不会覆盖）";
+                    visionBadge.Text = "已指定";
+                }
+                chatBadge.Text = model.Text.Trim().Length > 0 ? "" : "";
+            }
 
             cmb.SelectionChanged += (s, e) =>
             {
@@ -509,38 +692,53 @@ namespace WhaleLauncher.Views
                 if (_providers != null && _providers.TryGetValue(p.Key, out var pv))
                 {
                     baseUrl.Text = GetStr(pv, "baseUrl");
+                    FillOptions(pv);
                     model.Text = GetStr(pv, "model");
+                    SyncVisionToChat();
                 }
             };
+            model.SelectionChanged += (s, e) => { if (!_loading) SyncVisionToChat(); };
+            visionModel.SelectionChanged += (s, e) => { if (!_loading) SyncVisionToChat(); };
 
-            body.Children.Add(Row("模型服务", cmb, ""));
-            body.Children.Add(Row("接口地址", baseUrl, ""));
-            body.Children.Add(Row("模型名", model, ""));
-            body.Children.Add(Row("API Key", key, "留空表示不改；已存的这里不会显示"));
-            body.Children.Add(Row("演示模式", mock, "不连模型，用内置台词"));
+            // ── 聊天面板 ────────────────────────────────────────
+            chatPanel.Children.Add(Row("模型服务", cmb, ""));
+            chatPanel.Children.Add(Row("接口地址", baseUrl, ""));
+            chatPanel.Children.Add(Row("模型名", model, "点下拉直接选；没有的型号也可以自己输入"));
+            chatPanel.Children.Add(Row("API Key", key, "留空表示不改；已存的这里不会显示"));
+            chatPanel.Children.Add(Row("演示模式", mock, "不连模型，用内置台词"));
 
-            // 采样参数也放这张卡：以前只在网页里能改，启动器用户根本看不到。
-            body.Children.Add(BuildField(new FieldSpec { Path = "deepseek.temperature", Label = "温度", Kind = "num", Min = 0, Max = 2, IsInt = false, Hint = "越大越放得开；超过 1.2 容易越聊越离谱" }));
-            body.Children.Add(BuildField(new FieldSpec { Path = "deepseek.maxTokens", Label = "单次最多生成多少 token", Kind = "num", Min = 16, Max = 32768, Hint = "默认 700；具体字数因模型而异" }));
-            body.Children.Add(BuildField(new FieldSpec { Path = "deepseek.frequencyPenalty", Label = "频率惩罚（减少复读）", Kind = "num", Min = -2, Max = 2, IsInt = false }));
-            body.Children.Add(BuildField(new FieldSpec { Path = "deepseek.presencePenalty", Label = "在场惩罚（鼓励换话题）", Kind = "num", Min = -2, Max = 2, IsInt = false }));
-            body.Children.Add(BuildField(new FieldSpec { Path = "deepseek.timeoutMs", Label = "请求超时(毫秒)", Kind = "num", Min = 1000, Max = 600000 }));
+            var chatDivider = new Border { Height = 1, Margin = new Thickness(0, 4, 0, 12) };
+            chatDivider.SetResourceReference(Border.BackgroundProperty, "Line");
+            chatPanel.Children.Add(chatDivider);
+            chatPanel.Children.Add(new TextBlock { Text = "采样", Style = (Style)FindResource("Label"), Margin = new Thickness(0, 0, 0, 8) });
+            chatPanel.Children.Add(TwoCol(
+                BuildField(new FieldSpec { Path = "deepseek.temperature", Label = "温度", Kind = "num", Min = 0, Max = 2, IsInt = false, Hint = "越大越放得开；超过 1.2 容易越聊越离谱" }, true),
+                BuildField(new FieldSpec { Path = "deepseek.maxTokens", Label = "最多 token", Kind = "num", Min = 16, Max = 32768, Hint = "默认 700" }, true)));
+            chatPanel.Children.Add(TwoCol(
+                BuildField(new FieldSpec { Path = "deepseek.frequencyPenalty", Label = "频率惩罚", Kind = "num", Min = -2, Max = 2, IsInt = false }, true),
+                BuildField(new FieldSpec { Path = "deepseek.presencePenalty", Label = "在场惩罚", Kind = "num", Min = -2, Max = 2, IsInt = false }, true)));
+            chatPanel.Children.Add(TwoCol(
+                BuildField(new FieldSpec { Path = "deepseek.timeoutMs", Label = "请求超时(毫秒)", Kind = "num", Min = 1000, Max = 600000 }, true),
+                null));
 
-            var buttons = new WrapPanel { Margin = new Thickness(0, 10, 0, 0) };
+            var chatButtons = new WrapPanel { Margin = new Thickness(0, 6, 0, 0) };
             var save = new Button { Content = "保存", Style = (Style)FindResource("Primary") };
             var test = new Button { Content = "测试连通", Style = (Style)FindResource("Ghost"), Margin = new Thickness(8, 0, 0, 0) };
-            buttons.Children.Add(save);
-            buttons.Children.Add(test);
-            body.Children.Add(buttons);
-            body.Children.Add(result);
+            chatButtons.Children.Add(save);
+            chatButtons.Children.Add(test);
+            chatPanel.Children.Add(chatButtons);
+            chatPanel.Children.Add(chatResult);
 
             string ModelRequest()
             {
                 var prov = (cmb.SelectedItem as ProviderItem)?.Key ?? "";
+                var vm = visionModel.SelectedItem as string ?? AutoVision;
+                if (vm == AutoVision) vm = "";
                 return "{"
                     + "\"provider\":\"" + Api.Esc(prov) + "\","
                     + "\"baseUrl\":\"" + Api.Esc(baseUrl.Text.Trim()) + "\","
                     + "\"model\":\"" + Api.Esc(model.Text.Trim()) + "\","
+                    + "\"visionModel\":\"" + Api.Esc(vm) + "\","
                     + "\"mock\":" + (mock.IsChecked == true ? "true" : "false")
                     + (key.Password.Length > 0 ? ",\"apiKey\":\"" + Api.Esc(key.Password.Trim()) + "\"" : "")
                     + "}";
@@ -548,18 +746,63 @@ namespace WhaleLauncher.Views
 
             save.Click += async (s, e) =>
             {
-                var json = ModelRequest();
-                var res = await Api.Post(_sup.Url, "/api/settings", json);
-                if (!res.Ok) { result.Text = "保存失败：" + (res.Error.Length > 0 ? res.Error : res.Raw); return; }
+                var res = await Api.Post(_sup.Url, "/api/settings", ModelRequest());
+                if (!res.Ok) { chatResult.Text = "保存失败：" + (res.Error.Length > 0 ? res.Error : res.Raw); return; }
                 key.Password = "";
-                result.Text = "已保存。";
+                chatResult.Text = "已保存。";
             };
             test.Click += async (s, e) =>
             {
-                result.Text = "正在测…";
+                chatResult.Text = "正在测…";
                 var res = await Api.Post(_sup.Url, "/api/settings/test", ModelRequest());
-                result.Text = res.Ok ? "连通正常。" : "测试没通过：" + (res.Error.Length > 0 ? res.Error : res.Raw);
+                chatResult.Text = res.Ok ? "连通正常。" : "测试没通过：" + (res.Error.Length > 0 ? res.Error : res.Raw);
             };
+
+            // ── 看图面板 ────────────────────────────────────────
+            visionPanel.Children.Add(visionHint);
+            visionPanel.Children.Add(Row("看图模型", visionBox, ""));
+            visionPanel.Children.Add(visionEndpoint);
+            visionPanel.Children.Add(BuildField(new FieldSpec { Path = "vision.timeoutMs", Label = "超时(毫秒)", Kind = "num", Min = 1000, Max = 300000 }, true));
+            visionPanel.Children.Add(Row("看图 Key", visionKey, "留空表示不改"));
+
+            var visionButtons = new WrapPanel { Margin = new Thickness(0, 6, 0, 0) };
+            var vsave = new Button { Content = "保存看图 Key", Style = (Style)FindResource("Ghost") };
+            var vtest = new Button { Content = "测一下", Style = (Style)FindResource("Ghost"), Margin = new Thickness(8, 0, 0, 0) };
+            visionButtons.Children.Add(vsave);
+            visionButtons.Children.Add(vtest);
+            visionPanel.Children.Add(visionButtons);
+            visionPanel.Children.Add(visionResult);
+
+            vsave.Click += async (s, e) =>
+            {
+                if (visionKey.Password.Trim().Length == 0) { visionResult.Text = "留空就不改。"; return; }
+                var res = await Api.Post(_sup.Url, "/api/settings", "{\"visionApiKey\":\"" + Api.Esc(visionKey.Password.Trim()) + "\"}");
+                visionResult.Text = res.Ok ? "看图 Key 已保存。" : "保存失败：" + (res.Error.Length > 0 ? res.Error : res.Raw);
+                if (res.Ok) visionKey.Password = "";
+            };
+            vtest.Click += async (s, e) =>
+            {
+                visionResult.Text = "正在测…";
+                var res = await Api.Post(_sup.Url, "/api/vision/test", "{}");
+                visionResult.Text = res.Ok ? "看图通了，它说：" + res.Str("sample") : "没通：" + (res.Error.Length > 0 ? res.Error : res.Raw);
+            };
+
+            // ── 语音面板（原来单独一页，并到模型卡里）──────────
+            var voiceHint = new TextBlock
+            {
+                Style = (Style)FindResource("Small"),
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 0, 0, 8),
+                Text = "别人发语音时先转成文字再回复；Key 留空则沿用主模型那把。",
+            };
+            voicePanel.Children.Add(voiceHint);
+            voicePanel.Children.Add(BuildField(new FieldSpec { Path = "voice.enabled", Label = "语音回复", Kind = "bool" }, true));
+            voicePanel.Children.Add(BuildField(new FieldSpec { Path = "voice.apiKey", Label = "语音接口 Key", Kind = "secret", Hint = "留空表示不改；留空则用主模型的 Key" }, true));
+            voicePanel.Children.Add(BuildField(new FieldSpec { Path = "voice.baseUrl", Label = "接口地址", Kind = "text" }, true));
+            voicePanel.Children.Add(BuildField(new FieldSpec { Path = "voice.model", Label = "语音模型", Kind = "text" }, true));
+            voicePanel.Children.Add(TwoCol(
+                BuildField(new FieldSpec { Path = "voice.timeoutMs", Label = "识别超时(毫秒)", Kind = "num", Min = 1000, Max = 300000 }, true),
+                BuildField(new FieldSpec { Path = "voice.maxSeconds", Label = "最长语音(秒)", Kind = "num", Min = 1, Max = 600 }, true)));
 
             _loadModel = (set, provs) =>
             {
@@ -571,59 +814,47 @@ namespace WhaleLauncher.Views
                 cmb.ItemsSource = null;
                 cmb.ItemsSource = items;
                 var cur = GetStr(set, "provider");
-                // 回填前跳过正在编辑的控件，别把用户没保存的输入冲掉（M30）
                 if (!cmb.IsKeyboardFocusWithin) cmb.SelectedItem = items.FirstOrDefault(x => x.Key == cur);
+                var picked = items.FirstOrDefault(x => x.Key == cur);
+                FillOptions(picked != null && provs.TryGetValue(picked.Key, out var pv) ? pv : default);
                 if (!baseUrl.IsKeyboardFocusWithin) baseUrl.Text = GetStr(set, "baseUrl");
                 if (!model.IsKeyboardFocusWithin) model.Text = GetStr(set, "model");
+                var vis = set.ValueKind == JsonValueKind.Object && set.TryGetProperty("vision", out var vv) ? vv : default;
+                var vmodel = GetStr(vis, "model");
+                var manual = vis.ValueKind == JsonValueKind.Object && vis.TryGetProperty("manual", out var mf) && mf.ValueKind == JsonValueKind.True;
+                if (!visionModel.IsKeyboardFocusWithin)
+                {
+                    if (manual && vmodel.Length > 0)
+                    {
+                        var sight = visionModel.ItemsSource as List<string> ?? new List<string>();
+                        if (!sight.Contains(vmodel)) { sight.Add(vmodel); visionModel.ItemsSource = null; visionModel.ItemsSource = sight; }
+                        visionModel.SelectedItem = vmodel;
+                    }
+                    else if (visionModel.ItemsSource is List<string> list2 && list2.Contains(AutoVision))
+                        visionModel.SelectedItem = AutoVision;
+                }
                 if (!mock.IsKeyboardFocusWithin) mock.IsChecked = set.ValueKind == JsonValueKind.Object && set.TryGetProperty("mock", out var m) && m.ValueKind == JsonValueKind.True;
+                SyncVisionToChat();
                 _loading = false;
-            };
-            return card;
-        }
-
-        private Border BuildVisionSection()
-        {
-            var card = Card("看图（视觉模型）", "给智谱 GLM-4V 的 Key，她才能看图片。", out var body);
-            var hint = new TextBlock { Style = (Style)FindResource("Small"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) };
-            var pwd = new PasswordBox();
-            body.Children.Add(hint);
-            body.Children.Add(BuildField(new FieldSpec { Path = "vision.baseUrl", Label = "看图接口地址", Kind = "text" }));
-            body.Children.Add(BuildField(new FieldSpec { Path = "vision.model", Label = "看图模型名", Kind = "text", Hint = "默认 glm-4v-flash（免费）" }));
-            body.Children.Add(BuildField(new FieldSpec { Path = "vision.timeoutMs", Label = "看图超时(毫秒)", Kind = "num", Min = 1000, Max = 300000 }));
-            body.Children.Add(Row("看图 Key", pwd, "留空表示不改"));
-            var buttons = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
-            var save = new Button { Content = "保存看图 Key", Style = (Style)FindResource("Ghost") };
-            var test = new Button { Content = "测一下", Style = (Style)FindResource("Ghost"), Margin = new Thickness(8, 0, 0, 0) };
-            var result = new TextBlock { Style = (Style)FindResource("Small"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 0) };
-            buttons.Children.Add(save);
-            buttons.Children.Add(test);
-            body.Children.Add(buttons);
-            body.Children.Add(result);
-
-            save.Click += async (s, e) =>
-            {
-                if (pwd.Password.Trim().Length == 0) { result.Text = "留空就不改。"; return; }
-                var res = await Api.Post(_sup.Url, "/api/settings", "{\"visionApiKey\":\"" + Api.Esc(pwd.Password.Trim()) + "\"}");
-                result.Text = res.Ok ? "看图 Key 已保存。" : "保存失败：" + (res.Error.Length > 0 ? res.Error : res.Raw);
-                if (res.Ok) pwd.Password = "";
-            };
-            test.Click += async (s, e) =>
-            {
-                result.Text = "正在测…";
-                var res = await Api.Post(_sup.Url, "/api/vision/test", "{}");
-                result.Text = res.Ok ? "看图通了，它说：" + res.Str("sample") : "没通：" + (res.Error.Length > 0 ? res.Error : res.Raw);
             };
 
             _loadVision = (set) =>
             {
                 var v = set.ValueKind == JsonValueKind.Object && set.TryGetProperty("vision", out var vv) ? vv : default;
+                var curModel = GetStr(v, "model");
+                var manual = v.ValueKind == JsonValueKind.Object && v.TryGetProperty("manual", out var mf) && mf.ValueKind == JsonValueKind.True;
                 if (v.ValueKind == JsonValueKind.Object)
                 {
                     var configured = v.TryGetProperty("configured", out var c) && c.ValueKind == JsonValueKind.True;
                     var masked = v.TryGetProperty("keyMasked", out var km) && km.ValueKind == JsonValueKind.String ? km.GetString() : "";
-                    hint.Text = configured ? "已配置：" + masked : "没配置。填一把智谱 GLM-4V 的 Key。";
+                    var follow = manual ? "" : "（自动跟随聊天模型）";
+                    visionHint.Text = (configured ? "已配置：" + masked : "没配置。可以填一把智谱 Key，也可以让聊天模型跟随它自带看图。")
+                        + (curModel.Length > 0 ? " 当前看图模型：" + curModel + follow : "");
+                    var ep = GetStr(v, "baseUrl");
+                    visionEndpoint.Text = ep.Length > 0 ? "接口地址：" + ep + (manual ? "（手动指定）" : "（自动跟随聊天模型）") : "";
                 }
             };
+
             return card;
         }
 
@@ -699,3 +930,4 @@ namespace WhaleLauncher.Views
                 ? (v.GetString() ?? "") : "";
     }
 }
+

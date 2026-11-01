@@ -10,6 +10,7 @@ using System.Windows.Controls;
 using System.Windows.Media;
 using System.Runtime.InteropServices;
 using System.Windows.Interop;
+using System.Windows.Input;
 using System.Windows.Threading;
 using WhaleLauncher.Views;
 
@@ -62,7 +63,6 @@ namespace WhaleLauncher
             }
             catch { }
             VersionText.Text = ver;
-            NavVersion.Text = ver;
 
             foreach (var k in NavKeys) Nav.Items.Add(k);
             Nav.SelectedIndex = 0;
@@ -80,6 +80,14 @@ namespace WhaleLauncher
             {
                 Nav.SelectedIndex = 0;
                 await RefreshAsync();
+                // 静默查一次（5 秒后）：只在有新版本时亮一行字，不下载、不弹窗
+                var once = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
+                once.Tick += async (s, ___) =>
+                {
+                    once.Stop();
+                    await SilentUpdateCheckAsync();
+                };
+                once.Start();
             };
             Closed += (_, __) =>
             {
@@ -87,6 +95,144 @@ namespace WhaleLauncher
                 _timer.Stop();
                 _sup.Dispose();
             };
+        }
+
+        // ── 检查更新（左下角按钮 + 右上角小横幅）────────────────
+        private bool _updating;
+        private DispatcherTimer _toastTimer;
+        private UpdateService.Result _lastUpdate;
+
+        private void ShowToast(string text)
+        {
+            UpdateToastText.Text = text ?? "已检测到新版本";
+            UpdateToast.Visibility = Visibility.Visible;
+            if (_toastTimer == null)
+            {
+                _toastTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(8) };
+                _toastTimer.Tick += (s, e) =>
+                {
+                    _toastTimer.Stop();
+                    UpdateToast.Visibility = Visibility.Collapsed;
+                };
+            }
+            _toastTimer.Stop();
+            _toastTimer.Start();
+        }
+
+        private void HideToast()
+        {
+            _toastTimer?.Stop();
+            UpdateToast.Visibility = Visibility.Collapsed;
+        }
+
+        private void OnToastClick(object sender, MouseButtonEventArgs e)
+        {
+            HideToast();
+            if (_lastUpdate != null && _lastUpdate.HasUpdate) ConfirmUpdate(_lastUpdate);
+            else OnCheckUpdate(sender, null);
+            e.Handled = true;
+        }
+
+        private void SetUpdateButton(bool hasUpdate)
+        {
+            BtnUpdate.Content = hasUpdate ? "有新版本" : "检查更新";
+        }
+
+        private async void OnCheckUpdate(object sender, RoutedEventArgs e)
+        {
+            if (_updating) return;
+            BtnUpdate.IsEnabled = false;
+            StatusLine.Text = "正在检查更新…";
+            try
+            {
+                var r = await UpdateService.CheckAsync(_sup.BaseDir);
+                HandleUpdateResult(r, true);
+            }
+            finally
+            {
+                BtnUpdate.IsEnabled = true;
+            }
+        }
+
+        /// <summary>启动后静默跑一次：只有「有新版本」才亮按钮和横幅，其余什么都不显示。</summary>
+        private async Task SilentUpdateCheckAsync()
+        {
+            if (_updating) return;
+            var r = await UpdateService.CheckAsync(_sup.BaseDir);
+            if (r.Ok && r.HasUpdate) HandleUpdateResult(r, false);
+        }
+
+        private void HandleUpdateResult(UpdateService.Result r, bool interactive)
+        {
+            if (!r.Ok)
+            {
+                StatusLine.Text = "检查更新失败：" + (r.Error.Length > 0 ? r.Error : "原因不明");
+                return;
+            }
+            if (r.HasUpdate)
+            {
+                _lastUpdate = r;
+                SetUpdateButton(true);
+                ShowToast("已检测到新版本 v" + r.Latest);
+                StatusLine.Text = "发现新版本 v" + r.Latest + "（当前 v" + r.Current + "）";
+                if (interactive) ConfirmUpdate(r);
+                return;
+            }
+            _lastUpdate = null;
+            SetUpdateButton(false);
+            if (r.Stale) StatusLine.Text = "本地 v" + r.Current + "，远端 v" + r.Latest + "（镜像信息滞后，暂不更新）";
+            else StatusLine.Text = "已是最新 v" + (r.Current.Length > 0 ? r.Current : "?");
+        }
+
+        private async void ConfirmUpdate(UpdateService.Result r)
+        {
+            var answer = MessageBox.Show(
+                "发现新版本 v" + r.Latest + "（当前 v" + r.Current + "）。\n\n" +
+                "更新会先备份，再覆盖代码；data\\ 和 config.json 不会被改动。\n" +
+                "更新期间内核会停，完成后需要重启启动器。\n\n现在更新吗？",
+                "检查更新", MessageBoxButton.YesNo, MessageBoxImage.Question);
+            if (answer != MessageBoxResult.Yes) return;
+
+            _updating = true;
+            BtnUpdate.IsEnabled = false;
+            StatusLine.Text = "正在更新，别关窗口…";
+            try
+            {
+                var err = await UpdateService.ApplyAsync(_sup.BaseDir);
+                if (err.Length > 0)
+                {
+                    StatusLine.Text = "更新失败：" + err;
+                    MessageBox.Show("更新失败：" + err + "\n\n可以双击根目录的 一键更新.bat 手动更新（失败会自动回滚）。",
+                        "检查更新", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+                SetUpdateButton(false);
+                StatusLine.Text = "已更新到 v" + r.Latest;
+                var restart = MessageBox.Show("更新完成。重启启动器后生效。\n\n现在重启吗？",
+                    "检查更新", MessageBoxButton.YesNo, MessageBoxImage.Information);
+                if (restart == MessageBoxResult.Yes) RestartSelf();
+            }
+            finally
+            {
+                _updating = false;
+                BtnUpdate.IsEnabled = true;
+            }
+        }
+
+        private void RestartSelf()
+        {
+            try
+            {
+                var exe = Path.Combine(AppContext.BaseDirectory, "WhaleLauncher.exe");
+                Process.Start(new ProcessStartInfo(exe) { UseShellExecute = true, WorkingDirectory = AppContext.BaseDirectory });
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("自动重启失败：" + ex.Message + "\n请手动打开 WhaleLauncher.exe。", "检查更新",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+            Application.Current.Shutdown();
         }
 
         // ── 外观：主题 / 背景图 / 标题栏 ────────────────────────
@@ -259,8 +405,6 @@ namespace WhaleLauncher
             }
         }
 
-        private void OnOpenData(object sender, RoutedEventArgs e) => OpenDataDir();
-
         public void OpenDataDir()
         {
             try
@@ -290,7 +434,7 @@ namespace WhaleLauncher
                 DotWechat.Fill = s.BrOnline && s.BrAccountOk ? (Brush)FindResource("Ok")
                     : (s.BrOnline ? (Brush)FindResource("Warn") : (Brush)FindResource("Idle"));
 
-                NodeStateText.Text = s.NodeUp ? "运行中" : "未启动";
+                NodeStateText.Text = s.NodeUp ? "端口 " + s.Port : "内核未启动";
                 BridgeStateText.Text = s.BrOnline ? "在线" : (s.NodeUp ? "连接中" : "未启动");
 
                 var who = string.IsNullOrEmpty(s.BrAccountNick) ? s.BrAccount : s.BrAccountNick;
@@ -298,9 +442,8 @@ namespace WhaleLauncher
                 WechatLabel.ToolTip = string.IsNullOrEmpty(who) ? "微信" : "微信 · " + who;
                 BtnToggleText.Text = AnythingRunning ? "停止" : "启动";
 
+                // 内核与端口已经并进顶栏的内核胶囊；这里只说桥接和需要处理的状态
                 var parts = new List<string>();
-                if (!s.NodeUp) parts.Add("内核未启动");
-                else parts.Add("内核 " + Uptime(s.UptimeSec));
                 if (s.NodeUp)
                 {
                     if (s.BrOnline) parts.Add(s.BrLastSeenSec >= 0 ? $"桥接 {s.BrLastSeenSec} 秒前心跳" : "桥接在线");
@@ -308,8 +451,7 @@ namespace WhaleLauncher
                 }
                 if (s.NodeUp && s.NeedsKey && !s.HasKey) parts.Add("还没填 Key");
                 if (s.StFailed > 0) parts.Add($"发送失败 {s.StFailed}");
-                parts.Add("端口 " + s.Port);
-                StatusLine.Text = string.Join(" · ", parts);
+                StatusLine.Text = parts.Count > 0 ? string.Join(" · ", parts) : "启动器就绪";
 
                 if (Host.Content is IRefreshable r) await r.RefreshAsync();
             }
