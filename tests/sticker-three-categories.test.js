@@ -19,11 +19,13 @@ function fixture(t, on = true) {
 }
 
 test('分类白名单仅三类，旧key可读但原型属性不被接受', () => {
-  assert.deepEqual(stickers.EMOTIONS, { cute: '傲娇', angry: '炸毛', other: '其他' });
+  assert.deepEqual(stickers.EMOTIONS, { cute: '傲娇', angry: '炸毛', happy: '开心' });
   for (const key of ['constructor', '__proto__', 'toString', 'valueOf', '', 'other/../../', undefined, {}, 1]) {
     assert.equal(stickers.hasEmotion(key), false, String(key));
   }
-  assert.equal(stickers.normalizeEmotion('happy'), 'other');
+  assert.equal(stickers.normalizeEmotion('happy'), 'happy');
+  assert.equal(stickers.normalizeEmotion('other'), 'happy', '旧的 other 并入开心');
+  assert.equal(stickers.normalizeEmotion('meh'), 'happy');
   assert.equal(stickers.normalizeEmotion('cute'), 'cute');
 });
 
@@ -33,39 +35,33 @@ test('旧中英文分类、通用、根目录图片全部有明确归属；不�
   put('root.gif');
   for (const label of ['撒娇', 'cute', '傲娇']) put(label + '/a.gif');
   put('angry/a.gif'); put('炸毛/a.gif');
-  assert.equal(stickers.categoryImages(dir, 'other').length, 10);
+  assert.equal(stickers.categoryImages(dir, 'happy').length, 9);
   assert.equal(stickers.categoryImages(dir, 'cute').length, 3);
   assert.equal(stickers.categoryImages(dir, 'angry').length, 2);
   assert.deepEqual(stickers.categoryImages(dir, 'constructor'), []);
 });
 
-test('其他为空时绝不偷发炸毛/傲娇；强信号空池也不冒充', (t) => {
+test('分类为空绝不偷发别的分类；没给分类就不发', (t) => {
   const { cfg, root, put } = fixture(t);
   put('炸毛/a.gif'); put('傲娇/a.gif');
-  for (const request of ['', '发个表情包']) {
-    assert.equal(stickers.pick({ config: cfg, root, text: '你好', request, rng: () => 0 }), null);
-  }
+  assert.equal(stickers.pick({ config: cfg, root, category: '其他', rng: () => 0 }), null);
+  assert.equal(stickers.pick({ config: cfg, root, category: '', rng: () => 0 }), null);
+  assert.equal(stickers.pick({ config: cfg, root, rng: () => 0 }), null);
   put('其他/a.gif');
-  const hit = stickers.pick({ config: cfg, root, text: '正常聊天', rng: () => 0 });
-  assert.equal(hit.emotion, 'other'); assert.equal(path.basename(path.dirname(hit.path)), '其他');
-  const empty = fixture(t);
-  empty.put('其他/a.gif');
-  assert.equal(stickers.pick({ config: empty.cfg, root: empty.root, text: '气死我了', rng: () => 0 }), null);
-  assert.equal(stickers.pick({ config: empty.cfg, root: empty.root, text: '抱抱我', rng: () => 0 }), null);
+  const hit = stickers.pick({ config: cfg, root, category: '其他', rng: () => 0 });
+  assert.equal(hit.emotion, 'happy'); assert.equal(path.basename(path.dirname(hit.path)), '其他');
+  assert.equal(stickers.pick({ config: cfg, root, category: '炸毛', rng: () => 0 }).emotion, 'angry');
 });
 
-test('三类概率读写使用同一个key，25%阈值可确定验证，不叠加第二次概率', (t) => {
+test('chances / genericChance 不再参与自动发送，指定分类就必发', (t) => {
   const { cfg, root, put } = fixture(t);
   put('其他/a.gif'); put('炸毛/a.gif'); put('傲娇/a.gif');
-  cfg.sticker.chances = { other: 0.25, angry: 0, cute: 1 }; cfg.sticker.genericChance = 1;
-  assert.ok(stickers.pick({ config: cfg, root, text: '天气不错', rng: () => 0.249 }));
-  assert.equal(stickers.pick({ config: cfg, root, text: '天气不错', rng: () => 0.25 }), null);
+  cfg.sticker.chances = { other: 0, angry: 0, cute: 0 }; cfg.sticker.genericChance = 0;
+  assert.equal(stickers.pick({ config: cfg, root, category: '其他', rng: () => 0 }).emotion, 'happy');
+  assert.equal(stickers.pick({ config: cfg, root, category: '炸毛', rng: () => 0 }).emotion, 'angry');
+  assert.equal(stickers.pick({ config: cfg, root, category: '傲娇', rng: () => 0 }).emotion, 'cute');
+  // 没有任何分类时，概率再高也不发
   assert.equal(stickers.pick({ config: cfg, root, text: '气死我了', rng: () => 0 }), null);
-  assert.equal(stickers.pick({ config: cfg, root, text: '抱抱我', rng: () => 0.99 }).emotion, 'cute');
-  cfg.sticker.chances.other = 0;
-  assert.equal(stickers.pick({ config: cfg, root, text: '我不会发表情包', rng: () => 0 }), null, '她自己说发不能绕过概率');
-  assert.equal(stickers.pick({ config: cfg, root, text: '好呀', request: '不要发表情包', rng: () => 0 }), null);
-  assert.ok(stickers.pick({ config: cfg, root, text: '好呀', request: '发个表情包', rng: () => 0.99 }));
 });
 
 test('其他选择多个文件可遍历全部，轮换一圈也不立刻重复最后一张', (t) => {
@@ -74,7 +70,7 @@ test('其他选择多个文件可遍历全部，轮换一圈也不立刻重复�
   const seen = new Set();
   let recent = [];
   for (let i = 0; i < 8; i++) {
-    const hit = stickers.pick({ config: cfg, root, text: '普通聊天', recent, rng: () => 0 });
+    const hit = stickers.pick({ config: cfg, root, category: '其他', recent, rng: () => 0 });
     assert.notEqual(hit.path, recent.at(-1)); seen.add(hit.path); recent.push(hit.path);
   }
   assert.equal(seen.size, 4);
@@ -92,10 +88,10 @@ test('迁移无覆盖、字节不变、可重复执行；相同内容去重，�
   put('root.gif', Buffer.from('root'));
   const report = stickers.migrateLegacy(cfg, root);
   assert.deepEqual(report.errors, []);
-  assert.equal(report.moved, 6); assert.equal(report.deduplicated, 1);
-  assert.equal(fs.readFileSync(path.join(dir, '其他/same.gif'), 'utf8'), 'canonical');
-  const bytes = stickers.categoryImages(dir, 'other').map((file) => fs.readFileSync(file, 'utf8')).sort();
-  assert.deepEqual(bytes, ['canonical', 'happy', 'english', 'generic', 'root'].sort());
+  assert.equal(report.moved, 5); assert.equal(report.deduplicated, 1);
+  assert.equal(fs.readFileSync(path.join(dir, '开心/same.gif'), 'utf8'), 'happy');
+  const bytes = stickers.categoryImages(dir, 'happy').map((file) => fs.readFileSync(file, 'utf8')).sort();
+  assert.deepEqual(bytes, ['canonical', 'happy', 'english', 'generic'].sort());
   assert.equal(stickers.categoryImages(dir, 'cute').length, 1);
   assert.equal(stickers.categoryImages(dir, 'angry').length, 1);
   assert.deepEqual(stickers.migrateLegacy(cfg, root), { moved: 0, deduplicated: 0, errors: [] });
@@ -103,16 +99,17 @@ test('迁移无覆盖、字节不变、可重复执行；相同内容去重，�
 
 test('迁移复制失败保留旧图，带相对ID仍能预览；未知文件不被清理', (t) => {
   const { cfg, root, dir, put } = fixture(t);
-  const src = put('开心/source.gif'); put('开心/readme.txt', Buffer.from('keep me'));
+  const src = put('其他/source.gif'); put('开心/readme.txt', Buffer.from('keep me'));
   const copy = t.mock.method(fs, 'copyFileSync', () => { throw new Error('simulated copy failure'); });
   const report = stickers.migrateLegacy(cfg, root);
   assert.ok(report.errors.length);
   assert.equal(fs.existsSync(src), true);
-  assert.equal(stickers.resolveImage(dir, 'other', '开心/source.gif'), src);
+  assert.equal(stickers.resolveImage(dir, 'happy', '其他/source.gif'), src);
   assert.equal(fs.readFileSync(path.join(dir, '开心/readme.txt'), 'utf8'), 'keep me');
   copy.mock.restore();
   assert.deepEqual(stickers.migrateLegacy(cfg, root).errors, []);
   assert.equal(fs.existsSync(src), false);
+  assert.equal(fs.existsSync(path.join(dir, '开心/source.gif')), true);
   assert.equal(fs.existsSync(path.join(dir, '开心/readme.txt')), true);
 });
 
@@ -155,13 +152,13 @@ test('祖先junction不被迁移/上传/预览跟随，外部文件不被修改'
   assert.deepEqual(fs.readFileSync(external), GIF);
 });
 
-test('旧genericChance只做内存兼容，不改原配置或被默认other盖掉', (t) => {
+test('旧 chances / genericChance 字段被忽略，也不会被改写', (t) => {
   const { root } = fixture(t);
   const file = path.join(root, 'config.json');
   const raw = JSON.stringify({ sticker: { genericChance: 0.67, chances: { happy: 0.1 } } }); fs.writeFileSync(file, raw);
-  const cfg = loadConfig({ root, env: {} });
-  assert.equal(stickers.chanceFor(cfg, 'other'), 0.67);
+  loadConfig({ root, env: {} });
   assert.equal(fs.readFileSync(file, 'utf8'), raw);
+  assert.equal(stickers.chanceFor, undefined);
 });
 
 test('45秒不允许同会话并排两张；过90秒旧任务失效不能再领取', (t) => {
@@ -169,18 +166,18 @@ test('45秒不允许同会话并排两张；过90秒旧任务失效不能再领�
   let now = 1000;
   const service = new StickerService(cfg, {now: () => now, rng: () => 0});
   const msg = { platform: 'wechat', chatId: 'peer', chatType: 'private' };
-  const old = service.plan(msg, '你好');
+  const old = service.plan(msg, '其他');
   service.claim(old.id);
-  now += 46000; assert.equal(service.plan(msg, '你好'), null);
+  now += 46000; assert.equal(service.plan(msg, '其他'), null);
   now += 45000;
-  const next = service.plan(msg, '你好'); assert.ok(next);
+  const next = service.plan(msg, '其他'); assert.ok(next);
   assert.equal(service.jobs.get(old.id).status, 'unconfirmed');
   assert.throws(() => service.claim(old.id), { statusCode: 409 });
 });
 
 test('HTTP三类旧图迁移、预览字节与删除对象一致；不改主人/设置', async (t) => {
   const { root, put } = fixture(t, false);
-  put('开心/same.gif', Buffer.from(GIF)); put('其他/same.gif', Buffer.concat([GIF, Buffer.from('different')]));
+  put('开心/same.gif', Buffer.concat([GIF, Buffer.from('different')])); put('其他/same.gif', Buffer.from(GIF));
   put('撒娇/c.gif'); put('angry/a.gif');
   const config = JSON.stringify({server:{port:0,openBrowser:false},watchConfig:false,features:{stickers:true}, persona:{name:'测试名字',ownerName:'测试主人'}, sticker:{chances:{other:0.45,cute:0.2,angry:0.3}}});
   fs.writeFileSync(path.join(root, 'config.json'), config);
@@ -188,16 +185,16 @@ test('HTTP三类旧图迁移、预览字节与删除对象一致；不改主人/
   const inst = await startServer({root,env:{WHALE_LOG_FILE:'',WHALE_TEST_NO_SHELL:'1'},port:0,openBrowser:false}); t.after(() => inst.close());
   const get = (r) => fetch(inst.url + r);
   const status = await (await get('/api/stickers/status')).json();
-  assert.deepEqual(status.emotions.map((e) => e.key), ['cute','angry','other']);
-  const other = status.emotions.find((e) => e.key === 'other');
-  assert.equal(other.chance, 0.45); assert.equal(other.count, 2);
+  assert.deepEqual(status.emotions.map((e) => e.key), ['cute','angry','happy']);
+  const other = status.emotions.find((e) => e.key === 'happy');
+  assert.equal(other.count, 2);
   assert.equal(new Set(other.items.map((i) => i.id)).size, 2);
   const victim = other.items.find((i) => i.name.includes('迁移'));
   const response = await get('/api/stickers/image?emotion=other&name=' + encodeURIComponent(victim.id));
   assert.equal(response.status,200); assert.deepEqual(Buffer.from(await response.arrayBuffer()), GIF);
   const del = await fetch(inst.url+'/api/stickers/delete',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({emotion:'other',name:victim.id})});
   assert.equal(del.status,200);
-  assert.equal((await (await get('/api/stickers/status')).json()).emotions.find((e) => e.key==='other').count,1);
+  assert.equal((await (await get('/api/stickers/status')).json()).emotions.find((e) => e.key==='happy').count,1);
   for (const name of ['../same.gif','其他/../same.gif']) assert.equal((await get('/api/stickers/image?emotion=other&name='+encodeURIComponent(name))).status,404);
   assert.equal((await get('/api/stickers/image?emotion=constructor&name=same.gif')).status,404);
   assert.equal(fs.readFileSync(path.join(root,'config.json'),'utf8'),config);

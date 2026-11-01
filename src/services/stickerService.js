@@ -9,12 +9,13 @@ function fail(message, statusCode = 400) { return Object.assign(new Error(messag
 
 /** Ephemeral, one-shot delivery jobs. Never replay a persisted queue after restart. */
 class StickerService {
-  constructor(config, { now = Date.now, rng = Math.random, store = null } = {}) {
+  constructor(config, { now = Date.now, rng = Math.random, store = null, logger = null } = {}) {
     this.config = config;
     this.now = now;
     this.rng = rng;
     // 动作账本：把「发了哪张、成没成」写回会话，模型下一轮才知道自己干过什么
     this.store = store || null;
+    this.logger = logger || null;
     this.enabled = false;
     this.generation = '';
     this.jobs = new Map();
@@ -47,10 +48,23 @@ class StickerService {
     }
     if (enabled) {
       const dir = stickers.stickerDir(this.config, this.config.root);
+      // 内置分类（傲娇 / 炸毛 / 开心）的文件夹被删了要补回来；自定义分类不碰
+      try {
+        const created = stickers.ensureBuiltinDirs(this.config, this.config.root);
+        if (created.length) {
+          this.restored = (this.restored || []).concat(created);
+          if (this.logger) this.logger.info('表情包内置分类文件夹已补回：' + created.join('、'));
+        }
+      } catch { /* 目录建不出来不影响其它逻辑 */ }
       // Migrate once per enabled library; never move a file held by an active job.
       if (this.libraryDir !== dir && ![...this.jobs.values()].some((j) => ACTIVE.has(j.status))) {
         this.migration = stickers.migrateLegacy(this.config, this.config.root);
         this.libraryDir = dir;
+        const m = this.migration;
+        if (m && (m.moved || m.deduplicated) && this.logger) {
+          this.logger.info(`表情包旧分类已并入「开心」：迁移 ${m.moved} 张、去重 ${m.deduplicated} 张`
+            + (m.errors && m.errors.length ? `、${m.errors.length} 张失败（原图保留）` : ''));
+        }
       }
     } else this.libraryDir = '';
     // Preserve active jobs, but bound terminal history and session caches.
@@ -81,13 +95,14 @@ class StickerService {
       if (entry) job.eventTs = entry.ts;
     } catch { /* 记账失败不影响发送 */ }
   }
-  plan(msg, text, request = '') {
+  /** category 由模型在回复里用 [[sticker:分类]] 指定；没给就什么都不发 */
+  plan(msg, category = '') {
     if (!this.reconcile() || msg?.platform !== 'wechat' || !msg.chatId) return null;
     const key = `wechat:${msg.chatId}`;
     // No cooldown after a completed send. An in-flight job remains exclusive until
     // ACK or the 90s expiry; the old 45s bypass could queue two sends for one chat.
     if ([...this.jobs.values()].some((j) => j.key === key && ACTIVE.has(j.status))) return null;
-    const hit = stickers.pick({ config: this.config, root: this.config.root, key, text, request,
+    const hit = stickers.pick({ config: this.config, root: this.config.root, category,
       recent: this.recent.get(key) || [], rng: this.rng });
     if (!hit) return null;
     const added = this.add(hit, msg.chatTitle || msg.chatId, msg.chatId, key, 'reserved');
@@ -152,7 +167,7 @@ class StickerService {
         name: path.basename(file), id: path.relative(dir, file).split(path.sep).join('/'),
       }));
       return { key, label, extra: Boolean(extra), files: items.map((item) => item.name), items,
-        count: items.length, chance: stickers.chanceFor(this.config, key) };
+        count: items.length };
     };
     const emotions = Object.keys(stickers.EMOTIONS).map((key) => list(key, stickers.EMOTIONS[key], false));
     for (const cat of stickers.readExtraCategories(this.config, this.config.root)) {

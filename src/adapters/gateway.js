@@ -197,7 +197,7 @@ class Gateway {
     let sticker = null;
     try {
       if (local && this.platform === 'wechat' && this.bot && typeof this.bot.stickerFor === 'function') {
-        sticker = this.bot.stickerFor({ msg }, result.reply, msg.text);
+        sticker = this.bot.stickerFor({ msg, stickerCategory: result.stickerCategory }, result.reply);
       }
     } catch (err) {
       this.logger && this.logger.warn && this.logger.warn('挑表情包失败：' + (err && err.message ? err.message : err));

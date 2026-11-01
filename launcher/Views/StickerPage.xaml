@@ -30,14 +30,11 @@
                     <TextBlock Text="目录" Style="{StaticResource Small}" VerticalAlignment="Center" Margin="0,0,6,0" />
                     <TextBox x:Name="TxtDir" Width="300" VerticalAlignment="Center" LostFocus="OnSaveStickerSettings"
                              ToolTip="相对路径，分类是它下面的文件夹" />
-                    <TextBlock Text="概率" Style="{StaticResource Small}" VerticalAlignment="Center" Margin="18,0,6,0" />
-                    <TextBox x:Name="TxtCute" Width="50" Margin="0,0,4,0" LostFocus="OnSaveStickerSettings" ToolTip="傲娇" />
-                    <TextBox x:Name="TxtAngry" Width="50" Margin="0,0,4,0" LostFocus="OnSaveStickerSettings" ToolTip="炸毛" />
-                    <TextBox x:Name="TxtOther" Width="50" Margin="0,0,6,0" LostFocus="OnSaveStickerSettings" ToolTip="其他" />
-                    <TextBlock Text="傲娇 / 炸毛 / 其他（0–1）" Style="{StaticResource Small}" VerticalAlignment="Center" />
                 </WrapPanel>
-                <TextBlock Text="只有在微信窗口处于前台、且账号校验通过时才会真的发出去；关掉开关会立刻取消所有排队任务。"
+                <TextBlock Text="发哪一类由模型在回复里决定（[[sticker:分类]] 标记），不再按概率自动发；标记会被剥掉，用户看不到。"
                            Style="{StaticResource Small}" Margin="0,8,0,0" TextWrapping="Wrap" />
+                <TextBlock Text="只有在微信窗口处于前台、且账号校验通过时才会真的发出去；关掉开关会立刻取消所有排队任务。"
+                           Style="{StaticResource Small}" Margin="0,4,0,0" TextWrapping="Wrap" />
             </StackPanel>
         </Border>
 

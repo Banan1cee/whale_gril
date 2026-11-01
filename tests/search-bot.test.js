@@ -24,10 +24,12 @@ function fixture(t, { answer = '{"need":false}', enabled = true, timeoutMs = 100
   } };
   const bot = new Bot({ config, store, llm, logger: null, mockChunkDelayMs: 0 });
   const calls = [];
-  for (const method of ['searchText', 'bilibiliHotText', 'weiboHotText', 'hotNewsText', 'weatherText', 'ipCity']) {
+  for (const method of ['searchText', 'bilibiliHotText', 'weiboHotText', 'hotNewsText', 'weatherText', 'ipCity', 'geocodeCity']) {
     t.mock.method(web, method, async (...args) => {
       calls.push({ method, args });
-      return method === 'ipCity' ? '' : 'TEST EVIDENCE ' + method;
+      if (method === 'ipCity') return '';
+      if (method === 'geocodeCity') return null;
+      return 'TEST EVIDENCE ' + method;
     });
   }
   const msg = (text) => ({ platform: 'web', chatId: 'search-test', chatType: 'private', senderId: 'user', senderName: '小海', text });
@@ -136,16 +138,65 @@ for (const customPrompt of ['', '自定义人设测试']) {
   });
 }
 
+test('链接读取挪到触发判定之后：群里没叫她的消息不抓链接', async (t) => {
+  const f = fixture(t, { answer: '{"need":false}' });
+  f.bot.config.links.enabled = true;
+  f.bot.config.group.requireAt = true;
+  f.bot.config.group.freeChat = false;
+  const read = [];
+  f.bot.linkReader = async (url) => { read.push(url); return { ok: true, url, kind: 'web', title: 't', description: 'd', article: '' }; };
+  const groupMsg = { platform: 'wechat', chatId: 'g1', chatType: 'group', senderId: 'u1', senderName: '小明', text: '看这个 https://example.com/a' };
+  const ignored = await f.bot.decide(groupMsg);
+  assert.equal(ignored.action, 'ignore');
+  assert.deepEqual(read, [], '没被叫到就不该抓链接');
+
+  const decision = await f.bot.decide({ ...groupMsg, atMe: true, msgId: 'm2' });
+  assert.deepEqual(read, ['https://example.com/a']);
+  assert.match(decision.msg.linkText, /链接标题/);
+});
+
+test('链接读取和联网搜索并行，总耗时取两者最大值', async (t) => {
+  const f = fixture(t, { answer: '{"need":true,"query":"显卡行情"}', timeoutMs: 5000 });
+  f.bot.config.links.enabled = true;
+  t.mock.method(web, 'searchText', async () => {
+    await new Promise((r) => setTimeout(r, 80));
+    return 'TEST EVIDENCE searchText';
+  });
+  f.bot.linkReader = async (url) => {
+    await new Promise((r) => setTimeout(r, 80));
+    return { ok: true, url, kind: 'web', title: '标题', description: '简介', article: '' };
+  };
+  const started = Date.now();
+  const decision = await f.bot.decide(f.msg('查一下显卡行情 https://example.com/a'));
+  const elapsed = Date.now() - started;
+  assert.match(decision.msg.webText, /TEST EVIDENCE/);
+  assert.match(decision.msg.linkText, /链接标题/);
+  assert.ok(elapsed < 150, '串行会 >=160ms，并行应该在 80ms 左右，实际 ' + elapsed + 'ms');
+});
+
 test('weather result goes through actual decide into the final persona prompt', async (t) => {
-  const f = fixture(t, { answer: '{"need":true,"query":"北京 天气"}', city: '上海' });
+  // 模型把地名抄进 city；它优先于配置里的 city（上海）
+  const f = fixture(t, { answer: '{"need":true,"query":"北京 天气","city":"北京"}', city: '上海' });
   const decision = await f.bot.decide(f.msg('北京天气怎么样'));
   assert.deepEqual(f.calls.map((x) => x.method), ['weatherText']);
   assert.equal(f.calls[0].args[0], '北京');
   assert.match(decision.system, /TEST EVIDENCE weatherText/);
 });
 
+test('模型没给地名时，去掉天气词后交给 geocodeCity 解析', async (t) => {
+  const f = fixture(t, { answer: '{"need":true,"query":"明天会下雨吗"}' });
+  t.mock.method(web, 'geocodeCity', async (name) => {
+    f.calls.push({ method: 'geocodeCity', args: [name] });
+    return name.includes('杭州') ? { name: '杭州' } : null;
+  });
+  await f.bot.decide(f.msg('杭州明天会下雨吗'));
+  assert.deepEqual(f.calls.map((x) => x.method), ['geocodeCity', 'weatherText']);
+  assert.match(f.calls[0].args[0], /杭州/);
+  assert.equal(f.calls[1].args[0], '杭州');
+});
+
 test('weather and fallback search receive decreasing shared deadline budgets', async (t) => {
-  const f = fixture(t, { answer: '{"need":true,"query":"北京 天气"}', timeoutMs: 100 });
+  const f = fixture(t, { answer: '{"need":true,"query":"北京 天气","city":"北京"}', timeoutMs: 100 });
   let weatherBudget;
   t.mock.method(web, 'weatherText', async (_, opts) => {
     weatherBudget = opts.timeoutMs;

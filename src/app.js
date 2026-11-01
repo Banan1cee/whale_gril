@@ -107,7 +107,7 @@ function createRuntime({ root = path.resolve(__dirname, '..'), env = process.env
   runtime.bot = new Bot({ config, store, llm: runtime.llm, logger });
   // 表情包任务队列：内存态，重启不重放（避免把上一条没发出去的表情再补发一次）
   // store 用来记动作账：发了哪张、桥接确认没确认，下一轮提示词才看得见
-  runtime.stickerService = new StickerService(config, { store });
+  runtime.stickerService = new StickerService(config, { store, logger });
   runtime.bot.stickerService = runtime.stickerService;
   // 联系人缓存：桥接推上来的 wxid 清单，给启动器选择器和 care 白名单用
   runtime.contacts = new ContactsCache(config, { logger });

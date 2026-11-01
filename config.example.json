@@ -186,16 +186,8 @@
     "memorySnapshot": true
   },
   "sticker": {
-    "_说明": "表情包（实验性）：总闸在 features.stickers。文件夹 data/stickers/<开心|炸毛|撒娇|嫌弃|敷衍>/（中英文名都认），没图回落「通用」。控制台可以上传/删除/预览缩略图。",
+    "_说明": "表情包（实验性）：总闸在 features.stickers。文件夹 data/stickers/<傲娇|炸毛|开心|自定义>/（中英文名都认）。发哪一类由模型在回复里用 [[sticker:分类名]] 决定，不再按概率自动发；分类没有图或名字不对就不发。控制台可以上传/删除/预览缩略图。",
     "dir": "data/stickers",
-    "chances": {
-      "happy": 0.25,
-      "angry": 0.25,
-      "cute": 0.25,
-      "meh": 0.25,
-      "bored": 0.25
-    },
-    "genericChance": 0.25,
     "testChat": "文件传输助手"
   }
 }

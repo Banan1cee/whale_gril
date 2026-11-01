@@ -11,7 +11,7 @@
  */
 
 const SCHEMA_HINT = `只输出 JSON，不要解释、不要代码块围栏。格式：
-{"need":true,"query":"简短检索词（保留完整专名和型号）","site":"bilibili|weibo|toutiao|"}
+{"need":true,"query":"简短检索词（保留完整专名和型号）","site":"bilibili|weibo|toutiao|","city":"地名原文或空","fresh":"strict|normal|any"}
 或
 {"need":false}`;
 
@@ -33,6 +33,15 @@ const SYSTEM = `你是一个检索路由器。判断用户这句话是否需要�
 - 只是在复述或回应上一句
 
 site 字段：明确提到 B站/哔哩哔哩 用 bilibili；明确提到微博 用 weibo；不指定留空。
+
+city 字段：这句话提到地点就把地名原文抄进 city（保留用户写法，不翻译）；没提就留空。
+例如「明天上海会下雨吗」→ city 填「上海」；「明天会下雨吗」→ city 留空。
+
+fresh 字段（结果要多新）：
+- strict：问价格、型号、最新、现在出到几、这周/今天这类会变的数字
+- normal：一般事实、新闻、近况
+- any：常识、历史、定义这类不会变的知识
+
 query 字段：写成「能直接粘进搜索引擎」的词。
 - **保留用户原话里的名词**（产品名、人名、作品名、公司名），不要改写成更泛的类别。
   反例：用户说「苹果最新的机器」，不要改写成「苹果最新发布电脑」（那是另一个产品线）。
@@ -62,9 +71,13 @@ function parseRoute(raw) {
   const query = String(obj.query || '').trim().slice(0, 100);
   const site = ['bilibili', 'weibo', 'toutiao'].includes(String(obj.site || '').trim())
     ? String(obj.site).trim() : '';
-  if (!need) return { need: false, query: '', site: '' };
+  // 地名保留用户写法（不翻译）；只做长度和空白收敛
+  const city = String(obj.city == null ? '' : obj.city).trim().slice(0, 40);
+  const fresh = ['strict', 'normal', 'any'].includes(String(obj.fresh || '').trim())
+    ? String(obj.fresh).trim() : 'normal';
+  if (!need) return { need: false, query: '', site: '', city, fresh };
   if (!query) return null;
-  return { need: true, query, site };
+  return { need: true, query, site, city, fresh };
 }
 
 /**
@@ -75,8 +88,8 @@ function parseRoute(raw) {
  */
 async function route(llm, text, opts = {}) {
   const said = String(text || '').trim().slice(0, 200);
-  if (!said) return { need: false, query: '', site: '' };
-  if (!llm || typeof llm.complete !== 'function') return { need: false, query: '', site: '', failed: true };
+  if (!said) return { need: false, query: '', site: '', city: '', fresh: 'normal' };
+  if (!llm || typeof llm.complete !== 'function') return { need: false, query: '', site: '', city: '', fresh: 'normal', failed: true };
   const history = (opts.history || []).slice(-4).join('\n') || '（无）';
   let timer;
   const controller = new AbortController();
@@ -98,10 +111,10 @@ async function route(llm, text, opts = {}) {
       }),
     ]);
     const parsed = parseRoute(raw);
-    if (!parsed) return { need: false, query: '', site: '', failed: true };
+    if (!parsed) return { need: false, query: '', site: '', city: '', fresh: 'normal', failed: true };
     return parsed;
   } catch {
-    return { need: false, query: '', site: '', failed: true };
+    return { need: false, query: '', site: '', city: '', fresh: 'normal', failed: true };
   } finally {
     clearTimeout(timer);
   }

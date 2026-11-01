@@ -86,6 +86,16 @@ test('C3：普通问题不过滤（问红楼作者不需要时效）', () => {
   assert.equal(websearch.dropStaleResults('红楼梦作者是谁', results).length, 2);
 });
 
+test('C3：模型判的时效三档决定丢弃阈值（strict 90 / normal 365 / any 不限）', () => {
+  const results = [
+    { title: '近文', snippet: '30 天之前 a' },
+    { title: '中年', snippet: '200 天之前 b' },
+    { title: '老文', snippet: '2019年1月1日 c' },
+  ];
+  assert.deepEqual(websearch.dropStaleResults('随便', results, { maxAgeDays: 90 }).map((x) => x.title), ['近文']);
+  assert.deepEqual(websearch.dropStaleResults('随便', results, { maxAgeDays: 365 }).map((x) => x.title), ['近文', '中年']);
+  assert.equal(websearch.dropStaleResults('随便', results, { maxAgeDays: null }).length, 3);
+});
 test('C3：全被判过期时退回原始结果，不能让她「搜不到」', () => {
   const results = [{ title: '旧文', snippet: '2010年3月4日 z' }];
   assert.equal(websearch.dropStaleResults('最新显卡', results).length, 1);

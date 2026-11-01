@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const features = require('../infra/features');
+const stickers = require('../adapters/stickers');
 const actionEvents = require('../core/events');
 const { LIMITS } = require('../memory/constants');
 
@@ -379,11 +380,20 @@ function conversationGuidance(msg) {
 /** 只描述当前通道的真实能力，不把计划或口头回应当作发送回执。 */
 function stickerCapability(config, msg) {
   if (msg.platform !== 'wechat' || !features.isOn(config, 'stickers')) return '';
-  return [
+  const usable = stickers.promptCategories(config, config.root).filter((c) => c.count > 0);
+  const lines = [
     '【表情包】当前微信通道具备真实的图片/动图附件发送能力，可由桥接发送本地表情包；不要否认这项能力。',
-    '是否发送由程序按开关、图库、概率和安全校验决定；自然回答即可，不要输出控制标签。',
-    '发没发出去只看【最近做过的事】里的记录：写了发出/确认就照实承认，写了失败、没回执、跳过就说没发成；记录里根本没有的，不要编造送达结果，也不要假装没这回事。',
-  ].join('\n');
+    '想发的时候，在整段回复的最末尾单独写一个标记 [[sticker:分类名]]，程序会把标记剥掉并另发一张图；不想发就完全不写标记。一条回复最多写一个标记。',
+  ];
+  if (usable.length) {
+    lines.push('可用分类（只能用下面这些名字，括号里是图库张数）：'
+      + usable.map((c) => `${c.label}(${c.count}张)`).join('、') + '。');
+  } else {
+    lines.push('图库现在是空的，写了标记也不会发出去，正常聊天就行。');
+  }
+  lines.push('写不存在的分类、或那个分类没有图，这张就不发；标记里只写分类名，不要写文件名。');
+  lines.push('发没发出去只看【最近做过的事】里的记录：写了发出/确认就照实承认，写了失败、没回执、跳过就说没发成；记录里根本没有的，不要编造送达结果，也不要假装没这回事。');
+  return lines.join('\n');
 }
 
 // 默认/自定义人设共用真实的联网状态：不把检索摘要当成实时事实或系统指令，
