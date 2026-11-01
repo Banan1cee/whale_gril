@@ -37,7 +37,7 @@ Token 不对返回 `403`。没配 token 时不校验（只建议本机调试这�
 | `text` | `content` `message` `msg` `body` | 消息文本（必填） |
 | `chat_id` | `chatId` `room_id` `conversation_id` `group_id` | 群 id 或用户 id，缺省用发送者 id |
 | `chat_type` | `chatType` `type` `is_group` `from_group` | `group` / `private`，有 `room_id` 时默认 group |
-| `user_id` | `sender_id` `from` `wxid` `open_id` | 发送者 id |
+| `user_id` | `sender_id` `from` `wxid` | 发送者 id（抖音 `open_id` 不直接支持，需先转换成本程序的 id） |
 | `nickname` | `sender_name` `user_name` `name` | 发送者昵称（记忆里用这个） |
 | `at_me` | `atMe` `is_at` `mentioned` | 是否 @ 了她（也可以直接让文本里带「鲸鲸」） |
 | `reply_to_bot` | `quote_from_bot` | 是否回复了她的消息 |
@@ -192,7 +192,7 @@ curl -X POST "http://127.0.0.1:8787/webhook/wechat" \
 
 ## 六、部署建议
 
-- 公网部署：`config.json` 里 `server.host` 改 `0.0.0.0`，前面套 Nginx/Caddy 反向代理并上 HTTPS。
+- 公网部署：**先把 `server.allowRemote` 设成 `true`、把两个 `inboundToken` 改成随机串，再改 `server.host`**（顺序反了 `server.js` 会把 host 强制改回 `127.0.0.1` 并告警）；然后前面套 Nginx/Caddy 反向代理并上 HTTPS。
 - **一定要**给两个网关配不同的 `inboundToken`，并在中转服务侧校验。
 - 不要把 `/api/settings` 暴露到公网（里面能改 API Key）；本程序没有登录系统，建议只在内网/本机用。
 - 想扩展新平台（QQ、Discord…）：复制 `src/adapters/gateway.js` 里的模式，加一个平台名就行；`PLATFORMS` 数组里加一项。

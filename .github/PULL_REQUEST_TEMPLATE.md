@@ -16,14 +16,18 @@
 ## 怎么验证
 
 - [ ] `npm test` 全绿
+- [ ] Python 用例 / 启动器编译按需跑过
 - [ ] 新增测试能在修复前失败（说明它真的测到了这个 bug）
 - [ ] 手动验证过：<!-- 写一句你在微信/网页里实际看到的结果 -->
+- [ ] 或启动器/安装包烟测：<!-- 改了 launcher 或打包时填：dotnet publish 后能起、installer 流水线烟测通过 -->
 
 ## 影响面
 
 - [ ] 改了提示词 / 人设
 - [ ] 改了微信桥接（涉及 UI 自动化）
 - [ ] 改了配置项（需要写进 CHANGELOG）
+- [ ] 改了启动器 UI（需 dotnet publish 并同步根目录 `WhaleLauncher.exe`）
+- [ ] 改了安装脚本 / CI（`.github/workflows/installer.yml`）
 - [ ] 只改测试 / 文档
 
 ## 其他

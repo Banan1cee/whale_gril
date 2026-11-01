@@ -2,7 +2,7 @@
 
 当前状态：`engine.py` 是原 `examples/wechatauto_bridge.py` 的完整迁移，
 入口已经拆成 `python -m bridge` / `examples/wechatauto_bridge.py` 薄壳。
-`engine.py` 内部的 `main()` 仍然是巨型函数（约 2100 行闭包），下一步按下面的顺序拆：
+`engine.py` 共 4253 行，内部的 `main()` 仍然是巨型函数（约 3100 行闭包）；**截至 4.0 仍未拆**，后续按下面的顺序拆：
 
 ```
 bridge/
