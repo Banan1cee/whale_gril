@@ -16,6 +16,7 @@ const modules = [
   require('./bridge'),
   require('./stickers'),
   require('./reminders'),
+  require('./budget'),
 ];
 
 /** 组装路由表：每个领域一个文件，server 只负责启动。 */

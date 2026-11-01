@@ -95,6 +95,8 @@ class Store {
       maxSessions: Number(limits.maxSessions) || 200,
       maxMessages: Number(limits.maxMessages) || LIMITS.maxMessagesPerChat,
       maxNotesPerUser: Number(limits.maxNotesPerUser) || LIMITS.maxPreferencesPerPerson,
+      // 对话预算由 config.memory.dialogueBudget 传入（app.js 就是这么传的），没传就用默认 5,500
+      dialogueBudget: Number(limits.dialogueBudget) || LIMITS.dialogueBudget,
     };
     this.sessions = new Map();
     this.digest = [];
@@ -347,7 +349,7 @@ class Store {
       summaryTokens: chat.summary.tokens,
       memoryTokens: estimateBudgetTokens(block),
       // 对话预算（不含 system）：system 只由上层测量，不参与这里的挤压
-      dialogueBudget: LIMITS.dialogueBudget,
+      dialogueBudget: this.limits.dialogueBudget,
       hardTotalTokens: LIMITS.hardTotalTokens,
       reserveTokens: LIMITS.reserveTokens,
       notes: activePreferenceTexts(card),
@@ -535,7 +537,7 @@ class Store {
       totalMessages,
       totalReplies,
       budget: {
-        dialogueBudget: LIMITS.dialogueBudget,
+        dialogueBudget: this.limits.dialogueBudget,
         hardTotalTokens: LIMITS.hardTotalTokens,
         memoryTokens: LIMITS.memoryTokens,
         summaryTokens: LIMITS.summaryTokens,

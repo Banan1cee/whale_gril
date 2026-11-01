@@ -8,12 +8,20 @@
  * 没有 Key、演示模式、离线或接口不支持时，退回本地轻量估算，并明确标记 exact=false。
  *
  * system prompt 不占对话预算（dialogueBudget），但单轮硬上限是
- * systemTokens + dialogueBudget <= hardTotalTokens，所以人设上限是 32,000 - 5,500 = 26,500。
+ * systemTokens + dialogueBudget <= hardTotalTokens，所以人设上限是
+ * 32,000 - 当前对话预算（默认 5,500 → 26,500）。
  */
 const persona = require('./index');
 const { LIMITS } = require('../memory/constants');
 const { estimateBudgetTokens } = require('../memory/tokens');
 
+/** 当前生效的对话预算：config.memory.dialogueBudget 优先，否则用默认 5,500 */
+function effectiveDialogueBudget(config) {
+  const v = config && config.memory ? Number(config.memory.dialogueBudget) : NaN;
+  return Number.isFinite(v) && v > 0 ? v : LIMITS.dialogueBudget;
+}
+
+// 默认口径（测试和旧调用方还按它断言）；实际校验用 checkPersonaTokens 里的动态值
 const PERSONA_MAX_TOKENS = LIMITS.hardTotalTokens - LIMITS.dialogueBudget;
 
 /** 只把这几个字段合进预览 config，不写盘 */
@@ -22,6 +30,7 @@ function previewConfig(config, patch = {}) {
     persona: config.persona || {},
     chat: config.chat || {},
     group: config.group || {},
+    memory: config.memory || {},
   }));
   const p = preview.persona || {};
   const c = preview.chat || {};
@@ -87,6 +96,8 @@ async function checkPersonaTokens(runtime, patch = {}) {
     if (runtime.logger) runtime.logger.warn('人设 token 精确计数失败，退回估算：' + ((err && err.message) || err));
   }
   const tokens = exact && Number(exact.tokens) > 0 ? Number(exact.tokens) : estimated;
+  // 人设上限跟着对话预算走：预算调大 → system 可用空间变小
+  const limit = LIMITS.hardTotalTokens - effectiveDialogueBudget(config);
   return {
     tokens,
     estimated,
@@ -94,10 +105,10 @@ async function checkPersonaTokens(runtime, patch = {}) {
     source: exact && Number(exact.tokens) > 0 ? 'provider-usage' : 'estimate',
     model: (runtime.llm && runtime.llm.model) || '',
     provider: (runtime.llm && runtime.llm.provider) || '',
-    limit: PERSONA_MAX_TOKENS,
-    overLimit: tokens > PERSONA_MAX_TOKENS,
+    limit,
+    overLimit: tokens > limit,
     systemChars: system.length,
   };
 }
 
-module.exports = { PERSONA_MAX_TOKENS, checkPersonaTokens, previewConfig, longestSystem };
+module.exports = { PERSONA_MAX_TOKENS, checkPersonaTokens, previewConfig, longestSystem, effectiveDialogueBudget };

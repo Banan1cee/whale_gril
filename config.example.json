@@ -67,7 +67,8 @@
     "muteDefaultMinutes": 30
   },
   "memory": {
-    "_说明": "记忆规模：最多记几个会话、每个会话多少条消息、每人多少条笔记",
+    "_说明": "记忆规模：最多记几个会话、每个会话多少条消息、每人多少条笔记。dialogueBudget=对话预算（不含 system prompt），默认 5500 = 记忆 900 + 摘要 900 + 原文 3200 + 预留 500，可在启动器「高级模式 → 高级」里调；maxSessions 等旧键运行时已忽略",
+    "dialogueBudget": 5500,
     "maxSessions": 200,
     "maxMessages": 400,
     "maxNotesPerUser": 6
