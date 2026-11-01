@@ -211,6 +211,9 @@ test('启动器重启用真实路径，并等旧实例退出再抢单实例锁',
   const svc = fs.readFileSync(path.join(root, 'launcher', 'UpdateService.cs'), 'utf8');
   assert.match(main, /Environment\.ProcessPath/, '重启不能写死 WhaleLauncher.exe（以后会改名）');
   assert.match(main, /--replace/, '重启要带 --replace <pid>');
+  assert.match(main, /正在重启/, '更新完要自动重启，不能只留个提示');
+  assert.ok(!/现在重启吗/.test(main), '不该再弹「现在重启吗」让用户点（以后没有 bat，全靠自动）');
+  assert.match(main, /private bool RestartSelf\(out string error\)/, '重启失败要能回报给调用方');
   assert.match(app, /WaitForReplacedInstance/, '新实例要先等旧实例退出，否则弹「已经在运行」');
   assert.match(app, /CleanupOldExes/, '启动时清理 *.old-*');
   assert.match(svc, /-ExeName/, '更新时要告诉脚本当前 exe 名');
