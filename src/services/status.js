@@ -106,8 +106,6 @@ function recentMessages(store, limit = 10) {
   return out.sort((a, b) => b.ts - a.ts).slice(0, Math.max(1, limit));
 }
 
-/* ---------------- 消息汇总 ---------------- */
-
 function replyChannelLabel(config) {
   const g = (config.gateway && config.gateway.wechat) || {};
   if (g.outboundUrl) return `中转网关 ${g.outboundUrl}`;

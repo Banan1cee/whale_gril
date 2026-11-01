@@ -105,9 +105,6 @@ ACCOUNT_WANTED = ""
 
 # 提醒调度器：main() 里构造；模块级是为了让退出分支能拿到它
 REMINDER_RUNNER = None
-# 消息汇总 worker 尚未实现（Node 侧 src/memory/digest 做汇总，桥接侧常驻 worker 还没写）。
-# 先定义成 None：reload_config / 退出清理引用它时不再 NameError（H1）。
-DIGEST_WORKER = None
 # 发送状态（单一 owner：send_text / send_at / send_sticker 的临界区上下文）。
 # 放模块级是为了让 reload_config 的「账号变更 → 重启」路径能等到在途发送结束（M16）。
 # budget：看门狗预算，按文本长度动态放宽（H3），见 _SendStateScope。
@@ -273,7 +270,7 @@ try:
     # 手动钉窗口（调试用）：填微信主窗的 hwnd，直接用它，跳过自动识别
     # 强转换都走安全 helper（M12）：一个坏值不该让后面的配置全都不解析。
     WINDOW_HWND = _as_int(_wechat.get("windowHwnd"), 0)
-    # 网页「设置」里选的账号（目录名 / wxid / 昵称都行）；留空 = 自动选「最近活跃」。
+    # 启动器「微信桥接」页选的账号（目录名 / wxid / 昵称都行）；留空 = 自动选「最近活跃」。
     # 这个键最关键，见大 try 结束后的独立兜底解析（M12）。
     LOW_BATTERY_PCT = _as_float(_wechat.get("lowBatteryPercent", 5), 5)
     GOODNIGHT_TEXT = str(_wechat.get("goodnightText", "晚安，电量快没了，我先睡啦，明天见～"))
@@ -379,7 +376,7 @@ def reload_config(path=None):
     """把 config.json 重新读一遍，覆盖上面这些「启动时定型」的开关。
 
     为什么需要：调试台（/debug）改的是 config.json，但桥接以前只在启动时读一次，
-    用户在页面上关掉「主动分享」、改「忽略名单」、调「游戏白名单」……全都没反应，
+    用户在页面上关掉「主动搭话」、改「忽略名单」、调「群聊开关」……全都没反应，
     只能手动重启「启动微信桥接.bat」，表现出来就是「调了没用，还是默认」。
     现在 config.json 一变，5 秒内自动生效。
 
@@ -478,13 +475,6 @@ def reload_config(path=None):
     wxids = (((cfg.get("persona") or {}).get("master") or {}).get("wxids") or [])
     if wxids:
         MASTER_WXID = wxids[0]
-    # 消息汇总：开关/频率/收件人/账号一变就立刻生效（worker 自己也会每步读盘复核）。
-    worker = DIGEST_WORKER
-    if worker is not None:
-        try:
-            worker.configure(cfg)
-        except Exception as e:                  # noqa: BLE001
-            log("消息汇总配置热更新失败：", repr(e))
     return True
 
 
@@ -1105,7 +1095,7 @@ def _bg_cli(argv=None):
 
 def main():
     boot("进入 main()")
-    # 给网页「设置 → 微信账号」下拉用：只扫账号、不连消息，跑完就退出。
+    # 给启动器「微信桥接」页列账号用：只扫账号、不连消息，跑完就退出。
     # 必须放在单实例锁之前 —— 否则桥接正跑着的时候，这条命令会以为自己"重复启动"直接退出。
     if "--list-accounts" in sys.argv:
         return list_accounts_cli()
@@ -1266,7 +1256,7 @@ def main():
             log("")
             log("✗ 找不到微信账号 %r。" % acct)
             log("  这台机器上现有账号：%s" % ("、".join(acct_dirs) or "（一个都没有）"))
-            log("  去网页「设置 → 微信账号」里重新选一个，或把 config.json 的")
+            log("  去启动器「微信桥接」页点一下账号卡，或把 config.json 的")
             log("  wechat.account 改成上面某个名字（目录名 / wxid / 昵称都行，留空=自动选）。")
             log("  这里直接停下，不会偷偷换成别的号。")
             return 2
@@ -1277,7 +1267,7 @@ def main():
     elif len(acct_dirs) > 1:
         log("⚠️ 这台机器有 %d 个微信账号：%s" % (len(acct_dirs), "、".join(acct_dirs)))
         log("   没指定账号 → 按「最近活跃」自动选，可能选到大号。")
-        log("   去网页「设置 → 微信账号」里选一个（推荐：只选小号）。")
+        log("   去启动器「微信桥接」页点一下账号卡（推荐：只选小号）。")
 
     # 打开微信数据库偶尔会「卡住不返回」（wechatauto-replica 内部去找微信进程/取密钥时挂住），
     # 表现就是「重启了但一直不监听」。这里给它 90 秒上限，超时明确报错退出。
@@ -1800,7 +1790,7 @@ def main():
         """前台是不是「真全屏」程序（全屏游戏、全屏视频）。
 
         3.9 起「打游戏就休息/排队」的行为已经删掉，这个检测只剩一个用途：
-        主动发起的消息（主动分享、主动搭话、消息汇总、表情包）在全屏时先跳过，
+        主动发起的消息（主动搭话、提醒、表情包）在全屏时先跳过，
         免得抢焦点；被动回复不再看它。
 
         不能拿屏幕尺寸判断：Windows 上最大化窗口的 GetWindowRect 带 DWM 隐形边框，
@@ -2967,10 +2957,8 @@ def main():
                 log("表情包结果：", outcome["status"], outcome["error"])
         return outcome
 
-    def send_text(text, chat_display_name, chat_username="", force=False, quote_text=None,
-                  send_guard=None):
+    def send_text(text, chat_display_name, chat_username="", force=False, quote_text=None):
         # force 仅为兼容旧调用方保留：3.9 起没有「离开/游戏排队」了，它不再改变发送行为。
-        # send_guard 供消息汇总等「定时主动发送」在真正落键前再复核一次权限/开关。
         nonlocal gui
         if chat_username and chat_username in dead_chats:
             log("跳过已失效的会话：", chat_display_name)
@@ -2987,15 +2975,6 @@ def main():
         with send_lock, _SendStateScope(len(text)):
             if not sticker_quarantine_allows(chat_username, chat_display_name):
                 return False
-            if send_guard is not None:
-                # 定时主动发送的最后一道闸：在 send_lock 内、真正落键前复核。
-                try:
-                    allowed = bool(send_guard())
-                except Exception:
-                    allowed = False
-                if not allowed:
-                    log("发送取消：发送前复核未通过（消息汇总），这条不发：", chat_display_name)
-                    return False
             # ⓪ 零焦点通道：不依赖 WeChatGUI（构造它本身就会抢一次焦点），先试这条。
             #    见 bridge/bg_sender.py 与 docs/微信消息后台发送.md。
             #    失败才往下走会动窗口的旧通道。
@@ -4121,8 +4100,8 @@ def main():
     def config_watch():
         """盯 config.json 的修改时间：调试台一保存就热更新，不用重启桥接。
 
-        以前这些开关只在启动时读一次，用户在 /debug 里关掉「主动分享」、
-        改「忽略名单」、「游戏白名单」都没反应，只能重启桥接 —— 也就是
+        以前这些开关只在启动时读一次，用户在 /debug 里关掉「主动搭话」、
+        改「忽略名单」、「群聊开关」都没反应，只能重启桥接 —— 也就是
         「调了没用，还是默认」。
         """
         last = 0.0
@@ -4260,11 +4239,6 @@ def main():
         if REMINDER_RUNNER is not None:
             try:
                 REMINDER_RUNNER.stop()
-            except Exception:
-                pass
-        if DIGEST_WORKER is not None:
-            try:
-                DIGEST_WORKER.stop()
             except Exception:
                 pass
         try:

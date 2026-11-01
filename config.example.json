@@ -78,14 +78,6 @@
     "minutes": 30,
     "allowAll": false
   },
-  "share": {
-    "_说明": "主动分享：每隔 everyMinutes 分钟从 sources 里挑一条视频发过来（目前支持 bilibili）",
-    "enabled": true,
-    "everyMinutes": 120,
-    "sources": [
-      "bilibili"
-    ]
-  },
   "care": {
     "_说明": "主动找话题（她没事时自己来一句「在干啥」）。默认只找主人，不进群、不找别人： enabled=总开关；onlyMaster=只找主人；allowGroups=允许群聊；allowOthers=允许主动私聊别人。",
     "enabled": true,
@@ -102,7 +94,7 @@
     "allowOthers": false
   },
   "wechat": {
-    "_说明": "微信桥接（examples/wechatauto_bridge.py）的参数。桥接是独立进程，backgroundSend=不抢前台直接发送（默认 true，实测微信最小化/被遮挡也能发，电脑可照常用；设 false 则每次先把微信拉到前台）。改完这里要重启「启动微信桥接.bat」才生效。account=固定用哪个微信号（微信双开/多账号时一定要选，填账号目录名 / wxid / 昵称都行；留空=自动选「最近活跃」，可能选到另一个号）——一般不用手填，在网页「设置 → 微信账号」里点一下就行；accountGuard=认不出哪个窗口是所选账号时宁可不发（默认 true）；windowHwnd=手动钉微信主窗句柄（调试用，0=自动）；staleAfterSec=多久没新消息就当她去忙了（3.9 起没有游戏休息/离开回来/排队补发的开关了）；ignoreSenders=这些会话永不回复；quoteReply=是否引用原消息回复；dbDir=微信文件保存位置（留空会自动找：先看正在运行的微信打开了哪些文件，再扫各个盘根目录；找不到时把微信「设置→文件管理」里的路径填这里）；bgSend=零焦点发送通道（默认开：用窗口消息打字+点按钮，全程不抢前台；失败才退回前面的通道）；pipelineWorkers=同时处理几个会话（默认 4；同一会话永远串行，改 1 = 全部串行）；pipelineQueueLimit=单个会话最多积压几条（超出丢最早的）",
+    "_说明": "微信桥接（examples/wechatauto_bridge.py）的参数。桥接是独立进程，backgroundSend=不抢前台直接发送（默认 true，实测微信最小化/被遮挡也能发，电脑可照常用；设 false 则每次先把微信拉到前台）。改完这里要重启「启动微信桥接.bat」才生效。account=固定用哪个微信号（微信双开/多账号时一定要选，填账号目录名 / wxid / 昵称都行；留空=自动选「最近活跃」，可能选到另一个号）——一般不用手填，在启动器「微信桥接」页点一下账号卡就行；accountGuard=认不出哪个窗口是所选账号时宁可不发（默认 true）；windowHwnd=手动钉微信主窗句柄（调试用，0=自动）；staleAfterSec=多久没新消息就当她去忙了（3.9 起没有游戏休息/离开回来/排队补发的开关了）；ignoreSenders=这些会话永不回复；quoteReply=是否引用原消息回复；dbDir=微信文件保存位置（留空会自动找：先看正在运行的微信打开了哪些文件，再扫各个盘根目录；找不到时把微信「设置→文件管理」里的路径填这里）；bgSend=零焦点发送通道（默认开：用窗口消息打字+点按钮，全程不抢前台；失败才退回前面的通道）；pipelineWorkers=同时处理几个会话（默认 4；同一会话永远串行，改 1 = 全部串行）；pipelineQueueLimit=单个会话最多积压几条（超出丢最早的）",
     "dbDir": "",
     "account": "",
     "accountGuard": true,
@@ -147,12 +139,6 @@
       "outboundUrl": "",
       "outboundHeaders": {}
     }
-  },
-  "digest": {
-    "_说明": "消息汇总：总开关仅为 digest.enabled（默认关），开后每隔 everyMinutes 分钟（1～1440整数）把微信里未接话的普通消息节选发给主人。只向 persona.master.wxids 中唯一明确的主人发送，不按昵称猜号；没填或填多个则不推送。关闭即清空本轮队列、不采集、不轮询、不推送，接口404；重新打开只收新消息。maxItems为每次最多1～120条，文本会限长。注意：和 memory.digest（整理记忆）不是一回事。",
-    "enabled": false,
-    "everyMinutes": 30,
-    "maxItems": 120
   },
   "websearch": {
     "_说明": "问天气/新闻等实时问题时联网现搜。city 填你所在的城市（比如「上海」），问她天气时才准；留空就按她收到的原话搜（可能搜到别的城市）。enabled=false 关闭所有联网",

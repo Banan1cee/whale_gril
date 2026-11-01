@@ -81,12 +81,11 @@
 
 | 新文件 | 负责 |
 | --- | --- |
-| `src/services/status.js` | `/api/status`、最近发言人、消息汇总、回复通道说明 |
+| `src/services/status.js` | `/api/status`、最近发言人、回复通道说明 |
 | `src/services/settings.js` | 读写设置、切换 provider、称呼同步 |
 | `src/services/debug.js` | 调试台状态 / 会话 / 提示词预览 |
 | `src/services/persona.js` | 人设调教保存与恢复 |
 | `src/services/wechat.js` | 多账号扫描、缓存、选账号、刷新 |
-| `src/services/share.js` | 主动分享视频 |
 | `src/services/careChat.js` | 主动搭话文案生成 |
 | `src/services/chat.js` | 网页 SSE 聊天 |
 | `src/http/router.js` | 声明式路由、安全闸、静态文件兜底 |

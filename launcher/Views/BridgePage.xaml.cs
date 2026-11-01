@@ -26,6 +26,14 @@ namespace WhaleLauncher.Views
     {
         public string Title { get; set; }
         public string Sub { get; set; }
+        /// <summary>要写进 wechat.account 的账号目录名；空串 = 不固定。</summary>
+        public string Account { get; set; } = "";
+        public string Nick { get; set; } = "";
+        /// <summary>这台微信现在用的就是它（卡片高亮，再点没意义）。</summary>
+        public bool IsActive { get; set; }
+        /// <summary>能不能点。当前在用的卡 / 兜底信息卡都是 false。</summary>
+        public bool CanPick { get; set; } = true;
+        public string Tip { get; set; } = "";
     }
 
     public partial class BridgePage : UserControl, IRefreshable
@@ -256,22 +264,31 @@ namespace WhaleLauncher.Views
         private async Task LoadAccountsAsync(Snapshot s)
         {
             var cards = new List<AccountCard>();
+            var wanted = "";
             try
             {
                 var json = await _http.GetStringAsync(_sup.Url + "/api/wechat/accounts");
                 using var doc = JsonDocument.Parse(json);
                 var root = doc.RootElement;
+                wanted = Str(root, "wanted");
                 if (root.TryGetProperty("accounts", out var arr) && arr.ValueKind == JsonValueKind.Array)
                 {
                     foreach (var a in arr.EnumerateArray())
                     {
                         var account = Str(a, "account");
+                        if (string.IsNullOrEmpty(account)) continue;
                         var nick = Str(a, "nick");
                         var active = a.TryGetProperty("active", out var ac) && ac.ValueKind == JsonValueKind.True;
+                        var name = string.IsNullOrEmpty(nick) ? account : nick;
                         cards.Add(new AccountCard
                         {
-                            Title = (string.IsNullOrEmpty(nick) ? account : nick) + (active ? " · 当前在用" : ""),
-                            Sub = string.IsNullOrEmpty(nick) ? account : account + (active ? "" : " · 未选中")
+                            Account = account,
+                            Nick = nick,
+                            IsActive = active,
+                            CanPick = !active,
+                            Title = name + (active ? "   ·   当前在用" : ""),
+                            Sub = account + (active ? "" : "   ·   点此切换"),
+                            Tip = active ? "这台微信现在用的就是它" : "点一下切到 " + name + "（桥接会自动重启）",
                         });
                     }
                 }
@@ -282,13 +299,81 @@ namespace WhaleLauncher.Views
             {
                 cards.Add(new AccountCard
                 {
+                    Account = s.BrAccount,
+                    Nick = s.BrAccountNick,
+                    CanPick = false,
                     Title = string.IsNullOrEmpty(s.BrAccountNick) ? (string.IsNullOrEmpty(s.BrAccount) ? "微信" : s.BrAccount) : s.BrAccountNick,
-                    Sub = (s.BrAccountOk ? "已确认" : "未确认") + (string.IsNullOrEmpty(s.BrAccountWhy) ? "" : " · " + s.BrAccountWhy)
+                    Sub = (s.BrAccountOk ? "已确认" : "未确认") + (string.IsNullOrEmpty(s.BrAccountWhy) ? "" : " · " + s.BrAccountWhy),
+                    Tip = "读不到账号目录，只能看桥接上报的这个号",
                 });
             }
 
             Accounts.ItemsSource = cards;
             AccountsEmpty.Visibility = cards.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+            AccountHint.Text = cards.Count == 0
+                ? ""
+                : (string.IsNullOrEmpty(wanted) ? "没固定账号 · 现在按最近活跃自动认" : "点一下卡片就切到这个号");
+        }
+
+        // ── 选账号：点卡片 = 把 wechat.account 钉成这个号（校验在内核做）──────
+        private async void OnPickAccount(object sender, RoutedEventArgs e)
+        {
+            if (_loading) return;
+            if (!(sender is FrameworkElement fe) || !(fe.DataContext is AccountCard card)) return;
+            if (!card.CanPick)
+            {
+                SwitchHint.Text = "这个号已经在用了，不用再点。";
+                return;
+            }
+            await PickAccountAsync(card.Account, string.IsNullOrEmpty(card.Nick) ? card.Account : card.Nick);
+        }
+
+        private async void OnUseAutoAccount(object sender, RoutedEventArgs e)
+        {
+            if (_loading) return;
+            await PickAccountAsync("", "自动（按最近活跃）");
+        }
+
+        private async Task PickAccountAsync(string account, string label)
+        {
+            try
+            {
+                var body = new StringContent("{\"account\":\"" + Api.Esc(account) + "\"}", Encoding.UTF8, "application/json");
+                var res = await _http.PostAsync(_sup.Url + "/api/wechat/account", body);
+                var text = await res.Content.ReadAsStringAsync();
+                if (!res.IsSuccessStatusCode)
+                {
+                    SwitchHint.Text = "切账号失败：" + ApiText(text);
+                    return;
+                }
+                TxtAccount.Text = account;
+                SwitchHint.Text = "已切到 " + label + "，桥接会在几秒内自动重启。";
+                _sup.Say("微信账号 → " + label);
+                _configLoaded = false;
+                _lastAccounts = DateTime.MinValue;
+                _lastRefresh = DateTime.MinValue;
+                await Task.Delay(250);
+                await RefreshAsync();
+            }
+            catch (Exception ex)
+            {
+                SwitchHint.Text = "切账号失败：" + ex.Message;
+            }
+        }
+
+        /// <summary>后端报错是 {"error":"..."}，取出来给人看；不是 JSON 就原样给。</summary>
+        private static string ApiText(string raw)
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(raw);
+                if (doc.RootElement.ValueKind == JsonValueKind.Object
+                    && doc.RootElement.TryGetProperty("error", out var er)
+                    && er.ValueKind == JsonValueKind.String)
+                    return er.GetString() ?? raw;
+            }
+            catch { }
+            return string.IsNullOrWhiteSpace(raw) ? "内核没响应" : raw;
         }
 
         private void OnRefreshAccounts(object sender, RoutedEventArgs e)

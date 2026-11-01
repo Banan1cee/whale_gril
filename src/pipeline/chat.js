@@ -492,7 +492,7 @@ class Bot {
       return { action: 'ignore', reason: 'muted', key, msg, atMe };
     }
     // 同一个会话一分钟内已经回了太多条 → 先停一下，别越聊越乱。
-    // 阈值跟「每分钟最多回几条」共用（原来这里硬编码 10，跟配置的每小时上限打架）。
+    // 阈值跟「每分钟最多回几条」共用（原来这里硬编码 10，跟配置里的每分钟上限打架）。
     // state.replyTimes 在会话状态被重建时会丢条目（CHANGELOG 实测 1/4 漏拦），
     // 所以照搬 trigger.js 的兜底：再数一遍存储里真正落盘的助手消息，取两边较大的（M20）。
     const minuteAgo = nowMs - 60000;
