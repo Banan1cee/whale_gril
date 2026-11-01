@@ -17,10 +17,13 @@ namespace WhaleLauncher.Views
     {
         public string Path;
         public string Label;
-        public string Kind = "text";      // bool / num / text / secret / select / multiline
+        public string Kind = "text";      // bool / num / text / secret / select / multiline / slider / sliderInput
         public string Hint = "";
         public double Min = double.NaN;
         public double Max = double.NaN;
+        // sliderInput 专用：右边输入框自己的范围（可以比滑块宽，比如滑块 2000–20000、输入框 1000–不设上限）
+        public double InputMin = double.NaN;
+        public double InputMax = double.NaN;
         public string[] Options;
         public bool IsInt = true;
         public string Unit = "";          // 拖动条右侧读数后缀，比如「 条/分钟」
@@ -95,8 +98,9 @@ namespace WhaleLauncher.Views
                 new FieldSpec { Path = "links.timeoutMs", Label = "链接超时(毫秒)", Kind = "num", Min = 1000, Max = 30000 },
                 new FieldSpec { Path = "links.cacheMinutes", Label = "链接缓存(分钟)", Kind = "num", Min = 0, Max = 1440 },
             }},
-            new SectionSpec { Title = "高级", Note = "改完要重启的项都在这里；管理员口令也归这一组，平时不用碰。", Fields =
+            new SectionSpec { Title = "高级", Note = "改完要重启的项都在这里（对话预算例外，改完立刻生效）；管理员口令也归这一组，平时不用碰。", Fields =
             {
+                new FieldSpec { Path = "memory.dialogueBudget", Label = "对话预算(token)", Kind = "sliderInput", Min = 2000, Max = 20000, InputMin = 1000, Hint = "每轮带多少对话内容（不含人设）：默认 5,500 = 记忆 900 + 摘要 900 + 原文 3,200 + 预留 500。滑块 2,000–20,000，右边输入框可直接填（最低 1,000，不设上限，但超过 32,000 − 人设 的硬上限会被拒绝调用）" },
                 new FieldSpec { Path = "server.host", Label = "监听地址", Kind = "text", Hint = "只给本机用就 127.0.0.1；0.0.0.0 = 同 WiFi 也能连（改完重启）" },
                 new FieldSpec { Path = "server.port", Label = "本机端口", Kind = "selectnum", Options = new[] { "8787", "9191", "1919", "7878" }, Hint = "默认 8787；只在这四个里选，改完重启内核生效" },
                 new FieldSpec { Path = "log.level", Label = "日志级别（界面 / 控制台）", Kind = "select", Options = new[] { "debug", "info", "error" }, Hint = "只影响界面和启动器控制台；日志文件始终记 debug 全量（data/whale.log、data/wechat-bridge-4x.log），改完重启生效" },
@@ -509,6 +513,162 @@ namespace WhaleLauncher.Views
                     panel.Children.Add(readout);
                     return Row(f.Label, panel, f.Hint, false, labelWidth);
                 }
+                case "sliderInput":
+                {
+                    // 滑块管「常用范围」，右边输入框管「精确值 / 超出滑块范围的值」；
+                    // 下面那行说明由 /api/budget/estimate 实时算（只读估算，不联网、不花钱）。
+                    var slider = new Slider
+                    {
+                        Minimum = double.IsNaN(f.Min) ? 0 : f.Min,
+                        Maximum = double.IsNaN(f.Max) ? 100 : f.Max,
+                        TickFrequency = 100,
+                        IsSnapToTickEnabled = true,
+                        Width = 240,
+                        VerticalAlignment = VerticalAlignment.Center
+                    };
+                    var box = new TextBox
+                    {
+                        Width = 96,
+                        VerticalAlignment = VerticalAlignment.Center,
+                        Margin = new Thickness(12, 0, 0, 0),
+                        TextAlignment = TextAlignment.Center
+                    };
+                    var unit = new TextBlock
+                    {
+                        Text = string.IsNullOrEmpty(f.Unit) ? " token" : f.Unit,
+                        Style = (Style)FindResource("Small"),
+                        VerticalAlignment = VerticalAlignment.Center,
+                        Margin = new Thickness(6, 0, 0, 0)
+                    };
+                    var line = new TextBlock
+                    {
+                        Style = (Style)FindResource("Small"),
+                        TextWrapping = TextWrapping.Wrap,
+                        Margin = new Thickness(0, 6, 0, 0),
+                        Text = f.Hint,
+                    };
+                    var bar = new WrapPanel { HorizontalAlignment = HorizontalAlignment.Left };
+                    bar.Children.Add(slider);
+                    bar.Children.Add(box);
+                    bar.Children.Add(unit);
+                    var stack = new StackPanel { HorizontalAlignment = HorizontalAlignment.Stretch };
+                    stack.Children.Add(bar);
+                    stack.Children.Add(line);
+
+                    var saveTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(450) };
+                    var hintTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(180) };
+                    var syncing = false;
+                    var saved = double.NaN;
+
+                    double Clamp(double v)
+                    {
+                        if (!double.IsNaN(f.InputMin)) v = Math.Max(f.InputMin, v);
+                        if (!double.IsNaN(f.InputMax)) v = Math.Min(f.InputMax, v);
+                        return Math.Round(v);
+                    }
+
+                    double Current()
+                    {
+                        var text = (box.Text ?? "").Trim();
+                        return double.TryParse(text, out var v) ? Clamp(v) : Math.Round(slider.Value);
+                    }
+
+                    void Show(double v)
+                    {
+                        syncing = true;
+                        slider.Value = Math.Max(slider.Minimum, Math.Min(slider.Maximum, v));
+                        if (!box.IsKeyboardFocusWithin) box.Text = Math.Round(v).ToString();
+                        syncing = false;
+                    }
+
+                    async void RefreshHint(double v)
+                    {
+                        try
+                        {
+                            var res = await Api.Get(_sup.Url, "/api/budget/estimate?dialogueBudget=" + Math.Round(v));
+                            if (!res.Ok)
+                            {
+                                line.Text = f.Hint;
+                                return;
+                            }
+                            var sys = res.Long("systemTokens");
+                            var sp = res.Long("systemPrivateTokens");
+                            var sg = res.Long("systemGroupTokens");
+                            var maxIn = res.Long("maxInputTokens");
+                            var over = res.Bool("overHardLimit");
+                            var first = Num(res.Prop("cost"), "idle", "first");
+                            var cached = Num(res.Prop("cost"), "idle", "cached");
+                            line.Text =
+                                $"系统提示词 ≈ {sys:N0} token（私聊 {sp:N0} / 群聊 {sg:N0}，取中间），加上对话预算 {Math.Round(v):N0} → 单轮最多 ≈ {maxIn:N0} token\n"
+                                + $"谷时：首次约 ¥{first:0.0000}，之后缓存命中约 ¥{cached:0.0000} / 次（人设走缓存，新对话仍按新内容计费）"
+                                + (over ? "\n⚠ 已超过 32,000 硬上限，这个预算下会被拒绝调用，请调小" : "");
+                        }
+                        catch
+                        {
+                            line.Text = f.Hint;
+                        }
+                    }
+
+                    void Schedule(bool refreshHint)
+                    {
+                        if (_loading) return;
+                        saveTimer.Stop();
+                        saveTimer.Start();
+                        if (!refreshHint) return;
+                        hintTimer.Stop();
+                        hintTimer.Start();
+                    }
+
+                    slider.ValueChanged += (s, e) =>
+                    {
+                        if (syncing || _loading) return;
+                        box.Text = Math.Round(slider.Value).ToString();
+                        Schedule(true);
+                    };
+
+                    box.LostFocus += (s, e) =>
+                    {
+                        if (syncing || _loading) return;
+                        var v = Current();
+                        Show(v);
+                        Schedule(true);
+                    };
+                    box.KeyDown += (s, e) =>
+                    {
+                        if (e.Key == System.Windows.Input.Key.Enter) System.Windows.Input.Keyboard.ClearFocus();
+                    };
+
+                    saveTimer.Tick += async (s, e) =>
+                    {
+                        saveTimer.Stop();
+                        var v = Current();
+                        if (v.Equals(saved)) return;
+                        saved = v;
+                        await PatchAsync(f.Path, v.ToString("0"));
+                    };
+
+                    hintTimer.Tick += (s, e) =>
+                    {
+                        hintTimer.Stop();
+                        RefreshHint(Current());
+                    };
+
+                    _loaders[f.Path] = v =>
+                    {
+                        if (box.IsKeyboardFocusWithin) return;   // 正在编辑就不覆盖（M30）
+                        _loading = true;
+                        if (v.ValueKind == JsonValueKind.Number)
+                        {
+                            var n = v.GetDouble();
+                            Show(n);
+                            saved = Math.Round(n);
+                        }
+                        _loading = false;
+                        RefreshHint(Current());
+                    };
+
+                    return Row(f.Label, stack, "", false, labelWidth);
+                }
                 default:
                 {
                     var box = new TextBox();
@@ -528,6 +688,18 @@ namespace WhaleLauncher.Views
                     return Row(f.Label, box, f.Hint, false, labelWidth);
                 }
             }
+        }
+
+        /// <summary>按路径从 JSON 里取数字（拿不到就 0），给估算回包的嵌套字段用。</summary>
+        private static double Num(JsonElement root, params string[] path)
+        {
+            var cur = root;
+            foreach (var p in path)
+            {
+                if (cur.ValueKind != JsonValueKind.Object || !cur.TryGetProperty(p, out var next)) return 0;
+                cur = next;
+            }
+            return cur.ValueKind == JsonValueKind.Number ? cur.GetDouble() : 0;
         }
 
         private async Task<bool> PatchAsync(string path, string jsonLiteral)

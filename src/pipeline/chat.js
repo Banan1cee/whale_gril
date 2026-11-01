@@ -801,11 +801,14 @@ class Bot {
     });
     const turns = this.buildTurns(msg, historyForTurns, mem.block);
 
-    // 预算：system 只测量，不裁剪；对话预算是固定 5,500（memory+summary+recent+reserve）。
+    // 预算：system 只测量，不裁剪；对话预算默认 5,500（memory+summary+recent+reserve），
+    // 启动器「高级模式 → 高级 → 对话预算」改的是 config.memory.dialogueBudget。
     // 只有 system + dialogue 超过 32,000 才拒绝，且明确报错，不静默截断。
     let promptBudget;
     try {
-      promptBudget = memoryBudget.assertWithinHardLimit(memoryBudget.buildBudget(system));
+      promptBudget = memoryBudget.assertWithinHardLimit(memoryBudget.buildBudget(system, {
+        dialogueBudget: this.config && this.config.memory && this.config.memory.dialogueBudget,
+      }));
     } catch (err) {
       this.logger && this.logger.error(
         `单轮输入超硬上限，拒绝调用模型：system≈${err.budget ? err.budget.systemTokens : '?'} token`
