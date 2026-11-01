@@ -100,7 +100,7 @@ namespace WhaleLauncher.Views
             }},
             new SectionSpec { Title = "高级", Note = "改完要重启的项都在这里（对话预算例外，改完立刻生效）；管理员口令也归这一组，平时不用碰。", Fields =
             {
-                new FieldSpec { Path = "memory.dialogueBudget", Label = "对话预算(token)", Kind = "sliderInput", Min = 2000, Max = 20000, InputMin = 1000, Hint = "每轮带多少对话内容（不含人设）：默认 5,500 = 记忆 900 + 摘要 900 + 原文 3,200 + 预留 500。滑块 2,000–20,000，右边输入框可直接填（最低 1,000，不设上限，但超过 32,000 − 人设 的硬上限会被拒绝调用）" },
+                new FieldSpec { Path = "memory.dialogueBudget", Label = "对话预算(token)", Kind = "sliderInput", Min = 2000, Max = 20000, InputMin = 1000, Hint = "每轮带多少对话内容（不含人设）：默认 5,500 = 记忆 900 + 摘要 900 + 原文 3,200 + 预留 500。滑块 2,000–20,000；右边输入框可以直接填（最低 1,000，不设上限）。模型一次只收 32,000 token，人设越长留给对话的越少，加起来超了内核不会偷偷截断，而是这一轮干脆不调用 —— 下面那行会实时算出「人设 + 预算」和最多还能填多少" },
                 new FieldSpec { Path = "server.host", Label = "监听地址", Kind = "text", Hint = "只给本机用就 127.0.0.1；0.0.0.0 = 同 WiFi 也能连（改完重启）" },
                 new FieldSpec { Path = "server.port", Label = "本机端口", Kind = "selectnum", Options = new[] { "8787", "9191", "1919", "7878" }, Hint = "默认 8787；只在这四个里选，改完重启内核生效" },
                 new FieldSpec { Path = "log.level", Label = "日志级别（界面 / 控制台）", Kind = "select", Options = new[] { "debug", "info", "error" }, Hint = "只影响界面和启动器控制台；日志文件始终记 debug 全量（data/whale.log、data/wechat-bridge-4x.log），改完重启生效" },
@@ -175,6 +175,13 @@ namespace WhaleLauncher.Views
                         Margin = new Thickness(0, 0, 0, 8),
                     });
                 foreach (var f in spec.Fields) panel.Children.Add(BuildField(f));
+
+                // 这一组「恢复默认」：只写回这个页签里的字段，默认值由内核给
+                var foot = new WrapPanel { Margin = new Thickness(0, 10, 0, 0) };
+                var resetTab = new Button { Content = "这一组恢复默认", Style = (Style)FindResource("Ghost") };
+                resetTab.Click += async (s, e) => await ResetFieldsAsync(spec.Title, spec.Fields.Select(f => f.Path));
+                foot.Children.Add(resetTab);
+                panel.Children.Add(foot);
                 tabs[i] = tab;
                 panels[i] = panel;
                 strip.Children.Add(tab);
@@ -595,13 +602,15 @@ namespace WhaleLauncher.Views
                             var sp = res.Long("systemPrivateTokens");
                             var sg = res.Long("systemGroupTokens");
                             var maxIn = res.Long("maxInputTokens");
+                            var hard = res.Long("hardTotalTokens");
+                            var room = Math.Max(0, hard - sys);
                             var over = res.Bool("overHardLimit");
                             var first = Num(res.Prop("cost"), "idle", "first");
                             var cached = Num(res.Prop("cost"), "idle", "cached");
                             line.Text =
-                                $"系统提示词 ≈ {sys:N0} token（私聊 {sp:N0} / 群聊 {sg:N0}，取中间），加上对话预算 {Math.Round(v):N0} → 单轮最多 ≈ {maxIn:N0} token\n"
+                                $"人设 system ≈ {sys:N0} token（私聊 {sp:N0} / 群聊 {sg:N0}，取中间）+ 对话预算 {Math.Round(v):N0} → 单轮最多 ≈ {maxIn:N0} token（上限 {hard:N0}）\n"
                                 + $"谷时：首次约 ¥{first:0.0000}，之后缓存命中约 ¥{cached:0.0000} / 次（人设走缓存，新对话仍按新内容计费）"
-                                + (over ? "\n⚠ 已超过 32,000 硬上限，这个预算下会被拒绝调用，请调小" : "");
+                                + (over ? $"\n⚠ 已经超过 {hard:N0} 上限：这个预算下每轮都会被拒绝，最多只能填 {room:N0}" : "");
                         }
                         catch
                         {
@@ -712,6 +721,40 @@ namespace WhaleLauncher.Views
             return res.Ok;
         }
 
+        /// <summary>
+        /// 「恢复默认」：把这些字段写回默认值。
+        /// 默认值由内核按 DEFAULT_CONFIG 给（启动器不自己抄一份，抄的那份迟早和 config.js 对不上）。
+        /// 只动这些字段：API Key 不重置，data\ 里的聊天记忆更不会碰。
+        /// </summary>
+        private async Task ResetFieldsAsync(string title, IEnumerable<string> paths)
+        {
+            var list = (paths ?? Enumerable.Empty<string>())
+                .Where(p => !string.IsNullOrWhiteSpace(p))
+                .Distinct()
+                .ToList();
+            if (list.Count == 0) return;
+
+            var answer = MessageBox.Show(
+                "把「" + title + "」改回默认值？\n\n只改这 " + list.Count + " 项；API Key 和聊天记忆不会被清掉。",
+                "恢复默认", MessageBoxButton.YesNo, MessageBoxImage.Question);
+            if (answer != MessageBoxResult.Yes) return;
+
+            var body = "{\"paths\":[" + string.Join(",", list.Select(p => "\"" + Api.Esc(p) + "\"")) + "]}";
+            var res = await Api.Post(_sup.Url, "/api/config/reset", body);
+            if (!res.Ok)
+            {
+                StatusText.Text = "恢复默认失败：" + (res.Error.Length > 0 ? res.Error : res.Raw);
+                return;
+            }
+
+            var unknown = res.Prop("unknown");
+            var missed = unknown.ValueKind == JsonValueKind.Array ? unknown.GetArrayLength() : 0;
+            StatusText.Text = "「" + title + "」已恢复默认（" + list.Count + " 项）"
+                + (missed > 0 ? "，其中 " + missed + " 项不是可恢复项" : "");
+            _lastLoad = DateTime.MinValue;   // 绕过节流，立刻把默认值刷回表单
+            await LoadConfigAsync();
+        }
+
         // ── 模型 / 看图（一张卡，两组用页签切换）────────────────────
         private const string AutoVision = "自动（跟随聊天模型）";
 
@@ -743,11 +786,15 @@ namespace WhaleLauncher.Views
             btn.FontWeight = active ? FontWeights.SemiBold : FontWeights.Normal;
         }
 
-        /// <summary>两列并排；right 为空时只占左半列。</summary>
+        /// <summary>
+        /// 两列并排；right 为空时只占左半列。
+        /// 左列定宽而不是各占一半：字段本身只有一百多像素宽，平均分两半会让右列
+        /// 孤零零飘在卡片正中间，左边空出一大块（4.0 的采样区就是这样）。
+        /// </summary>
         private static FrameworkElement TwoCol(FrameworkElement left, FrameworkElement right)
         {
             var g = new Grid();
-            g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(360) });
             g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(18) });
             g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             g.Children.Add(left);
@@ -896,8 +943,16 @@ namespace WhaleLauncher.Views
             var chatButtons = new WrapPanel { Margin = new Thickness(0, 6, 0, 0) };
             var save = new Button { Content = "保存", Style = (Style)FindResource("Primary") };
             var test = new Button { Content = "测试连通", Style = (Style)FindResource("Ghost"), Margin = new Thickness(8, 0, 0, 0) };
+            var resetSampling = new Button { Content = "采样恢复默认", Style = (Style)FindResource("Ghost"), Margin = new Thickness(8, 0, 0, 0) };
+            resetSampling.Click += async (s, e) => await ResetFieldsAsync("采样参数", new[]
+            {
+                "deepseek.temperature", "deepseek.maxTokens",
+                "deepseek.frequencyPenalty", "deepseek.presencePenalty",
+                "deepseek.timeoutMs",
+            });
             chatButtons.Children.Add(save);
             chatButtons.Children.Add(test);
+            chatButtons.Children.Add(resetSampling);
             chatPanel.Children.Add(chatButtons);
             chatPanel.Children.Add(chatResult);
 
@@ -934,7 +989,8 @@ namespace WhaleLauncher.Views
             visionPanel.Children.Add(visionHint);
             visionPanel.Children.Add(Row("看图模型", visionBox, ""));
             visionPanel.Children.Add(visionEndpoint);
-            visionPanel.Children.Add(BuildField(new FieldSpec { Path = "vision.timeoutMs", Label = "超时(毫秒)", Kind = "num", Min = 1000, Max = 300000 }, true));
+            // 这一行别用 compact：同页另外两行是 210 的标签列，108 会让输入框缩进去一截（错位）
+            visionPanel.Children.Add(BuildField(new FieldSpec { Path = "vision.timeoutMs", Label = "超时(毫秒)", Kind = "num", Min = 1000, Max = 300000 }));
             visionPanel.Children.Add(Row("看图 Key", visionKey, "留空表示不改"));
 
             var visionButtons = new WrapPanel { Margin = new Thickness(0, 6, 0, 0) };
@@ -968,10 +1024,10 @@ namespace WhaleLauncher.Views
                 Text = "别人发语音时先转成文字再回复；Key 留空则沿用主模型那把。",
             };
             voicePanel.Children.Add(voiceHint);
-            voicePanel.Children.Add(BuildField(new FieldSpec { Path = "voice.enabled", Label = "语音回复", Kind = "bool" }, true));
-            voicePanel.Children.Add(BuildField(new FieldSpec { Path = "voice.apiKey", Label = "语音接口 Key", Kind = "secret", Hint = "留空表示不改；留空则用主模型的 Key" }, true));
-            voicePanel.Children.Add(BuildField(new FieldSpec { Path = "voice.baseUrl", Label = "接口地址", Kind = "text" }, true));
-            voicePanel.Children.Add(BuildField(new FieldSpec { Path = "voice.model", Label = "语音模型", Kind = "text" }, true));
+            voicePanel.Children.Add(BuildField(new FieldSpec { Path = "voice.enabled", Label = "语音回复", Kind = "bool" }));
+            voicePanel.Children.Add(BuildField(new FieldSpec { Path = "voice.apiKey", Label = "语音接口 Key", Kind = "secret", Hint = "留空表示不改；留空则用主模型的 Key" }));
+            voicePanel.Children.Add(BuildField(new FieldSpec { Path = "voice.baseUrl", Label = "接口地址", Kind = "text" }));
+            voicePanel.Children.Add(BuildField(new FieldSpec { Path = "voice.model", Label = "语音模型", Kind = "text" }));
             voicePanel.Children.Add(TwoCol(
                 BuildField(new FieldSpec { Path = "voice.timeoutMs", Label = "识别超时(毫秒)", Kind = "num", Min = 1000, Max = 300000 }, true),
                 BuildField(new FieldSpec { Path = "voice.maxSeconds", Label = "最长语音(秒)", Kind = "num", Min = 1, Max = 600 }, true)));
