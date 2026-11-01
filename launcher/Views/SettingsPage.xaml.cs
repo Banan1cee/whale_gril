@@ -359,10 +359,12 @@ namespace WhaleLauncher.Views
         }
 
         // ── 单个字段 ────────────────────────────────────────────
-        private FrameworkElement BuildField(FieldSpec f, bool compact = false)
+        /// <param name="compact">两列并排时用的紧凑标签列</param>
+        /// <param name="width">单独指定标签列宽（不传就按 compact 取默认值）</param>
+        private FrameworkElement BuildField(FieldSpec f, bool compact = false, double width = double.NaN)
         {
             // 标签列别太宽：210 的时候标签和输入框中间空出半个屏幕，短标签尤其难看
-            var labelWidth = compact ? 80.0 : 150.0;
+            var labelWidth = !double.IsNaN(width) ? width : (compact ? 110.0 : 150.0);
             switch (f.Kind)
             {
                 case "bool":
@@ -759,6 +761,9 @@ namespace WhaleLauncher.Views
         // ── 模型 / 看图（一张卡，两组用页签切换）────────────────────
         private const string AutoVision = "自动（跟随聊天模型）";
 
+        /// <summary>模型卡片里的标签都短，标签列收到 110 就够；再宽就是白条。</summary>
+        private const double ModelLabel = 110;
+
         private Button MakeTab(string text, out TextBlock badge)
         {
             badge = new TextBlock { FontSize = 10, Margin = new Thickness(6, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
@@ -795,7 +800,7 @@ namespace WhaleLauncher.Views
         private static FrameworkElement TwoCol(FrameworkElement left, FrameworkElement right)
         {
             var g = new Grid();
-            g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(310) });
+            g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(330) });
             g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(18) });
             g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             g.Children.Add(left);
@@ -921,24 +926,24 @@ namespace WhaleLauncher.Views
             visionModel.SelectionChanged += (s, e) => { if (!_loading) SyncVisionToChat(); };
 
             // ── 聊天面板 ────────────────────────────────────────
-            chatPanel.Children.Add(Row("模型服务", cmb, ""));
-            chatPanel.Children.Add(Row("接口地址", baseUrl, ""));
-            chatPanel.Children.Add(Row("模型名", model, "点下拉直接选；没有的型号也可以自己输入"));
-            chatPanel.Children.Add(Row("API Key", key, "留空表示不改；已存的这里不会显示"));
-            chatPanel.Children.Add(Row("演示模式", mock, "不连模型，用内置台词"));
+            chatPanel.Children.Add(Row("模型服务", cmb, "", false, ModelLabel));
+            chatPanel.Children.Add(Row("接口地址", baseUrl, "", false, ModelLabel));
+            chatPanel.Children.Add(Row("模型名", model, "点下拉直接选；没有的型号也可以自己输入", false, ModelLabel));
+            chatPanel.Children.Add(Row("API Key", key, "留空表示不改；已存的这里不会显示", false, ModelLabel));
+            chatPanel.Children.Add(Row("演示模式", mock, "不连模型，用内置台词", false, ModelLabel));
 
             var chatDivider = new Border { Height = 1, Margin = new Thickness(0, 4, 0, 12) };
             chatDivider.SetResourceReference(Border.BackgroundProperty, "Line");
             chatPanel.Children.Add(chatDivider);
             chatPanel.Children.Add(new TextBlock { Text = "采样", Style = (Style)FindResource("Label"), Margin = new Thickness(0, 0, 0, 8) });
             chatPanel.Children.Add(TwoCol(
-                BuildField(new FieldSpec { Path = "deepseek.temperature", Label = "温度", Kind = "num", Min = 0, Max = 2, IsInt = false, Hint = "越大越放得开；超过 1.2 容易越聊越离谱" }, true),
+                BuildField(new FieldSpec { Path = "deepseek.temperature", Label = "温度", Kind = "num", Min = 0, Max = 2, IsInt = false, Hint = "越大越放得开（>1.2 容易跑偏）" }, true),
                 BuildField(new FieldSpec { Path = "deepseek.maxTokens", Label = "最多 token", Kind = "num", Min = 16, Max = 32768, Hint = "默认 700" }, true)));
             chatPanel.Children.Add(TwoCol(
                 BuildField(new FieldSpec { Path = "deepseek.frequencyPenalty", Label = "频率惩罚", Kind = "num", Min = -2, Max = 2, IsInt = false }, true),
                 BuildField(new FieldSpec { Path = "deepseek.presencePenalty", Label = "在场惩罚", Kind = "num", Min = -2, Max = 2, IsInt = false }, true)));
             chatPanel.Children.Add(TwoCol(
-                BuildField(new FieldSpec { Path = "deepseek.timeoutMs", Label = "请求超时(毫秒)", Kind = "num", Min = 1000, Max = 600000 }, true),
+                BuildField(new FieldSpec { Path = "deepseek.timeoutMs", Label = "请求超时(ms)", Kind = "num", Min = 1000, Max = 600000 }, true),
                 null));
 
             var chatButtons = new WrapPanel { Margin = new Thickness(0, 6, 0, 0) };
@@ -988,11 +993,11 @@ namespace WhaleLauncher.Views
 
             // ── 看图面板 ────────────────────────────────────────
             visionPanel.Children.Add(visionHint);
-            visionPanel.Children.Add(Row("看图模型", visionBox, ""));
+            visionPanel.Children.Add(Row("看图模型", visionBox, "", false, ModelLabel));
             visionPanel.Children.Add(visionEndpoint);
-            // 这一行别用 compact：同页另外两行是 210 的标签列，108 会让输入框缩进去一截（错位）
-            visionPanel.Children.Add(BuildField(new FieldSpec { Path = "vision.timeoutMs", Label = "超时(毫秒)", Kind = "num", Min = 1000, Max = 300000 }));
-            visionPanel.Children.Add(Row("看图 Key", visionKey, "留空表示不改"));
+            // 这一行别用 compact：同页另外两行是 ModelLabel 的标签列，窄了会让输入框缩进去一截（错位）
+            visionPanel.Children.Add(BuildField(new FieldSpec { Path = "vision.timeoutMs", Label = "超时(毫秒)", Kind = "num", Min = 1000, Max = 300000 }, false, ModelLabel));
+            visionPanel.Children.Add(Row("看图 Key", visionKey, "留空表示不改", false, ModelLabel));
 
             var visionButtons = new WrapPanel { Margin = new Thickness(0, 6, 0, 0) };
             var vsave = new Button { Content = "保存看图 Key", Style = (Style)FindResource("Ghost") };
@@ -1025,12 +1030,12 @@ namespace WhaleLauncher.Views
                 Text = "别人发语音时先转成文字再回复；Key 留空则沿用主模型那把。",
             };
             voicePanel.Children.Add(voiceHint);
-            voicePanel.Children.Add(BuildField(new FieldSpec { Path = "voice.enabled", Label = "语音回复", Kind = "bool" }));
-            voicePanel.Children.Add(BuildField(new FieldSpec { Path = "voice.apiKey", Label = "语音接口 Key", Kind = "secret", Hint = "留空表示不改；留空则用主模型的 Key" }));
-            voicePanel.Children.Add(BuildField(new FieldSpec { Path = "voice.baseUrl", Label = "接口地址", Kind = "text" }));
-            voicePanel.Children.Add(BuildField(new FieldSpec { Path = "voice.model", Label = "语音模型", Kind = "text" }));
+            voicePanel.Children.Add(BuildField(new FieldSpec { Path = "voice.enabled", Label = "语音回复", Kind = "bool" }, false, ModelLabel));
+            voicePanel.Children.Add(BuildField(new FieldSpec { Path = "voice.apiKey", Label = "语音接口 Key", Kind = "secret", Hint = "留空表示不改；留空则用主模型的 Key" }, false, ModelLabel));
+            voicePanel.Children.Add(BuildField(new FieldSpec { Path = "voice.baseUrl", Label = "接口地址", Kind = "text" }, false, ModelLabel));
+            voicePanel.Children.Add(BuildField(new FieldSpec { Path = "voice.model", Label = "语音模型", Kind = "text" }, false, ModelLabel));
             voicePanel.Children.Add(TwoCol(
-                BuildField(new FieldSpec { Path = "voice.timeoutMs", Label = "识别超时(毫秒)", Kind = "num", Min = 1000, Max = 300000 }, true),
+                BuildField(new FieldSpec { Path = "voice.timeoutMs", Label = "识别超时(ms)", Kind = "num", Min = 1000, Max = 300000 }, true),
                 BuildField(new FieldSpec { Path = "voice.maxSeconds", Label = "最长语音(秒)", Kind = "num", Min = 1, Max = 600 }, true)));
 
             _loadModel = (set, provs) =>
