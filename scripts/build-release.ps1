@@ -7,10 +7,13 @@
 用法：
   powershell -File scripts\build-release.ps1                          # 输出到默认目录
   powershell -File scripts\build-release.ps1 -OutDir D:\release -Version 3.0.5
+  powershell -File scripts\build-release.ps1 -PrevZip D:\release\whale-girl-4.0.zip
+                                                                      # 顺手出差分补丁
 #>
 param(
   [string]$OutDir = (Join-Path $env:USERPROFILE 'Documents\whale-girl-release'),
   [string]$RuntimeSource = '',   # 默认用本目录的 runtime\
+  [string]$PrevZip = '',         # 上一版的 zip：给了就顺手出 whale-girl-<新>-from-<旧>.patch
   [switch]$SkipFull              # 只打源码包
 )
 
@@ -81,6 +84,17 @@ if (-not $SkipFull) {
   & tar -a -cf $fullZip -C $build $pkgNameFull
   if ($LASTEXITCODE -ne 0) { Pop-Location; throw "tar 打包失败 $LASTEXITCODE" }
   Write-Host ("  完整包：{0:N1} MB  →  {1}" -f ((Get-Item $fullZip).Length / 1MB), (Split-Path $fullZip -Leaf))
+}
+
+# 差分补丁：上一版 zip 给了就出，客户端下次只下这个（几 MB）而不是整包
+if ($PrevZip) {
+  if (-not (Test-Path -LiteralPath $PrevZip)) { Pop-Location; throw "找不到上一版包：$PrevZip" }
+  $prevVer = ([IO.Path]::GetFileNameWithoutExtension($PrevZip) -replace '^whale-girl-', '' -replace '-full$', '')
+  $patchName = "$pkgName-from-$prevVer.patch"
+  $patchPath = Join-Path $OutDir $patchName
+  & $node 'scripts\patch.js' 'make' $PrevZip $srcZip $patchPath
+  if ($LASTEXITCODE -ne 0) { Pop-Location; throw "差分补丁生成失败 $LASTEXITCODE" }
+  Write-Host ("  差分补丁：{0:N0} KB  →  {1}（上一版 {2}）" -f ((Get-Item $patchPath).Length / 1KB), $patchName, $prevVer)
 }
 
 Step '5/5 从 zip 里读文件复核（不信任磁盘）'

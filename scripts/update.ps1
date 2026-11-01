@@ -9,6 +9,10 @@
     scripts\update.ps1 -Tag v3.54 -Force  # 指定版本 / 降级
     scripts\update.ps1 -DryRun            # 只出计划，不下载不落盘
     scripts\update.ps1 -NoMirror          # 只用官方源
+    scripts\update.ps1 -Connections 8     # 下载并发连接数（默认 6，1 = 单连接）
+    scripts\update.ps1 -NoParallel        # 强制单连接下载
+    scripts\update.ps1 -NoPatch           # 不用差分补丁，永远下整包
+    scripts\update.ps1 -ExeName 鲸鲸.exe  # 指定"要换的启动器文件名"（默认自动探测正在运行的那个）
     scripts\update.ps1 -Migrate           # 只搬记忆：从旧安装复制 data\ + config.json
     scripts\update.ps1 -Migrate -FromDir "D:\whale-girl-3.50"   # 指定旧目录（已有记忆要覆盖再加 -Force）
 
@@ -16,6 +20,9 @@
     - release 是打包好的 zip（含 runtime），不是 git 仓库；这里只做「下载 → 校验 → 覆盖」，不编辑任何源码
     - 覆盖时跳过 data\、config.json、backup\、日志；runtime 只增改不删除（包里带的 ffmpeg 会补进来）
     - 下载按官方 API 给的 sha256 校验；官方不通时自动换镜像（镜像只搬运，不参与校验）
+    - 下载支持分段并发：先探测 Range，支持就开 N 条连接并行拉，不支持（多数反代）就退回单连接
+    - 差分更新：cache 里留着上一版的 zip，release 里有 from-<旧版本>.patch 时就只下补丁，打完按官方 sha256 校验
+    - 正在运行的启动器 exe 不参与覆盖（写不进去），最后单独「改名 → 落位」换掉，失败不影响已更新的代码
     - 覆盖后自检版本号 / 记忆条数 / config 哈希，任一项不过就自动回滚
     - 新目录首次运行时，如果没有 data\，会先找旧安装问一句「要不要把记忆搬过来」
 #>
@@ -37,6 +44,10 @@ param(
     [switch]$Rollback,
     [switch]$Migrate,
     [string]$FromDir,
+    [string]$ExeName,
+    [int]$Connections = 6,
+    [switch]$NoParallel,
+    [switch]$NoPatch,
     [switch]$Move,
     [Parameter(Position = 0)][string]$Zip
 )
@@ -44,6 +55,8 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $Repo = 'Banan1cee/whale_gril'
+# 下载并发：GitHub 对单连接限速很凶，多连接能明显快；-NoParallel 强制单连接
+$script:conns = if ($NoParallel) { 1 } else { [Math]::Max(1, $Connections) }
 $StateDir = if ($env:TEMP) { Join-Path $env:TEMP 'whale-girl-tools' } else { Join-Path $PSScriptRoot '..\.state' }
 $StateFile = Join-Path $StateDir 'last-root.txt'
 $CanPrompt = (-not [Console]::IsInputRedirected)
@@ -254,25 +267,30 @@ function Write-HttpHelper {
     param([string]$Path)
     $js = @'
 'use strict';
-// 只做两件事：把 URL 内容存文件（json），或流式下载（download）。
+// 只做两件事：把 URL 内容存文件（json），或下载（download）。
+// download 先探测 Range：支持就开 N 条连接分段并发拉，不支持就退回单连接。
 // 用 node 自带的 https，避免 PowerShell 5.1 / schannel 在部分机器上握手失败。
 const https = require('https');
 const http = require('http');
 const fs = require('fs');
 
-function request(url, depth) {
+function request(url, depth, extra) {
   return new Promise((resolve, reject) => {
     if (depth > 6) return reject(new Error('重定向次数过多'));
     const lib = url.indexOf('https:') === 0 ? https : http;
-    const req = lib.get(url, { headers: { 'user-agent': 'whale-girl-updater/1.0', 'accept': 'application/vnd.github+json' } }, (res) => {
+    const headers = Object.assign(
+      { 'user-agent': 'whale-girl-updater/1.0', 'accept': 'application/vnd.github+json' },
+      extra || {}
+    );
+    const req = lib.get(url, { headers }, (res) => {
       const code = res.statusCode;
       if (code >= 300 && code < 400 && res.headers.location) {
         res.resume();
-        try { resolve(request(new URL(res.headers.location, url).toString(), depth + 1)); }
+        try { resolve(request(new URL(res.headers.location, url).toString(), depth + 1, extra)); }
         catch (e) { reject(e); }
         return;
       }
-      if (code !== 200) {
+      if (code !== 200 && code !== 206) {
         let body = '';
         res.on('data', (d) => { if (body.length < 300) body += d; });
         res.on('end', () => reject(new Error('HTTP ' + code + ' ' + body.replace(/\s+/g, ' ').slice(0, 160))));
@@ -285,35 +303,134 @@ function request(url, depth) {
   });
 }
 
+function makeReporter(total) {
+  let last = -1;
+  return (got) => {
+    if (!(total > 0)) return;
+    const pct = Math.floor(got * 100 / total);
+    if (pct >= last + 5) {
+      last = pct;
+      console.log('P ' + pct + ' ' + (got / 1048576).toFixed(1) + '/' + (total / 1048576).toFixed(1));
+    }
+  };
+}
+
+function totalFrom(headers) {
+  const m = /bytes\s+\d+-\d+\/(\d+)/i.exec(String(headers['content-range'] || ''));
+  if (m) return Number(m[1]);
+  const len = Number(headers['content-length'] || 0);
+  return len > 0 ? len : 0;
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// 把响应流写到 fd 的 offset 位置，边写边报字节数
+async function pump(res, fd, offset, onBytes) {
+  let pos = offset;
+  for await (const c of res) {
+    fs.writeSync(fd, c, 0, c.length, pos);
+    pos += c.length;
+    onBytes(c.length);
+  }
+  return pos;
+}
+
+async function downloadSingle(res, out) {
+  const total = Number(res.headers['content-length'] || 0);
+  const report = makeReporter(total);
+  const fd = fs.openSync(out, 'w');
+  let got = 0;
+  try {
+    got = await pump(res, fd, 0, (n) => { got += n; report(got); });
+  } finally {
+    fs.closeSync(fd);
+  }
+  console.log('OK ' + got);
+}
+
+// 一个分片：Range 请求；失败从断点重试（换源由 PowerShell 那层负责）
+async function fetchSegment(url, fd, seg, onBytes) {
+  let pos = seg.start;
+  let lastErr = null;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      const res = await request(url, 0, { Range: 'bytes=' + pos + '-' + seg.end });
+      if (res.statusCode !== 206) { res.resume(); throw new Error('分片返回 ' + res.statusCode + '（源不支持 Range）'); }
+      for await (const c of res) {
+        fs.writeSync(fd, c, 0, c.length, pos);
+        pos += c.length;
+        onBytes(c.length);
+      }
+      if (pos !== seg.end + 1) throw new Error('分片长度不对（' + (pos - seg.start) + '/' + (seg.end - seg.start + 1) + '）');
+      return;
+    } catch (e) {
+      lastErr = e;
+      // 429/503 这种限流要退得更久，否则六条连接一起撞墙
+      const wait = Math.min(4000, 400 * Math.pow(2, attempt));
+      await sleep(wait);
+    }
+  }
+  throw lastErr || new Error('分片下载失败');
+}
+
+async function downloadMulti(url, out, total, conns) {
+  // 分片 1MB~8MB：再小就被 TLS 握手吃掉了
+  const chunk = Math.max(1 << 20, Math.min(8 << 20, Math.ceil(total / conns)));
+  const segs = [];
+  for (let s = 0; s < total; s += chunk) segs.push({ start: s, end: Math.min(s + chunk, total) - 1 });
+  const report = makeReporter(total);
+  const fd = fs.openSync(out, 'w');
+  fs.ftruncateSync(fd, total);
+  let got = 0;
+  try {
+    await Promise.all(segs.map((seg) => fetchSegment(url, fd, seg, (n) => { got += n; report(got); })));
+  } finally {
+    fs.closeSync(fd);
+  }
+  if (got !== total) throw new Error('分段下载字节数对不上（' + got + '/' + total + '）');
+  console.log('OK ' + got);
+}
+
 (async () => {
   const mode = process.argv[2];
   const url = process.argv[3];
   const out = process.argv[4];
-  const res = await request(url, 0);
+  const conns = Math.max(1, Number(process.argv[5] || 1));
+
   if (mode === 'json') {
+    const res = await request(url, 0);
     const chunks = [];
     for await (const c of res) chunks.push(c);
     fs.writeFileSync(out, Buffer.concat(chunks));
     console.log('OK');
     return;
   }
-  const total = Number(res.headers['content-length'] || 0);
-  const ws = fs.createWriteStream(out);
-  let got = 0;
-  let lastPct = -1;
-  for await (const c of res) {
-    got += c.length;
-    if (!ws.write(c)) await new Promise((r) => ws.once('drain', r));
+
+  if (conns <= 1) {
+    await downloadSingle(await request(url, 0), out);
+    return;
+  }
+
+  // 探测：先要 1 个字节。206 = 支持 Range，200 = 不支持（反代很常见）
+  const probe = await request(url, 0, { Range: 'bytes=0-0' });
+  if (probe.statusCode === 206) {
+    const total = totalFrom(probe.headers);
+    probe.resume();
+    await new Promise((r) => { probe.on('end', r); probe.on('error', r); });
     if (total > 0) {
-      const pct = Math.floor(got * 100 / total);
-      if (pct >= lastPct + 5) {
-        lastPct = pct;
-        console.log('P ' + pct + ' ' + (got / 1048576).toFixed(1) + '/' + (total / 1048576).toFixed(1));
+      try {
+        await downloadMulti(url, out, total, conns);
+        return;
+      } catch (e) {
+        // 反代对并发很敏感（动不动 429）：这个源别浪费，退回单连接再拉一遍
+        console.log('P 0 0.0/' + (total / 1048576).toFixed(1));
+        await downloadSingle(await request(url, 0), out);
+        return;
       }
     }
   }
-  await new Promise((r) => ws.end(r));
-  console.log('OK ' + got);
+  // 不支持分段：这个 200 响应本身就是完整文件，直接当单连接用
+  await downloadSingle(probe, out);
 })().catch((e) => { console.error('ERR ' + e.message); process.exit(1); });
 '@
     [IO.File]::WriteAllText($Path, $js, (New-Object Text.UTF8Encoding($false)))
@@ -655,7 +772,7 @@ function Save-ReleaseAsset {
         try {
             if ($node) {
                 $err = ''
-                & $node $Helper 'download' $u $Dest 2>&1 | ForEach-Object {
+                & $node $Helper 'download' $u $Dest $script:conns 2>&1 | ForEach-Object {
                     $line = [string]$_
                     if ($line -match '^P (\d+) (.+)$') {
                         Update-Progress -Activity ('下载 ' + $Label) -Status ($hostName + '  ' + $matches[2] + ' MB') -Percent ([int]$matches[1])
@@ -829,6 +946,63 @@ function Test-FileWritable {
     } catch { return $false }
 }
 
+# ---------------------------------------------------------------- 换启动器自己
+
+# 安装目录里正在运行的那个 exe（不写死名字：以后改名叫什么都行）
+function Get-RunningExeName {
+    param([string]$AppRoot)
+    $root = $AppRoot.TrimEnd('\')
+    foreach ($p in @(Get-Process -ErrorAction SilentlyContinue)) {
+        $exe = ''
+        try { $exe = $p.Path } catch { }
+        if (-not $exe) { continue }
+        $dir = Split-Path -Parent $exe
+        if ($dir -and ($dir.TrimEnd('\') -ieq $root)) { return (Split-Path -Leaf $exe) }
+    }
+    return ''
+}
+
+# 运行中的 exe：不能写、不能删，但可以改名——这是自更新的标准解法。
+# 先改名腾出路径，再把新文件放回去；任何一步失败都把旧文件改回来，绝不留下半截。
+function Swap-AppExe {
+    param([string]$AppRoot, [string]$SrcRoot, [string]$ExeName)
+    if (-not $ExeName) { return '' }
+    $cur = Join-Path $AppRoot $ExeName
+    if (-not (Test-Path -LiteralPath $cur)) { throw ('安装目录里没有 ' + $ExeName) }
+
+    $newExe = Join-Path $SrcRoot $ExeName
+    if (-not (Test-Path -LiteralPath $newExe)) {
+        # 包里改了名字：根目录只有一个 exe 时才敢认
+        $exes = @(Get-ChildItem -LiteralPath $SrcRoot -Filter '*.exe' -File -ErrorAction SilentlyContinue)
+        if ($exes.Count -ne 1) { return '' }
+        $newExe = $exes[0].FullName
+    }
+
+    $stageDir = Join-Path $AppRoot 'update'
+    New-Item -ItemType Directory -Force -Path $stageDir | Out-Null
+    $staged = Join-Path $stageDir ($ExeName + '.new')
+    Copy-Item -LiteralPath $newExe -Destination $staged -Force
+    if ((Get-Item -LiteralPath $staged).Length -le 0) { throw '新 exe 是空文件' }
+
+    $old = Join-Path $AppRoot ($ExeName + '.old-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
+    Rename-Item -LiteralPath $cur -NewName (Split-Path -Leaf $old) -ErrorAction Stop
+    try {
+        Move-Item -LiteralPath $staged -Destination $cur -Force -ErrorAction Stop
+    } catch {
+        try { Rename-Item -LiteralPath $old -NewName $ExeName -ErrorAction Stop } catch { }
+        throw
+    }
+    Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue
+    # 旧 exe：没进程占着就当场删掉（从 bat 更新、启动器本来就关着的情况）；
+    # 占着（启动器还开着）删不掉，留成 .old-*，下次启动 / 下次更新再清。
+    try { Remove-Item -LiteralPath $old -Force -ErrorAction Stop } catch { }
+    # 以前留下的 .old-*：那时候的进程已经退了，删得掉就删
+    Get-ChildItem -LiteralPath $AppRoot -Filter ($ExeName + '.old-*') -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -ne $old } |
+        ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
+    return $cur
+}
+
 # ---------------------------------------------------------------- 备份 / 覆盖
 
 function Backup-ForUpdate {
@@ -935,6 +1109,10 @@ try {
     Say ('  当前安装：' + $script:appRoot) 'Gray'
     Say ('  当前版本：' + $localVer) 'Gray'
 
+    # 要换的启动器：优先用 -ExeName，否则自动找安装目录里正在跑的那个（名字不写死）
+    $exeName = if ($ExeName) { $ExeName } else { Get-RunningExeName $script:appRoot }
+    if ($exeName) { Say ('  启动器：' + $exeName + '（运行中不覆盖，最后单独换）') 'DarkGray' }
+
     if ($Rollback) { Invoke-RollbackFlow }
 
     Save-KnownRoot $script:appRoot
@@ -1021,6 +1199,7 @@ try {
     $asset = $null
     $exclDirs = @('data', 'runtime', 'backup', 'node_modules', '.git', 'wechatauto_db', 'wechatauto_logs', 'logs', '__pycache__')
     $exclFiles = @('config.json', '*.log')
+    if ($exeName) { $exclFiles += $exeName }
 
     if ($Zip) {
         if (-not (Test-Path -LiteralPath $Zip)) { throw ('本地包不存在：' + $Zip) }
@@ -1166,18 +1345,20 @@ try {
 
     $exclDirs = @('data', 'runtime', 'backup', 'node_modules', '.git', 'wechatauto_db', 'wechatauto_logs', 'logs', '__pycache__')
     $exclFiles = @('config.json', '*.log')
+    if ($exeName) { $exclFiles += $exeName }
     $bakPreview = Join-Path $script:appRoot ('backup\update-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
 
     if ($DryRun) {
         Say ''
         Say '  [预演] 将执行：' 'Cyan'
-        Say ('    1) 下载 ' + $zipName + ' 并校验 sha256')
+        Say ('    1) 下载 ' + $zipName + ' 并校验 sha256（有差分补丁就先试补丁）')
         Say ('    2) 解压到临时目录、检查版本号和语法')
         Say ('    3) 停掉正在跑的鲸鲸（若有）')
         Say ('    4) 备份到 ' + $bakPreview)
         Say ('    5) 用新版覆盖代码，跳过：' + ($exclDirs -join '、'))
         Say ('       以及文件：' + ($exclFiles -join '、'))
         Say '    6) 校验记忆条数、config.json 哈希、版本号'
+        if ($exeName) { Say ('    7) 换启动器：' + $exeName + '（改名 → 放新文件，换不掉只提示、不回滚）') }
         Say ''
         Say ('  目标：' + $localVer + ' → ' + $remoteVer) 'Yellow'
         exit 0
@@ -1191,6 +1372,48 @@ try {
             Say ''
             Say '  命中本地缓存，跳过下载。' 'DarkGray'
             $needDownload = $false
+        }
+    }
+
+    # ---- 差分更新：本地留着上一版的 zip + release 里有对应补丁，就只下补丁 ----
+    if ($needDownload -and -not $NoPatch -and $localVer) {
+        $oldZip = Join-Path $cacheDir ('whale-girl-' + $localVer + '.zip')
+        $patchAsset = @($assets | Where-Object {
+            $_.name -match '\.patch$' -and $_.name -match ('-from-' + [regex]::Escape($localVer) + '\.patch$')
+        }) | Select-Object -First 1
+        $patchJs = Join-Path $script:appRoot 'scripts\patch.js'
+        $nodeExe = Find-NodeExe $script:appRoot
+        if ((Test-Path -LiteralPath $oldZip) -and $patchAsset -and (Test-Path -LiteralPath $patchJs) -and $nodeExe) {
+            $patchPath = Join-Path $cacheDir ([string]$patchAsset.name)
+            $pOfficial = [string]$patchAsset.browser_download_url
+            if ($AssetBase) {
+                $pOfficial = $AssetBase.TrimEnd('/') + '/' + ($pOfficial -replace '^https?://[^/]+/', '')
+            }
+            $patchUrls = @()
+            if ($Mirror) { $patchUrls += ($Mirror.TrimEnd('/') + '/' + $pOfficial) }
+            $patchUrls += $pOfficial
+            if (-not $NoMirror) {
+                foreach ($m in @('https://ghfast.top/', 'https://gh-proxy.com/', 'https://gh-proxy.org/', 'https://ghproxy.net/')) {
+                    $patchUrls += ($m + $pOfficial)
+                }
+            }
+            Say ''
+            Say ('  先试差分：' + [string]$patchAsset.name + '（' + (Format-Size ([long]$patchAsset.size)) + '）') 'Cyan'
+            try {
+                Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue
+                [void](Save-ReleaseAsset -Urls $patchUrls -Dest $patchPath -Label ([string]$patchAsset.name) -ExpectedSize ([long]$patchAsset.size))
+                & $nodeExe $patchJs 'apply' $oldZip $patchPath $zipPath 2>&1 | ForEach-Object { Say ('    ' + $_) 'DarkGray' }
+                if ($LASTEXITCODE -ne 0) { throw '打补丁失败' }
+                $okSize = ([long]$asset.size -le 0) -or ((Get-Item -LiteralPath $zipPath).Length -eq [long]$asset.size)
+                $okHash = ($digest -eq '') -or ((Get-Sha256 $zipPath) -eq $digest)
+                if (-not ($okSize -and $okHash)) { throw '打完补丁和官方包对不上' }
+                $needDownload = $false
+                Say '  ✅ 差分更新成功：只下了补丁，没下整包' 'Green'
+            } catch {
+                Say ('  ⚠ 差分没走通（' + $_.Exception.Message + '），改下整包。') 'Yellow'
+                Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue
+                Remove-Item -LiteralPath $patchPath -Force -ErrorAction SilentlyContinue
+            }
         }
     }
 
@@ -1347,8 +1570,35 @@ try {
         throw ('config.json 被动过了！用 一键更新.bat -Rollback 恢复。')
     }
 
+    # ---- 换启动器自己 ----
+    # 代码已经覆盖成功，这里只是把被占用的 exe 换掉：改名 → 落位。
+    # 换不掉不算更新失败（否则又会因为一个文件把整包回滚），只提示手动换。
+    $exeLine = ''
+    if ($exeName) {
+        try {
+            $swapped = Swap-AppExe -AppRoot $script:appRoot -SrcRoot $srcRoot -ExeName $exeName
+            if ($swapped) {
+                $exeLine = '启动器已换成新版：' + $exeName + '（关掉再打开，或点启动器里的「重启」）'
+                Say ('  ✅ ' + $exeLine) 'Green'
+            } else {
+                $exeLine = '新版包里没带 ' + $exeName + '，启动器保持原样'
+                Say ('  ℹ ' + $exeLine) 'DarkGray'
+            }
+        } catch {
+            $exeLine = '启动器没换成新版（' + $_.Exception.Message + '）：代码已更新，可关掉启动器后手动替换'
+            Say ('  ⚠ ' + $exeLine) 'Yellow'
+        }
+    }
+
     # ---- 收尾 ----
-    if (-not $KeepZip) { Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue }
+    # 这次的 zip 留在 cache 里：下次更新可以拿它做差分（只留最新一份，旧的清掉）
+    if (-not $KeepZip) {
+        Get-ChildItem -LiteralPath $cacheDir -Filter '*.zip' -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -ne $zipPath } |
+            ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
+        Get-ChildItem -LiteralPath $cacheDir -Filter '*.patch' -File -ErrorAction SilentlyContinue |
+            ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
+    }
     Remove-Item -LiteralPath $Work -Recurse -Force -ErrorAction SilentlyContinue
 
     $memLine = if ($after.Exists) {
@@ -1360,6 +1610,7 @@ try {
         $memLine,
         ('config.json：' + $(if ($cfgHashBefore) { '原样保留' } else { '本来就没有，未创建' })),
         ('备份：' + $bak),
+        $exeLine,
         '下一步：双击 启动鲸鱼娘.bat（改了代码必须重启才生效）',
         '想退回上一版：双击 一键更新.bat -Rollback'
     )

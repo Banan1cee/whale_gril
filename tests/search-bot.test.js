@@ -158,20 +158,29 @@ test('链接读取挪到触发判定之后：群里没叫她的消息不抓链�
 test('链接读取和联网搜索并行，总耗时取两者最大值', async (t) => {
   const f = fixture(t, { answer: '{"need":true,"query":"显卡行情"}', timeoutMs: 5000 });
   f.bot.config.links.enabled = true;
-  t.mock.method(web, 'searchText', async () => {
-    await new Promise((r) => setTimeout(r, 80));
-    return 'TEST EVIDENCE searchText';
-  });
-  f.bot.linkReader = async (url) => {
-    await new Promise((r) => setTimeout(r, 80));
-    return { ok: true, url, kind: 'web', title: '标题', description: '简介', article: '' };
+  // 记一下两件事各自的起止时间：判断并行要看区间有没有重叠，而不是卡墙钟阈值
+  // （CI 机器一抖，80ms 的活儿能跑出 200ms，写死 <150ms 就会偶发红）
+  const spans = [];
+  const timed = async (name, ms, value) => {
+    const start = Date.now();
+    await new Promise((r) => setTimeout(r, ms));
+    spans.push({ name, start, end: Date.now() });
+    return value;
   };
+  t.mock.method(web, 'searchText', () => timed('search', 80, 'TEST EVIDENCE searchText'));
+  f.bot.linkReader = (url) => timed('link', 80, { ok: true, url, kind: 'web', title: '标题', description: '简介', article: '' });
   const started = Date.now();
   const decision = await f.bot.decide(f.msg('查一下显卡行情 https://example.com/a'));
   const elapsed = Date.now() - started;
   assert.match(decision.msg.webText, /TEST EVIDENCE/);
   assert.match(decision.msg.linkText, /链接标题/);
-  assert.ok(elapsed < 150, '串行会 >=160ms，并行应该在 80ms 左右，实际 ' + elapsed + 'ms');
+
+  assert.equal(spans.length, 2, '联网搜索和链接读取都该跑');
+  const [a, b] = spans;
+  // 判据只看"两段区间有没有重叠"：串行不可能重叠，并行必然重叠。
+  // 不卡总耗时——decide() 里还有提示词组装等固定开销，墙钟阈值在 CI 上必炸。
+  const overlap = Math.min(a.end, b.end) - Math.max(a.start, b.start);
+  assert.ok(overlap > 0, '两件事必须重叠执行；串行不会重叠（实际重叠 ' + overlap + 'ms）');
 });
 
 test('weather result goes through actual decide into the final persona prompt', async (t) => {

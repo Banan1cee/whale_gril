@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Text;
 using System.Windows;
@@ -15,6 +16,10 @@ namespace WhaleLauncher
 
         protected override void OnStartup(StartupEventArgs e)
         {
+            // 自更新后重启会带 --replace <pid>：等旧实例真的退出，再去抢单实例锁
+            WaitForReplacedInstance();
+            CleanupOldExes();
+
             var identity = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(AppContext.BaseDirectory.ToUpperInvariant())));
             _instance = new Mutex(false, "Local\\WhaleGirlLauncher-" + identity);
             try { _ownsInstance = _instance.WaitOne(0); }
@@ -37,6 +42,41 @@ namespace WhaleLauncher
             if (_ownsInstance) _instance?.ReleaseMutex();
             _instance?.Dispose();
             base.OnExit(e);
+        }
+
+        /// <summary>重启时带 --replace &lt;pid&gt;：等旧实例退出再继续，否则会弹「已经在运行」。</summary>
+        private static void WaitForReplacedInstance()
+        {
+            try
+            {
+                var args = Environment.GetCommandLineArgs();
+                for (var i = 1; i + 1 < args.Length; i++)
+                {
+                    if (!string.Equals(args[i], "--replace", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (!int.TryParse(args[i + 1], out var pid)) return;
+                    try { Process.GetProcessById(pid).WaitForExit(15000); } catch { }
+                    return;
+                }
+            }
+            catch { }
+        }
+
+        /// <summary>更新时旧 exe 被改名成 *.old-*，那时它还锁着；下次启动就能删了。</summary>
+        private static void CleanupOldExes()
+        {
+            try
+            {
+                foreach (var f in Directory.GetFiles(AppContext.BaseDirectory, "*.old-*"))
+                {
+                    // 上一个实例可能刚退出、句柄还没完全释放，重试几次
+                    for (var i = 0; i < 5; i++)
+                    {
+                        try { File.Delete(f); break; }
+                        catch { Thread.Sleep(200); }
+                    }
+                }
+            }
+            catch { }
         }
 
         /// <summary>任何没接住的异常都写进 data\crash.log，别让窗口无声消失。</summary>

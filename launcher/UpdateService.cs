@@ -112,6 +112,8 @@ namespace WhaleLauncher
 
         /// <summary>
         /// 真正更新：跑 update.ps1 -Yes（脚本自己备份、覆盖、自检、失败回滚）。
+        /// 正在运行的 exe 不能写，脚本会跳过它、最后用「改名 → 落位」换掉，
+        /// 所以这里把当前 exe 文件名告诉脚本（名字不写死，以后改名也照跑）。
         /// 返回空串表示成功，否则是失败原因。
         /// </summary>
         public static async Task<string> ApplyAsync(string baseDir)
@@ -120,10 +122,15 @@ namespace WhaleLauncher
             if (!File.Exists(script)) return "没找到 scripts\\update.ps1";
             try
             {
+                var exeName = "";
+                try { exeName = Path.GetFileName(Environment.ProcessPath ?? ""); } catch { }
+                var args = "-NoProfile -ExecutionPolicy Bypass -File \"" + script + "\" -Yes";
+                if (!string.IsNullOrWhiteSpace(exeName)) args += " -ExeName \"" + exeName + "\"";
+
                 var psi = new ProcessStartInfo
                 {
                     FileName = "powershell.exe",
-                    Arguments = "-NoProfile -ExecutionPolicy Bypass -File \"" + script + "\" -Yes",
+                    Arguments = args,
                     WorkingDirectory = baseDir,
                     UseShellExecute = false,
                     CreateNoWindow = true,

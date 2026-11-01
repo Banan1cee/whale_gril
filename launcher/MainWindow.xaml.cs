@@ -189,7 +189,7 @@ namespace WhaleLauncher
             var answer = MessageBox.Show(
                 "发现新版本 v" + r.Latest + "（当前 v" + r.Current + "）。\n\n" +
                 "更新会先备份，再覆盖代码；data\\ 和 config.json 不会被改动。\n" +
-                "更新期间内核会停，完成后需要重启启动器。\n\n现在更新吗？",
+                "更新完会自动重启启动器（内核会先停）。\n\n现在更新吗？",
                 "检查更新", MessageBoxButton.YesNo, MessageBoxImage.Question);
             if (answer != MessageBoxResult.Yes) return;
 
@@ -202,15 +202,23 @@ namespace WhaleLauncher
                 if (err.Length > 0)
                 {
                     StatusLine.Text = "更新失败：" + err;
-                    MessageBox.Show("更新失败：" + err + "\n\n可以双击根目录的 一键更新.bat 手动更新（失败会自动回滚）。",
+                    MessageBox.Show("更新失败：" + err + "\n\n再点一次「检查更新」可以重试（失败会自动回滚）。",
                         "检查更新", MessageBoxButton.OK, MessageBoxImage.Warning);
                     return;
                 }
+
+                // 更新完必须重启：跑着的还是旧镜像，旧 exe 也只有等本进程退出才删得掉。
+                // 重启交给 --replace：新实例等本进程退出 → 抢单实例锁 → 顺手清 *.old-*。
                 SetUpdateButton(false);
-                StatusLine.Text = "已更新到 v" + r.Latest;
-                var restart = MessageBox.Show("更新完成。重启启动器后生效。\n\n现在重启吗？",
-                    "检查更新", MessageBoxButton.YesNo, MessageBoxImage.Information);
-                if (restart == MessageBoxResult.Yes) RestartSelf();
+                StatusLine.Text = "已更新到 v" + r.Latest + "，正在重启…";
+                await Task.Delay(900);
+                if (!RestartSelf(out var restartErr))
+                {
+                    StatusLine.Text = "已更新到 v" + r.Latest + "，请手动重新打开";
+                    MessageBox.Show(
+                        "更新完成，但自动重启失败：" + restartErr + "\n\n请手动关掉再打开启动器（新版要重启才生效）。",
+                        "检查更新", MessageBoxButton.OK, MessageBoxImage.Information);
+                }
             }
             finally
             {
@@ -219,20 +227,34 @@ namespace WhaleLauncher
             }
         }
 
-        private void RestartSelf()
+        /// <summary>
+        /// 重启自己：起一个新实例（带 --replace 本进程 PID），然后关掉本进程。
+        /// 返回 false 表示起不来，调用方负责提示。
+        /// </summary>
+        private bool RestartSelf(out string error)
         {
+            error = "";
             try
             {
-                var exe = Path.Combine(AppContext.BaseDirectory, "WhaleLauncher.exe");
-                Process.Start(new ProcessStartInfo(exe) { UseShellExecute = true, WorkingDirectory = AppContext.BaseDirectory });
+                // 不写死文件名：更新可能刚把 exe 换掉（甚至以后会改名），
+                // ProcessPath 永远是"我是从哪个路径启动的"，正好就是要重启的那个。
+                var exe = Environment.ProcessPath;
+                if (string.IsNullOrEmpty(exe)) exe = Path.Combine(AppContext.BaseDirectory, "WhaleLauncher.exe");
+                Process.Start(new ProcessStartInfo(exe)
+                {
+                    UseShellExecute = true,
+                    WorkingDirectory = AppContext.BaseDirectory,
+                    // 让新进程等本进程退出再抢单实例锁，否则会弹「已经在运行」
+                    Arguments = "--replace " + Environment.ProcessId,
+                });
             }
             catch (Exception ex)
             {
-                MessageBox.Show("自动重启失败：" + ex.Message + "\n请手动打开 WhaleLauncher.exe。", "检查更新",
-                    MessageBoxButton.OK, MessageBoxImage.Warning);
-                return;
+                error = ex.Message;
+                return false;
             }
             Application.Current.Shutdown();
+            return true;
         }
 
         // ── 外观：主题 / 背景图 / 标题栏 ────────────────────────
