@@ -12,6 +12,15 @@ $ErrorActionPreference = 'Continue'
 Push-Location (Split-Path -Parent $PSScriptRoot)
 $results = @()
 
+# 临时目录放进仓库内：测试会大量创建临时目录/文件，指向系统 %TEMP% 时
+# 在受限沙箱里会被拒（PermissionError），看起来像测试失败，其实是权限。
+# 放 artifacts/ci-tmp 既能跑通，也不会污染工作树（artifacts/ 已 gitignore）。
+$ciTmp = Join-Path (Get-Location) 'artifacts\ci-tmp'
+New-Item -ItemType Directory -Force -Path $ciTmp | Out-Null
+$env:TEMP = $ciTmp
+$env:TMP = $ciTmp
+$env:TMPDIR = $ciTmp
+
 function Step([string]$Name, [scriptblock]$Body) {
     Write-Host ''
     Write-Host "== $Name" -ForegroundColor Cyan
@@ -46,12 +55,29 @@ Step '发布自检' {
     node scripts/release-check.js
 }
 
+Step '隐私扫描（文本 + 二进制）' {
+    node scripts/privacy-scan.js .
+}
+
 Step 'Node 单元测试' {
     npm test
 }
 
 Step 'Python 单元测试' {
     & $Python -m unittest discover -s tests -p 'test_*.py'
+}
+
+Step '桥接自检（零焦点发送 / 消息调度）' {
+    $failed = @()
+    foreach ($script in @('scripts/bg-selftest.py', 'scripts/bridge-pipeline-selftest.py')) {
+        Write-Host "----- $script"
+        & $Python $script
+        if ($LASTEXITCODE -ne 0) { $failed += $script }
+    }
+    if ($failed.Count -gt 0) {
+        Write-Host ("失败：" + ($failed -join '、')) -ForegroundColor Red
+        $global:LASTEXITCODE = 1
+    }
 }
 
 Step '启动器编译' {
