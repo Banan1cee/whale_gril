@@ -223,12 +223,21 @@ namespace WhaleLauncher
         {
             try
             {
-                var exe = Path.Combine(AppContext.BaseDirectory, "WhaleLauncher.exe");
-                Process.Start(new ProcessStartInfo(exe) { UseShellExecute = true, WorkingDirectory = AppContext.BaseDirectory });
+                // 不写死文件名：更新可能刚把 exe 换掉（甚至以后会改名），
+                // ProcessPath 永远是"我是从哪个路径启动的"，正好就是要重启的那个。
+                var exe = Environment.ProcessPath;
+                if (string.IsNullOrEmpty(exe)) exe = Path.Combine(AppContext.BaseDirectory, "WhaleLauncher.exe");
+                Process.Start(new ProcessStartInfo(exe)
+                {
+                    UseShellExecute = true,
+                    WorkingDirectory = AppContext.BaseDirectory,
+                    // 让新进程等本进程退出再抢单实例锁，否则会弹「已经在运行」
+                    Arguments = "--replace " + Environment.ProcessId,
+                });
             }
             catch (Exception ex)
             {
-                MessageBox.Show("自动重启失败：" + ex.Message + "\n请手动打开 WhaleLauncher.exe。", "检查更新",
+                MessageBox.Show("自动重启失败：" + ex.Message + "\n请手动打开 " + Path.GetFileName(Environment.ProcessPath ?? "启动器"), "检查更新",
                     MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }

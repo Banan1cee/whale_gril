@@ -143,3 +143,65 @@ test('版本号只要和 latest 不同就更新，不比较大小', () => {
   assert.match(ps1, /if \(\$cmp -eq 0 -and -not \$Force\)/);
   assert.ok(!/if \(\$cmp -le 0/.test(ps1), '不要再按大小跳过');
 });
+
+test('运行中的启动器不参与覆盖，改成「改名 → 落位」换掉', () => {
+  // 现象：从启动器里点更新，最后一个文件是它自己，写不进去 → robocopy 退出码 8 → 整包回滚。
+  // Windows 允许给运行中的 exe 改名（不允许写/删），所以换成先改名腾路径再落位。
+  const ps1 = readPs1();
+  assert.match(ps1, /\[string\]\$ExeName/, '缺 -ExeName 参数');
+  assert.match(ps1, /function Get-RunningExeName/, '要能自动探测正在运行的 exe，名字不能写死');
+  assert.match(ps1, /function Swap-AppExe/, '缺换 exe 的实现');
+  assert.match(ps1, /\$exclFiles \+= \$exeName/, '正在运行的 exe 必须从覆盖列表里排除');
+  assert.match(ps1, /Rename-Item -LiteralPath \$cur -NewName/, '运行中的 exe 只能改名，不能覆盖');
+  assert.match(ps1, /Rename-Item -LiteralPath \$old -NewName \$ExeName/, '落位失败要把旧文件改回来');
+});
+
+test('换 exe 失败不算更新失败（否则又会整包回滚）', () => {
+  const ps1 = readPs1();
+  const start = ps1.indexOf('# ---- 换启动器自己 ----');
+  const end = ps1.indexOf('# ---- 收尾 ----');
+  assert.ok(start > 0 && end > start, '找不到换 exe 的段落');
+  const block = ps1.slice(start, end);
+  assert.match(block, /catch \{[\s\S]*代码已更新/, '换不掉要提示手动替换');
+  assert.ok(!/throw/.test(block), '换 exe 的段落里不能 throw，否则会把已更新的代码回滚掉');
+});
+
+test('下载支持分段并发，不支持 Range 时退回单连接', () => {
+  const ps1 = readPs1();
+  assert.match(ps1, /\[int\]\$Connections/, '缺 -Connections 参数');
+  assert.match(ps1, /\[switch\]\$NoParallel/, '缺 -NoParallel 开关');
+  assert.match(ps1, /content-range/i, '要按 Content-Range 拿总长度');
+  assert.match(ps1, /Range: 'bytes=' \+ pos/, '分片要带 Range 头');
+  assert.match(ps1, /downloadMulti/, '缺多连接实现');
+  assert.match(ps1, /fetchSegment/, '缺分片重试');
+  assert.match(ps1, /downloadSingle\(probe, out\)/, '不支持 Range 时要拿探测到的 200 响应当单连接');
+  assert.match(ps1, /'download' \$u \$Dest \$script:conns/, '要把并发数传给 helper');
+});
+
+test('差分更新：有上一版缓存和对应补丁，就只下补丁', () => {
+  const ps1 = readPs1();
+  assert.match(ps1, /\[switch\]\$NoPatch/, '缺 -NoPatch 开关');
+  assert.match(ps1, /\\\.patch\$/, '要按 .patch 资产名认补丁');
+  assert.match(ps1, /-from-/, '补丁资产名要带 from-<旧版本>，避免拿错补丁');
+  assert.match(ps1, /scripts\\patch\.js/, '客户端要用 scripts\\patch.js 打补丁');
+  assert.match(ps1, /差分更新成功/, '要明确告诉用户这次只下了补丁');
+  assert.match(ps1, /改下整包/, '补丁失败必须回退到整包，不能直接失败');
+  assert.match(ps1, /打完补丁和官方包对不上/, '打完补丁仍要按官方 sha256 校验');
+});
+
+test('更新完把这次的 zip 留在 cache 里（下次差分要用）', () => {
+  const ps1 = readPs1();
+  assert.match(ps1, /Get-ChildItem -LiteralPath \$cacheDir -Filter '\*\.zip'/, 'cache 里要保留最新一份 zip');
+  assert.ok(!/if \(-not \$KeepZip\) \{ Remove-Item -LiteralPath \$zipPath/.test(ps1), '不能下完就把 zip 删掉');
+});
+
+test('启动器重启用真实路径，并等旧实例退出再抢单实例锁', () => {
+  const main = fs.readFileSync(path.join(root, 'launcher', 'MainWindow.xaml.cs'), 'utf8');
+  const app = fs.readFileSync(path.join(root, 'launcher', 'App.xaml.cs'), 'utf8');
+  const svc = fs.readFileSync(path.join(root, 'launcher', 'UpdateService.cs'), 'utf8');
+  assert.match(main, /Environment\.ProcessPath/, '重启不能写死 WhaleLauncher.exe（以后会改名）');
+  assert.match(main, /--replace/, '重启要带 --replace <pid>');
+  assert.match(app, /WaitForReplacedInstance/, '新实例要先等旧实例退出，否则弹「已经在运行」');
+  assert.match(app, /CleanupOldExes/, '启动时清理 *.old-*');
+  assert.match(svc, /-ExeName/, '更新时要告诉脚本当前 exe 名');
+});
