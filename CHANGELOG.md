@@ -2,6 +2,20 @@
 
 ## 4.0
 
+### 打包 · 安装包改到 GitHub Actions 构建（为签名留好位置）
+
+**本机不再出安装包。** 跑一次 `Actions → installer` 就把 Python、Node、.NET 10 运行时
+全打进一个 setup.exe；推 `v*` tag 还会自动建 Release。签名步骤已经写好，仓库配上证书
+secrets 就能签，不用改代码。
+
+- 新增 `.github/workflows/installer.yml`：运行环境 → .NET 运行时 → 启动器 → 安装包 → 烟测 → 产物/Release 一条流水线
+- 新增 `scripts/sign-windows.ps1`：启动器先签、再编译安装包、再签安装包；没配证书就跳过并在摘要标「未签名」
+- Inno Setup 7.1.1 官方安装包随仓库带一份（`tools/innosetup/`），CI 不再依赖联网下载
+- 安装包版本号改由 CI 传入（`ISCC --define=AppVersion=`），产品名、公司、文件版本一起写进版本资源
+- 安装脚本把 `runtime\manifest.json` 补回包里（启动器诊断页要读它），`runtime\wheelhouse` 与本地活动预设继续排除
+- 卸载时清掉 `runtime\dotnet` 下的 .NET 运行时安装包（约 60MB）
+- 新增 `docs/打包与签名.md`：触发方式、版本规则、证书选项、secrets 配置步骤、失败排查
+
 ### 提醒 · 主动搭话白名单 · 启动器成为唯一界面 · 删除主动分享与消息汇总
 
 **本版删除「主动分享视频」和「消息汇总」两套功能（服务、路由、配置、桥接线程一并移除）。**

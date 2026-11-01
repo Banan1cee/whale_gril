@@ -18,6 +18,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Threading;
+using Microsoft.Win32;
 
 namespace WhaleLauncher.Views
 {
@@ -968,6 +969,342 @@ namespace WhaleLauncher.Views
             }
             catch { }
             return (provider, model, vision);
+        }
+
+
+        // ── 数据维护：UIA 自检 / 备份记忆 / 恢复记忆 / 重置全部 ─────
+        private sealed class SnapItem
+        {
+            public string Name = "";
+            public string File = "";
+            public DateTime At;
+            public long Messages;
+            public int Sessions;
+            public override string ToString()
+                => $"{At:yyyy-MM-dd HH:mm}   {Sessions} 个聊天 / {Messages} 条消息   {Name}";
+        }
+
+        private string NodeExe()
+        {
+            var local = Path.Combine(_sup.BaseDir, "runtime", "node", "node.exe");
+            return File.Exists(local) ? local : "node";
+        }
+
+        private string PythonExe()
+        {
+            var local = Path.Combine(_sup.BaseDir, "runtime", "python", "python.exe");
+            return File.Exists(local) ? local : "python";
+        }
+
+        private async Task<(int Code, string Output)> RunToolAsync(string exe, string args, int timeoutMs = 180000)
+        {
+            try
+            {
+                var psi = new ProcessStartInfo
+                {
+                    FileName = exe,
+                    Arguments = args,
+                    WorkingDirectory = _sup.BaseDir,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    StandardOutputEncoding = Encoding.UTF8,
+                    StandardErrorEncoding = Encoding.UTF8,
+                };
+                using var p = Process.Start(psi);
+                var so = p.StandardOutput.ReadToEndAsync();
+                var se = p.StandardError.ReadToEndAsync();
+                var ok = await Task.Run(() => p.WaitForExit(timeoutMs));
+                var text = (await so) + (await se);
+                if (!ok)
+                {
+                    try { p.Kill(true); } catch { }
+                    return (-1, text + "\n（超时，已中止）");
+                }
+                return (p.ExitCode, text);
+            }
+            catch (Exception ex)
+            {
+                return (-1, "启动失败：" + ex.Message);
+            }
+        }
+
+        /// <summary>把一段长输出放进可滚动的只读窗口（不弹一屏 MessageBox）。</summary>
+        private void ShowTextWindow(string title, string text)
+        {
+            var box = new TextBox
+            {
+                Text = string.IsNullOrEmpty(text) ? "（没有输出）" : text,
+                IsReadOnly = true,
+                BorderThickness = new Thickness(1),
+                Padding = new Thickness(12),
+                FontFamily = new FontFamily("Cascadia Mono, Consolas, monospace"),
+                FontSize = 12,
+                TextWrapping = TextWrapping.Wrap,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                VerticalContentAlignment = VerticalAlignment.Top,
+                MinHeight = 320,
+            };
+            var win = new Window
+            {
+                Title = title,
+                Width = 760,
+                Height = 540,
+                Owner = Window.GetWindow(this),
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                Content = box,
+            };
+            // 全局 TextBox 样式给的是浅色字 + 深色底；新开窗口默认白底，会出现「白屏」，
+            // 所以窗口背景和文字颜色都显式跟主题走。
+            win.SetResourceReference(Window.BackgroundProperty, "Bg");
+            box.SetResourceReference(Control.BackgroundProperty, "FieldBg");
+            box.SetResourceReference(Control.ForegroundProperty, "Text");
+            win.ShowDialog();
+        }
+
+        /// <summary>应用内确认弹窗：和界面同一套配色，替代系统 MessageBox。</summary>
+        private bool AskInline(string title, string body, string okText, bool danger = false)
+        {
+            var win = new Window
+            {
+                Title = title,
+                Width = 520,
+                SizeToContent = SizeToContent.Height,
+                ResizeMode = ResizeMode.NoResize,
+                Owner = Window.GetWindow(this),
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                ShowInTaskbar = false,
+            };
+            win.SetResourceReference(Window.BackgroundProperty, "Bg");
+
+            var panel = new StackPanel { Margin = new Thickness(22, 20, 22, 18) };
+
+            var head = new TextBlock { Text = title, FontSize = 15, FontWeight = FontWeights.SemiBold };
+            head.SetResourceReference(TextBlock.ForegroundProperty, "Text");
+            panel.Children.Add(head);
+
+            var text = new TextBlock
+            {
+                Text = body,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 10, 0, 0),
+                LineHeight = 21,
+            };
+            text.SetResourceReference(TextBlock.ForegroundProperty, "Text2");
+            panel.Children.Add(text);
+
+            var row = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                HorizontalAlignment = HorizontalAlignment.Right,
+                Margin = new Thickness(0, 18, 0, 0),
+            };
+            var cancel = new Button { Content = "取消", Style = (Style)FindResource("Primary"), Padding = new Thickness(16, 5, 16, 5) };
+            var ok = new Button
+            {
+                Content = okText,
+                Style = (Style)FindResource("Ghost"),
+                Padding = new Thickness(16, 5, 16, 5),
+                Margin = new Thickness(10, 0, 0, 0),
+            };
+            if (danger) ok.SetResourceReference(Control.ForegroundProperty, "Bad");
+            row.Children.Add(cancel);
+            row.Children.Add(ok);
+            panel.Children.Add(row);
+
+            var answered = false;
+            cancel.Click += (s, e) => win.Close();
+            ok.Click += (s, e) => { answered = true; win.Close(); };
+            win.Content = panel;
+            win.ShowDialog();
+            return answered;
+        }
+
+        private async void OnUiaCheck(object sender, RoutedEventArgs e)
+        {
+            MaintenanceHint.Text = "正在检查微信 UIA 控件树（3~15 秒）…";
+            try
+            {
+                var (code, output) = await RunToolAsync(PythonExe(), "\"" + Path.Combine(_sup.BaseDir, "tools", "uia-check.py") + "\"", 60000);
+                MaintenanceHint.Text = code == 0 ? "UIA 自检完成。" : "UIA 自检没通过，看窗口里的结论。";
+                ShowTextWindow("UIA 自检", output);
+            }
+            finally
+            {
+                if (MaintenanceHint.Text.StartsWith("正在检查")) MaintenanceHint.Text = "";
+            }
+        }
+
+        private async void OnBackupMemory(object sender, RoutedEventArgs e)
+        {
+            var dlg = new SaveFileDialog
+            {
+                Title = "备份记忆",
+                FileName = "whale-memory-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".json",
+                Filter = "鲸鲸记忆 (*.json)|*.json",
+                InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
+            };
+            if (dlg.ShowDialog() != true) return;
+
+            MaintenanceHint.Text = "正在导出记忆…";
+            var (code, output) = await RunToolAsync(NodeExe(), "\"scripts/memory-tool.js\" export \"" + dlg.FileName + "\"");
+            if (code == 0)
+            {
+                MaintenanceHint.Text = "已备份到 " + dlg.FileName;
+                MessageBox.Show(Window.GetWindow(this), "已备份到：\n" + dlg.FileName + "\n\n默认不含 API Key；要连 Key 一起带走请用命令行加 --secrets。",
+                    "备份记忆", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            else
+            {
+                MaintenanceHint.Text = "备份失败";
+                ShowTextWindow("备份失败", output);
+            }
+        }
+
+        private async Task<List<SnapItem>> LoadSnapshotsAsync()
+        {
+            var list = new List<SnapItem>();
+            var (code, output) = await RunToolAsync(NodeExe(), "\"scripts/memory-tool.js\" list --json");
+            if (code != 0) return list;
+            var start = output.IndexOf('[');
+            var end = output.LastIndexOf(']');
+            if (start < 0 || end <= start) return list;
+            try
+            {
+                using var doc = JsonDocument.Parse(output.Substring(start, end - start + 1));
+                foreach (var it in doc.RootElement.EnumerateArray())
+                {
+                    var at = DateTime.Now;
+                    DateTime.TryParse(JsonStr(it, "mtime"), null, DateTimeStyles.RoundtripKind, out at);
+                    list.Add(new SnapItem
+                    {
+                        Name = JsonStr(it, "name"),
+                        File = JsonStr(it, "file"),
+                        At = at,
+                        Sessions = it.TryGetProperty("sessions", out var ss) && ss.ValueKind == JsonValueKind.Number ? ss.GetInt32() : 0,
+                        Messages = it.TryGetProperty("messages", out var mm) && mm.ValueKind == JsonValueKind.Number ? mm.GetInt64() : 0,
+                    });
+                }
+            }
+            catch { }
+            return list;
+        }
+
+        private async void OnRestoreMemory(object sender, RoutedEventArgs e)
+        {
+            MaintenanceHint.Text = "正在读取快照列表…";
+            var snaps = await LoadSnapshotsAsync();
+            MaintenanceHint.Text = snaps.Count == 0 ? "还没有自动快照，可以选外部备份文件恢复。" : "";
+
+            var win = new Window
+            {
+                Title = "恢复记忆",
+                Width = 640,
+                Height = 440,
+                Owner = Window.GetWindow(this),
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            };
+            var grid = new Grid { Margin = new Thickness(14) };
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+            grid.Children.Add(new TextBlock
+            {
+                Text = "选一个快照恢复；恢复前会先停内核，并自动把当前记忆另存一份。",
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 0, 0, 8),
+            });
+
+            var listBox = new ListBox { ItemsSource = snaps, DisplayMemberPath = "" };
+            Grid.SetRow(listBox, 1);
+            grid.Children.Add(listBox);
+
+            var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 10, 0, 0) };
+            var pick = new Button { Content = "从文件恢复…", Padding = new Thickness(12, 4, 12, 4) };
+            var go = new Button { Content = "恢复选中", Padding = new Thickness(12, 4, 12, 4), Margin = new Thickness(8, 0, 0, 0), IsEnabled = snaps.Count > 0 };
+            var cancel = new Button { Content = "取消", Padding = new Thickness(12, 4, 12, 4), Margin = new Thickness(8, 0, 0, 0) };
+            buttons.Children.Add(pick);
+            buttons.Children.Add(go);
+            buttons.Children.Add(cancel);
+            Grid.SetRow(buttons, 2);
+            grid.Children.Add(buttons);
+            win.Content = grid;
+
+            string chosen = null;
+            cancel.Click += (s, _) => win.Close();
+            pick.Click += (s, _) =>
+            {
+                var dlg = new OpenFileDialog { Title = "选择记忆备份", Filter = "鲸鲸记忆 (*.json)|*.json" };
+                if (dlg.ShowDialog() == true) { chosen = dlg.FileName; win.Close(); }
+            };
+            go.Click += (s, _) =>
+            {
+                if (listBox.SelectedItem is SnapItem item) { chosen = item.File; win.Close(); }
+            };
+            win.ShowDialog();
+
+            if (string.IsNullOrEmpty(chosen)) return;
+
+            var confirm = MessageBox.Show(
+                Window.GetWindow(this),
+                "要恢复这个备份吗？\n\n" + chosen + "\n\n" +
+                "恢复前会先停止内核，并把当前记忆自动备份到 data\\backups\\。",
+                "恢复记忆", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+            if (confirm != MessageBoxResult.Yes) return;
+
+            if (_sup.NodeRunning || _sup.BridgeRunning)
+            {
+                MaintenanceHint.Text = "正在停止内核…";
+                _sup.StopAll();
+                await Task.Delay(1200);
+            }
+
+            MaintenanceHint.Text = "正在恢复记忆…";
+            var (code, output) = await RunToolAsync(NodeExe(), "\"scripts/memory-tool.js\" restore \"" + chosen + "\"", 300000);
+            if (code != 0)
+            {
+                MaintenanceHint.Text = "恢复失败";
+                ShowTextWindow("恢复失败", output);
+                return;
+            }
+
+            MaintenanceHint.Text = "记忆已恢复";
+            var restart = MessageBox.Show(Window.GetWindow(this), "恢复完成。\n\n现在重新启动内核和桥接吗？",
+                "恢复记忆", MessageBoxButton.YesNo, MessageBoxImage.Question);
+            if (restart == MessageBoxResult.Yes)
+            {
+                MaintenanceHint.Text = "正在启动…";
+                await _sup.StartAllAsync();
+                MaintenanceHint.Text = "已重新启动";
+            }
+        }
+
+        private async void OnFactoryReset(object sender, RoutedEventArgs e)
+        {
+            if (!AskInline("重置全部（恢复出厂）",
+                "会清空：聊天记忆、API Key、人设调教、主人名单、网关令牌、所有设置。\n" +
+                "清空前会先自动备份到 backup\\reset-时间戳\\，但恢复要自己手动捞。",
+                "继续")) return;
+
+            if (!AskInline("最后确认",
+                "真的要清空所有数据和设置吗？\n这一步不可撤销，只能从 backup\\reset-* 手动恢复。",
+                "确定重置", danger: true)) return;
+
+            MaintenanceHint.Text = "正在重置，别关窗口…";
+            var (code, output) = await RunToolAsync("powershell.exe",
+                "-NoProfile -ExecutionPolicy Bypass -File \"scripts/factory-reset.ps1\" -Yes -NoStart", 300000);
+            if (code != 0)
+            {
+                MaintenanceHint.Text = "重置失败";
+                ShowTextWindow("重置失败", output);
+                return;
+            }
+            MaintenanceHint.Text = "已恢复出厂";
+            MessageBox.Show(Window.GetWindow(this),
+                "已恢复出厂设置。\n\n请关闭并重新打开启动器（数据目录已重建）。",
+                "重置全部", MessageBoxButton.OK, MessageBoxImage.Information);
         }
 
         private static JsonElement JsonProp(JsonElement e, string name)

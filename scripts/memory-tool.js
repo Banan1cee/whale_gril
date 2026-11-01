@@ -17,6 +17,7 @@ const backup = require('../src/memory/backup');
 const root = path.resolve(__dirname, '..');
 const [cmd = 'info', arg = '', ...rest] = process.argv.slice(2);
 const withSecrets = rest.includes('--secrets') || arg === '--secrets';
+const asJson = rest.includes('--json') || arg === '--json';
 
 function fmtTime(d) {
   const t = new Date(d);
@@ -27,6 +28,14 @@ function fmtTime(d) {
 async function main() {
   if (cmd === 'list') {
     const items = backup.listBackups(root);
+    if (asJson) {
+      // 给启动器「恢复记忆」读的：只给元数据，不带正文
+      console.log(JSON.stringify(items.map((it) => ({
+        name: it.name, file: it.file, size: it.size, mtime: it.mtime,
+        sessions: it.sessions, messages: it.messages, notes: it.notes,
+      }))));
+      return 0;
+    }
     if (!items.length) {
       console.log('还没有快照。先跑一次 backup，或者启动一次服务（会自动留一份）。');
       return 0;

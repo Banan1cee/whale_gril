@@ -1,6 +1,6 @@
 # UIA 在微信 4.2 上失效：原因与修复
 
-> 适用：微信 4.2.x（实测 4.2.0.9）+ wechatauto-replica 1.2.8.1
+> 适用：微信 4.2.x（实测 4.2.0.9）+ wechatauto-replica 1.2.9
 > 相关文件：`bridge/uia_boot.py`、`bridge/engine.py`、`launcher/app.manifest`
 
 ## 症状

@@ -156,6 +156,22 @@ test('设置页去掉侧栏和标题，单列铺开，模型/高级模式/外观
   assert.ok(!titles.includes('语音'), '语音已并进模型卡，不该再占 Specs 分组');
 });
 
+test('诊断页内置 UIA 自检与数据维护，不用再开 bat', () => {
+  const xaml = readLauncher('Views/DiagPage.xaml');
+  const code = readLauncher('Views/DiagPage.xaml.cs');
+  for (const t of ['UIA 自检', '备份记忆', '恢复记忆', '重置全部']) {
+    assert.ok(xaml.includes(t), '诊断页缺少按钮：' + t);
+  }
+  assert.ok(code.includes('memory-tool.js'), '备份/恢复应该走 memory-tool.js');
+  assert.ok(code.includes('factory-reset.ps1'), '重置全部应该走 factory-reset.ps1');
+  assert.match(code, /_sup\.StopAll\(\)/, '恢复记忆前必须先停内核');
+  assert.ok(xaml.includes('uia-check.py') || code.includes('uia-check.py'), 'UIA 自检入口');
+  assert.equal((code.match(/AskInline\(/g) || []).length >= 2, true, '重置全部必须两次应用内确认');
+  // 命令行工具要给启动器吐 JSON 列表
+  const tool = readLauncher('../scripts/memory-tool.js');
+  assert.match(tool, /--json/, 'memory-tool list 要支持 --json');
+});
+
 test('卡片不再把 DropShadowEffect 挂在内容上，避免竖线/糊字', () => {
   const start = appXaml.indexOf('<Style TargetType="Border" x:Key="Card">');
   assert.ok(start >= 0, '找不到 Card 样式');

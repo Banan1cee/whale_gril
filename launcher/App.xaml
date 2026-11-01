@@ -297,7 +297,13 @@
                                     </ControlTemplate>
                                 </ToggleButton.Template>
                             </ToggleButton>
-                            <ContentPresenter IsHitTestVisible="False" Margin="10,0,26,0" VerticalAlignment="Center"
+                            <!-- 可编辑下拉必须有这一部分，否则 IsEditable=true 时文字不显示（模型名曾经是空白） -->
+                            <TextBox x:Name="PART_EditableTextBox" Visibility="Collapsed"
+                                     Background="Transparent" BorderThickness="0" Padding="0" MinHeight="0"
+                                     Margin="10,0,26,0" VerticalAlignment="Center"
+                                     Foreground="{DynamicResource Text}" CaretBrush="{DynamicResource Text}"
+                                     IsReadOnly="{TemplateBinding IsReadOnly}" />
+                            <ContentPresenter x:Name="ContentSite" IsHitTestVisible="False" Margin="10,0,26,0" VerticalAlignment="Center"
                                               Content="{TemplateBinding SelectionBoxItem}"
                                               ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}" />
                             <Popup x:Name="PART_Popup" Placement="Bottom" AllowsTransparency="True" Focusable="False"
@@ -311,6 +317,12 @@
                                 </Border>
                             </Popup>
                         </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsEditable" Value="True">
+                                <Setter TargetName="PART_EditableTextBox" Property="Visibility" Value="Visible" />
+                                <Setter TargetName="ContentSite" Property="Visibility" Value="Collapsed" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>

@@ -3,7 +3,7 @@
 
 现场（本机 2026-10-23 实测，pid 29208）
 --------------------------------------
-wechatauto-replica 1.2.7.0 认微信主窗要同时满足四个条件，本机一个都不满足：
+wechatauto-replica 1.2.7.0 / 1.2.9 认微信主窗都要同时满足四个条件，本机一个都不满足：
 
     _wechat_hwnds()   # uia_driver.py:355
       if win32gui.IsWindowVisible(h) and _title_is_main(title):      # ①要可见 ②标题含「微信/Weixin」

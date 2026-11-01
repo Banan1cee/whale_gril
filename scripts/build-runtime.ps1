@@ -25,7 +25,7 @@
 param(
   [string]$PythonVersion = '3.12.10',
   [string]$PythonUrl = '',
-  [string[]]$Packages = @('wechatauto-replica==1.2.8.1', 'psutil', 'pywin32', 'requests'),
+  [string[]]$Packages = @('wechatauto-replica==1.2.9', 'psutil', 'pywin32', 'requests'),
   [string]$Mirror = 'https://pypi.tuna.tsinghua.edu.cn/simple',
   [switch]$Force,
   [switch]$SkipNode
@@ -59,15 +59,38 @@ function Get-File($url, $out) {
   if ($LASTEXITCODE -ne 0 -or -not (Test-Path $out)) { Fail "下载失败：$url" }
 }
 
-# 优先要二进制轮子；拿不到（pyautogui 这类只发源码包的）退回源码包
+# 抓单个包的兜底（正常流程用不到，见第 4 步的「一次抓齐」）
+# 构建机就是目标平台（Windows x64 + Python 3.12），所以不用 --platform 那套跨平台参数：
+# 那套模式 pip 不解析传递依赖，只能缺一个补一个。
 function Get-Wheel($name) {
-  $common = @('-m', 'pip', 'download', '--dest', $wheelhouse, '--no-deps',
-    '-i', $Mirror, '--trusted-host', $mirrorHost)
-  & python @common --only-binary=:all: --platform win_amd64 --python-version 3.12 --implementation cp --abi cp312 $name 2>&1 | Out-Null
-  if ($LASTEXITCODE -eq 0) { Info "  轮子  $name"; return }
-  & python @common --no-binary :all: $name 2>&1 | Out-Null
-  if ($LASTEXITCODE -eq 0) { Info "  源码包 $name"; return }
+  & python -m pip download --dest $wheelhouse --no-deps --prefer-binary `
+    -i $Mirror --trusted-host $mirrorHost $name 2>&1 | Out-Null
+  if ($LASTEXITCODE -eq 0) { Info "  抓到 $name"; return }
   Fail "拿不到 $name（镜像源或网络问题）"
+}
+
+# 一次抓齐整个依赖闭包（含传递依赖）。以前是「缺一个补一个」，
+# 31 个包要 31 轮 HTTP，慢得像卡死；这里一条命令下完。
+function Get-Closure($packages) {
+  Info '抓依赖闭包到 wheelhouse（含传递依赖，约 118MB）'
+  & python -m pip download --dest $wheelhouse --prefer-binary `
+    -i $Mirror --trusted-host $mirrorHost @packages 2>&1 | Out-Null
+  if ($LASTEXITCODE -ne 0) { Fail '依赖闭包下载失败（镜像源或网络问题）' }
+  $n = (Get-ChildItem $wheelhouse -File | Measure-Object).Count
+  Info "wheelhouse 现有 $n 个包"
+}
+
+# ---------------------------------------------------------------- 缓存快速通道
+# CI 每轮都会跑这个脚本，但依赖没变时没理由重装 380MB 的包。
+# runtime 目录整体命中缓存时，看指纹直接退出，把这一步从几十秒压到 1~2 秒。
+$stamp = (@($Packages) -join '|') + "|python=$PythonVersion|schema=2"
+$marker = Join-Path $runtime '.built'
+if ((Test-Path $marker) -and (Test-Path $pythonExe) -and (Test-Path (Join-Path $runtime 'node.exe')) -and
+    ((Get-Content $marker -Raw -ErrorAction SilentlyContinue).Trim() -eq $stamp)) {
+  Info '运行环境已就绪（命中缓存），跳过构建'
+  & $pythonExe -c "import wechatauto, psutil, win32com, uiautomation; print('imports ok')" 2>&1 | Select-Object -Last 2
+  if ($LASTEXITCODE -eq 0) { exit 0 }
+  Info '缓存里的依赖不完整，回退到完整构建'
 }
 
 # ---------------------------------------------------------------- 0. 目录
@@ -134,17 +157,31 @@ if (Test-Path (Join-Path $sitePackages 'pip')) {
 
 # ---------------------------------------------------------------- 4. 桥接依赖（离线装，缺什么补什么）
 Step '4/6 安装桥接依赖'
+# 一次把整个依赖闭包抓下来（含 numpy / opencv / pyautogui 那一串传递依赖）。
+# 老写法是「pip install --no-index 报第一个缺的 → 下载一个 → 再试」，
+# 31 个包要 31 轮 HTTP；现在一条 pip download 下完，下面的循环只当兜底。
+if (-not (Test-Path (Join-Path $wheelhouse 'wheelhouse.ok'))) {
+  Get-Closure $Packages
+}
+
 $commonArgs = @('-m', 'pip', 'install', '--no-index', '--find-links', $wheelhouse,
   '--no-build-isolation', '--no-cache-dir', '--no-warn-script-location') + $Packages
-for ($round = 1; $round -le 12; $round++) {
+# 兜底循环：万一闭包漏了某个包（或 wheelhouse 是旧缓存），还是一次补一个。
+for ($round = 1; $round -le 20; $round++) {
   $out = & $pythonExe @commonArgs 2>&1
-  if ($LASTEXITCODE -eq 0) { Info '依赖安装完成'; break }
+  if ($LASTEXITCODE -eq 0) { Info "依赖安装完成（第 $round 轮）"; break }
   $missing = ([regex]::Match(($out -join "`n"), 'No matching distribution found for ([A-Za-z0-9][A-Za-z0-9_.\-]*)')).Groups[1].Value
   if (-not $missing) { $out | Select-Object -Last 12; Fail '依赖安装失败（不是缺包的问题）' }
+  # 补抓必须带上 $Packages 里的版本钉：只抓包名会拿到最新版，安装要求的是钉住的版本，
+  # 于是每一轮都「下载成功但装不上」。4.0 的 CI 第一次跑就是这么空转 12 轮的。
+  $spec = $Packages | Where-Object { (($_ -split '[=<>!~ ]')[0]) -eq $missing } | Select-Object -First 1
+  if ($spec) { $missing = $spec }
   Info "缺 $missing，补抓进 wheelhouse（第 $round 轮）"
   Get-Wheel $missing
 }
-if ($LASTEXITCODE -ne 0) { Fail '依赖安装没在 12 轮内收敛' }
+if ($LASTEXITCODE -ne 0) { $out | Select-Object -Last 20; Fail '依赖安装没在 20 轮内收敛' }
+# 装成功才留标记：下次命中缓存时就能跳过整段下载
+if ($LASTEXITCODE -eq 0) { New-Item -ItemType File -Force -Path (Join-Path $wheelhouse 'wheelhouse.ok') | Out-Null }
 
 # ---------------------------------------------------------------- 5. pywin32 postinstall
 Step '5/6 pywin32 postinstall'
@@ -167,6 +204,26 @@ $listJson = & $pythonExe -m pip list --format=json --disable-pip-version-check
 $packagesObj = [ordered]@{}
 foreach ($p in ($listJson | ConvertFrom-Json | Sort-Object name)) { $packagesObj[$p.name] = $p.version }
 
+# ---------------------------------------------------------------- 6.5 瘦身
+# 装进用户机器的东西越小越好。下面这些运行时一律用不到，删掉不损失任何功能：
+#   pip / setuptools / wheel / pkg_resources —— 只给构建期装包用
+#   __pycache__ / 各库自带的 tests —— 运行时不读
+# 必须在 pip list 之后删，否则上面就拿不到包清单了。
+Info '瘦身：删构建期工具 + 缓存 + 测试'
+$before = (Get-ChildItem $pythonDir -Recurse -File | Measure-Object Length -Sum).Sum
+foreach ($p in @('pip', 'setuptools', 'wheel', 'pkg_resources', '_distutils_hack')) {
+  $full = Join-Path $sitePackages $p
+  if (Test-Path $full) { Remove-Item $full -Recurse -Force -ErrorAction SilentlyContinue }
+}
+Get-ChildItem $pythonDir -Recurse -Directory -Filter '__pycache__' -ErrorAction SilentlyContinue |
+  Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+# 只删健康的 tests 目录（numpy\testing 这种给业务代码用的名字不在此列）
+Get-ChildItem $sitePackages -Recurse -Directory -ErrorAction SilentlyContinue |
+  Where-Object { $_.Name -in @('tests', 'test') } |
+  Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+$after = (Get-ChildItem $pythonDir -Recurse -File | Measure-Object Length -Sum).Sum
+Info ("  省了 {0:N1} MB（{1:N1} → {2:N1} MB）" -f (($before - $after) / 1MB), ($before / 1MB), ($after / 1MB))
+
 $hash = { param($p) if (Test-Path $p) { (Get-FileHash $p -Algorithm SHA256).Hash.ToLower() } else { '' } }
 $pyFiles = (Get-ChildItem $pythonDir -Recurse -File | Measure-Object Length -Sum)
 $manifest = [ordered]@{
@@ -182,6 +239,8 @@ $manifest = [ordered]@{
 }
 $manifestPath = Join-Path $runtime 'manifest.json'
 [IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json -Depth 5), (New-Object Text.UTF8Encoding $false))
+
+[IO.File]::WriteAllText((Join-Path $runtime '.built'), $stamp)  # 下次命中缓存时据此跳过
 
 Write-Host "`n✓ runtime 就绪" -ForegroundColor Green
 Info "python : $(& $pythonExe -c 'import sys;print(sys.version.split()[0])')（$($manifest.sizes.pythonMB) MB）"
