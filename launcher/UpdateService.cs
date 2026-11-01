@@ -52,8 +52,21 @@ namespace WhaleLauncher
                 p = Process.Start(psi);
                 var stdout = p.StandardOutput.ReadToEndAsync();
                 var stderr = p.StandardError.ReadToEndAsync();
-                var exit = p.WaitForExit(30000);
-                if (!exit)
+                // 必须异步等：WaitForExit(30000) 会卡在 UI 线程上，点一次检查更新就冻四五秒
+                bool exited;
+                using (var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(30)))
+                {
+                    try
+                    {
+                        await p.WaitForExitAsync(cts.Token);
+                        exited = true;
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        exited = false;
+                    }
+                }
+                if (!exited)
                 {
                     try { p.Kill(true); } catch { }
                     result.Error = "检查超时（30 秒）";

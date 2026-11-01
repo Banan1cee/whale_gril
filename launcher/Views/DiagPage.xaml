@@ -35,12 +35,15 @@
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
         <DockPanel Grid.Row="0" LastChildFill="False" Margin="0,0,0,12">
             <TextBlock DockPanel.Dock="Left" Text="诊断" Style="{StaticResource H1}" VerticalAlignment="Center" />
             <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" HorizontalAlignment="Right">
                 <Button Content="⟳ 重新自检" Style="{StaticResource Ghost}" Click="OnRecheck" />
+                <Button Content="UIA 自检" Style="{StaticResource Ghost}" Margin="8,0,0,0" Click="OnUiaCheck"
+                        ToolTip="检查微信的 UIA 控件树能不能用（发送走不走快通道）" />
                 <Button Content="数据目录" Style="{StaticResource Ghost}" Margin="8,0,0,0" Click="OnOpenDataDir"
                         ToolTip="打开 data 目录（日志、配置、记忆都在这里）" />
                 <Button x:Name="BtnExport" Content="导出日志" Style="{StaticResource Ghost}" Margin="8,0,0,0" Click="OnExport"
@@ -176,5 +179,25 @@
                 </StackPanel>
             </Border>
         </Grid>
+
+        <!-- 数据维护：备份 / 恢复 / 重置（都是本机操作，不用再开 bat） -->
+        <Border Grid.Row="3" Style="{StaticResource Card}" Padding="14,10" Margin="0,12,0,0">
+            <DockPanel>
+                <TextBlock DockPanel.Dock="Left" Text="数据维护" Style="{StaticResource Label}"
+                           VerticalAlignment="Center" Margin="0,0,14,0" />
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Button Content="备份记忆" Style="{StaticResource Ghost}" Click="OnBackupMemory"
+                            ToolTip="导出成一个 JSON（默认去掉 API Key），可换机恢复" />
+                    <Button Content="恢复记忆" Style="{StaticResource Ghost}" Margin="8,0,0,0" Click="OnRestoreMemory"
+                            ToolTip="选一个自动快照或外部文件恢复；恢复前会先停内核并自动备份当前记忆" />
+                    <Button x:Name="BtnFactoryReset" Content="重置全部" Style="{StaticResource Ghost}"
+                            Margin="8,0,0,0" Click="OnFactoryReset" Foreground="{DynamicResource Bad}"
+                            ToolTip="恢复出厂：清空记忆、Key、人设和设置；会先自动备份到 backup\reset-时间戳" />
+                </StackPanel>
+                <TextBlock x:Name="MaintenanceHint" Style="{StaticResource Small}" VerticalAlignment="Center"
+                           Margin="0,0,14,0" TextWrapping="Wrap" Foreground="{DynamicResource Dim}"
+                           Text="备份出来的文件默认不含 Key；恢复前会自动留一份当前记忆。" />
+            </DockPanel>
+        </Border>
     </Grid>
 </UserControl>
