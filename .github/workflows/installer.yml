@@ -1,0 +1,348 @@
+name: installer
+
+# 完整安装包在 GitHub 上构建：Python + Node 内置，.NET 10 桌面运行时随包、
+# 目标机缺失时由安装器请求管理员授权后静默安装。本机不出包 —— 产物全部来自
+# Actions runner，这样才能挂代码签名证书，也让「这个包是谁出的」有据可查。
+#
+# 触发：
+#   · 测试分支：推 test/** 就构建（只出 Artifact，**不会**建 Release）
+#   · 手动：Actions → installer → Run workflow（产物在本次运行的 Artifacts 里）
+#   · tag：git push origin v4.0.0 → 自动建 GitHub Release 并挂安装包
+#
+# 签名：仓库配了 WINDOWS_SIGNING_PFX_BASE64 / WINDOWS_SIGNING_PFX_PASSWORD 就签，
+#       没配就跳过，并在运行摘要里写明「未签名」。配置步骤见 docs/打包与签名.md。
+#
+# 改了 scripts/build-runtime.ps1 里钉的依赖版本、但 CI 似乎还装着老版本时，
+# 把下面的 RUNTIME_CACHE_VERSION 加一，强制重建运行环境缓存。
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（如 4.0.0；留空 = tag 去 v，否则读 package.json）'
+        required: false
+        default: ''
+  push:
+    branches:
+      # 测试分支：推送即构建，便于在没有 tag 的情况下验证流水线。
+      # 发版动作只在 tag 上执行（见文件末尾 Release 步骤的 if 条件），这里不会发版。
+      - 'test/**'
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: installer-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  RUNTIME_CACHE_VERSION: v2
+  PYTHONUTF8: '1'
+  PYTHONIOENCODING: utf-8
+  DOTNET_NOLOGO: '1'
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+
+jobs:
+  installer:
+    name: 构建安装包
+    runs-on: windows-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: 检出
+        uses: actions/checkout@v4
+
+      # 版本和仓库别的地方对齐：Node 24、Python 3.12、.NET 10 SDK
+      - name: Node 24（构建机用，取 node.exe 进包）
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Python 3.12（构建机用，只负责抓轮子）
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: .NET 10 SDK（编译启动器）
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: 环境版本
+        shell: pwsh
+        run: |
+          node -v
+          python -c "import sys; print(sys.version)"
+          dotnet --version
+          dotnet --list-sdks
+
+      - name: 解析版本号
+        id: ver
+        shell: pwsh
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          $v = $env:INPUT_VERSION
+          if (-not $v -and $env:REF_TYPE -eq 'tag') { $v = $env:REF_NAME -replace '^[vV]', '' }
+          if (-not $v) { $v = (Get-Content package.json -Raw -Encoding utf8 | ConvertFrom-Json).version }
+          $v = "$v".Trim()
+          if ($v -match '^\d+\.\d+$') { $v = "$v.0" }
+          if ($v -notmatch '^\d+\.\d+\.\d+(\.\d+)?$') {
+            Write-Output "::error title=版本号不合法::解析出「$v」，要 x.y.z 形式"
+            exit 1
+          }
+          "version=$v" >> $env:GITHUB_ENV
+          "version=$v" >> $env:GITHUB_OUTPUT
+          Write-Output "本次版本：$v"
+
+      - name: 构建前检查（缺文件早失败，别等到编译一半）
+        shell: pwsh
+        run: |
+          $need = @(
+            'installer/whale.iss',
+            'launcher/WhaleLauncher.csproj',
+            'scripts/build-runtime.ps1',
+            'scripts/fetch-dotnet-runtime.ps1',
+            'scripts/sign-windows.ps1',
+            'server.js',
+            'package.json'
+          )
+          $missing = $need | Where-Object { -not (Test-Path $_) }
+          if ($missing) {
+            Write-Output "::error title=缺文件::$($missing -join '、')"
+            exit 1
+          }
+          Write-Output '构建脚本齐全'
+
+      # tag 可能打在没跑过 tests.yml 的提交上，出包前先过一遍发布自检：
+      # 版本号与 CHANGELOG 对不上、包里混进隐私数据，这些都不该等到装好才发现。
+      - name: 发布自检（版本号 / 隐私 / 关键文件）
+        shell: pwsh
+        run: node scripts/release-check.js
+
+      # 运行环境（node.exe + CPython embeddable + 桥接依赖）每次从零装要 6~10 分钟，
+      # 缓存能让失败的运行快速重试。键里带 RUNTIME_CACHE_VERSION，要强制重建就改它。
+      - name: 缓存运行环境（python + node.exe + 指纹）
+        id: runtime-cache
+        uses: actions/cache@v4
+        with:
+          # wheelhouse 不进缓存：命中时用不到它（脚本看 .built 直接跳过），
+          # 未命中时一条 pip download 就能重新抓齐，没必要每次恢复 117MB。
+          path: |
+            runtime/python
+            runtime/node.exe
+            runtime/manifest.json
+            runtime/.built
+          # key 故意不带脚本哈希：带了的话改一行注释缓存就全废。
+          # 依赖版本 / Python 版本变了由 build-runtime.ps1 里的 .built 指纹识别，
+          # 真要强制重建就改上面的 RUNTIME_CACHE_VERSION。
+          key: whale-runtime-${{ env.RUNTIME_CACHE_VERSION }}
+          # 上一次的 key 带过脚本哈希，这里做前缀匹配，把老缓存也吃进来，
+          # 免得这次提交白跑一遍冷构建。
+          restore-keys: |
+            whale-runtime-${{ env.RUNTIME_CACHE_VERSION }}
+
+      - name: 构建运行环境（node.exe + CPython 3.12 + 桥接依赖）
+        shell: pwsh
+        env:
+          CACHE_HIT: ${{ steps.runtime-cache.outputs.cache-hit }}
+        run: |
+          Write-Output "缓存命中：$env:CACHE_HIT"
+          # 构建机在境外，用官方 PyPI；国内镜像只在本地手动构建时用
+          pwsh -NoProfile -File scripts/build-runtime.ps1 -Mirror https://pypi.org/simple
+
+      - name: 下载 .NET 10 桌面运行时安装包（随安装包分发）
+        shell: pwsh
+        run: pwsh -NoProfile -File scripts/fetch-dotnet-runtime.ps1
+
+      - name: 发布启动器（framework-dependent 单文件）
+        shell: pwsh
+        run: |
+          dotnet publish launcher/WhaleLauncher.csproj `
+            -c Release `
+            -r win-x64 `
+            --self-contained false `
+            -p:PublishSingleFile=true `
+            -o launcher/publish `
+            --nologo
+          if ($LASTEXITCODE -ne 0) { Write-Output '::error title=启动器发布失败::dotnet publish 退出码非 0'; exit 1 }
+          Copy-Item launcher/publish/WhaleLauncher.exe .\WhaleLauncher.exe -Force
+          $exe = Get-Item .\WhaleLauncher.exe
+          Write-Output ("启动器：{0:N0} KB，文件版本 {1}" -f ($exe.Length / 1KB), $exe.VersionInfo.FileVersion)
+
+      # 启动器必须先签、后编译安装包：反过来的话安装包里嵌的还是未签名 exe
+      - name: 签启动器（没有证书就跳过）
+        shell: pwsh
+        env:
+          WINDOWS_SIGNING_PFX_BASE64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
+          WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
+        run: pwsh -NoProfile -File scripts/sign-windows.ps1 -Path .\WhaleLauncher.exe
+
+      - name: 准备 Inno Setup 7（仓库自带编译器，不跑安装程序）
+        shell: pwsh
+        run: |
+          # 仓库带的是编译器本体（tools\innosetup\compiler），直接调 ISCC.exe。
+          # 不要再跑 innosetup-*.exe 安装程序：GitHub runner 上它要 6 分钟才装完
+          # （实测 359 秒，/VERYSILENT 下没有任何输出），纯粹浪费时间。
+          # 官方 license 允许二进制再分发，见 tools\innosetup\license.txt。
+          $iscc = Join-Path $PWD 'tools\innosetup\compiler\ISCC.exe'
+          if (-not (Test-Path $iscc)) {
+            Write-Output '::error title=缺编译器::tools\innosetup\compiler\ISCC.exe 不存在'
+            exit 1
+          }
+          & $iscc --help 2>&1 | Select-Object -First 1
+          "ISCC=$iscc" >> $env:GITHUB_ENV
+
+      - name: 编译安装包
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts/setup | Out-Null
+          Write-Output "版本：$env:version"
+          # Inno 7 的命令行定义是 --define=（6 时代的 /D 已经不在选项表里）
+          & $env:ISCC "installer\whale.iss" "--define=AppVersion=$env:version"
+          if ($LASTEXITCODE -ne 0) { Write-Output '::error title=安装包编译失败::ISCC 退出码非 0，看上面的编译日志'; exit 1 }
+          Get-ChildItem artifacts/setup | Select-Object Name, @{ n = 'MB'; e = { [math]::Round($_.Length / 1MB, 1) } } | Format-Table -AutoSize
+
+      - name: 签安装包（没有证书就跳过）
+        shell: pwsh
+        env:
+          WINDOWS_SIGNING_PFX_BASE64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
+          WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
+        run: |
+          $exe = Get-ChildItem artifacts/setup/*.exe | Select-Object -First 1
+          if (-not $exe) { Write-Output '::error title=产物缺失::artifacts/setup 下没有安装包'; exit 1 }
+          pwsh -NoProfile -File scripts/sign-windows.ps1 -Path $exe.FullName
+
+      # 真装一遍再卸：只检查 exe 大小证明不了「包里真有 python/node/.NET」，
+      # 这一步会把安装包装进临时目录、逐个核对文件、跑一次 import，再静默卸载。
+      - name: 安装烟测（静默安装 → 核对文件 → 卸载）
+        shell: pwsh
+        run: |
+          $setup = (Get-ChildItem artifacts/setup/*.exe | Select-Object -First 1).FullName
+          if (-not (Test-Path $setup)) { Write-Output '::error title=产物缺失::找不到安装包'; exit 1 }
+          $dir = Join-Path $env:RUNNER_TEMP 'whale-smoke'
+          $log = Join-Path $env:RUNNER_TEMP 'whale-smoke-install.log'
+          if (Test-Path $dir) { Remove-Item $dir -Recurse -Force }
+          Write-Output "安装到 $dir"
+
+          # 必须用 Start-Process -Wait：Inno 的 setup.exe 是 GUI 子系统程序，
+          # 用 & 调用时 PowerShell 不等待、也不设 $LASTEXITCODE，会误判成失败。
+          $installArgs = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', "/DIR=$dir", "/LOG=$log")
+          $proc = Start-Process -FilePath $setup -ArgumentList $installArgs -Wait -PassThru
+          Write-Output "安装程序退出码：$($proc.ExitCode)"
+          if ($proc.ExitCode -ne 0) {
+            Write-Output "::error title=静默安装失败::退出码 $($proc.ExitCode)，日志尾部："
+            if (Test-Path $log) { Get-Content $log -Tail 40 }
+            exit 1
+          }
+
+          $expect = @(
+            'WhaleLauncher.exe',
+            'server.js',
+            'src\core\master.js',
+            'bridge\engine.py',
+            'runtime\node.exe',
+            'runtime\python\python.exe',
+            'runtime\python\python312.zip',
+            'runtime\manifest.json',
+            'runtime\dotnet\windowsdesktop-runtime-10-win-x64.exe'
+          )
+          $missing = $expect | Where-Object { -not (Test-Path (Join-Path $dir $_)) }
+          if ($missing) {
+            Write-Output "::error title=安装后缺文件::$($missing -join '、')"
+            exit 1
+          }
+          # wheelhouse 是构建缓存，文件必须一个都不进包。
+          # 只查目录会误报：Inno 会按源树建出空目录（0 字节），那是无害的。
+          $wheels = @(Get-ChildItem (Join-Path $dir 'runtime\wheelhouse') -Recurse -File -ErrorAction SilentlyContinue)
+          if ($wheels.Count -gt 0) {
+            Write-Output "::error title=构建缓存进包::runtime\wheelhouse 里有 $($wheels.Count) 个文件，安装包白胖了"
+            exit 1
+          }
+
+          Write-Output "包内 Node：$(& (Join-Path $dir 'runtime\node.exe') -v)"
+          $py = Join-Path $dir 'runtime\python\python.exe'
+          $out = & $py -c "import wechatauto, psutil, win32com, uiautomation; print('imports ok')" 2>&1
+          Write-Output $out
+          if ($LASTEXITCODE -ne 0) {
+            Write-Output '::error title=包内 Python 依赖不可用::import 失败，安装包里的 runtime\python 是坏的'
+            exit 1
+          }
+
+          $unins = Join-Path $dir 'unins000.exe'
+          if (Test-Path $unins) {
+            Start-Process $unins -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait
+          }
+          Start-Sleep -Seconds 2
+          Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
+          Write-Output '安装/卸载烟测通过'
+
+      - name: 产物摘要与校验值
+        id: artifact
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem artifacts/setup/*.exe | Select-Object -First 1
+          if (-not $setup) { Write-Output '::error title=产物缺失::没有安装包可上传'; exit 1 }
+          $mb = [math]::Round($setup.Length / 1MB, 1)
+          if ($setup.Length -lt 100MB) {
+            Write-Output "::error title=产物可疑::安装包只有 $mb MB，正常应在 150~300MB（python+node+.NET 都在里面）"
+            exit 1
+          }
+          $hash = (Get-FileHash $setup.FullName -Algorithm SHA256).Hash
+          "$hash  $($setup.Name)" | Set-Content -Path artifacts/setup/SHA256SUMS.txt -Encoding utf8
+
+          $sig = Get-AuthenticodeSignature $setup.FullName
+          $launcherSig = Get-AuthenticodeSignature '.\WhaleLauncher.exe'
+          $signState = if ($sig.Status -eq 'Valid') { "已签名（$($sig.SignerCertificate.Subject)）" } else { "未签名（$($sig.Status)）" }
+
+          Write-Output "安装包：$($setup.Name)（$mb MB）"
+          Write-Output "SHA256：$hash"
+          Write-Output "签名：$signState"
+
+          '## 鲸鲸安装包' | Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          '' | Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          '| 项目 | 值 |' | Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          '| --- | --- |' | Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          "| 文件 | $($setup.Name) |" | Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          "| 版本 | $env:version |" | Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          "| 大小 | $mb MB |" | Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          "| SHA256 | ``$hash`` |" | Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          "| 安装包签名 | $signState |" | Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          "| 启动器签名 | $($launcherSig.Status) |" | Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          "| 内置运行时 | Node $(& .\runtime\node.exe -v) / CPython $((& .\runtime\python\python.exe -c 'import sys;print(sys.version.split()[0])')) |" | Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          "| 目标框架 | net10.0-windows（framework-dependent，缺 .NET 10 时安装器提权装） |" | Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+
+          if ($sig.Status -ne 'Valid') {
+            '未签名：仓库还没有配置代码签名证书。配置步骤见 `docs/打包与签名.md`。' | Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          }
+
+      - name: 上传安装包
+        uses: actions/upload-artifact@v4
+        with:
+          name: whale-girl-setup-${{ steps.ver.outputs.version }}
+          path: |
+            artifacts/setup/*.exe
+            artifacts/setup/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: 创建 GitHub Release（tag 触发）
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          $setup = (Get-ChildItem artifacts/setup/*.exe | Select-Object -First 1).FullName
+          $sums = (Get-ChildItem artifacts/setup/SHA256SUMS.txt).FullName
+          $notes = "- 由 GitHub Actions 在 $env:RUNNER_OS 上构建`n- 内置 Node 与 CPython 3.12（含桥接依赖），用户端零网络`n- .NET 10 桌面运行时随包，目标机缺失时安装器会请求管理员授权后静默安装`n- 安装包签名状态见本次运行摘要"
+          gh release create $env:TAG $setup $sums --title "鲸鲸 $env:TAG" --notes $notes
+          if ($LASTEXITCODE -ne 0) {
+            Write-Output '::warning::Release 可能已存在，改为覆盖上传资产'
+            gh release upload $env:TAG $setup $sums --clobber
+            if ($LASTEXITCODE -ne 0) { Write-Output '::error title=Release 上传失败::gh release upload 退出码非 0'; exit 1 }
+          }
