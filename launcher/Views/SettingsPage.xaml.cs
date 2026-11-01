@@ -73,12 +73,12 @@ namespace WhaleLauncher.Views
             {
                 new FieldSpec { Path = "group.requireAt", Label = "必须 @ 她才回", Kind = "bool", Hint = "关掉 = 群里不 @ 也会接，但按下面的插话概率抽，不是每条都回" },
                 new FieldSpec { Path = "group.freeChat", Label = "允许她自己插话", Kind = "bool", Hint = "开着时没点名的消息也按概率抽一句；@ 她的不受影响" },
-                new FieldSpec { Path = "group.freeChatChance", Label = "插话概率（0.06=6%，1=每条都回）", Kind = "num", Min = 0, Max = 1, IsInt = false, Hint = "没点名的消息按这个概率接一句；默认 0.06 约等于 16 条回 1 条。填 1 = 每条都回，仍受冷却和每分钟上限约束" },
+                new FieldSpec { Path = "group.freeChatChance", Label = "插话概率", Kind = "num", Min = 0, Max = 1, IsInt = false, Hint = "没点名的消息按这个概率接一句；0.06 = 百分之六，约 16 条回 1 条；填 1 = 每条都回，仍受冷却和每分钟上限约束" },
                 new FieldSpec { Path = "group.cooldownSec", Label = "两次回复冷却(秒)", Kind = "num", Min = 0, Max = 3600 },
                 new FieldSpec { Path = "group.maxRepliesPerMinute", Label = "每分钟最多回几条", Kind = "slider", Min = 5, Max = 30, Unit = " 条/分钟", Hint = "推荐 10–20 条" },
                 new FieldSpec { Path = "group.masterAlwaysReply", Label = "主人在群里说话永远回", Kind = "bool" },
                 new FieldSpec { Path = "group.engagedMinutes", Label = "接话后保持参与(分钟)", Kind = "num", Min = 1, Max = 1440 },
-                new FieldSpec { Path = "group.silentMinutes", Label = "冷场多久算话题结束(分钟)", Kind = "num", Min = 1, Max = 10080 },
+                new FieldSpec { Path = "group.silentMinutes", Label = "冷场多久算结束(分钟)", Kind = "num", Min = 1, Max = 10080 },
                 new FieldSpec { Path = "group.muteDefaultMinutes", Label = "免打扰默认时长(分钟)", Kind = "num", Min = 1, Max = 1440 },
             }},
             new SectionSpec { Title = "微信 · 数据与管道", Fields =
@@ -100,10 +100,10 @@ namespace WhaleLauncher.Views
             }},
             new SectionSpec { Title = "高级", Note = "改完要重启的项都在这里（对话预算例外，改完立刻生效）；管理员口令也归这一组，平时不用碰。", Fields =
             {
-                new FieldSpec { Path = "memory.dialogueBudget", Label = "对话预算(token)", Kind = "sliderInput", Min = 2000, Max = 20000, InputMin = 1000, Hint = "每轮带多少对话内容（不含人设）：默认 5,500 = 记忆 900 + 摘要 900 + 原文 3,200 + 预留 500。滑块 2,000–20,000；右边输入框可以直接填（最低 1,000，不设上限）。模型一次只收 32,000 token，人设越长留给对话的越少，加起来超了内核不会偷偷截断，而是这一轮干脆不调用 —— 下面那行会实时算出「人设 + 预算」和最多还能填多少" },
+                new FieldSpec { Path = "memory.dialogueBudget", Label = "对话预算(token)", Kind = "sliderInput", Min = 2000, Max = 20000, InputMin = 1000, Hint = "每轮带多少对话内容（不含人设）：默认 5,500 = 记忆 900 + 摘要 900 + 原文 3,200 + 预留 500。滑块 2,000–20,000；右边输入框可以直接填（最低 1,000，不设上限）。模型一次能收的 token 有硬上限（具体值看下面那行），人设越长留给对话的越少；加起来超了内核不会偷偷截断，而是这一轮干脆不调用" },
                 new FieldSpec { Path = "server.host", Label = "监听地址", Kind = "text", Hint = "只给本机用就 127.0.0.1；0.0.0.0 = 同 WiFi 也能连（改完重启）" },
                 new FieldSpec { Path = "server.port", Label = "本机端口", Kind = "selectnum", Options = new[] { "8787", "9191", "1919", "7878" }, Hint = "默认 8787；只在这四个里选，改完重启内核生效" },
-                new FieldSpec { Path = "log.level", Label = "日志级别（界面 / 控制台）", Kind = "select", Options = new[] { "debug", "info", "error" }, Hint = "只影响界面和启动器控制台；日志文件始终记 debug 全量（data/whale.log、data/wechat-bridge-4x.log），改完重启生效" },
+                new FieldSpec { Path = "log.level", Label = "日志级别", Kind = "select", Options = new[] { "debug", "info", "error" }, Hint = "界面 / 控制台用哪一档；日志文件始终记 debug 全量（data/whale.log、data/wechat-bridge-4x.log），改完重启生效" },
                 new FieldSpec { Path = "storage.mediaKeepDays", Label = "媒体缓存保留几天", Kind = "num", Min = 0, Max = 90 },
                 new FieldSpec { Path = "storage.mediaMaxMB", Label = "媒体缓存上限(MB)", Kind = "num", Min = 0, Max = 10000 },
                 new FieldSpec { Path = "admin.spell", Label = "管理员口令", Kind = "text", Hint = "在微信里发这句获得权限；留空 = 关闭" },
@@ -329,7 +329,7 @@ namespace WhaleLauncher.Views
             return border;
         }
 
-        private Grid Row(string label, FrameworkElement control, string hint, bool top = false, double labelWidth = 210)
+        private Grid Row(string label, FrameworkElement control, string hint, bool top = false, double labelWidth = 150)
         {
             var grid = new Grid { Margin = new Thickness(0, 0, 0, 8) };
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(labelWidth) });
@@ -361,7 +361,8 @@ namespace WhaleLauncher.Views
         // ── 单个字段 ────────────────────────────────────────────
         private FrameworkElement BuildField(FieldSpec f, bool compact = false)
         {
-            var labelWidth = compact ? 108.0 : 210.0;
+            // 标签列别太宽：210 的时候标签和输入框中间空出半个屏幕，短标签尤其难看
+            var labelWidth = compact ? 80.0 : 150.0;
             switch (f.Kind)
             {
                 case "bool":
@@ -794,7 +795,7 @@ namespace WhaleLauncher.Views
         private static FrameworkElement TwoCol(FrameworkElement left, FrameworkElement right)
         {
             var g = new Grid();
-            g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(360) });
+            g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(310) });
             g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(18) });
             g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             g.Children.Add(left);
