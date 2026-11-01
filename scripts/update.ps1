@@ -29,6 +29,7 @@ param(
     [switch]$NoMirror,
     [switch]$Check,
     [switch]$DryRun,
+    [switch]$Json,
     [switch]$Force,
     [switch]$KeepRuntime,
     [switch]$KeepZip,
@@ -57,7 +58,23 @@ $script:Stage = 'net'
 
 function Say {
     param([string]$Text = '', [string]$Color = 'Gray')
+    if ($Json) { return }   # 给启动器读的时候只输出一行 JSON，别混进中文日志
     Write-Host $Text -ForegroundColor $Color
+}
+
+# 启动器「检查更新」用：只吐一行 JSON，方便解析
+function Emit-Json {
+    param([bool]$HasUpdate, [string]$Current = '', [string]$Latest = '', [string]$Asset = '', [string]$ErrorText = '', [bool]$Stale = $false)
+    $obj = [ordered]@{
+        ok        = [string]::IsNullOrWhiteSpace($ErrorText)
+        hasUpdate = $HasUpdate
+        current   = $Current
+        latest    = $Latest
+        asset     = $Asset
+        stale     = $Stale
+        error     = $ErrorText
+    }
+    [Console]::Out.WriteLine(($obj | ConvertTo-Json -Compress))
 }
 
 # 5.1 在输出被重定向时读写 console buffer 会抛 Win32 0x5，进度条一律加开关
@@ -1114,6 +1131,11 @@ try {
         Say ('  ℹ 最新版是 ' + $remoteVer + '，本地是 ' + $localVer + '；版本号虽然变小，但不是同一个版本，仍覆盖成 latest。') 'Yellow'
     }
 
+    if ($Json) {
+        Emit-Json -HasUpdate ($cmp -gt 0) -Current $localVer -Latest $remoteVer -Asset ([string]$asset.name) -Stale ($cmp -lt 0)
+        exit 0
+    }
+
     if ($Check) {
         Say ''
         if ($cmp -lt 0) {
@@ -1381,6 +1403,10 @@ try {
             '新目录的 data\ 保持原样；覆盖前的旧数据在 backup\before-migrate-* 里。',
             '也可以手动把旧目录的 data\ 和 config.json 复制过来。'
         )
+        exit 2
+    }
+    if ($Json) {
+        Emit-Json -HasUpdate $false -ErrorText ([string]$err)
         exit 2
     }
     if ($script:Stage -eq 'net') {

@@ -278,7 +278,7 @@ python examples/wechatauto_bridge.py
 颜文字 少|多|关
 能力 链接 开|关 / 能力 主动接话 开|关
 禁言 鼠标 / 别在鼠标群说话 / 解除禁言 鼠标
-改模型 deepseek-reasoner
+改模型 deepseek-v4-pro
 演示模式 开|关
 重置记忆 / 清空所有记忆 / 恢复默认
 退出管理

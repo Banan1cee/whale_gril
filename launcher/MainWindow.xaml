@@ -44,11 +44,8 @@
                               HorizontalAlignment="Center" VerticalAlignment="Center" />
                     </Border>
 
-                    <StackPanel Margin="11,0,0,0" VerticalAlignment="Center">
-                        <TextBlock Text="鲸鲸" FontSize="15" FontWeight="Bold" Foreground="{DynamicResource Text}" />
-                        <TextBlock Text="WHALE" FontSize="8" FontWeight="SemiBold"
-                                   Foreground="{DynamicResource Muted}" Margin="0,1,0,0" />
-                    </StackPanel>
+                    <TextBlock Text="鲸鲸" FontSize="15" FontWeight="Bold"
+                               Foreground="{DynamicResource Text}" Margin="11,0,0,0" VerticalAlignment="Center" />
 
                     <Border Background="{DynamicResource Surface3}" CornerRadius="6" Padding="7,3"
                             Margin="9,0,0,0" VerticalAlignment="Center">
@@ -63,9 +60,8 @@
                         <Border Style="{StaticResource Chip}">
                             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                 <Ellipse x:Name="DotNode" Width="7" Height="7" Fill="{DynamicResource Idle}" />
-                                <TextBlock Text="内核" Style="{StaticResource Label}" Margin="8,0,0,0" VerticalAlignment="Center" />
-                                <TextBlock x:Name="NodeStateText" Text="未启动" Foreground="{DynamicResource Text}"
-                                           FontSize="11.5" FontWeight="SemiBold" Margin="6,0,0,0" VerticalAlignment="Center" />
+                                <TextBlock x:Name="NodeStateText" Text="内核未启动" Foreground="{DynamicResource Text}"
+                                           FontSize="11.5" FontWeight="SemiBold" Margin="8,0,0,0" VerticalAlignment="Center" />
                             </StackPanel>
                         </Border>
                         <Border Style="{StaticResource Chip}">
@@ -131,6 +127,21 @@
             </DockPanel>
         </Border>
 
+        <!-- 右上角：检测到新版本时滑出的小横幅（8 秒后自动消失） -->
+        <Border x:Name="UpdateToast" Grid.Row="1" HorizontalAlignment="Right" VerticalAlignment="Top"
+                Margin="0,14,26,0" CornerRadius="10" Padding="12,7" Visibility="Collapsed"
+                Panel.ZIndex="9"
+                BorderThickness="1" Cursor="Hand" MouseLeftButtonUp="OnToastClick">
+            <Border.Style>
+                <Style TargetType="Border">
+                    <Setter Property="Background" Value="{DynamicResource AccentSoft}" />
+                    <Setter Property="BorderBrush" Value="{DynamicResource Accent}" />
+                </Style>
+            </Border.Style>
+            <TextBlock x:Name="UpdateToastText" Text="已检测到新版本" FontSize="11.5" FontWeight="SemiBold"
+                       Foreground="{DynamicResource Accent}" />
+        </Border>
+
         <!-- 左栏 + 主区 -->
         <Grid Grid.Row="1">
             <Grid.ColumnDefinitions>
@@ -146,10 +157,11 @@
 
                     <!-- 关于：整个界面的左下角（版本 + 数据目录入口都在这附近，不再占设置一页） -->
                     <StackPanel DockPanel.Dock="Bottom" Margin="12,10,0,0">
-                        <Border Height="1" Background="{DynamicResource Line}" Margin="0,0,0,8" />
-                        <TextBlock x:Name="NavVersion" Text="v4.0-alpha" Style="{StaticResource Small}" />
-                        <TextBlock x:Name="NavAboutHint" Text="鲸鲸 · 启动器" Style="{StaticResource Small}"
-                                   Foreground="{DynamicResource Dim}" Margin="0,2,0,0" />
+                        <Border Height="1" Background="{DynamicResource Line}" Margin="0,0,0,10" />
+                        <Button x:Name="BtnUpdate" Content="检查更新" Style="{StaticResource Ghost}"
+                                HorizontalAlignment="Left" Padding="9,3" FontSize="11" Margin="0,0,0,2"
+                                Click="OnCheckUpdate"
+                                ToolTip="从 GitHub Release 查有没有新版；只检查，不会自己改动" />
                     </StackPanel>
 
                     <ListBox x:Name="Nav" Background="Transparent" BorderThickness="0"
@@ -182,10 +194,6 @@
             <DockPanel Margin="24,0" VerticalAlignment="Center">
                 <TextBlock x:Name="StatusLine" DockPanel.Dock="Left" Text="启动器就绪"
                            Style="{StaticResource Small}" VerticalAlignment="Center" />
-                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                    <Button x:Name="BtnDataDir" Content="数据目录" Style="{StaticResource TopBtn}"
-                            FontSize="10.5" Padding="6,2" Click="OnOpenData" Cursor="Hand" />
-                </StackPanel>
             </DockPanel>
         </Border>
     </Grid>

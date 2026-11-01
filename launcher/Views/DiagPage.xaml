@@ -2,6 +2,34 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              Background="Transparent">
+    <UserControl.Resources>
+        <!-- 「导出日志」悬浮窗里的可点选项：整行可点，悬停用主题的 Hover -->
+        <Style x:Key="ExportOption" TargetType="Button">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource Text}" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="row" Background="{TemplateBinding Background}" CornerRadius="9" Padding="9,7">
+                            <ContentPresenter HorizontalAlignment="Stretch" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="row" Property="Background" Value="{DynamicResource Hover}" />
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="row" Property="Background" Value="{DynamicResource Hover}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </UserControl.Resources>
+
     <Grid Margin="28,24,32,20">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
@@ -13,7 +41,38 @@
             <TextBlock DockPanel.Dock="Left" Text="诊断" Style="{StaticResource H1}" VerticalAlignment="Center" />
             <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" HorizontalAlignment="Right">
                 <Button Content="⟳ 重新自检" Style="{StaticResource Ghost}" Click="OnRecheck" />
-                <Button Content="导出日志（最近三次）" Style="{StaticResource Ghost}" Margin="8,0,0,0" Click="OnExport" ToolTip="打包 data/logs 下最近三次启动的日志和这一次的，存到 data/ 里" />
+                <Button Content="数据目录" Style="{StaticResource Ghost}" Margin="8,0,0,0" Click="OnOpenDataDir"
+                        ToolTip="打开 data 目录（日志、配置、记忆都在这里）" />
+                <Button x:Name="BtnExport" Content="导出日志" Style="{StaticResource Ghost}" Margin="8,0,0,0" Click="OnExport"
+                        ToolTip="导出最近 10 分钟 / 当次启动的 debug 日志包" />
+
+                <!-- 导出浮窗：点按钮在它下方展开的小卡片，选一个时间范围就开始导出 -->
+                <Popup x:Name="ExportPopup" Placement="Bottom" PlacementTarget="{Binding ElementName=BtnExport}"
+                       StaysOpen="False" AllowsTransparency="True" PopupAnimation="Fade"
+                       HorizontalOffset="-190" VerticalOffset="6">
+                    <Border Background="{DynamicResource PopupBg}" BorderBrush="{DynamicResource CardBorder}"
+                            BorderThickness="1" CornerRadius="12" Padding="6" Width="276">
+                        <StackPanel>
+                            <TextBlock Text="导出 debug 日志包" Style="{StaticResource Label}" Margin="9,5,9,4" />
+                            <Button Style="{StaticResource ExportOption}" Click="OnExportRecent10"
+                                    ToolTip="只导出最近 10 分钟内的日志">
+                                <StackPanel>
+                                    <TextBlock Text="最近 10 分钟" Foreground="{DynamicResource Text}" FontSize="12.5" />
+                                    <TextBlock Text="只导出最近 10 分钟内的日志行" Style="{StaticResource Small}"
+                                               TextWrapping="Wrap" Margin="0,2,0,0" />
+                                </StackPanel>
+                            </Button>
+                            <Button Style="{StaticResource ExportOption}" Margin="0,2,0,0" Click="OnExportThisRun"
+                                    ToolTip="本次启动以来的日志；内核没在跑时导出最近一次启动的">
+                                <StackPanel>
+                                    <TextBlock Text="当次启动" Foreground="{DynamicResource Text}" FontSize="12.5" />
+                                    <TextBlock Text="本次启动以来的日志；没在运行就导出最近一次启动的" Style="{StaticResource Small}"
+                                               TextWrapping="Wrap" Margin="0,2,0,0" />
+                                </StackPanel>
+                            </Button>
+                        </StackPanel>
+                    </Border>
+                </Popup>
             </StackPanel>
         </DockPanel>
 

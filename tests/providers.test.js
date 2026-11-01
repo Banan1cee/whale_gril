@@ -10,7 +10,7 @@ const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 
-const { loadConfig, resolveRuntime, isLocalUrl, PROVIDERS } = require('../src/infra/config');
+const { loadConfig, resolveRuntime, isLocalUrl, PROVIDERS, DEFAULT_CONFIG } = require('../src/infra/config');
 const { DeepSeekClient } = require('../src/llm/client');
 
 function tempRoot(configPatch = {}) {
@@ -59,10 +59,32 @@ test('智谱预设：地址和默认模型正确，没 Key 时是演示模式', 
   const rt = resolveRuntime(cfg);
   assert.equal(rt.provider, 'zhipu');
   assert.equal(rt.baseUrl, 'https://open.bigmodel.cn/api/paas/v4');
-  assert.equal(rt.model, 'glm-4-flash');
+  assert.equal(rt.model, 'glm-4.7-flash');
   assert.equal(rt.needsKey, true);
   assert.equal(rt.mock, true);
   fs.rmSync(root, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
+});
+
+test('智谱预设同时支持 GLM-5.3、免费文本与免费视觉', () => {
+  const z = PROVIDERS.zhipu;
+  assert.ok(z.models.includes('glm-5.3'), '要有旗舰 GLM-5.3');
+  assert.ok(z.models.includes('glm-4.7-flash'), '要有免费文本 GLM-4.7-Flash');
+  assert.equal(z.model, 'glm-4.7-flash', '默认走免费文本');
+  assert.equal(DEFAULT_CONFIG.vision.model, 'glm-4.6v-flash', '免费视觉默认用 GLM-4.6V-Flash');
+  assert.match(z.hint, /glm-4\.6v-flash/, '提示里要写清免费视觉用哪个');
+  assert.ok(z.models.includes('glm-4.6v-flash'), '免费视觉也能当聊天模型选');
+  assert.ok(z.visionModels.includes('glm-4.6v-flash'), '标出能看图的聊天模型，看图模型才会自动跟随');
+  assert.ok(z.visionModels.includes('glm-5.3-flash'), 'GLM-5.3-Flash 是原生多模态，选它也要能看图');
+});
+
+test('各家预设标出能看图的聊天模型（按官方文档，别瞎标）', () => {
+  assert.ok(PROVIDERS.deepseek.visionModels.includes('deepseek-flash'), 'DeepSeek 文档里 flash 的 Vision 是 ✓');
+  assert.ok(!PROVIDERS.deepseek.visionModels.includes('deepseek-v4-pro'), 'V4 Pro 明确不支持图片输入');
+  assert.ok(PROVIDERS.qwen.visionModels.includes('qwen3.8-max'), '百炼「视觉理解」里有 qwen3.8-max');
+  assert.ok(PROVIDERS.qwen.visionModels.includes('qwen3.7-plus'), '百炼「视觉理解」里有 qwen3.7-plus');
+  assert.ok(!PROVIDERS.qwen.visionModels.includes('qwen3.8-flash'), 'qwen3.8-flash 只在文本生成列表里');
+  assert.ok(PROVIDERS.siliconflow.visionModels.includes('Qwen/Qwen3.8-27B'), '官方模型页写明是原生视觉语言模型');
+  assert.ok(PROVIDERS.opencode.visionModels.includes('kimi-k3.1-pro'), 'Kimi K3.1 Pro 支持视觉输入');
 });
 
 test('Ollama 预设：不需要 Key，也不算演示模式', () => {
@@ -70,10 +92,16 @@ test('Ollama 预设：不需要 Key，也不算演示模式', () => {
   const client = clientFor(root);
   assert.equal(client.provider, 'ollama');
   assert.equal(client.baseUrl, 'http://127.0.0.1:11434/v1');
-  assert.equal(client.model, 'qwen2.5:7b');
+  assert.equal(client.model, 'qwen3:8b');
   assert.equal(client.needsKey, false);
   assert.equal(client.isMock, false);
   fs.rmSync(root, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
+});
+
+test('Ollama 只保留两个常用模型，默认值在候选里', () => {
+  const o = PROVIDERS.ollama;
+  assert.deepEqual(o.models, ['qwen3:8b', 'llama3.1:8b'], 'Ollama 候选回到 qwen3:8b 与 llama3.1:8b 两个');
+  assert.ok(o.models.includes(o.model), '默认模型必须在候选列表里');
 });
 
 test('Ollama 请求不带 Authorization，能正常拿到回复', async () => {
@@ -167,9 +195,9 @@ test('主服务商 Key 失效时，自动切到存过 Key 的备用服务商', (
 });
 /* ---------------- 千问（DashScope）预设 & 报错文案 ---------------- */
 
-test('千问默认模型是能用的 qwen-flash，且默认值在候选列表里', () => {
+test('千问默认模型是能用的 qwen3.8-flash，且默认值在候选列表里', () => {
   const q = PROVIDERS.qwen;
-  assert.equal(q.model, 'qwen-flash', 'qwen-turbo 免费额度常被耗尽，默认别用它');
+  assert.equal(q.model, 'qwen3.8-flash', '默认要用当前免费额度最稳的 flash 档');
   assert.ok(q.models.includes(q.model), '默认模型必须在候选列表里');
   assert.match(q.baseUrl, /compatible-mode\/v1$/, '要走 OpenAI 兼容模式');
   for (const bad of ['qwen-max-latest', 'qwen3-max']) {
@@ -182,7 +210,7 @@ test('429 / 模型 404 的提示要能指导用户', () => {
   const { friendlyForStatus } = require('../src/llm/client');
   const rl = friendlyForStatus(429, 'HTTP 429: You have exceeded your current request limit.');
   assert.match(rl, /额度|频率/);
-  assert.match(rl, /qwen-flash|qwen-plus/, '要给出可直接替换的模型名');
+  assert.match(rl, /qwen3\.8-flash|qwen3\.7-flash/, '要给出可直接替换的模型名');
   const nf = friendlyForStatus(404, '{"error":{"message":"Model not found"}}');
   assert.match(nf, /模型名/);
   const nfPlain = friendlyForStatus(404, 'Not Found');

@@ -114,25 +114,46 @@ test('人设页左侧身份/说话方式子导航已移除，分区直接铺满'
   assert.ok(xaml.includes('x:Name="Body"'), '主体滚动区还在');
 });
 
-test('设置页有分类侧栏，外观固定在最后', () => {
+test('设置页去掉侧栏和标题，单列铺开，模型/高级模式/外观', () => {
   const xaml = readLauncher('Views/SettingsPage.xaml');
   const code = readLauncher('Views/SettingsPage.xaml.cs');
 
-  assert.ok(xaml.includes('x:Name="SettingsNav"'), '缺少设置分类侧栏');
-  assert.ok(xaml.includes('SettingsNavItem'), '缺少侧栏项样式');
-  assert.ok(xaml.includes('SelectionChanged="OnSettingsNavChanged"'), '侧栏没接跳转事件');
-  assert.match(code, /MainScroll\.ScrollToVerticalOffset/, '侧栏要能滚动到对应卡片');
+  assert.ok(!xaml.includes('SettingsNav'), '设置页不该再有分类侧栏');
+  assert.ok(!xaml.includes('SelectionChanged="OnSettingsNavChanged"'), '侧栏跳转事件应删掉');
+  assert.ok(!xaml.includes('Text="设置"'), '设置页顶部的「设置」标题应去掉');
+  assert.ok(xaml.includes('x:Name="SectionsHost"'), '缺少单列卡片容器');
+  assert.ok(xaml.includes('x:Name="MainScroll"'), '缺少滚动区');
+  assert.ok(xaml.includes('x:Name="KernelHint"'), '内核提示行不该丢');
+  assert.ok(xaml.includes('x:Name="StatusText"'), '保存状态行不该丢');
 
+  // 顺序：模型 → 高级模式 → 外观；外观必须最后
   const build = code.slice(code.indexOf('private void BuildOnce()'), code.indexOf('private void AddSection'));
-  const calls = [...build.matchAll(/AddSection\("([^"]+)"/g)].map((m) => m[1]);
-  assert.ok(calls.length >= 3, 'BuildOnce 应该显式注册模型/看图/外观');
-  assert.equal(calls[calls.length - 1], '外观', '外观必须排在设置的最后');
-  assert.ok(calls.includes('模型与 Key'));
+  const order = ['BuildModelSection()', 'BuildAdvancedSection()', 'BuildAppearanceSection()']
+    .map((x) => build.indexOf(x));
+  assert.ok(order.every((i) => i >= 0), 'BuildOnce 应该显式建 模型/高级模式/外观 三张卡');
+  assert.ok(order[0] < order[1] && order[1] < order[2], '顺序必须是 模型 → 高级模式 → 外观');
 
-  // 其余分区来自 Specs()：不能只剩模型/看图/外观三张
+  // 模型卡三个页签：聊天 / 看图 / 语音
+  const modelSection = code.slice(code.indexOf('private Border BuildModelSection()'), code.indexOf('// ── 读写'));
+  for (const tab of ['聊天（文本）', '看图（视觉）', '语音']) {
+    assert.ok(modelSection.includes(tab), '模型卡缺少页签：' + tab);
+  }
+  assert.ok(modelSection.includes('voice.enabled'), '语音设置应并进模型卡');
+
+  // 高级模式：一张卡默认收起，含四组
+  const advSection = code.slice(code.indexOf('private Border BuildAdvancedSection()'), code.indexOf('private Border BuildAppearanceSection()'));
+  assert.match(advSection, /Visibility = Visibility\.Collapsed/, '高级模式默认要收起');
+  assert.ok(advSection.includes('MakeTab'), '高级模式要用和模型卡一样的胶囊页签');
+  assert.ok(advSection.includes('MarkTab'), '页签选中态要复用同一套样式');
+  for (const t of ['群聊', '微信 · 数据与管道', '联网与链接', '高级']) {
+    assert.ok(advSection.includes(t) || code.includes('Title = "' + t + '"'), '高级模式缺少分组：' + t);
+  }
+
+  // 语音不再单独占一个 Specs 分区
   const specs = code.slice(code.indexOf('private static List<SectionSpec> Specs()'), code.indexOf('private void BuildOnce'));
   const titles = [...specs.matchAll(/Title = "([^"]+)"/g)].map((m) => m[1]);
-  assert.ok(titles.length >= 5, `Specs 里应该有多个分区，实际 ${titles.length} 个`);
+  assert.ok(titles.length >= 4, `Specs 里应该有多个分组，实际 ${titles.length} 个`);
+  assert.ok(!titles.includes('语音'), '语音已并进模型卡，不该再占 Specs 分组');
 });
 
 test('卡片不再把 DropShadowEffect 挂在内容上，避免竖线/糊字', () => {

@@ -12,5 +12,17 @@
     <AssemblyTitle>鲸鲸 · 启动器</AssemblyTitle>
     <Company>鲸鲸</Company>
     <SatelliteResourceLanguages>zh-Hans</SatelliteResourceLanguages>
+    <!-- 不要调试符号：exe 的 debug 目录会写进编译机上的 PDB 绝对路径，
+         发布出去等于把本机用户目录带进仓库（隐私扫描和 CI 都会红）。 -->
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+    <Deterministic>true</Deterministic>
   </PropertyGroup>
+
+  <!--
+    发布（单文件、框架依赖，产物只有一个 exe）：
+      dotnet publish launcher/WhaleLauncher.csproj -c Release -o launcher/publish -p:PublishSingleFile=true -p:SelfContained=false
+    然后把 launcher/publish/WhaleLauncher.exe 复制到仓库根目录一份。
+    不要用默认发布：默认会把 WhaleLauncher.dll / .deps.json 拆出来，单发 exe 起不来。
+  -->
 </Project>

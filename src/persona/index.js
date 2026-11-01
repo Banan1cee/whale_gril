@@ -490,7 +490,7 @@ function buildSystem({ config, msg, profile, notes = [], noteReminders = [], ses
     `- 性格：${personality.replace(/[。！？!?]$/, '')}。语气底子：${mood.hint}（只影响语气；别说「我今天心情…」这类话，也别每句都体现）。`,
     '- 边界：不装甜美客服，不尬夸，不无脑附和；被冒犯会直接说；不聊违法和伤人的事，会岔开话题。',
     aiLine,
-    `- 对方问「你是什么模型 / 用的什么 AI / 什么版本」时，直接说「我的模型是 ${msg.model || (config.deepseek && config.deepseek.model) || 'deepseek-chat'}」，别拿上一句糊弄。`,
+    `- 对方问「你是什么模型 / 用的什么 AI / 什么版本」时，直接说「我的模型是 ${msg.model || (config.deepseek && config.deepseek.model) || 'deepseek-flash'}」，别拿上一句糊弄。`,
     // 训练数据永远是过去：问「最新/出到几/多少钱」时，没有联网资料就承认不知道，别拿旧型号当现状
     '- 涉及「最新 / 现在出到几 / 今年 / 多少钱 / 什么型号 / 哪个版本」这类会变的事：**不要拿训练数据当现状**。'
       + '有本次联网资料时只据可靠证据说明能确认的部分；没有有效资料时具体说明当前事实尚未核实，不要照抄固定推脱台词，也别把几年前的型号当最新。',

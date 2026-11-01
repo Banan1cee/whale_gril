@@ -1,0 +1,125 @@
+name: build
+
+# 只产出启动器 exe，不做测试（测试在 tests.yml）。
+# 目的是让「CI 构建的 exe」和「本地发布」行为一致，为后续签名做准备。
+#   手动触发：Actions → build → Run workflow
+#   打 tag 触发：git tag v4.0.0 && git push origin v4.0.0
+on:
+  workflow_dispatch:
+    inputs:
+      note:
+        description: '本次构建说明（可选）'
+        required: false
+        type: string
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    name: 发布启动器（framework-dependent 单文件）
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      # 启动器是 net10.0-windows，必须用 .NET 10 SDK
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: 环境版本
+        shell: pwsh
+        run: |
+          dotnet --version
+          dotnet --list-sdks
+
+      # 与本地发布命令保持一致（见 docs/维护手册 或 scripts/ 里的发布说明）：
+      #   --self-contained false  → 产物约 400-600 KB，用户机器需要 .NET 10 桌面运行时
+      #   PublishSingleFile       → 单文件，方便覆盖仓库根目录的 WhaleLauncher.exe
+      - name: 发布
+        shell: pwsh
+        run: |
+          dotnet publish launcher/WhaleLauncher.csproj `
+            -c Release `
+            -r win-x64 `
+            --self-contained false `
+            -p:PublishSingleFile=true `
+            -o "${{ runner.temp }}/publish" `
+            --nologo
+
+      # 产物体检：不存在、太小（说明没打进去）、版本号不对都直接红，
+      # 避免把一个坏 exe 传上去。
+      - name: 产物检查
+        shell: pwsh
+        run: |
+          $exe = "${{ runner.temp }}/publish/WhaleLauncher.exe"
+          if (-not (Test-Path $exe)) { Write-Output '::error title=产物缺失::没找到 WhaleLauncher.exe'; exit 1 }
+
+          $item = Get-Item $exe
+          $mb = [math]::Round($item.Length / 1MB, 2)
+          Write-Output "文件：$($item.FullName)"
+          Write-Output "大小：$mb MB"
+
+          # framework-dependent 单文件一般在 0.3~1.5 MB；超过 20 MB 说明误打成了自包含
+          if ($item.Length -lt 200KB) {
+            Write-Output '::error title=产物可疑::exe 小于 200KB，可能没有正确发布'; exit 1
+          }
+          if ($item.Length -gt 20MB) {
+            Write-Output '::error title=产物可疑::exe 超过 20MB，怀疑打成了 self-contained'; exit 1
+          }
+
+          # 读文件版本，确认是预期的 4.x
+          $ver = $item.VersionInfo.FileVersion
+          Write-Output "文件版本：$ver"
+          if (-not $ver -or -not $ver.StartsWith('4.')) {
+            Write-Output "::warning title=版本异常::文件版本为 $ver，不是预期的 4.x"
+          }
+
+          # 目录里除了 exe 不应该再有别的（单文件发布）
+          $others = Get-ChildItem "${{ runner.temp }}/publish" -File | Where-Object { $_.Name -ne 'WhaleLauncher.exe' }
+          if ($others) {
+            Write-Output '::warning title=多余文件::单文件发布竟然还有其它文件：'
+            $others | ForEach-Object { Write-Output "  $($_.Name)" }
+          }
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: WhaleLauncher-win-x64
+          path: ${{ runner.temp }}/publish/WhaleLauncher.exe
+          if-no-files-found: error
+          retention-days: 30
+
+      # 构建摘要：在 Actions 运行页面直接能看到大小和版本，不用下 artifact 才知道
+      - name: 写入构建摘要
+        shell: pwsh
+        run: |
+          $exe = Get-Item "${{ runner.temp }}/publish/WhaleLauncher.exe"
+          $mb = [math]::Round($exe.Length / 1MB, 2)
+          $lines = @(
+            '## 启动器构建完成',
+            '',
+            '| 项目 | 值 |',
+            '| --- | --- |',
+            "| 文件 | WhaleLauncher.exe |",
+            "| 大小 | $mb MB |",
+            "| 文件版本 | $($exe.VersionInfo.FileVersion) |",
+            '| 目标框架 | net10.0-windows（framework-dependent） |',
+            "| 触发方式 | ${{ github.event_name }} |"
+          )
+          $note = "${{ inputs.note }}"
+          if ($note) { $lines += "| 说明 | $note |" }
+          $lines += @(
+            '',
+            '> 下载后在本地覆盖仓库根目录的 `WhaleLauncher.exe` 和 `launcher/publish/WhaleLauncher.exe`。',
+            '> 用户机器需要 .NET 10 桌面运行时（安装包已随 runtime\dotnet\ 分发）。'
+          )
+          $lines | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
