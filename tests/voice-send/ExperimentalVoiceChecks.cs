@@ -16,6 +16,10 @@ static class ExperimentalVoiceChecks
         var defaults=new AutoVoiceSettings();Check(!defaults.Enabled);Check(defaults.RecordingHotkey=="Ctrl+Alt");
         Check(RecordingShortcut.Parse("Alt + Control").Label=="Ctrl+Alt");
         Check(RecordingShortcut.Parse("Ctrl+Alt").Keys.SequenceEqual(new ushort[]{0x11,0x12}));
+        Check(RecordingShortcut.Parse("control + tab").Label=="Ctrl+Tab");
+        Check(RecordingShortcut.Parse("Ctrl+Tab").Keys.SequenceEqual(new ushort[]{0x11,0x09}));
+        Check(RecordingShortcut.Parse("Ctrl+Tab").MatchesButton("发语音（按住 Ctrl+Tab）"));
+        Check(!RecordingShortcut.Parse("Ctrl+Tab").MatchesButton("发语音（按住 Ctrl+Alt）"));
         Check(RecordingShortcut.Parse("alt+=").Keys.SequenceEqual(new ushort[]{0x12,0xBB}));
         Check(RecordingShortcut.Parse("Ctrl+Shift+F11").Keys.SequenceEqual(new ushort[]{0x11,0x10,0x7A}));
         Check(RecordingShortcut.Parse("F24").Keys.Single()==0x87);

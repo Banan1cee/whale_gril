@@ -15,8 +15,8 @@ public sealed class AutoVoiceSettings
     public bool Private { get; set; } = true;
     public string Provider { get; set; } = "breezeblue";
     public string Address { get; set; } = BreezeSpeech.BaseUrl;
-    public string Model { get; set; } = "breeze-tts-2";
-    public string Voice { get; set; } = "";
+    public string Model { get; set; } = BreezeSpeech.DefaultModelId;
+    public string Voice { get; set; } = BreezeSpeech.DefaultVoiceId;
     public string Device { get; set; } = "";
     public string Instructions { get; set; } = "";
     public string RecordingHotkey { get; set; } = "Ctrl+Alt";

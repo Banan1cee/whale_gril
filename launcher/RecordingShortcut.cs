@@ -22,7 +22,8 @@ public sealed record RecordingShortcut(ushort[] Keys, string Label)
             if(key.Length==1&&((key[0]>='A'&&key[0]<='Z')||(key[0]>='0'&&key[0]<='9'))){main=key[0];mainLabel=key;}
             else if(Regex.IsMatch(key,@"^F(?:[1-9]|1[0-9]|2[0-4])$")){main=(ushort)(0x70+int.Parse(key[1..])-1);mainLabel=key;}
             else if(key is "=" or "OEMPLUS"){main=0xBB;mainLabel="=";}
-            else throw new ArgumentException("支持 Ctrl/Alt/Shift、字母、数字、F1～F24 和 = 号");
+            else if(key=="TAB"){main=0x09;mainLabel="Tab";}
+            else throw new ArgumentException("支持 Ctrl/Alt/Shift、Tab、字母、数字、F1～F24 和 = 号");
         }
         if(modifiers.Count==0&&!main.HasValue)throw new ArgumentException("快捷键不能为空");
         var result=new List<ushort>();var labels=new List<string>();

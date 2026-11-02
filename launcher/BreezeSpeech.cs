@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net.Http;
 using System.Security.Cryptography;
 using System.Text;
@@ -14,7 +15,29 @@ namespace WhaleLauncher;
 public static class BreezeSpeech
 {
     public const string BaseUrl = "https://api.breeze.blue/v1";
-    public sealed record Choice(string Id, string Name) { public override string ToString() => Name + "（" + Id + "）"; }
+    public const string DefaultModelId = "breeze-tts-2";
+    public const string DefaultVoiceId = "voc_u3nxkd5578wc";
+    public const string DefaultVoiceName = "大肥鱼（机灵版）";
+    public sealed record Choice(string Id, string Name) { public override string ToString() => Name; }
+    public static string ModelName(string id,string name) => id switch {
+        DefaultModelId => "Breeze TTS 2 · 中英双语版（默认，中文性能更好）",
+        "breeze-tts-2-multilingual" => "Breeze TTS 2 · 多语言版",
+        _ => name
+    };
+    public static string SelectionId(string value,bool voices) => string.IsNullOrWhiteSpace(value)
+        ? (voices?DefaultVoiceId:DefaultModelId) : value.Trim();
+    public static Choice[] Choices(IEnumerable<Choice> options,string selected,bool voices)
+    {
+        selected=SelectionId(selected,voices);
+        var presets=voices?new[]{new Choice(DefaultVoiceId,DefaultVoiceName)}:new[]{
+            new Choice(DefaultModelId,ModelName(DefaultModelId,"")),
+            new Choice("breeze-tts-2-multilingual",ModelName("breeze-tts-2-multilingual",""))};
+        var list=presets.Concat(options??Array.Empty<Choice>()).Where(c=>!string.IsNullOrWhiteSpace(c.Id))
+            .Select(c=>new Choice(c.Id,voices?(c.Id==DefaultVoiceId?DefaultVoiceName:c.Name):ModelName(c.Id,c.Name)))
+            .DistinctBy(c=>c.Id).ToList();
+        if(!list.Any(c=>c.Id==selected))list.Add(new Choice(selected,voices?"已保存的自定义音色":"已保存的自定义模型"));
+        return list.ToArray();
+    }
 
     public static string LoadKey(string file) => File.Exists(file)
         ? Encoding.UTF8.GetString(ProtectedData.Unprotect(File.ReadAllBytes(file), null, DataProtectionScope.CurrentUser)) : "";
@@ -104,7 +127,11 @@ public static class BreezeSpeech
         var entries = voices ? json.RootElement.GetProperty("voices") : json.RootElement;
         var list = new List<Choice>();
         foreach (var entry in entries.EnumerateArray())
-            list.Add(new Choice(entry.GetProperty(voices ? "voice_id" : "model_id").GetString(), entry.GetProperty("name").GetString()));
+        {
+            var id=entry.GetProperty(voices ? "voice_id" : "model_id").GetString();
+            var name=entry.GetProperty("name").GetString();
+            list.Add(new Choice(id,voices?name:ModelName(id,name)));
+        }
         return list.ToArray();
     }
 }
