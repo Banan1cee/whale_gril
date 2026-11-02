@@ -165,10 +165,12 @@ begin
 
   if not FileExists(Installer) then
   begin
-    MsgBox('安装包里没有找到 .NET 10 运行时安装包，启动器可能打不开。' + #13#10#13#10 +
+    { 用 SuppressibleMsgBox 而不是 MsgBox：MsgBox 不认 /SUPPRESSMSGBOXES，
+      静默安装（/VERYSILENT）会卡在这个对话框上永远不返回。 }
+    SuppressibleMsgBox('安装包里没有找到 .NET 10 运行时安装包，启动器可能打不开。' + #13#10#13#10 +
            '请手动下载安装：' + #13#10 +
            'https://aka.ms/dotnet/10.0/windowsdesktop-runtime-win-x64.exe',
-           mbError, MB_OK);
+           mbError, MB_OK, IDOK);
     Exit;
   end;
 
@@ -179,8 +181,8 @@ begin
   if not ShellExec('runas', Installer, Params, '', SW_SHOW, ewWaitUntilTerminated, ExitCode) then
   begin
     Log('ShellExec 失败（提权被拒或无法启动）');
-    MsgBox('没能启动 .NET 运行时安装（可能取消了 UAC）。' + #13#10#13#10 +
-           '可以手动运行：' + Installer, mbError, MB_OK);
+    SuppressibleMsgBox('没能启动 .NET 运行时安装（可能取消了 UAC）。' + #13#10#13#10 +
+           '可以手动运行：' + Installer, mbError, MB_OK, IDOK);
     Exit;
   end;
 
@@ -189,8 +191,8 @@ begin
   { 0 = 成功；3010 = 成功但需要重启 }
   Result := (ExitCode = 0) or (ExitCode = 3010);
   if not Result then
-    MsgBox('运行时安装返回 ' + IntToStr(ExitCode) + '，可能没装成功。' + #13#10 +
-           '启动器如果打不开，请手动运行：' + Installer, mbInformation, MB_OK);
+    SuppressibleMsgBox('运行时安装返回 ' + IntToStr(ExitCode) + '，可能没装成功。' + #13#10 +
+           '启动器如果打不开，请手动运行：' + Installer, mbInformation, MB_OK, IDOK);
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
@@ -215,10 +217,10 @@ begin
       if not IsDesktopRuntimeInstalled() then
       begin
         Log('安装后复检：仍然检测不到 .NET 10 桌面运行时');
-        MsgBox('已经尝试安装 .NET 10 运行时，但系统里仍然检测不到。' + #13#10#13#10 +
+        SuppressibleMsgBox('已经尝试安装 .NET 10 运行时，但系统里仍然检测不到。' + #13#10#13#10 +
                '启动器可能打不开。请手动运行安装包：' + #13#10 +
                ExpandConstant('{app}\runtime\dotnet\' + DotnetInstallerName),
-               mbError, MB_OK);
+               mbError, MB_OK, IDOK);
       end;
     end;
 
@@ -236,15 +238,19 @@ begin
 end;
 
 { 卸载：问一句要不要连个人数据一起删。默认「不删」（MB_DEFBUTTON2），
-  静默卸载（/SUPPRESSMSGBOXES）也走默认，数据保留。 }
+  静默卸载（/VERYSILENT /SUPPRESSMSGBOXES）走默认 = 保留数据，而且不会卡住。
+
+  必须用 SuppressibleMsgBox：MsgBox 不认 /SUPPRESSMSGBOXES，静默卸载会一直
+  停在这个对话框上（CI 烟测就是这么发现它卡了 180 秒的），用户用第三方卸载工具
+  （都是静默调用）也会永远卡住。 }
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if CurUninstallStep = usUninstall then
   begin
-    if MsgBox('是否同时删除个人数据？' + #13#10#13#10 +
+    if SuppressibleMsgBox('是否同时删除个人数据？' + #13#10#13#10 +
               'data\ 里存着 API Key、聊天记忆、人设和提醒；删掉之后无法恢复。' + #13#10 + #13#10 +
               '选「是」= 个人数据也一起删，应用程序全部移除；选「否」= 保留个人数据，重装后还能接着用。',
-              mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES then
+              mbConfirmation, MB_YESNO or MB_DEFBUTTON2, IDNO) = IDYES then
     begin
       Log('用户选择：连个人数据一起删除');
       DelTree(ExpandConstant('{app}\data'), True, True, True);
