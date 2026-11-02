@@ -338,16 +338,41 @@ jobs:
           if (Test-Path $dir) { Remove-Item $dir -Recurse -Force }
           Write-Output "安装到 $dir"
 
-          # 必须用 Start-Process -Wait：Inno 的 setup.exe 是 GUI 子系统程序，
+          # 必须用 Start-Process：Inno 的 setup.exe 是 GUI 子系统程序，
           # 用 & 调用时 PowerShell 不等待、也不设 $LASTEXITCODE，会误判成失败。
+          #
+          # 但不能用 -Wait：一旦安装器卡住（等某个对话框 / 装 .NET 运行时 / 文件被占），
+          # 这一步会一直挂到 job 超时（90 分钟），而且什么都看不到（日志在 runner 上）。
+          # 所以显式 WaitForExit(超时) + 杀进程 + 把安装日志尾巴写进运行摘要。
+          function Invoke-Quiet([string]$exe, [string[]]$arguments, [int]$timeoutSec, [string]$label, [string]$logPath) {
+            $p = Start-Process -FilePath $exe -ArgumentList $arguments -PassThru
+            if (-not $p.WaitForExit($timeoutSec * 1000)) {
+              try { $p.Kill() } catch { }
+              $tail = if ($logPath -and (Test-Path $logPath)) {
+                ((Get-Content $logPath -Tail 60) -join "`n")
+              } else { '（没有日志）' }
+              "### $label 超时（$timeoutSec 秒）" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+              '' | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+              '```' | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+              $tail | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+              '```' | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+              Write-Output "::error title=$label 超时::${timeoutSec}s 内没结束，已杀进程；日志尾部见运行摘要"
+              Write-Output $tail
+              exit 1
+            }
+            return $p
+          }
+
           $installArgs = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', "/DIR=$dir", "/LOG=$log")
-          $proc = Start-Process -FilePath $setup -ArgumentList $installArgs -Wait -PassThru
+          Write-Output '阶段 1/5 静默安装…'
+          $proc = Invoke-Quiet $setup $installArgs 900 '静默安装' $log
           Write-Output "安装程序退出码：$($proc.ExitCode)"
           if ($proc.ExitCode -ne 0) {
             Write-Output "::error title=静默安装失败::退出码 $($proc.ExitCode)，日志尾部："
             if (Test-Path $log) { Get-Content $log -Tail 40 }
             exit 1
           }
+          Write-Output '阶段 2/5 核对文件…'
 
           $expect = @(
             'WhaleLauncher.exe',
@@ -389,18 +414,39 @@ jobs:
             exit 1
           }
 
+          Write-Output '阶段 3/5 包内 node…'
           Write-Output "包内 Node：$(& (Join-Path $dir 'runtime\node.exe') -v)"
+
+          Write-Output '阶段 4/5 包内 Python import…'
+          # 同样加超时：import uiautomation 在某些无交互会话里会等 COM，一挂就是几十分钟
           $py = Join-Path $dir 'runtime\python\python.exe'
-          $out = & $py -c "import wechatauto, psutil, win32com, uiautomation; print('imports ok')" 2>&1
-          Write-Output $out
-          if ($LASTEXITCODE -ne 0) {
+          $pyOut = Join-Path $env:RUNNER_TEMP 'whale-smoke-import.log'
+          $pyProc = Start-Process -FilePath $py `
+              -ArgumentList '-c', "import wechatauto, psutil, win32com, uiautomation; print('imports ok')" `
+              -RedirectStandardOutput $pyOut -RedirectStandardError ($pyOut + '.err') -PassThru -NoNewWindow
+          if (-not $pyProc.WaitForExit(180000)) {
+            try { $pyProc.Kill() } catch { }
+            Write-Output '::error title=包内 Python import 超时::180 秒没跑完（import uiautomation 卡住？）'
+            exit 1
+          }
+          $out = @()
+          if (Test-Path $pyOut) { $out += Get-Content $pyOut }
+          if (Test-Path ($pyOut + '.err')) { $out += Get-Content ($pyOut + '.err') }
+          Write-Output ($out -join "`n")
+          if ($pyProc.ExitCode -ne 0) {
             Write-Output '::error title=包内 Python 依赖不可用::import 失败，安装包里的 runtime\python 是坏的'
             exit 1
           }
 
+          Write-Output '阶段 5/5 静默卸载…'
           $unins = Join-Path $dir 'unins000.exe'
           if (Test-Path $unins) {
-            Start-Process $unins -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait
+            $uninsProc = Start-Process $unins -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -PassThru
+            if (-not $uninsProc.WaitForExit(300000)) {
+              try { $uninsProc.Kill() } catch { }
+              Write-Output '::error title=静默卸载超时::300 秒没跑完（卸载器弹了对话框？）'
+              exit 1
+            }
           }
           Start-Sleep -Seconds 2
           Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
