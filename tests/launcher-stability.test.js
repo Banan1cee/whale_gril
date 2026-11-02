@@ -111,6 +111,9 @@ test('「自动跟随」只在聊天模型能识图时出现，否则不让人�
   const rebuild = code.slice(code.indexOf('void RebuildVisionProviders'), code.indexOf('void EnsureVisionSelection'));
   assert.match(rebuild, /if \(ChatCanSeeImages\(\)\)[\s\S]{0,160}自动跟随聊天模型/, '不能识图时不能把「自动跟随」加进下拉');
   assert.match(rebuild, /ProviderHasVision\(kv\.Key\)/, '只列真的有看图模型的服务商');
+  // 看图下拉也换成新列表实例，别复用同一个 List（WPF 会按实例缓存默认视图）
+  assert.match(rebuild, /visionProviders = list;/, '看图下拉每次重建要换新列表实例');
+  assert.doesNotMatch(rebuild, /visionProviders\.Clear\(\)/, '不能原地清空复用的列表');
   // 自定义接口不依赖任何预设，聊天模型能不能识图都该在
   assert.match(rebuild, /\.Add\(new ProviderItem \{ Key = "custom"/, '「自定义」要一直可选');
   // 聊天模型切成不能识图的：自动项消失 → 落到手动并立刻保存
@@ -138,7 +141,8 @@ test('程序重建下拉时不触发自动保存（否则整页重读、换模�
   assert.match(vision, /if \(_loading \|\| suppressAuto \|\| !_configLoaded\) return;/, '重建看图下拉时不能走保存流程');
   const modelSel = code.slice(code.indexOf('model.SelectionChanged += async'), code.indexOf('visionProvider.SelectionChanged += async'));
   assert.match(modelSel, /if \(_loading \|\| suppressAuto\) return;/, '模型下拉重建时也不能重复保存');
-  assert.match(code, /async Task AutoSaveChatAsync\(\)[\s\S]{0,200}suppressAuto/, '自动保存要认这个抑制开关');
+  assert.match(code, /async Task AutoSaveChatAsync\(\)[\s\S]{0,200}suppressAuto/, '聊天自动保存要认这个抑制开关');
+  assert.match(code, /async Task AutoSaveVisionAsync\(\)[\s\S]{0,120}suppressAuto/, '看图自动保存也要认这个抑制开关');
 });
 
 test('微信桥接页的编码是中文选项，且提示了 4.1/4.2 该选哪个', () => {
