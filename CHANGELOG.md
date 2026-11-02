@@ -2,6 +2,32 @@
 
 ## 4.0
 
+### 修复 · 图片与表情包识别：缓存重试、解密探针、表情包进识别链路、看图补 OpenCode 会话头
+
+**现象：私聊文字正常，图片却「取不到本地文件」；表情包发过来完全没反应。**
+
+- 图片：`describe_image` 只按 full/best 各试一次，而「消息先入库、缓存后落盘」是常态 →
+  改成四轮重试（轮间等 0.5 / 1 / 2 秒，共八次下载），四轮都没拿到就不给视觉接口发空图
+- 解密探针：`MediaDownloader` 默认拿**历史缓存图**当密钥验证探针，当前图与它不一致就会验证失败
+  或反复扫描 → 新增 `bridge/image_cache.py::bind_target_probe`，解密前读目标文件头，V2 魔数
+  （`07 08 56 32 08 07`）用 `header[15:31]` 更新 `_key_probe`、探针变了清空 `_xor_key`，
+  解密调用加 RLock（并发不再交错），绑定幂等
+- 表情包：`on_message_inner` 原来对 emoji XML 和「表情 / 动画表情」直接 return（装死不回）→
+  删掉该分支，表情 / 动画表情 / 「被标成图片但正文是 emoji XML」统一走新的 `describe_emoji`
+- 新增 `bridge/emoji_vision.py`：先按 `cache/*/Emoticon/<md5前两位>/<md5>` 找无扩展名缓存，
+  本地解不开才回源；回源只允许 `tc.qq.com` 子域 HTTPS、拒绝带账号密码与非常用端口、
+  逐跳校验重定向、8 MiB 上限、内容必须匹配消息 MD5（密文用消息自带 16 字节 AES Key 解密后
+  同样校验）；Pillow 解码并限制像素数与总帧数，静态图最长边 1600、动画抽首 / 中 / 末三帧
+  每帧最长边 768，白底合成 PNG 再送给视觉接口；提示词说明「从左到右是同一动画的抽样帧」，
+  避免模型把各帧当成不同图或编造未展示的动作
+- 看图：`src/adapters/vision.js` 对 `*.opencode.ai` 补 `User-Agent` 与稳定 `x-opencode-session`
+  ——不带 UA 会被 Cloudflare 拦成 403（error code 1010），缺会话头则回 400 MissingSessionID；
+  聊天链路早有这两个头，看图一直漏着，表现为「OpenCode Go 的 Key 明明能用，图片却认不出来」
+- 加测试：`tests/test_received_media.py` 7 条（缓存重试与 shard、最终失败不调视觉、探针幂等、
+  GIF 抽帧与 MD5、联网开关与域名限制、无扩展名缓存、AES 回源解密校验）；
+  `tests/bridge-recovery.test.js` 两条表情包用例从「要装死」改成「要进识别链路」；
+  `tests/vision-follow.test.js` 两条钉住 OpenCode 的头、且不影响本地服务
+
 ### 新增 · 看图模型可以自己填接口地址（自定义 / 一键从聊天复制）
 
 **以前「看图」只能从预设服务商里挑一家，base_url 跟着预设焊死：中转站、自建视觉服务、

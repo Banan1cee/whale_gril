@@ -479,3 +479,55 @@ test('本机 / 内网的看图服务（Ollama 等）没有 Key 也能测通，�
     await new Promise((r) => server.close(r));
   }
 });
+
+// ── OpenCode Go：看图请求要自报身份 + 会话号 ───────────────────────────────
+// 真实故障：provider=opencode、Key 也对，图画得也对，但看图一直失败。
+//   不带 UA     → Cloudflare 403（error code 1010）
+//   缺会话头    → HTTP 400 "Request is missing x-opencode-session"
+// 聊天链路 client.js 有这两个头，看图骨架漏了；这里钉住规则，别再漏。
+
+test('opencode.ai 的看图请求带 UA + x-opencode-session，其它服务商一个头都不加', () => {
+  const url = 'https://opencode.ai/inference/go/openai/v1/chat/completions';
+  const oc = vision.requestHeaders(url, { Authorization: 'Bearer oc_sk_test' });
+  assert.match(oc['User-Agent'], /^whale-girl\//, '不带 UA 会被 Cloudflare 拦成 403');
+  assert.match(oc['x-opencode-session'], /^whale-girl-[0-9a-f]{24}$/, '缺会话头会回 400 MissingSessionID');
+  assert.equal(oc.Authorization, 'Bearer oc_sk_test', '不能把 Key 弄丢');
+  assert.equal(vision.requestHeaders(url, {})['x-opencode-session'], oc['x-opencode-session'], '会话号要稳定（网关按它路由/缓存）');
+
+  for (const other of [
+    'https://api.deepseek.com/chat/completions',
+    'https://open.bigmodel.cn/api/paas/v4/chat/completions',
+    'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
+    'http://127.0.0.1:11434/v1/chat/completions',
+    'https://opencode.ai.evil.example/v1/chat/completions',
+  ]) {
+    const h = vision.requestHeaders(other, { Authorization: 'Bearer x' });
+    assert.equal(h['x-opencode-session'], undefined, other + ' 不该带会话头');
+    assert.equal(h['User-Agent'], undefined, other + ' 不该被改 UA');
+    assert.equal(h.Authorization, 'Bearer x', other + ' 原有头要保留');
+  }
+});
+
+test('本机 / 内网看图服务收不到 opencode 的会话头（别把本地服务搞坏）', async () => {
+  let seen = null;
+  const server = http.createServer((req, res) => {
+    seen = req.headers;
+    req.resume();
+    req.on('end', () => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ choices: [{ message: { content: '蓝色' } }] }));
+    });
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const baseUrl = `http://127.0.0.1:${server.address().port}/v1`;
+  try {
+    const text = await vision.describe(
+      { vision: { model: 'qwen2.5vl:7b', baseUrl, timeoutMs: 4000 } },
+      { imageBase64: vision.TEST_IMAGE, mime: 'image/png', prompt: '什么颜色？' }
+    );
+    assert.equal(text, '蓝色');
+    assert.equal(seen['x-opencode-session'], undefined);
+  } finally {
+    await new Promise((r) => server.close(r));
+  }
+});
