@@ -887,15 +887,85 @@ def boot(msg):
 boot("脚本开始执行")
 
 
-def _log_allowed(text):
-    """按级别粗分：error 只留报错，info 去掉排查噪音，debug 全留。"""
+def _log_allowed(level, text):
+    """控制台过滤：显式级别优先；老的 log() 命中报错词时抬成 warn，保持以前的可读性。
+
+    error 档 = 只留报错（显式 error，或老调用里命中报错词的那类），其余一律不打印。
+    """
     if LOG_LEVEL == "debug":
         return True
-    if any(h in text for h in _LOG_ERROR_HINT):
-        return True
+    hinted = level == "info" and any(h in text for h in _LOG_ERROR_HINT)
     if LOG_LEVEL == "error":
-        return False
+        return level == "error" or hinted
+    if level in ("warn", "error") or hinted:
+        return True
     return not any(h in text for h in _LOG_DEBUG_HINT)
+
+
+# 显式级别（2026-11 起）：以前所有行都是 log()，控制台只能按关键词猜「这句算不算报错」。
+# 现在 warn / error 有真级别，行首还带 [文件:行]，从日志能直接跳到代码。
+# 只给 warn/error 抓调用点：info/debug 是热路径，抓栈不值当。
+_LOGGER_CODES = set()
+
+
+def _caller_where():
+    """warn/error 用：调用点「文件:行」。engine.py 自己的行号也保留——它就是个巨型文件。"""
+    try:
+        frame = sys._getframe(1)
+        while frame is not None and frame.f_code in _LOGGER_CODES:
+            frame = frame.f_back
+        if frame is None:
+            return ""
+        name = os.path.basename(frame.f_code.co_filename)
+        if name.endswith(".py"):
+            name = name[:-3]
+        return "%s:%d" % (name, frame.f_lineno)
+    except Exception:                                  # noqa: BLE001
+        return ""
+
+
+def _emit_log(level, args, where=""):
+    text = " ".join(_fmt_log_arg(a) for a in args)
+    head = time.strftime("[%H:%M:%S] ") + level.upper()
+    line = head + " " + (("[" + where + "] ") if where else "") + text
+    # 文件：永远记全量（debug），出问题能溯源；界面/启动器控制台按 LOG_LEVEL 过滤。
+    try:
+        os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
+        _rotate_bridge_log()
+        with open(LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception:                                  # noqa: BLE001
+        pass
+    if not _log_allowed(level, text):
+        return
+    try:
+        print(line, flush=True)
+    except Exception:                                  # noqa: BLE001
+        pass
+
+
+def log(*args):
+    """老调用：info 级。"""
+    _emit_log("info", args)
+
+
+def log_debug(*args):
+    _emit_log("debug", args)
+
+
+def log_warn(*args):
+    """已降级/已自愈，但值得记一笔（切通道、跳过一次、重试成功）。"""
+    _emit_log("warn", args, _caller_where())
+
+
+def log_error(*args):
+    """这次功能真的坏了（发送彻底失败、写盘失败、配置读不出来）。"""
+    _emit_log("error", args, _caller_where())
+
+
+for _fn in (log, log_debug, log_warn, log_error, _emit_log):
+    _LOGGER_CODES.add(_fn.__code__)
+del _fn
 
 
 _last_rotate_check = [0.0]
@@ -929,24 +999,6 @@ def _fmt_log_arg(a):
     return str(a)
 
 
-def log(*args):
-    line = time.strftime("[%H:%M:%S] ") + " ".join(_fmt_log_arg(a) for a in args)
-    # 文件：永远记全量（debug），出问题能溯源；界面/启动器控制台按 LOG_LEVEL 过滤。
-    try:
-        os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
-        _rotate_bridge_log()
-        with open(LOG_FILE, "a", encoding="utf-8") as f:
-            f.write(line + "\n")
-    except Exception:
-        pass
-    if not _log_allowed(line):
-        return
-    try:
-        print(line, flush=True)
-    except Exception:
-        pass
-
-
 _win_problem_ts = {}
 
 
@@ -960,7 +1012,7 @@ def log_window_problem(where, err):
     if now - _win_problem_ts.get(where, 0) < 120:
         return
     _win_problem_ts[where] = now
-    log(where + "：", repr(err))
+    log_warn(where + "：", repr(err))
 
 
 def read_config():
@@ -970,7 +1022,7 @@ def read_config():
             with open(CONFIG_PATH, "r", encoding="utf-8-sig") as f:
                 cfg = json.load(f)
         except Exception as e:
-            log("读取 config.json 失败：", e)
+            log_error("读取 config.json 失败（会按默认值跑）：", e)
     return cfg
 
 
@@ -1014,7 +1066,7 @@ def wait_for_server(url, timeout=30):
             log("等服务起来（最多 %d 秒）…" % timeout)
         _t.sleep(1)
         waited += 1
-    log("[!] 等了 %d 秒服务还没起来。先双击「启动鲸鱼娘.bat」，再跑桥接。" % timeout)
+    log_error("[!] 等了 %d 秒服务还没起来。先双击「启动鲸鱼娘.bat」，再跑桥接。" % timeout)
     log("    提示：直接双击「先点启动鲸鱼娘再点启动桥接」文件夹里的两个 bat 就不会顺序错。")
     return False
 
@@ -1044,7 +1096,7 @@ def ensure_ffmpeg_env():
             _bundled = os.path.join(ROOT, "runtime", "ffmpeg", "bin")
             log("找到 ffmpeg：", exe, "（包里自带，微信图片是 wxgf/HEVC，靠它转 jpg）" if exe.lower().startswith(_bundled.lower()) else "（微信图片是 wxgf/HEVC，靠它转 jpg）")
             return True
-    log("[!] 没找到 ffmpeg：微信 4.x 的图片多是 wxgf/HEVC，没有它就看不了图。")
+    log_warn("[!] 没找到 ffmpeg：微信 4.x 的图片多是 wxgf/HEVC，没有它就看不了图。")
     log("    装一个（解压到 C:\\ffmpeg 即可）或把 ffmpeg.exe 放进 runtime\\ffmpeg\\bin")
     return False
 
@@ -1072,7 +1124,7 @@ def _bg_cli(argv=None):
         try:
             from . import bg_sender          # type: ignore
         except Exception as e:               # noqa: BLE001
-            log("导入 bg_sender 失败：", repr(e))
+            log_warn("导入 bg_sender 失败：", repr(e))
             return 1
 
     if "--bg-send" in argv:
@@ -1116,7 +1168,7 @@ def main():
     try:
         import ctypes
         if not ctypes.windll.shell32.IsUserAnAdmin():
-            log("[!] 当前不是管理员：如果微信也是管理员运行的，零焦点发送会用不了（UIPI）。")
+            log_warn("[!] 当前不是管理员：如果微信也是管理员运行的，零焦点发送会用不了（UIPI）。")
             log("    用「启动微信桥接.bat」启动会自动提权；手动跑请右键「以管理员身份运行」。")
     except Exception:
         pass
@@ -1124,7 +1176,7 @@ def main():
     # UIA 认不出主窗（ensure_window 超时 37s），之后每次发送都退到 OCR 并报
     # error(5, 'SetWindowPos', '拒绝访问')，日志刷屏、消息发不出去。
     if any(ord(ch) > 127 for ch in ROOT):
-        log("[!] 路径里有中文/非英文字符：", ROOT)
+        log_warn("[!] 路径里有中文/非英文字符：", ROOT)
         log("    微信 UI 自动化在这种路径下会失败（发送一直报「拒绝访问」）。")
         log("    请把整个文件夹移到纯英文路径再启动，例如 D:\\whale-girl-3.0")
     # 单实例锁：多个桥接连同一份微信数据库会导致同一条消息被回好几遍
@@ -1206,7 +1258,7 @@ def main():
         boot("import 完成")
     except Exception as e:
         boot("导入失败: %r" % (e,))
-        log("缺少依赖或导入失败：", e)
+        log_error("缺少依赖或导入失败：", e)
         _msg = "%s %s" % (type(e).__name__, e)
         _dll_issue = (
             isinstance(e, OSError)
@@ -1326,7 +1378,7 @@ def main():
         # 其它异常（解不开密钥 / 驱动异常…）也按「指引 + 退出码」分级处理（L2），
         # 不再穿透出去把 main() 裸崩掉。
         log("")
-        log("✗ 打开微信数据库失败（%s）：%s" % (type(e).__name__, e))
+        log_error("✗ 打开微信数据库失败（%s）：%s" % (type(e).__name__, e))
         log("  按顺序检查：1) 微信 4.x 已登录？2) config.json 的 wechat.dbDir 填对没有；")
         log("  3) 重跑「启动微信桥接.bat」；还不行就把这段日志发给作者。")
         return 2
@@ -1391,7 +1443,7 @@ def main():
         for s in db.get_sessions(limit=800):
             sessions[s["username"]] = s
     except Exception as e:
-        log("读取会话列表失败：", e)
+        log_warn("读取会话列表失败：", e)
 
     name_cache = {}
 
@@ -1945,6 +1997,28 @@ def main():
         except Exception:
             return False
 
+    def wechat_window_state():
+        """心跳上报的窗口现场：主窗在不在、可见/最小化/托盘。纯只读，不动窗口。
+
+        排查「她不回消息」时第一个要看的就是这个：窗口缩进托盘、被自更新回收、
+        或者双开时钉错了号，日志里一眼能看出来。
+        """
+        try:
+            import win32gui
+            w = find_weixin_hwnd()
+            if not w:
+                return "没有微信主窗（未登录或已退出）"
+            h = int(ACCOUNT.get("hwnd") or 0) or int(w)
+            if not win32gui.IsWindow(h):
+                return "主窗句柄失效（微信可能自更新/重启过）"
+            if win32gui.IsIconic(h):
+                return "已最小化"
+            if not win32gui.IsWindowVisible(h):
+                return "在托盘（窗口隐藏）"
+            return "可见"
+        except Exception as e:                      # noqa: BLE001
+            return "读不到窗口状态（%s）" % type(e).__name__
+
     def normalize_window(hwnd):
         """微信窗口太小 / 超出屏幕 / 被挪走都会让 UI 自动化点空，统一调成稳定尺寸。"""
         try:
@@ -2310,7 +2384,7 @@ def main():
             )
         except Exception as e:                   # noqa: BLE001
             ok, why = False, "exception:" + type(e).__name__
-            log("后台通道异常：", repr(e))
+            log_warn("后台通道异常：", repr(e))
 
         BG_STATS["tried"] += 1
         BG_STATS["last"] = why
@@ -2432,7 +2506,7 @@ def main():
                 press_enter(True)
                 return True
         except Exception as e:
-            log("UIA 发送异常：", repr(e))
+            log_warn("UIA 发送异常：", repr(e))
         return False
 
     def recover_uia(reason=""):
@@ -2455,7 +2529,7 @@ def main():
             if u is not None:
                 log("UIA 已重新热激活%s" % (("（" + reason + "）") if reason else ""))
                 return True
-            log("UIA 重新热激活失败%s" % (("（" + reason + "）") if reason else ""))
+            log_warn("UIA 重新热激活失败%s" % (("（" + reason + "）") if reason else ""))
         except Exception as e:                     # noqa: BLE001
             log("UIA 重新热激活异常：", repr(e))
         return False
@@ -2630,7 +2704,7 @@ def main():
                         continue
                     if str(m.get("content") or "").strip() == want:
                         return True
-            log("键盘通道：按键发了，但数据库里没确认到（可能发到了别的会话），这条按失败处理")
+            log_error("键盘通道：按键发了，但数据库里没确认到（可能发到了别的会话），这条按失败处理")
             return False
         except Exception as e:                 # noqa: BLE001
             log("键盘通道按键失败：", repr(e))
@@ -3030,7 +3104,7 @@ def main():
                     # 用户明确要求「绝不抢前台」：这条不发，但不把会话标死
                     # （窗口最小化、会话不在列表里都是可恢复状态）。
                     allow_mark_dead = False
-                    log("后台通道失败且已关闭前台兜底，这条不发：", chat_display_name)
+                    log_error("后台通道失败且已关闭前台兜底，这条不发：", chat_display_name)
                     return False
 
             with gui_lock:
@@ -3148,7 +3222,7 @@ def main():
                 if fail_streak[chat_username] >= 2:
                     dead_chats.add(chat_username)
                     log("连续发送失败，先停掉这个会话：", chat_display_name)
-            log("发送最终失败，请把微信窗口保持在桌面、别最小化；内容：", text[:30])
+            log_error("发送最终失败，请把微信窗口保持在桌面、别最小化（这条 %d 字，正文不写日志）" % len(text))
             return False
 
     def send_at(member, text, chat_display_name, chat_username=""):
@@ -3538,7 +3612,8 @@ def main():
                 log("已连上鲸鲸服务：", bot_url.rsplit("/webhook", 1)[0])
             if data.get("action") != "reply" or not data.get("reply"):
                 if is_group and addressed:
-                    log("鲸鲸没接话：", nickname, "→", content[:20], "|", data.get("reason"))
+                    # 只记判定原因和长度，正文不进日志（要原文看 data/trace/ 的短期留存）
+                    log("鲸鲸没接话：", nickname, "| 原因:", data.get("reason"), "| %d 字" % len(content))
                 return
 
             # 演示模式（服务端没配 Key，说的是内置台词）：提醒一次，别让人以为「没 Key 也能真聊」
@@ -4067,6 +4142,7 @@ def main():
         base = bot_url.rsplit("/webhook", 1)[0]
         misses = 0
         gate_logged = False
+        hb_misses = 0            # 心跳连续失败次数（服务端没起来时别每 20 秒刷一条）
         while True:
             try:
                 # 3.9 起没有「游戏休息模式」了；rest 字段保留但恒为 False，
@@ -4093,7 +4169,7 @@ def main():
                             misses = 0
                             uia_now = False
                             if not gate_logged:
-                                log("[!] 微信主窗当前不存在（可能缩进托盘/被回收/自更新），已收起 UIA 引擎，等窗口回来再预热")
+                                log_warn("[!] 微信主窗当前不存在（可能缩进托盘/被回收/自更新），已收起 UIA 引擎，等窗口回来再预热")
                                 gate_logged = True
                         else:
                             with gui_lock:
@@ -4114,7 +4190,7 @@ def main():
                                 if _u is None:
                                     misses += 1
                                 if _u is None and misses >= 3:
-                                    log("[!] UIA 连续 %d 次拿不到，重建窗口驱动再试…" % misses)
+                                    log_warn("[!] UIA 连续 %d 次拿不到，重建窗口驱动再试…" % misses)
                                     with gui_lock:
                                         gui = WeChatGUI()
                                         _u = gui._get_uia()
@@ -4141,13 +4217,22 @@ def main():
                     "account_ok": bool(ACCOUNT.get("verified")),
                     "account_why": str(ACCOUNT.get("why") or ""),
                     "account_guard": bool(ACCOUNT_GUARD),
+                    # 微信窗口现场：缩托盘 / 被回收 / 双开钉错号，一眼能看出来
+                    "window": wechat_window_state(),
                 }
                 headers = {"x-whale-bridge": "1"}
                 if token:
                     headers["x-bot-token"] = token
                 LOCAL_HTTP.post(base + "/api/bridge/heartbeat", json=payload, headers=headers, timeout=8)
-            except Exception:
-                pass  # 服务没起来/重启中，下一轮再报
+                if hb_misses:
+                    log_warn("心跳恢复（之前连续失败 %d 次，服务端已回来）" % hb_misses)
+                    hb_misses = 0
+            except Exception as e:                     # noqa: BLE001
+                # 服务没起来/重启中：别刷屏，只在 1/3/10 次和之后每 60 次报一条。
+                # 这是「启动器显示桥接离线、但桥接其实活着」的第一现场。
+                hb_misses += 1
+                if hb_misses in (1, 3, 10) or hb_misses % 60 == 0:
+                    log_warn("心跳失败（连续 %d 次，服务端可能没起来）：%r" % (hb_misses, e))
             time.sleep(20)
 
     def config_watch():

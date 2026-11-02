@@ -49,11 +49,13 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 
 class Bot {
-  constructor({ config, store, llm, logger, now = () => new Date(), rng = Math.random, mockChunkDelayMs = 12, linkReader = null }) {
+  constructor({ config, store, llm, logger, trace = null, now = () => new Date(), rng = Math.random, mockChunkDelayMs = 12, linkReader = null }) {
     this.config = config;
     this.store = store;
     this.llm = llm;
     this.logger = logger;
+    // 判定链落盘（src/core/trace.js）。测试/网页里可以不传，没有 trace 只是少一份证据。
+    this.trace = trace;
     this.now = now;
     this.rng = rng;
     this.mockChunkDelayMs = mockChunkDelayMs;
@@ -221,7 +223,19 @@ class Bot {
    * 判断并准备好这次回复（不调用模型）。返回 decision。
    */
   async decide(rawMsg) {
-    return this._decide(rawMsg);
+    const decision = await this._decide(rawMsg);
+    // 判定链：为什么回 / 为什么不回。只记原因、长度和状态，正文交给 trace 的短期原文副本
+    // （默认不进导出包）。追踪本身出错也绝不能影响回消息。
+    try {
+      if (this.trace) {
+        this.trace.record({
+          msg: decision.msg || this.normalize(rawMsg),
+          decision,
+          state: this._lastTraceState || null,
+        });
+      }
+    } catch { /* 追踪失败不影响回消息 */ }
+    return decision;
   }
 
   async _decide(rawMsg) {
@@ -265,6 +279,8 @@ class Bot {
       chatType: msg.chatType,
       title: msg.chatTitle,
     });
+    // 给 decide() 外面的 trace 用：会话状态（静默期/接话窗口/限流计数）在这里才是最新的
+    this._lastTraceState = session.state;
 
     // 1) 去重
     if (msg.msgId && this.store.isDuplicate(key, msg.msgId)) {

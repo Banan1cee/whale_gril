@@ -72,6 +72,35 @@
   secret 与 variable、SignPath 后台要建什么对象；并写明 2023 年 6 月起 OV/EV 证书的私钥
   必须在硬件 token / HSM 里，新证书基本给不出 PFX
 
+### 排查增强 · 日志带调用点 · 判定链 · 日志包补现场
+
+**「她突然不回了」以前只能靠猜：日志看不出是哪一行报的，崩溃栈根本不在导出包里。**
+
+- 内核日志：`warn` / `error` 行首自动加调用点（`[15:02:06] ERROR pipeline/chat.js:422 ...`），
+  报障时直接跳代码；`info` / `debug` 不抓栈（热路径，省开销），需要模块名就用 `logger.child('llm')`
+  - 启动器「仅异常」筛选以前靠关键词猜级别，现在先认 `DEBUG/INFO/WARN/ERROR` 显式级别，猜漏的少了
+- 桥接：新增 `log_warn` / `log_error`（带 `[engine:行号]`），控制台按真级别过滤，老 `log()` 命中报错词仍抬成 warn；
+  把「服务没起来 / 微信数据库打不开 / 键盘通道发出去但库里没确认 / 兜底通道关了没发」等 19 处改成显式级别
+- 桥接心跳失败现在会记（1/3/10 次和之后每 60 次一条）：服务端没起来时不再一条日志都没有
+- 启动器：进程退出记 `code + pid`，非 0 标成 error，并补一行「退出前 stderr 最后 3 行」；
+  内核/桥接的显式级别会被识别，不再全靠 `InferLevel` 猜
+- 日志包补上真正能定位问题的文件：`crash.log`、`bridge-crash.log`、`bridge-hang.log`、`bridge-boot.log`、
+  `uia-fault.log`、`uia-selftest.log`、`wechat-bridge-4x.log`（含 `.1` 轮转），启动时也会一起归档到 `logs/run-*`
+- `info.txt` 补现场：微信进程/主窗状态（可见/最小化/托盘/句柄失效）、当前账号与确认原因、UIA/收消息线程/ffmpeg、
+  消息收发统计、runtime manifest、Python 依赖、判定链条数
+- 桥接心跳新增 `window` 字段上报窗口现场（`wechat_window_state()`），诊断页多两条自检：微信窗口 / 微信账号
+- 脱敏扩面：除密钥外，`ownerName` / `aliases` / `master.names` / `master.wxids` / `ignoreSenders` /
+  `care.whitelist` / `sticker.testChat` 也换成 `***`；日志正文里 `sk-*` / `wxid_*` / Bearer / 手机号打码
+- 新增判定链 `src/core/trace.js`：每条消息一行 JSONL（`fp`、会话哈希、长度、@/引用、`reason`、静默期/接话窗口/限流计数），
+  **不含正文**；原文副本写 `data/trace/raw/`，24 小时 / 200 条自动清
+- **导出改成一键**：诊断页顶栏「导出日志」不再弹「最近 10 分钟 / 当次启动」的小窗，点一下就打完整包 ——
+  当次启动 + 最近两次启动的日志、判定链、最近 30 分钟的原文（最多 60 条）、脱敏配置、doctor、wechatauto 日志；
+  当前这次留尾部 3MB、归档各留 1MB，包不会因为 debug 全量而失控
+- 新增 `scripts/replay-trace.js`：拿历史输入重跑 `computeTrigger`，改完规则先预演，直接看哪条结论变了
+- 桥接不再把消息正文写日志：「没接话」只记 `昵称 | 原因 | N 字`，发送最终失败只记字数
+- 配置：`log.trace`（默认开）/ `log.traceRaw`（默认开，本地 24 小时）进 `config.example.json` 和调试台
+- 测试：新增 `tests/trace.test.js`（调用点 / 判定链不含正文 / 原文 24 小时过期 / Bot 真落盘 / 桥接规则守卫）
+
 ### 启动器设置页 · 标签贴近输入框 · 一键恢复默认 · 预算说明说人话
 
 **看图页那行「超时」跟同页对不齐、标签和输入框之间空半个屏幕、高级选项没有恢复默认 —— 这三件一起修。**

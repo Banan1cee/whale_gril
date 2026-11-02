@@ -22,6 +22,12 @@ const FIELDS = {
   'server.allowRemote': { type: 'bool' },
   'server.openBrowser': { type: 'bool' },
 
+  // ---- 日志 / 判定链 ----
+  'log.level': { type: 'enum', values: ['debug', 'info', 'warn', 'error'] },
+  'log.fileLevel': { type: 'enum', values: ['debug', 'info', 'warn', 'error'] },
+  'log.trace': { type: 'bool' },
+  'log.traceRaw': { type: 'bool' },
+
   // ---- 对话 ----
   'chat.historyTurns': { type: 'int', min: 2, max: 800 },
   'chat.groupHistoryTurns': { type: 'int', min: 2, max: 800 },
