@@ -205,6 +205,15 @@ test('换完 exe 要把旧的删干净，不能越更新越占地方', () => {
   assert.match(app, /for \(var i = 0; i < 5; i\+\+\)/, '刚退出的旧实例可能还没释放句柄，要重试');
 });
 
+test('更新完由脚本负责把启动器拉起来（窗口关了也不烂尾）', () => {
+  const ps1 = readPs1();
+  assert.match(ps1, /function Start-LauncherAfterUpdate/, '缺拉起启动器的实现');
+  assert.match(ps1, /function Get-RunningExeProcess/, '要能拿到运行中实例的 PID');
+  assert.match(ps1, /@\('--replace', \[string\]\$running\.Id\)/, '新实例要带 --replace <旧 PID>，否则会弹「已经在运行」');
+  assert.match(ps1, /OnlyIfGone/, '回滚时只在该拉的时候拉');
+  assert.match(ps1, /更新期间窗口被关掉了，已替你重新打开启动器/, '关窗口的情况要给出明确提示');
+});
+
 test('启动器重启用真实路径，并等旧实例退出再抢单实例锁', () => {
   const main = fs.readFileSync(path.join(root, 'launcher', 'MainWindow.xaml.cs'), 'utf8');
   const app = fs.readFileSync(path.join(root, 'launcher', 'App.xaml.cs'), 'utf8');
