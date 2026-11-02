@@ -449,10 +449,23 @@ jobs:
           Write-Output '阶段 5/5 静默卸载…'
           $unins = Join-Path $dir 'unins000.exe'
           if (Test-Path $unins) {
-            $uninsProc = Start-Process $unins -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -PassThru
-            if (-not $uninsProc.WaitForExit(300000)) {
+            # 卸载器也会留日志（/LOG），超时时把它尾巴写进运行摘要——不然只能干瞪眼
+            $uninsLog = Join-Path $env:RUNNER_TEMP 'whale-smoke-uninstall.log'
+            $uninsProc = Start-Process $unins `
+                -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=$uninsLog" -PassThru
+            if (-not $uninsProc.WaitForExit(180000)) {
+              $tmp = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -like '_iu*' -or $_.ProcessName -like 'unins*' } |
+                  ForEach-Object { "$($_.ProcessName)($($_.Id))" }) -join ', '
               try { $uninsProc.Kill() } catch { }
-              Write-Output '::error title=静默卸载超时::300 秒没跑完（卸载器弹了对话框？）'
+              $tail = if (Test-Path $uninsLog) { (Get-Content $uninsLog -Tail 60) -join "`n" } else { '（没有卸载日志）' }
+              '### 静默卸载超时（180s）' | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+              '' | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+              "残留进程：$tmp" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+              '```' | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+              $tail | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+              '```' | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+              Write-Output "::error title=静默卸载超时::180 秒没跑完；残留进程 $tmp；卸载日志尾部见运行摘要"
+              Write-Output $tail
               exit 1
             }
           }
