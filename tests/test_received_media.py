@@ -8,7 +8,17 @@ import tempfile
 import types
 import unittest
 from unittest.mock import Mock
-from PIL import Image
+
+try:
+    from PIL import Image
+except ImportError:  # 干净的 Python / 没装 Pillow：整组跳过，别让一堆无关用例跟着红
+    raise unittest.SkipTest('表情包解码要 Pillow（随包 runtime 自带；源码环境 pip install pillow）')
+
+try:  # AES 回源解密那条用例才需要它
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes  # noqa: F401
+    HAS_CRYPTO = True
+except ImportError:
+    HAS_CRYPTO = False
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'bridge'))
@@ -104,8 +114,8 @@ class ReceivedMediaTests(unittest.TestCase):
         self.assertEqual(count, 1)
         self.assertEqual(Image.open(io.BytesIO(preview)).size, (40, 30))
 
+    @unittest.skipUnless(HAS_CRYPTO, '需要 cryptography 才能校验 AES 回源解密')
     def test_encrypted_cdn_sticker_is_verified_after_decryption(self):
-        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
         raw = self.image.read_bytes()
         key = bytes(range(16))
         padding = 16 - len(raw) % 16

@@ -103,6 +103,14 @@ jobs:
             exit $code
           }
 
+      # 图片 / 表情包回归要真解码：Pillow 解图与抽帧、cryptography 试 AES 回源解密、
+      # requests 被 bridge/engine.py 导入。这三个随包 runtime 里本来就有，CI 不装就等于
+      # 把「真实解码路径」整组跳过（test_received_media.py 会 skip），等于没守。
+      - name: Python 依赖（看图 / 表情包回归）
+        if: always()
+        shell: pwsh
+        run: python -m pip install --disable-pip-version-check --quiet pillow cryptography requests
+
       - name: Python 单元测试
         if: always()
         shell: pwsh
