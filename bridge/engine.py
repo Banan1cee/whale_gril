@@ -398,6 +398,13 @@ def reload_config(path=None):
         log("重读配置失败（继续用旧值）：", repr(e))
         return False
 
+    # 表情包总闸必须跟着配置热更新：以前只在启动时读一次，
+    # 桥接先起、后开总闸就永久不生效（测试队列停在「排队中」，回复也不带图）。
+    try:
+        STICKER_TEST_ON = _as_bool(((cfg.get("features") or {}).get("stickers", False)), False)
+    except Exception:
+        pass
+
     w = cfg.get("wechat") or {}
     try:
         STALE_AFTER = float(w.get("staleAfterSec") or STALE_AFTER or 4)
