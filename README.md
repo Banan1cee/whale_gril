@@ -417,6 +417,25 @@ node server.js --doctor   # 自检
 
 ---
 
+## 代码签名（Code signing policy）
+
+发行包的 Windows 签名由 SignPath 提供：
+
+> Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org).
+
+签名覆盖 `WhaleLauncher.exe` 和 `whale-girl-<版本>-setup.exe`，只对由本仓库
+GitHub Actions 构建出来的产物签名（每个发版签名都要人工批准）。
+
+**完整的代码签名策略**（签哪些文件、谁批准、隐私声明、怎么验证签名）见
+**[CODE_SIGNING_POLICY.md](CODE_SIGNING_POLICY.md)**。
+
+验证方法：
+
+```powershell
+Get-AuthenticodeSignature .\whale-girl-4.0.0-setup.exe | Format-List Status, SignerCertificate
+Get-FileHash .\whale-girl-4.0.0-setup.exe -Algorithm SHA256   # 对照 Release 里的 SHA256SUMS.txt
+```
+
 ## License
 
 MIT，见 [LICENSE](LICENSE)。欢迎 fork、改人设、接自己的模型。

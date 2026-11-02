@@ -1,7 +1,16 @@
-﻿<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
   <!-- 第 2 轮：安装包。文件名带版本号（whale-girl-4.0.0-setup.exe），
-       用通配符；默认 max-matches=1，所以必须只匹配到一个文件。 -->
-  <pe-file path="whale-girl-*-setup.exe">
+       用通配符；默认 max-matches=1，所以必须只匹配到一个文件。
+
+       metadata restrictions 对上 installer/whale.iss 里的
+       VersionInfoProductName=鲸鲸 / VersionInfoCompany=鲸鲸 / VersionInfoProductVersion={#AppVersion}。 -->
+  <parameters>
+    <parameter name="version" required="true" />
+  </parameters>
+  <pe-file path="whale-girl-*-setup.exe"
+           product-name="鲸鲸"
+           company-name="鲸鲸"
+           product-version="${version}">
     <authenticode-sign />
   </pe-file>
 </artifact-configuration>

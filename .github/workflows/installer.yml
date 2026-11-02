@@ -212,6 +212,10 @@ jobs:
           wait-for-completion: true
           output-artifact-directory: signed/launcher
           skip-decompress: true
+          # SignPath 的 metadata restrictions 用 ${version} 核对 exe 里的产品版本，
+          # 传错就等于签不上（artifact configuration 里 required="true"）
+          parameters: |
+            version: ${{ toJSON(env.version) }}
 
       - name: 换上签好名的启动器
         if: env.SIGNING_MODE == 'signpath'
@@ -291,6 +295,8 @@ jobs:
           wait-for-completion: true
           output-artifact-directory: signed/setup
           skip-decompress: true
+          parameters: |
+            version: ${{ toJSON(env.version) }}
 
       - name: 换上签好名的安装包
         if: env.SIGNING_MODE == 'signpath'
