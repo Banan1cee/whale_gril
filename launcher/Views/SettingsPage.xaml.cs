@@ -895,7 +895,7 @@ namespace WhaleLauncher.Views
 
         private Border BuildModelSection()
         {
-            var card = Card("模型", "聊天、看图、语音分三页签。聊天模型自己能看图时，看图模型自动跟随；手动指定过就以手动为准。", out var body);
+            var card = Card("模型", "聊天、看图、语音分三页签。聊天模型自己能看图时，看图模型自动跟随；手动指定过就以手动为准；看图也可以选「自定义」，接口地址和模型都自己填（能一键从聊天复制）。", out var body);
 
             var chatTab = MakeTab("聊天（文本）", out var chatBadge);
             var visionTab = MakeTab("看图（视觉）", out var visionBadge);
@@ -929,7 +929,6 @@ namespace WhaleLauncher.Views
             SelectTab(0);
 
             // 两组控件先都建出来：换聊天模型时要同步刷新看图的提示和角标
-            var items = new List<ProviderItem>();
             var suppressAuto = false;           // 程序化改控件时别触发自动保存
             var autoSaving = false;
             var cmb = new ComboBox { Height = 28, DisplayMemberPath = "Label", MinWidth = 320, HorizontalAlignment = HorizontalAlignment.Left };
@@ -940,11 +939,15 @@ namespace WhaleLauncher.Views
             var chatResult = new TextBlock { Style = (Style)FindResource("Small"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 0) };
 
             // 看图：和聊天页一样的「服务商 + 模型」两个下拉。
-            // 服务商第一项是「自动跟随聊天模型」（默认）；只有选了具体服务商，
-            // 模型和下面的接口地址/超时/Key 才显示，否则整页只留「测一下」。
+            // 服务商第一项是「自动跟随聊天模型」（默认），最后一项是「自定义」：
+            // 选了自定义就自己填接口地址和模型名（中转站、自建视觉服务、同服务商换路径都能用），
+            // 还可以一键「从聊天复制」把聊天那套地址/模型抄过来。
             var visionProviders = new List<ProviderItem>();
             var visionProvider = new ComboBox { Height = 28, DisplayMemberPath = "Label", MinWidth = 320, HorizontalAlignment = HorizontalAlignment.Left };
+            // 预设服务商时只能从下拉里选（选项跟聊天模型同一份）；
+            // 只有「自定义」才切成可编辑，好让用户填预设里没有的模型名
             var visionModel = new ComboBox { Height = 28, MinWidth = 320, HorizontalAlignment = HorizontalAlignment.Left };
+            var visionUrl = new TextBox { MinWidth = 320 };
             var visionTip = new TextBlock { Style = (Style)FindResource("Small"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 3, 0, 0) };
             var visionBox = new StackPanel();
             visionBox.Children.Add(visionModel);
@@ -955,9 +958,11 @@ namespace WhaleLauncher.Views
             var visionResult = new TextBlock { Style = (Style)FindResource("Small"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 0) };
             // 这些行要按「自动 / 手动」切显隐，所以在事件挂上之前先声明、下面再赋值。
             FrameworkElement visionModelRow = null;
+            FrameworkElement visionUrlRow = null;
             FrameworkElement visionTimeoutRow = null;
             FrameworkElement visionKeyRow = null;
             Button vsave = null;
+            Button vcopy = null;
 
             JsonElement currentPreset = default;   // 当前服务商预设（判断「聊天模型自己能不能看图」用）
 
@@ -1001,6 +1006,7 @@ namespace WhaleLauncher.Views
             }
 
             bool VisionIsAuto() => string.IsNullOrEmpty((visionProvider.SelectedItem as ProviderItem)?.Key);
+            bool VisionIsCustom() => (visionProvider.SelectedItem as ProviderItem)?.Key == "custom";
 
             void SyncVisionTip()
             {
@@ -1024,8 +1030,20 @@ namespace WhaleLauncher.Views
                 else
                 {
                     var prov = (visionProvider.SelectedItem as ProviderItem)?.Label ?? "";
-                    visionTip.Text = "手动指定：" + prov + " · " + (visionModel.SelectedItem as string ?? "");
-                    visionBadge.Text = "已指定";
+                    if (VisionIsCustom())
+                    {
+                        var url = visionUrl.Text.Trim();
+                        var vm = VisionValue();
+                        visionTip.Text = url.Length > 0
+                            ? "自定义接口：" + url + " · " + vm
+                            : "自定义接口：先填接口地址和模型名（点「从聊天复制」也能直接把聊天的地址/模型搬过来）";
+                        visionBadge.Text = "自定义";
+                    }
+                    else
+                    {
+                        visionTip.Text = "手动指定：" + prov + " · " + (visionModel.SelectedItem as string ?? "");
+                        visionBadge.Text = "已指定";
+                    }
                 }
                 chatBadge.Text = model.Text.Trim().Length > 0 ? "" : "";
             }
@@ -1065,23 +1083,26 @@ namespace WhaleLauncher.Views
                     && varr.GetArrayLength() > 0;
             }
 
-            // 看图服务商列表：聊天模型能识图时第一项才是「自动跟随」；
-            // 只列真的有看图模型的服务商，免得选完模型下拉是空的。
+            // 看图服务商列表：聊天模型能识图时第一项才是「自动跟随」；只列真的有看图
+            // 模型的服务商，免得选完模型下拉是空的。最后一项「自定义」不依赖预设，常驻。
             void RebuildVisionProviders()
             {
                 var keepKey = (visionProvider.SelectedItem as ProviderItem)?.Key;
-                visionProviders.Clear();
+                // 同样换新实例：复用同一个 List 会被 WPF 的默认视图缓存住，选中的新对象匹配不上
+                var list = new List<ProviderItem>();
                 if (ChatCanSeeImages())
-                    visionProviders.Add(new ProviderItem { Key = "", Label = "自动跟随聊天模型" });
+                    list.Add(new ProviderItem { Key = "", Label = "自动跟随聊天模型" });
                 if (_providers != null)
                     foreach (var kv in _providers)
                         if (ProviderHasVision(kv.Key))
-                            visionProviders.Add(new ProviderItem { Key = kv.Key, Label = GetStr(kv.Value, "label") + "（" + kv.Key + "）" });
-                visionProvider.ItemsSource = null;
-                visionProvider.ItemsSource = visionProviders;
+                            list.Add(new ProviderItem { Key = kv.Key, Label = GetStr(kv.Value, "label") + "（" + kv.Key + "）" });
+                // 自定义永远在最后：不依赖任何预设，地址和模型都由用户填
+                list.Add(new ProviderItem { Key = "custom", Label = "自定义（自己填接口地址和模型）" });
+                visionProviders = list;
+                visionProvider.ItemsSource = list;
                 if (keepKey != null)
                 {
-                    var hit = visionProviders.FirstOrDefault(x => x.Key == keepKey);
+                    var hit = list.FirstOrDefault(x => x.Key == keepKey);
                     if (hit != null) visionProvider.SelectedItem = hit;
                 }
             }
@@ -1098,7 +1119,7 @@ namespace WhaleLauncher.Views
 
             cmb.SelectionChanged += async (s, e) =>
             {
-                if (_loading || !(cmb.SelectedItem is ProviderItem p)) return;
+                if (_loading || suppressAuto || !(cmb.SelectedItem is ProviderItem p)) return;
                 if (_providers != null && _providers.TryGetValue(p.Key, out var pv))
                 {
                     var wasAuto = VisionIsAuto();
@@ -1119,7 +1140,7 @@ namespace WhaleLauncher.Views
             };
             model.SelectionChanged += async (s, e) =>
             {
-                if (_loading) return;
+                if (_loading || suppressAuto) return;
                 var wasAuto = VisionIsAuto();
                 suppressAuto = true;
                 try
@@ -1135,20 +1156,33 @@ namespace WhaleLauncher.Views
             };
             visionProvider.SelectionChanged += async (s, e) =>
             {
-                if (_loading || !_configLoaded) return;
+                // suppressAuto 为真 = 程序在重建下拉（比如换了聊天模型），不是用户点的：
+                // 以前这里会把外层设的 suppressAuto 冲成 false，然后一路自动保存 → 整页重读，
+                // 结果「换模型服务后下拉框变空白」。
+                if (_loading || suppressAuto || !_configLoaded) return;
                 suppressAuto = true;
                 try
                 {
                     var key = (visionProvider.SelectedItem as ProviderItem)?.Key ?? "";
                     if (key.Length > 0) FillVisionModels(key);
+                    if (key == "custom")
+                    {
+                        // 从「跟随 / 预设」切到自定义：先用聊天那套把地址和模型填好，用户再改。
+                        // 这就是「抄一份过来」，不用从零敲。
+                        visionModel.IsEditable = true;
+                        if (visionUrl.Text.Trim().Length == 0) visionUrl.Text = baseUrl.Text.Trim();
+                        if (VisionValue().Length == 0) visionModel.Text = (model.Text ?? "").Trim();
+                    }
                     ApplyVisionMode();
                 }
                 finally { suppressAuto = false; }
+                // 自定义还缺地址/模型时先别存：后端会拒绝，界面上提示就够了
+                if (VisionIsCustom() && (visionUrl.Text.Trim().Length == 0 || VisionValue().Length == 0)) return;
                 await AutoSaveVisionAsync();
             };
             visionModel.SelectionChanged += async (s, e) =>
             {
-                if (_loading) return;
+                if (_loading || suppressAuto) return;
                 SyncVisionTip();
                 await AutoSaveVisionAsync();
             };
@@ -1202,7 +1236,9 @@ namespace WhaleLauncher.Views
             string VisionValue()
             {
                 if (VisionProviderValue().Length == 0) return "";
-                return visionModel.SelectedItem as string ?? "";
+                // 自定义接口的模型是可编辑下拉：用户可能直接敲了一个预设里没有的名字
+                var picked = visionModel.SelectedItem as string;
+                return string.IsNullOrWhiteSpace(picked) ? (visionModel.Text ?? "").Trim() : picked;
             }
 
             string ModelRequest()
@@ -1214,6 +1250,7 @@ namespace WhaleLauncher.Views
                     + "\"model\":\"" + Api.Esc(model.Text.Trim()) + "\","
                     + "\"visionProvider\":\"" + Api.Esc(VisionProviderValue()) + "\","
                     + "\"visionModel\":\"" + Api.Esc(VisionValue()) + "\","
+                    + (VisionIsCustom() ? "\"visionBaseUrl\":\"" + Api.Esc(visionUrl.Text.Trim()) + "\"," : "")
                     + "\"mock\":" + (mock.IsChecked == true ? "true" : "false")
                     + (key.Password.Length > 0 ? ",\"apiKey\":\"" + Api.Esc(key.Password.Trim()) + "\"" : "")
                     + "}";
@@ -1264,14 +1301,16 @@ namespace WhaleLauncher.Views
             };
 
             // ── 看图面板 ────────────────────────────────────────
-            // 和聊天页一样的两个下拉：服务商（第一项是「自动跟随聊天模型」）+ 模型。
-            // 选了「自动跟随」时，下面这些全部隐藏，只留「测一下」。
-            var visionProviderRow = Row("服务商", visionProvider, "自动跟随 = 用聊天模型同一家的看图模型和 Key", false, ModelLabel);
+            // 和聊天页一样的两个下拉：服务商（第一项是「自动跟随聊天模型」）+ 模型；
+            // 最后一项「自定义」会多出一个接口地址输入框，模型也能自己敲。
+            var visionProviderRow = Row("服务商", visionProvider, "自动跟随 = 用聊天模型同一家的看图模型和 Key；自定义 = 地址和模型都自己填", false, ModelLabel);
             visionModelRow = Row("模型", visionBox, "", false, ModelLabel);
+            visionUrlRow = Row("接口地址", visionUrl, "自定义接口就填这里（例如 https://api.example.com/v1）；和聊天一样时直接复用聊天那把 Key", false, ModelLabel);
             visionTimeoutRow = BuildField(new FieldSpec { Path = "vision.timeoutMs", Label = "超时(毫秒)", Kind = "num", Min = 1000, Max = 300000 }, false, ModelLabel);
-            visionKeyRow = Row("看图 Key", visionKey, "留空表示不改；本机 / 内网服务可以留空", false, ModelLabel);
+            visionKeyRow = Row("看图 Key", visionKey, "留空表示不改；和聊天同一地址会自动复用聊天 Key；本机 / 内网服务可以留空", false, ModelLabel);
             visionPanel.Children.Add(visionHint);
             visionPanel.Children.Add(visionProviderRow);
+            visionPanel.Children.Add(visionUrlRow);
             visionPanel.Children.Add(visionModelRow);
             visionPanel.Children.Add(visionEndpoint);
             visionPanel.Children.Add(visionTimeoutRow);
@@ -1279,8 +1318,10 @@ namespace WhaleLauncher.Views
 
             var visionButtons = new WrapPanel { Margin = new Thickness(0, 6, 0, 0) };
             vsave = new Button { Content = "保存看图设置", Style = (Style)FindResource("Ghost") };
+            vcopy = new Button { Content = "从聊天复制", Style = (Style)FindResource("Ghost"), Margin = new Thickness(8, 0, 0, 0), ToolTip = "把聊天正在用的接口地址和能看图的模型抄到看图设置里" };
             var vtest = new Button { Content = "测一下", Style = (Style)FindResource("Ghost"), Margin = new Thickness(8, 0, 0, 0) };
             visionButtons.Children.Add(vsave);
+            visionButtons.Children.Add(vcopy);
             visionButtons.Children.Add(vtest);
             visionPanel.Children.Add(visionButtons);
             visionPanel.Children.Add(visionResult);
@@ -1290,21 +1331,26 @@ namespace WhaleLauncher.Views
             {
                 if (visionModelRow == null) return;
                 var auto = VisionIsAuto();
+                var custom = VisionIsCustom();
+                visionModel.IsEditable = custom;   // 只有自定义接口才允许自己敲模型名
                 visionModelRow.Visibility = auto ? Visibility.Collapsed : Visibility.Visible;
-                visionEndpoint.Visibility = auto ? Visibility.Collapsed : Visibility.Visible;
+                visionUrlRow.Visibility = custom ? Visibility.Visible : Visibility.Collapsed;
+                visionEndpoint.Visibility = (!auto && !custom) ? Visibility.Visible : Visibility.Collapsed;
                 visionTimeoutRow.Visibility = auto ? Visibility.Collapsed : Visibility.Visible;
                 visionKeyRow.Visibility = auto ? Visibility.Collapsed : Visibility.Visible;
                 visionHint.Visibility = auto ? Visibility.Collapsed : Visibility.Visible;
                 vsave.Visibility = auto ? Visibility.Collapsed : Visibility.Visible;
+                vcopy.Visibility = custom ? Visibility.Visible : Visibility.Collapsed;
                 SyncVisionTip();
             }
             ApplyVisionMode();   // 默认：自动跟随（模型 / Key 等都先藏起来）
 
-            // 保存这一页的全部内容：看图服务商 + 模型 + 看图 Key。
+            // 保存这一页的全部内容：看图服务商 + 模型 + （自定义时的）接口地址 + 看图 Key。
             async Task<bool> SaveVisionAsync(string successText)
             {
                 var payload = "{\"visionProvider\":\"" + Api.Esc(VisionProviderValue()) + "\","
                     + "\"visionModel\":\"" + Api.Esc(VisionValue()) + "\""
+                    + (VisionIsCustom() ? ",\"visionBaseUrl\":\"" + Api.Esc(visionUrl.Text.Trim()) + "\"" : "")
                     + (visionKey.Password.Length > 0 ? ",\"visionApiKey\":\"" + Api.Esc(visionKey.Password.Trim()) + "\"" : "")
                     + "}";
                 var res = await Api.Post(_sup.Url, "/api/settings", payload);
@@ -1321,6 +1367,22 @@ namespace WhaleLauncher.Views
             }
 
             vsave.Click += async (s, e) => await SaveVisionAsync("看图设置已保存。");
+            // 「从聊天复制」：服务端取聊天实际在用的地址 + 能看图的模型写进看图设置，
+            // 比在界面上比对两遍下拉更省事（聊天模型不能看图时它会自动挑本家的视觉模型）。
+            vcopy.Click += async (s, e) =>
+            {
+                visionResult.Text = "正在从聊天复制…";
+                var res = await Api.Post(_sup.Url, "/api/settings", "{\"visionCopyFromChat\":true}");
+                if (!res.Ok)
+                {
+                    visionResult.Text = "复制失败：" + (res.Error.Length > 0 ? res.Error : res.Raw);
+                    return;
+                }
+                _lastLoad = DateTime.MinValue;
+                await LoadConfigAsync();
+                visionResult.Text = "已把聊天的接口地址和看图模型抄过来，还能继续改。";
+            };
+            visionUrl.LostFocus += async (s, e) => await AutoSaveVisionAsync();
             vtest.Click += async (s, e) =>
             {
                 visionResult.Text = "正在测…";
@@ -1349,14 +1411,21 @@ namespace WhaleLauncher.Views
             {
                 _providers = provs;
                 _loading = true;
-                items.Clear();
+                // 每次换一个新的 List 实例：WPF 会按「数据源实例」缓存默认视图，
+                // 对同一个 List 清空再填充后，下拉的 Items 还是旧的那批对象，
+                // SelectedItem 指向新对象就匹配不上 → 显示成空白（换模型服务后就这样）。
+                var list = new List<ProviderItem>();
                 foreach (var kv in provs)
-                    items.Add(new ProviderItem { Key = kv.Key, Label = GetStr(kv.Value, "label") + "（" + kv.Key + "）" });
-                cmb.ItemsSource = null;
-                cmb.ItemsSource = items;
+                    list.Add(new ProviderItem { Key = kv.Key, Label = GetStr(kv.Value, "label") + "（" + kv.Key + "）" });
+                var keepKey = (cmb.SelectedItem as ProviderItem)?.Key;
+                cmb.ItemsSource = list;
                 var cur = GetStr(set, "provider");
-                if (!cmb.IsKeyboardFocusWithin) cmb.SelectedItem = items.FirstOrDefault(x => x.Key == cur);
-                var picked = items.FirstOrDefault(x => x.Key == cur);
+                // 以服务端值为准；万一认不出（服务刚重启、列表还没刷新）就退回上一次选中的，
+                // 再不行取第一项。以前焦点在下拉里时干脆不恢复，列表一重建就空白。
+                var picked = list.FirstOrDefault(x => x.Key == cur)
+                    ?? list.FirstOrDefault(x => x.Key == keepKey)
+                    ?? list.FirstOrDefault();
+                cmb.SelectedItem = picked;
                 FillChatOptions(picked != null && provs.TryGetValue(picked.Key, out var pv) ? pv : default);
                 if (!baseUrl.IsKeyboardFocusWithin) baseUrl.Text = GetStr(set, "baseUrl");
                 if (!model.IsKeyboardFocusWithin) model.Text = GetStr(set, "model");
@@ -1369,14 +1438,28 @@ namespace WhaleLauncher.Views
                 {
                     if (manual && vmodel.Length > 0)
                     {
-                        if (vprov.Length == 0) vprov = OwnerProviderOf(vmodel);
+                        var customSaved = vprov == "custom"
+                            || (vis.ValueKind == JsonValueKind.Object && vis.TryGetProperty("custom", out var cf) && cf.ValueKind == JsonValueKind.True);
+                        if (customSaved && vprov.Length == 0) vprov = "custom";   // 老数据只标了 custom 没存 provider
+                        if (vprov.Length == 0 && !customSaved) vprov = OwnerProviderOf(vmodel);
                         var hit = visionProviders.FirstOrDefault(x => x.Key == vprov);
                         if (hit == null) hit = visionProviders.FirstOrDefault(x => x.Key == cur);   // 认不出就用聊天服务商，别把手动模型弄丢
                         visionProvider.SelectedItem = hit ?? visionProviders.FirstOrDefault();
-                        if (hit != null && hit.Key.Length > 0) FillVisionModels(hit.Key);
-                        var sight = visionModel.ItemsSource as List<string> ?? new List<string>();
-                        if (!sight.Contains(vmodel)) { sight.Add(vmodel); visionModel.ItemsSource = null; visionModel.ItemsSource = sight; }
-                        visionModel.SelectedItem = vmodel;
+                        if (!visionUrl.IsKeyboardFocusWithin) visionUrl.Text = GetStr(vis, "baseUrl");
+                        if (hit != null && hit.Key == "custom")
+                        {
+                            // 自定义：模型名可能不在任何预设里，直接放进可编辑下拉的文本框
+                            visionModel.IsEditable = true;
+                            visionModel.ItemsSource = null;
+                            visionModel.Text = vmodel;
+                        }
+                        else
+                        {
+                            if (hit != null && hit.Key.Length > 0) FillVisionModels(hit.Key);
+                            var sight = visionModel.ItemsSource as List<string> ?? new List<string>();
+                            if (!sight.Contains(vmodel)) { sight.Add(vmodel); visionModel.ItemsSource = null; visionModel.ItemsSource = sight; }
+                            visionModel.SelectedItem = vmodel;
+                        }
                     }
                     else
                     {
@@ -1406,7 +1489,10 @@ namespace WhaleLauncher.Views
                     visionHint.Text = (configured ? "已配置：" + masked : "没配置。选「自动跟随」就用聊天那把 Key；本机/内网看图服务可以留空。")
                         + (curModel.Length > 0 ? " 当前看图模型：" + curModel + follow : "");
                     var ep = GetStr(v, "baseUrl");
-                    visionEndpoint.Text = ep.Length > 0 ? "接口地址：" + ep + (manual ? "（手动指定）" : "（自动跟随聊天模型）") : "";
+                    var custom = v.ValueKind == JsonValueKind.Object && v.TryGetProperty("custom", out var cst) && cst.ValueKind == JsonValueKind.True;
+                    visionEndpoint.Text = ep.Length > 0
+                        ? "接口地址：" + ep + (custom ? "（自定义）" : manual ? "（手动指定）" : "（自动跟随聊天模型）")
+                        : "";
                 }
             };
 

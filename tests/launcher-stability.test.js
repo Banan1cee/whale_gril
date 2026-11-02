@@ -104,16 +104,41 @@ test('自动跟随的看图 Key 取聊天那把（provider 只在 config.json �
   assert.match(code, /if \(vc\.auto\)[\s\S]{0,200}resolveRuntime\(config\)\.apiKey/, '自动模式要用聊天运行时的 Key');
 });
 
-test('「自动跟随」只在聊天模型能识图时出现，否则不让人选', () => {
+test('「自动跟随」只在聊天模型能识图时出现，否则不让人选；「自定义」始终可选', () => {
   const code = read('Views/SettingsPage.xaml.cs');
   assert.match(code, /bool ChatCanSeeImages\(\)/, '要先判断聊天模型能不能识图');
   assert.match(code, /currentPreset\.TryGetProperty\("visionModels"/, '按当前服务商的能看图清单判断');
   const rebuild = code.slice(code.indexOf('void RebuildVisionProviders'), code.indexOf('void EnsureVisionSelection'));
   assert.match(rebuild, /if \(ChatCanSeeImages\(\)\)[\s\S]{0,160}自动跟随聊天模型/, '不能识图时不能把「自动跟随」加进下拉');
   assert.match(rebuild, /ProviderHasVision\(kv\.Key\)/, '只列真的有看图模型的服务商');
+  // 自定义接口不依赖任何预设，聊天模型能不能识图都该在
+  assert.match(rebuild, /\.Add\(new ProviderItem \{ Key = "custom"/, '「自定义」要一直可选');
   // 聊天模型切成不能识图的：自动项消失 → 落到手动并立刻保存
   assert.match(code, /if \(wasAuto && !VisionIsAuto\(\)\) await AutoSaveVisionAsync\(\)/, '自动失效时要落成手动保存');
   assert.match(code, /if \(wasAuto && !VisionIsAuto\(\)\) EnsureVisionSelection\(\)/, '自动失效时要补选一个手动服务商');
+});
+
+test('重新拉配置后「模型服务」下拉不会变空白：换新列表实例 + 无条件恢复选中项', () => {
+  const code = read('Views/SettingsPage.xaml.cs');
+  const load = code.slice(code.indexOf('_loadModel = (set, provs)'), code.indexOf('var vis = set.ValueKind'));
+  // WPF 按数据源实例缓存默认视图：同一个 List 清空再填充，Items 里还是旧对象，
+  // SelectedItem 指向新对象就匹配不上 → 下拉空白。所以每次都得换新的 List 实例。
+  assert.match(load, /var list = new List<ProviderItem>\(\)/, '每次重建新列表实例，别复用被 WPF 缓存的 List');
+  assert.doesNotMatch(load, /items\.Clear\(\)/, '不能再清空复用的列表');
+  // 以前焦点在下拉里就跳过恢复，列表一重建就空白
+  assert.doesNotMatch(load, /if \(!cmb\.IsKeyboardFocusWithin\) cmb\.SelectedItem/, '焦点在下拉里时也要恢复选中项');
+  assert.match(load, /list\.FirstOrDefault\(x => x\.Key == keepKey\)/, '认不出服务端值时退回上一次选中项');
+});
+
+test('程序重建下拉时不触发自动保存（否则整页重读、换模型服务后下拉变空白）', () => {
+  const code = read('Views/SettingsPage.xaml.cs');
+  const vision = code.slice(code.indexOf('visionProvider.SelectionChanged += async'), code.indexOf('visionModel.SelectionChanged += async'));
+  // 以前换聊天模型会重建看图服务商下拉 → 触发这里的自动保存 → LoadConfigAsync 整页重读，
+  // 而重读时焦点还在聊天服务下拉里，选中项没恢复，框就空白了。
+  assert.match(vision, /if \(_loading \|\| suppressAuto \|\| !_configLoaded\) return;/, '重建看图下拉时不能走保存流程');
+  const modelSel = code.slice(code.indexOf('model.SelectionChanged += async'), code.indexOf('visionProvider.SelectionChanged += async'));
+  assert.match(modelSel, /if \(_loading \|\| suppressAuto\) return;/, '模型下拉重建时也不能重复保存');
+  assert.match(code, /async Task AutoSaveChatAsync\(\)[\s\S]{0,200}suppressAuto/, '自动保存要认这个抑制开关');
 });
 
 test('微信桥接页的编码是中文选项，且提示了 4.1/4.2 该选哪个', () => {

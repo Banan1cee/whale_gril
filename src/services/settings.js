@@ -1,6 +1,6 @@
 'use strict';
 
-const { loadSettings, saveSettings, resolveRuntime, maskKey, PROVIDERS, isLocalUrl, normalizeBaseUrl } = require('../infra/config');
+const { loadSettings, saveSettings, resolveRuntime, resolveVisionConfig, maskKey, PROVIDERS, isLocalUrl, normalizeBaseUrl } = require('../infra/config');
 const { applyConfigPatch } = require('../infra/configPatch');
 const vision = require('../adapters/vision');
 const { statusPayload } = require('./status');
@@ -56,13 +56,39 @@ function getSettings(runtime) {
  * - 没传，且从「能看图的聊天模型」切走了：解除跟随，回落默认看图模型。
  * 返回要合并进 settings.json 的字段；没有变化返回 null。
  */
-function decideVisionPatch({ preset, nextModel, saved = {}, manualValue = null, manualProvider = null } = {}) {
+function decideVisionPatch({ preset, nextModel, saved = {}, manualValue = null, manualProvider = null, manualBaseUrl = null } = {}) {
   const capable = ((preset && preset.visionModels) || []).includes(nextModel);
   // 看图服务商下拉：'' = 自动跟随（和聊天模型同一家），其它 = 显式钉一家。
   const providerPick = typeof manualProvider === 'string' ? manualProvider.trim() : null;
   const pickAuto = providerPick === '';
   // 空串表示「自动」：先解除手动钉住，再交给下面的跟随规则
   const wantsAuto = pickAuto || (typeof manualValue === 'string' && manualValue.trim() === '');
+  // 自定义看图接口（visionProvider=custom）：地址和模型都自己填。
+  // 以前只能从预设服务商里挑，base_url 就焊死在预设上——中转站、自建视觉服务、
+  // 同服务商换路径都没法用；现在把地址也当成一项配置存下来。
+  if (providerPick === 'custom') {
+    const vm = String(manualValue || '').trim() || String(nextModel || '').trim();
+    if (!vm) throw new Error('自定义看图接口要填模型名（例如 glm-4.6v-flash / qwen2.5vl:7b）');
+    if (!/^[a-zA-Z0-9._\-\/:]{1,80}$/.test(vm)) {
+      throw new Error('看图模型名只能包含字母、数字和 . _ - / :');
+    }
+    // 只改模型/地址时可能只带进来一半：缺的那个沿用已经存过的，别把配置清空
+    const rawBase = manualBaseUrl == null ? String(saved.visionBaseUrl || '') : String(manualBaseUrl);
+    const base = normalizeBaseUrl(rawBase).slice(0, 300);
+    if (!base) {
+      throw new Error('自定义看图接口要填接口地址（例如 https://api.example.com/v1）');
+    }
+    if (!/^https?:\/\/[^\s]+$/.test(base)) {
+      throw new Error('接口地址要以 http:// 或 https:// 开头（本机/内网地址可以直接写 127.0.0.1:8000/v1，会自动补 http://）');
+    }
+    return {
+      visionModel: vm,
+      visionManual: true,
+      visionAuto: false,
+      visionProvider: 'custom',
+      visionBaseUrl: base,
+    };
+  }
   if (providerPick && providerPick !== 'auto') {
     const target = PROVIDERS[providerPick];
     if (!target) throw new Error('不认识的看图服务商：' + providerPick);
@@ -129,6 +155,25 @@ function decideVisionPatch({ preset, nextModel, saved = {}, manualValue = null, 
   return null;
 }
 
+/**
+ * 「从聊天配置复制」：把聊天正在用的接口地址 + 能看图的模型抄到看图设置里。
+ * 不动 Key：地址和聊天完全相同时，resolveKey 会直接复用聊天那把（见 adapters/vision.js），
+ * 这样不用把同一把密钥在 settings.json 里存两遍。
+ */
+function visionFromChat(config) {
+  const rt = resolveRuntime(config);
+  const preset = rt.preset || PROVIDERS.custom;
+  const list = preset.visionModels || [];
+  const current = resolveVisionConfig(config) || {};
+  // 聊天模型自己能看图就抄它；否则用这家服务商的预设视觉模型；再没有才沿用当前的，
+  // 免得「聊天模型是纯文本、这家又没有视觉模型」时抄出一个空模型。
+  const model = list.includes(rt.model) ? rt.model : (list[0] || String(current.model || '').trim());
+  if (!model) {
+    throw new Error('聊天的模型不能看图，这家服务商也没有预设视觉模型：先把「模型」填一个看图模型名再复制');
+  }
+  return { baseUrl: rt.baseUrl, model };
+}
+
 async function applySettings(runtime, body) {
   const { config, llm } = runtime;
   const patch = {};
@@ -184,12 +229,15 @@ async function applySettings(runtime, body) {
     const nextModel = patch.model || current.model;
     const nextPreset = PROVIDERS[nextProvider] || PROVIDERS.custom;
     const savedSettings = loadSettings(config);
+    // 「从聊天复制」优先于手填：一键把地址/模型搬过来，之后照样能在界面上改
+    const fromChat = body.visionCopyFromChat === true ? visionFromChat(config) : null;
     const vp = decideVisionPatch({
       preset: nextPreset,
       nextModel,
       saved: savedSettings,
-      manualValue: typeof body.visionModel === 'string' ? body.visionModel : null,
-      manualProvider: typeof body.visionProvider === 'string' ? body.visionProvider : null,
+      manualValue: fromChat ? fromChat.model : (typeof body.visionModel === 'string' ? body.visionModel : null),
+      manualProvider: fromChat ? 'custom' : (typeof body.visionProvider === 'string' ? body.visionProvider : null),
+      manualBaseUrl: fromChat ? fromChat.baseUrl : (typeof body.visionBaseUrl === 'string' ? body.visionBaseUrl : null),
     });
     if (vp) Object.assign(patch, vp);
   }
@@ -274,4 +322,4 @@ async function applySettings(runtime, body) {
   };
 }
 
-module.exports = { getSettings, applySettings, decideVisionPatch };
+module.exports = { getSettings, applySettings, decideVisionPatch, visionFromChat };

@@ -19,7 +19,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const { PROVIDERS, resolveVisionConfig, loadConfig } = require('../src/infra/config');
-const { decideVisionPatch } = require('../src/services/settings');
+const { decideVisionPatch, visionFromChat } = require('../src/services/settings');
 const vision = require('../src/adapters/vision');
 
 function tempRoot(settings) {
@@ -275,6 +275,104 @@ test('看图服务商下拉：手动选别家时记下 visionProvider 和它的�
     () => decideVisionPatch({ preset: PROVIDERS.deepseek, nextModel: 'deepseek-flash', saved: {}, manualValue: '', manualProvider: 'nope' }),
     /看不懂|不认识/
   );
+});
+
+/* ---------------- 自定义看图接口（自己填 base_url） ---------------- */
+
+test('自定义看图接口：地址和模型都按填的存下来', () => {
+  const patch = decideVisionPatch({
+    preset: ZHIPU,
+    nextModel: 'glm-4.7-flash',
+    saved: {},
+    manualProvider: 'custom',
+    manualValue: 'qwen2.5vl:7b',
+    manualBaseUrl: 'http://127.0.0.1:8000/v1',
+  });
+  assert.equal(patch.visionProvider, 'custom');
+  assert.equal(patch.visionModel, 'qwen2.5vl:7b');
+  assert.equal(patch.visionBaseUrl, 'http://127.0.0.1:8000/v1');
+  assert.equal(patch.visionManual, true, '自定义接口就是手动指定，别再被聊天模型带着跑');
+  assert.equal(patch.visionAuto, false);
+});
+
+test('自定义看图接口：缺地址 / 缺模型 / 地址不合法都拒绝，不写半个配置', () => {
+  assert.throws(
+    () => decideVisionPatch({ preset: ZHIPU, nextModel: 'glm-4.7-flash', saved: {}, manualProvider: 'custom', manualValue: 'qwen2.5vl:7b' }),
+    /接口地址/
+  );
+  assert.throws(
+    () => decideVisionPatch({ preset: ZHIPU, nextModel: '', saved: {}, manualProvider: 'custom', manualValue: '', manualBaseUrl: 'https://api.example.com/v1' }),
+    /模型名/
+  );
+  assert.throws(
+    () => decideVisionPatch({ preset: ZHIPU, nextModel: 'x', saved: {}, manualProvider: 'custom', manualValue: 'mymodel', manualBaseUrl: 'ftp://example.com' }),
+    /http/
+  );
+});
+
+test('自定义看图接口：只改模型时沿用已经存下的地址', () => {
+  const patch = decideVisionPatch({
+    preset: ZHIPU,
+    nextModel: 'glm-4.7-flash',
+    saved: { visionProvider: 'custom', visionBaseUrl: 'https://relay.example.com/v1' },
+    manualProvider: 'custom',
+    manualValue: 'gpt-4o-mini',
+  });
+  assert.equal(patch.visionBaseUrl, 'https://relay.example.com/v1');
+});
+
+test('自定义接口和聊天同一地址时复用聊天那把 Key（不用把密钥存两遍）', () => {
+  const dir = tempRoot({
+    provider: 'deepseek',
+    keys: { deepseek: 'ds-key-12345678' },
+    visionProvider: 'custom',
+    visionManual: true,
+    visionAuto: false,
+    visionModel: 'deepseek-flash',
+    visionBaseUrl: 'https://api.deepseek.com/',
+  });
+  const cfg = loadConfig({ root: dir, env: {} });
+  assert.equal(vision.resolveKey(cfg), 'ds-key-12345678');
+  assert.equal(vision.status(cfg).configured, true);
+  assert.equal(vision.status(cfg).custom, true);
+  cleanup(dir);
+});
+
+test('自定义接口换到别家地址时不借用聊天 Key（避免把 Key 发给陌生地址）', () => {
+  const dir = tempRoot({
+    provider: 'deepseek',
+    keys: { deepseek: 'ds-key-12345678' },
+    visionProvider: 'custom',
+    visionManual: true,
+    visionAuto: false,
+    visionModel: 'glm-4.6v-flash',
+    visionBaseUrl: 'https://api.example.com/v1',
+  });
+  const cfg = loadConfig({ root: dir, env: {} });
+  assert.equal(vision.resolveKey(cfg), '');
+  assert.equal(vision.status(cfg).configured, false);
+  cleanup(dir);
+});
+
+test('「从聊天复制」：抄聊天在用的地址，模型不能看图时换成这家服务商的视觉模型', () => {
+  const dir = tempRoot({
+    provider: 'deepseek',
+    keys: { deepseek: 'ds-key-12345678' },
+    model: 'deepseek-flash',
+    baseUrl: 'https://api.deepseek.com',
+  });
+  const cfg = loadConfig({ root: dir, env: {} });
+  const picked = visionFromChat(cfg);
+  assert.equal(picked.baseUrl, 'https://api.deepseek.com');
+  assert.equal(picked.model, 'deepseek-flash');
+  cleanup(dir);
+
+  // 聊天模型是纯文本的 v4-pro：要抄地址，但模型得换成能看图的
+  const dir2 = tempRoot({ provider: 'deepseek', model: 'deepseek-v4-pro', baseUrl: 'https://api.deepseek.com' });
+  const cfg2 = loadConfig({ root: dir2, env: {} });
+  assert.equal(visionFromChat(cfg2).model, PROVIDERS.deepseek.visionModels[0]);
+  assert.equal(visionFromChat(cfg2).baseUrl, 'https://api.deepseek.com');
+  cleanup(dir2);
 });
 
 /* ---------------- 看图接口的失败提示 ---------------- */

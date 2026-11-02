@@ -479,7 +479,9 @@ function resolveVisionConfig(cfg) {
   // manual=true 表示用户自己选过看图模型；false 表示「自动跟随聊天模型」。
   // 自动跟随时 visionModel 也有值，所以要看 visionManual 这个显式标记；
   // 没有这个标记的老设置（只写了 visionModel）按手动处理。
-  const manual = settings.visionManual === true || (hasModel && settings.visionManual === undefined);
+  // 自定义接口（visionProvider=custom）天然是手动：地址和模型都是用户自己填的。
+  const customVision = settings.visionAuto !== true && String(settings.visionProvider || '').trim() === 'custom';
+  const manual = customVision || settings.visionManual === true || (hasModel && settings.visionManual === undefined);
   let model = String(settings.visionModel || v.model || 'glm-4.6v-flash').trim();
   let baseUrl = String(settings.visionBaseUrl || v.baseUrl || 'https://open.bigmodel.cn/api/paas/v4').trim();
   let auto = settings.visionAuto === true;
