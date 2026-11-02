@@ -9,7 +9,7 @@
  *
  * system prompt 不占对话预算（dialogueBudget），但单轮硬上限是
  * systemTokens + dialogueBudget <= hardTotalTokens，所以人设上限是
- * 32,000 - 当前对话预算（默认 5,500 → 26,500）。
+ * 64,000 - 当前对话预算（默认 5,500 → 58,500）。
  */
 const persona = require('./index');
 const { LIMITS } = require('../memory/constants');

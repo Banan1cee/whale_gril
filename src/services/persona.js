@@ -3,6 +3,7 @@
 const { saveSettings } = require('../infra/config');
 const personaStore = require('../persona/store');
 const { checkPersonaTokens, PERSONA_MAX_TOKENS } = require('../persona/tokenCheck');
+const { LIMITS } = require('../memory/constants');
 
 /* ---------------- 人设调教（浏览器表单用） ---------------- */
 
@@ -43,7 +44,7 @@ async function applyPersonaPatch(runtime, body) {
     return {
       ok: false,
       error: `人设太长：约 ${tokenCheck.tokens} token，超过上限 ${PERSONA_MAX_TOKENS}。`
-        + '单人设（system）不计入对话预算，但单轮合计不能超过 32,000 token，请精简设定或自定义提示词。',
+        + `单人设（system）不计入对话预算，但单轮合计不能超过 ${LIMITS.hardTotalTokens.toLocaleString('en-US')} token，请精简设定或自定义提示词。`,
       tokenCheck,
     };
   }

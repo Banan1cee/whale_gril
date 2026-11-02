@@ -9,7 +9,7 @@
  *   estimatedInputTokens = systemTokens + dialogueBudget
  *
  * system prompt 不参与“总预算”，也不会因为变大去挤 recent/memory。
- * 只有 estimatedInputTokens > hardTotalTokens(32,000) 才拒绝，且必须显式报错，不静默截断。
+ * 只有 estimatedInputTokens > hardTotalTokens(64,000) 才拒绝，且必须显式报错，不静默截断。
  */
 const { LIMITS } = require('./constants');
 const { estimateTokens } = require('./tokens');

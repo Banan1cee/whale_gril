@@ -17,8 +17,8 @@ function runtimeWith(llm, configPatch = {}) {
   return { config, llm, logger: null };
 }
 
-test('人设上限 = hardTotalTokens - dialogueBudget = 26,500', () => {
-  assert.equal(PERSONA_MAX_TOKENS, 26500);
+test('人设上限 = hardTotalTokens - dialogueBudget = 58,500', () => {
+  assert.equal(PERSONA_MAX_TOKENS, 58500);
   assert.equal(PERSONA_MAX_TOKENS, LIMITS.hardTotalTokens - LIMITS.dialogueBudget);
 });
 
@@ -60,7 +60,7 @@ test('官方计数超上限：overLimit=true', async () => {
     isMock: false,
     provider: 'deepseek',
     model: 'deepseek-chat',
-    async countPromptTokens() { return { tokens: 30000 }; },
+    async countPromptTokens() { return { tokens: 60000 }; },
   });
   const check = await checkPersonaTokens(runtime, {});
   assert.equal(check.overLimit, true);

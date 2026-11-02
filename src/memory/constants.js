@@ -10,7 +10,9 @@ const LIMITS = Object.freeze({
   // 对话预算（不含 system prompt）：memory 900 + summary 900 + recent 3200 + reserve 500
   dialogueBudget: 5500,
   // 只有 system + dialogueBudget 超过这个数才拒绝（不再有 7,500 总预算 / 2,000 system 上限）
-  hardTotalTokens: 32000,
+  // 2026-11 从 32,000 提到 64,000：32k 下 comfort 人设（1,800）没问题，但想写几万字设定的
+  // 一保存就被顶回来；64k ≈ 10 万汉字人设空间，单轮最贵也就 ¥0.07（谷时、全未命中）。
+  hardTotalTokens: 64000,
   memoryTokens: 900,
   summaryTokens: 900,
   recentMaxTokens: 3200,

@@ -803,7 +803,7 @@ class Bot {
 
     // 预算：system 只测量，不裁剪；对话预算默认 5,500（memory+summary+recent+reserve），
     // 启动器「高级模式 → 高级 → 对话预算」改的是 config.memory.dialogueBudget。
-    // 只有 system + dialogue 超过 32,000 才拒绝，且明确报错，不静默截断。
+    // 只有 system + dialogue 超过 64,000 才拒绝，且明确报错，不静默截断。
     let promptBudget;
     try {
       promptBudget = memoryBudget.assertWithinHardLimit(memoryBudget.buildBudget(system, {

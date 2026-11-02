@@ -2,6 +2,8 @@
 data/
 config.json
 wechatauto_logs/
+# 启动器更新器的工作备份（release.json / whale-http.js），属于运行时数据
+backup/
 wechatauto_db/
 
 # 包内自带的 Node + Python 运行时（发行包用，不入库；setup-runtime.ps1 装出来的）
