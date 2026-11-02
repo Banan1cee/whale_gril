@@ -45,6 +45,16 @@ namespace WhaleLauncher.Views
         };
 
         private const int ViewCap = 3000;
+        // 后台通道打字的编码（写进 config.json 的 wechat.bgSend.charMode）。
+        // 存的还是 auto/utf16/gbk 三个稳定值，界面上换成看得懂的说法：
+        // 版本号认不出时用户得自己选，光写 auto/gbk 没人知道该选哪个。
+        private static readonly string[] CharModeValues = { "auto", "utf16", "gbk" };
+        private static readonly string[] CharModeLabels =
+        {
+            "自动（按微信版本）",
+            "UTF-16（微信 4.2 及以上）",
+            "GBK（微信 4.1 及以前）",
+        };
         private readonly List<ConsoleRow> _all = new List<ConsoleRow>(ViewCap + 200);
         private readonly ObservableCollection<ConsoleRow> _view = new ObservableCollection<ConsoleRow>();
         private readonly List<ConsoleRow> _pending = new List<ConsoleRow>();
@@ -418,10 +428,9 @@ namespace WhaleLauncher.Views
                 }
                 if (!TxtCharGap.IsKeyboardFocusWithin) TxtCharGap.Text = charGap.ToString();
                 CmbCharMode.Items.Clear();
-                CmbCharMode.Items.Add("auto");
-                CmbCharMode.Items.Add("utf16");
-                CmbCharMode.Items.Add("gbk");
-                CmbCharMode.SelectedItem = charMode;
+                foreach (var label in CharModeLabels) CmbCharMode.Items.Add(label);
+                var modeIndex = Array.IndexOf(CharModeValues, charMode);
+                CmbCharMode.SelectedIndex = modeIndex >= 0 ? modeIndex : 0;
                 CmbSend.Items.Clear();
                 CmbSend.Items.Add("自动：后台优先，失败回前台");
                 CmbSend.Items.Add("仅前台：剪贴板粘贴");
@@ -501,7 +510,7 @@ namespace WhaleLauncher.Views
             if (int.TryParse((TxtCharGap.Text ?? "").Trim(), out var g)) gap = Math.Clamp(g, 20, 80);
             else if ((TxtCharGap.Text ?? "").Trim().Length > 0) TxtCharGap.Text = gap.ToString();
 
-            var mode = CmbCharMode.SelectedItem as string ?? "auto";
+            var mode = CharModeValues[Math.Max(0, Math.Min(CmbCharMode.SelectedIndex, CharModeValues.Length - 1))];
             await PatchAsync("{\"wechat\":{"
                 + "\"account\":\"" + Api.Esc(TxtAccount.Text.Trim()) + "\","
                 + "\"bgSend\":{\"charMode\":\"" + Api.Esc(mode) + "\",\"charGapMs\":" + gap + "}}}");

@@ -26,6 +26,17 @@ module.exports = function register(router) {
       }
     }
     const probe = await runtime.llm.probe();
-    return json(res, 200, { ok: probe.ok, probe });
+    if (!probe.ok) {
+      // 启动器只认顶层 error 字段；只回 probe 对象的话它拿不到文案，
+      // 会把整段原始 JSON 当提示贴出来（用户看到的就是一串看不懂的字符）。
+      const detail = String(probe.detail || '').trim();
+      const message = String(probe.message || '连接测试没通过').trim();
+      return json(res, 200, {
+        ok: false,
+        error: detail && !message.includes(detail) ? message + '（原始错误：' + detail.slice(0, 200) + '）' : message,
+        probe,
+      });
+    }
+    return json(res, 200, { ok: true, probe });
   });
 };

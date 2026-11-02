@@ -85,6 +85,9 @@ const FIELDS = {
   'wechat.accountGuard': { type: 'bool' },
   'wechat.bgSend.enabled': { type: 'bool' },
   'wechat.bgSend.charGapMs': { type: 'int', min: 20, max: 80 },
+  // 后台通道 WM_CHAR 的编码语义：4.1 及以前按 GBK 字节、4.2+ 按 UTF-16 码元。
+  // auto = 按版本自动；版本识别不出来时可以在「微信桥接」页手动钉死。
+  'wechat.bgSend.charMode': { type: 'enum', values: ['auto', 'utf16', 'gbk'] },
   'wechat.bgSend.verify': { type: 'bool' },
   'wechat.bgSend.fallbackToForeground': { type: 'bool' },
   'wechat.bgSend.stripUnencodable': { type: 'bool' },
@@ -113,6 +116,8 @@ function describe(expected) {
       return 'true / false';
     case 'string':
       return '字符串';
+    case 'enum':
+      return `以下之一：${(expected.values || []).join(' / ')}`;
     default:
       return expected.type;
   }
@@ -140,6 +145,14 @@ function checkValue(value, spec) {
     if (spec.min !== undefined && n < spec.min) return `不能小于 ${spec.min}（实际 ${n}）`;
     if (spec.max !== undefined && n > spec.max) return `不能大于 ${spec.max}（实际 ${n}）`;
     return null;
+  }
+  if (spec.type === 'enum') {
+    // 以前 FIELDS 里写了 enum，但 checkValue 没有这个分支，枚举字段其实从没校验过：
+    // 填错值照样「保存成功」，运行时再被默认值吃掉。现在照 values 白名单严格比。
+    const values = Array.isArray(spec.values) ? spec.values : [];
+    const text = typeof value === 'string' ? value : String(value);
+    if (values.includes(text)) return null;
+    return `只能是 ${values.join(' / ')}，实际是 ${JSON.stringify(value)}`;
   }
   if (spec.type === 'string') {
     if (typeof value !== 'string') return `应该是字符串，实际是 ${JSON.stringify(value)}`;

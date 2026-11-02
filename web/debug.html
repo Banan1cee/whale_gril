@@ -281,7 +281,7 @@ const META = {
   'admin.spell': ['魔咒口令', '在微信里发这段口令可获得管理员权限；留空 = 关闭'],
   'admin.minutes': ['管理员有效期（分钟）', ''],
   'admin.allowAll': ['谁发口令都给权限', '关 = 只有主人发才给'],
-  'wechat.bgSend.charMode': ['后台通道打字编码', 'auto = 按微信版本自动（4.2+ 用 UTF-16 码元，老版本用 GBK 字节）；发出来乱码时先看这里'],
+  'wechat.bgSend.charMode': ['后台通道打字编码', 'auto = 按微信版本自动（4.2+ 用 UTF-16 码元，4.1 及以前用 GBK 字节）；认不出版本就是 auto 也不会乱换。中文发出去是乱码时手动选：4.1.x 选 gbk，4.2+ 选 utf16'],
   'vision.apiKey': ['看图接口密钥', '默认智谱 GLM-4V-Flash（免费）；留空 = 不改'],
   'vision.baseUrl': ['看图接口地址', ''],
   'vision.model': ['看图模型名', ''],

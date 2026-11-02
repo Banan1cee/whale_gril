@@ -13,7 +13,7 @@ const { resolveRuntime, maskKey } = require('../infra/config');
 const FRIENDLY = {
   nokey: '呜…人家还没拿到深海的钥匙（API Key），去右上角「设置」里填一下吧 (｡•́︿•̀｡)',
   401: '呜…人家的深海钥匙（API Key）好像不对，去设置里换一把吧 (´･_･`)',
-  402: '深海算力余额用完啦…去服务商那边充值一下下嘛',
+  402: '服务商说余额不足（HTTP 402）。DeepSeek 要先充值才能用；想先用免费额度，可以在「模型服务」里换成智谱 GLM-4.6V-Flash 或千问。',
   403: '这扇门人家推不开（403），可能是 Key 没权限哦',
   429: '这家的额度/频率用完了（HTTP 429）。千问常见是免费额度用完，换 qwen3.8-flash 或 qwen3.7-flash 试试；别的服务商就是额度或限流。',
   404: '这个模型名服务商用不了（HTTP 404）。千问的话换成 qwen3.8-flash / qwen3.7-plus / qwen3.8-max 之一。',

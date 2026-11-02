@@ -41,7 +41,8 @@ function normalizeEmotion(value) {
 }
 const EXTS = ['.gif', '.png', '.jpg', '.jpeg', '.webp'];
 const MAX_FILE_BYTES = 64 * 1024 * 1024;   // 只防内存炸，不是业务限制
-const MAX_UPLOAD_FILES = 50;
+const MAX_UPLOAD_BYTES = 4 * 1024 * 1024;   // 单张上传上限，与启动器/README 对齐
+const MAX_UPLOAD_FILES = 5;
 const MAX_FILES = 5000;
 // 中文展示名 → 内部 key（模型可能直接写「傲娇」而不是 cute）
 const LABEL_TO_KEY = Object.freeze({ 傲娇: 'cute', 炸毛: 'angry', 开心: 'happy', 其他: 'happy' });
@@ -372,10 +373,10 @@ function upload(config, root, emotion, files) {
     let ext = path.extname(name).toLowerCase();
     if (!EXTS.includes(ext)) throw fail('只支持 GIF、PNG、JPG、WebP 图片');
     const data = item?.data;
-    if (typeof data !== 'string' || data.length > Math.ceil(MAX_FILE_BYTES / 3) * 4) throw fail('单张图片太大（上限 64 MB）', 413);
+    if (typeof data !== 'string' || data.length > Math.ceil(MAX_UPLOAD_BYTES / 3) * 4) throw fail('单张图片太大（上限 4 MB）', 413);
     if (!data.length || data.length % 4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(data)) throw fail('图片编码无效');
     const bytes = Buffer.from(data, 'base64');
-    if (!bytes.length || bytes.length > MAX_FILE_BYTES) throw fail('单张图片太大（上限 64 MB）', 413);
+    if (!bytes.length || bytes.length > MAX_UPLOAD_BYTES) throw fail('单张图片太大（上限 4 MB）', 413);
     if (bytes.toString('base64') !== data) throw fail('图片编码无效');
     const type = imageType(bytes);
     if (!type || (ext === '.jpeg' ? '.jpg' : ext) !== type) throw fail('图片内容与格式不匹配或图片已损坏');
@@ -406,6 +407,6 @@ function upload(config, root, emotion, files) {
   }
   return uploaded;
 }
-module.exports = { EMOTIONS, EMOTION_LABELS, EXTRA_PREFIX, cleanCategoryLabel, extraKey, hasCategory, readExtraCategories, writeExtraCategories, categoryFile, normalizeEmotion, categoryFromName, promptCategories, GENERIC, EXTS, MAX_FILE_BYTES, MAX_UPLOAD_FILES,
+module.exports = { EMOTIONS, EMOTION_LABELS, EXTRA_PREFIX, cleanCategoryLabel, extraKey, hasCategory, readExtraCategories, writeExtraCategories, categoryFile, normalizeEmotion, categoryFromName, promptCategories, GENERIC, EXTS, MAX_FILE_BYTES, MAX_UPLOAD_BYTES, MAX_UPLOAD_FILES,
   hasEmotion, resolveImage, safeDirectory, migrateLegacy, ensureBuiltinDirs, stickerDir, regularFile, listImages, categoryImages, imagesFor, anyImages, isOn,
   choose, pick, isStickerRequest, imageType, upload };

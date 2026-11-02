@@ -81,3 +81,23 @@ test('一批里有一个非法值，整批都不写（不会改一半）', () =>
   assert.equal(fs.readFileSync(configFile, 'utf8'), before);
   cleanup();
 });
+
+/* ---------------- 微信桥接：后台通道编码 ---------------- */
+
+test('编码 charMode 是受校验的枚举值：auto / utf16 / gbk', () => {
+  assert.deepEqual(validate({ wechat: { bgSend: { charMode: 'auto' } } }), []);
+  assert.deepEqual(validate({ wechat: { bgSend: { charMode: 'gbk' } } }), []);
+  const errors = validate({ wechat: { bgSend: { charMode: 'utf8' } } });
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].path, 'wechat.bgSend.charMode');
+  assert.match(errors[0].message, /auto/);
+});
+
+test('启动器桥接页改编码能真的写进 config.json（以前没有 schema 条目）', () => {
+  const { runtime, configFile, cleanup } = makeRuntime();
+  const res = applyConfigPatch(runtime, { wechat: { bgSend: { charMode: 'gbk' } } });
+  assert.deepEqual(res.changed, ['wechat.bgSend.charMode']);
+  assert.equal(JSON.parse(fs.readFileSync(configFile, 'utf8')).wechat.bgSend.charMode, 'gbk');
+  assert.throws(() => applyConfigPatch(runtime, { wechat: { bgSend: { charMode: '乱码' } } }), /charMode/);
+  cleanup();
+});

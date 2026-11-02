@@ -99,13 +99,17 @@ class StickerService {
   plan(msg, category = '') {
     if (!this.reconcile() || msg?.platform !== 'wechat' || !msg.chatId) return null;
     const key = `wechat:${msg.chatId}`;
+    const chatName = msg.chatTitle || msg.chatId;
     // No cooldown after a completed send. An in-flight job remains exclusive until
     // ACK or the 90s expiry; the old 45s bypass could queue two sends for one chat.
-    if ([...this.jobs.values()].some((j) => j.key === key && ACTIVE.has(j.status))) return null;
+    // 同一会话只允许一条在飞任务：既比会话 key，也比会话名。
+    // 手动排队的测试任务 key 为空，只比 key 挡不住它。
+    if ([...this.jobs.values()].some(
+      (j) => ACTIVE.has(j.status) && (j.key === key || j.chat === chatName))) return null;
     const hit = stickers.pick({ config: this.config, root: this.config.root, category,
       recent: this.recent.get(key) || [], rng: this.rng });
     if (!hit) return null;
-    const added = this.add(hit, msg.chatTitle || msg.chatId, msg.chatId, key, 'reserved');
+    const added = this.add(hit, chatName, msg.chatId, key, 'reserved');
     const job = this.jobs.get(added.id);
     // 会话 key 和聊天记录一致（wechat:u:/wechat:g:），ack 回来才写得到同一段上下文
     if (job) job.sessionKey = `wechat:${msg.chatType === 'group' ? 'g' : 'u'}:${String(msg.chatId).slice(0, 120)}`;
