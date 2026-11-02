@@ -86,7 +86,9 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopico
 
 [Run]
 Filename: "{app}\runtime\vb-cable\VBCABLE_Setup_x64.exe"; Description: "安装 VB-CABLE 虚拟声卡（自动语音需要；VB-Audio Donationware）"; Verb: "runas"; Flags: shellexec postinstall skipifsilent unchecked; Check: FileExists(ExpandConstant('{app}\runtime\vb-cable\VBCABLE_Setup_x64.exe'))
-Filename: "{app}\{#AppExe}"; Description: "启动{#AppName}"; Flags: nowait postinstall skipifsilent
+; 启动器清单是 requireAdministrator：必须走 ShellExecuteEx 才会弹 UAC。
+; 用默认的 CreateProcess 直接拉会失败：code 740 = ERROR_ELEVATION_REQUIRED。
+Filename: "{app}\{#AppExe}"; Description: "启动{#AppName}"; Verb: "runas"; Flags: shellexec postinstall skipifsilent
 
 [UninstallDelete]
 ; 安装目录内的 data 属于用户数据：卸载时保留，只清运行时垃圾
