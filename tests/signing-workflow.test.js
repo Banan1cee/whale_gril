@@ -69,8 +69,8 @@ test('两轮签名都要读本次运行的 artifact（不允许本地签名顶�
 test('artifact configuration 的根是 <pe-file>，和裸 exe 上传一致', () => {
   const dir = path.join(root, '.github/signpath');
   for (const [file, pattern] of [
-    ['whale-launcher.xml', /<pe-file path="WhaleLauncher\.exe">\s*<authenticode-sign \/>/],
-    ['whale-setup.xml', /<pe-file path="whale-girl-\*-setup\.exe">\s*<authenticode-sign \/>/],
+    ['whale-launcher.xml', /<pe-file path="WhaleLauncher\.exe"[\s\S]*?<authenticode-sign \/>/],
+    ['whale-setup.xml', /<pe-file path="whale-girl-\*-setup\.exe"[\s\S]*?<authenticode-sign \/>/],
   ]) {
     const full = path.join(dir, file);
     assert.ok(fs.existsSync(full), `缺少 ${file}`);
@@ -79,6 +79,59 @@ test('artifact configuration 的根是 <pe-file>，和裸 exe 上传一致', () 
     assert.match(xml, pattern, `${file} 里 pe-file 路径没对上`);
     assert.doesNotMatch(xml, /<zip-file/, `${file} 是裸 exe，不能写 zip-file`);
   }
+});
+
+test('artifact configuration 带 metadata restrictions，版本号从 parameters 进来', () => {
+  // SignPath Foundation 要求用 file metadata restrictions 约束产品名/版本，
+  // 否则审核不过；版本每次构建必须一致，所以走 ${version} 参数而不是写死。
+  const dir = path.join(root, '.github/signpath');
+  for (const file of ['whale-launcher.xml', 'whale-setup.xml']) {
+    const xml = fs.readFileSync(path.join(dir, file), 'utf8');
+    assert.match(xml, /<parameter name="version" required="true" \/>/, `${file} 缺 version 参数定义`);
+    assert.match(xml, /product-name="鲸鲸"/, `${file} 缺 product-name 约束`);
+    assert.match(xml, /company-name="鲸鲸"/, `${file} 缺 company-name 约束`);
+    assert.match(xml, /product-version="\$\{version\}"/, `${file} 缺 product-version 约束`);
+  }
+  // 两轮签名都要把 version 传进去
+  assert.equal((wf.match(/parameters: \|\n\s+version: \$\{\{ toJSON\(env\.version\) \}\}/g) || []).length, 2,
+    '两轮签名请求都要传 version 参数');
+});
+
+test('仓库首页和 CODE_SIGNING_POLICY.md 满足 SignPath 的「代码签名策略」要求', () => {
+  const policyPath = path.join(root, 'CODE_SIGNING_POLICY.md');
+  assert.ok(fs.existsSync(policyPath), '缺少 CODE_SIGNING_POLICY.md（SignPath 审核硬要求）');
+  const policy = fs.readFileSync(policyPath, 'utf8');
+  assert.match(policy, /Free code signing provided by \[SignPath\.io\]\(https:\/\/about\.signpath\.io\)/,
+    '策略里要有 SignPath 要求的原话');
+  assert.match(policy, /certificate by \[SignPath Foundation\]\(https:\/\/signpath\.org\)/);
+  for (const role of ['Authors', 'Reviewers', 'Approvers']) {
+    assert.ok(policy.includes(role), `策略里要写清 ${role} 角色`);
+  }
+  assert.match(policy, /## 隐私声明/, '策略里要有隐私声明');
+  assert.match(policy, /Get-AuthenticodeSignature/, '策略里要写怎么验证签名');
+
+  const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
+  assert.match(readme, /## 代码签名（Code signing policy）/, 'README 首页要有 Code signing policy 段落');
+  assert.match(readme, /CODE_SIGNING_POLICY\.md/, 'README 要链到策略文件');
+  assert.match(readme, /Free code signing provided by/, 'README 也要带那句原话');
+});
+
+test('SignPath 申请表单要的三个页面都在仓库里', () => {
+  // 表单要 Homepage / Download / Privacy Policy 三个 URL，其中 Download 页面
+  // 必须写明「用了 SignPath Foundation 做签名」。
+  const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
+  assert.match(readme, /## 下载（Download）/, 'README 要有下载段落当 Homepage/Download 入口');
+  assert.match(readme, /PRIVACY\.md/, 'README 要链到隐私声明');
+
+  const download = fs.readFileSync(path.join(root, 'DOWNLOAD.md'), 'utf8');
+  assert.match(download, /SignPath Foundation/, '下载页必须写明用 SignPath Foundation 签名');
+  assert.match(download, /Free code signing provided by/);
+  assert.match(download, /github\.com\/Banan1cee\/whale_gril\/releases/, '下载页要给 Releases 链接');
+
+  const privacy = fs.readFileSync(path.join(root, 'PRIVACY.md'), 'utf8');
+  assert.match(privacy, /隐私声明/, '隐私声明要有标题');
+  assert.match(privacy, /遥测/, '隐私声明要说明有没有遥测');
+  assert.match(privacy, /data\\/, '隐私声明要写清本地数据放在哪');
 });
 
 test('文档写清了要配哪个 secret 和哪些变量', () => {
@@ -97,4 +150,20 @@ test('仓库里不留自签名/本机签名工具：对外只认公开受信任�
   }
   const doc = fs.readFileSync(path.join(root, 'docs/打包与签名.md'), 'utf8');
   assert.doesNotMatch(doc, /一键签名|make-dev-cert|sign-local/, '文档不该再教怎么自签名');
+});
+
+test('安装烟测不把「随包 .NET 安装包被安装器删掉」当成缺文件', () => {
+  // 本机已有 .NET 10 桌面运行时的时候，installer 会删掉那个 57MB 的安装包（设计如此）。
+  // runner 上装了 .NET 10 SDK，所以这一步几乎每次都会删 —— 烟测必须区分
+  // 「被删了」和「压根没进包」，否则流水线每次都红。
+  const expectBlock = wf.slice(wf.indexOf('$expect = @('), wf.indexOf('$missing = $expect'));
+  assert.doesNotMatch(expectBlock, /windowsdesktop-runtime-10-win-x64\.exe/,
+    '随包 .NET 安装包不能再放在必检清单里（它会被安装器删掉）');
+  assert.match(wf, /\$dotnetInstaller = Join-Path \$dir 'runtime\\dotnet\\windowsdesktop-runtime-10-win-x64\.exe'/,
+    '要单独检查随包 .NET 安装包');
+  assert.match(wf, /Microsoft\.WindowsDesktop\.App/, '缺文件时要看本机有没有 .NET 10 桌面运行时');
+  assert.match(wf, /压根没进包/, '两种情况要分开报错');
+
+  const doc = fs.readFileSync(path.join(root, 'docs/打包与签名.md'), 'utf8');
+  assert.match(doc, /被安装器删掉/, '文档要写成「在，或者被删且本机已有运行时」');
 });

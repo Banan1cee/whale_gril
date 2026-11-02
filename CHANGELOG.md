@@ -2,6 +2,35 @@
 
 ## 4.0
 
+### 签名 · 按 SignPath Foundation 的要求补齐「代码签名策略 + 元数据约束」
+
+**SignPath 审核不只看代码：仓库首页要有签名策略，artifact 配置要有元数据约束，缺一样就打回。**
+
+- 新增 `CODE_SIGNING_POLICY.md`：签哪些文件、什么时候签（tag 用 `release-signing`、测试分支用
+  `test-signing`）、团队角色（Authors / Reviewers / Approvers）、隐私声明（数据只发往用户自己配的
+  接口，无遥测）、怎么验证签名
+- `README.md` 新增「代码签名（Code signing policy）」段落，带上 SignPath 要求的那句原话
+  （Free code signing provided by SignPath.io, certificate by SignPath Foundation）并链到策略文件
+- `.github/signpath/` 两份 artifact configuration 补 **file metadata restrictions**：
+  `product-name` / `company-name` / `product-version` 会核对 exe 里的版本资源，对不上签不了；
+  版本号由 CI 通过签名请求的 `parameters: version` 传入，保证每次构建一致
+- 启动器版本信息收干净：`ProductVersion` 不再拼 git sha（`4.0.0+ae20f30…` → `4.0.0`），
+  否则元数据约束永远对不上；`FileVersion` 固定 `4.0.0.0`
+- 加测试钉住：策略文件存在且含三个角色、README 有该段落、artifact configuration 有这三条约束、
+  两轮签名都传 `version` 参数
+
+### 修复 · 安装烟测把「随包 .NET 安装包被安装器删掉」当成缺文件（CI 每次红）
+
+**跑一次 installer 就红在「安装后缺文件: runtime\dotnet\windowsdesktop-runtime-10-win-x64.exe」。**
+
+- 根因：安装器在 `CurStepChanged` 里发现本机已有 .NET 10 桌面运行时，就会删掉随包那个
+  57MB 的安装包（设计如此，用户目录里不该留它）；而烟测把它写死在必检清单里。
+  runner 上装了 .NET 10 SDK，所以这一步几乎每次都会删 —— 每次都判「缺文件」
+- 现在分两种情况：文件在就打印大小；不在就查
+  `C:\Program Files\dotnet\shared\Microsoft.WindowsDesktop.App\10.*`，
+  本机有运行时 = 被安装器删掉了（正常），本机也没有才判「压根没进包」
+- 加测试钉住：必检清单里不许再出现这个文件；文档「烟测查什么」同步改成分情况说明
+
 ### 图标 · 启动器换上了鲸鲸（右下角那只小人，左上角气泡裁掉）
 
 **以前启动器是没有图标的默认 exe 脸，任务栏、桌面快捷方式、安装包全长一个样。**
