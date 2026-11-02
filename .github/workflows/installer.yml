@@ -351,13 +351,29 @@ jobs:
             'runtime\node.exe',
             'runtime\python\python.exe',
             'runtime\python\python312.zip',
-            'runtime\manifest.json',
-            'runtime\dotnet\windowsdesktop-runtime-10-win-x64.exe'
+            'runtime\manifest.json'
           )
           $missing = $expect | Where-Object { -not (Test-Path (Join-Path $dir $_)) }
           if ($missing) {
             Write-Output "::error title=安装后缺文件::$($missing -join '、')"
             exit 1
+          }
+
+          # 随包的 .NET 运行时安装包：安装器发现本机已经有 .NET 10 桌面运行时，就会
+          # 把这个 57MB 的 exe 删掉（见 installer/whale.iss 的 CurStepChanged）。
+          # runner 上装了 .NET 10 SDK，所以这里经常是「文件不在」——不能直接当成失败，
+          # 要分清楚是「被安装器删掉了」还是「压根没进包」。
+          $dotnetInstaller = Join-Path $dir 'runtime\dotnet\windowsdesktop-runtime-10-win-x64.exe'
+          if (Test-Path $dotnetInstaller) {
+            Write-Output ("随包 .NET 运行时安装包在：{0:N1} MB" -f ((Get-Item $dotnetInstaller).Length / 1MB))
+          } else {
+            $runtime = @(Get-ChildItem 'C:\Program Files\dotnet\shared\Microsoft.WindowsDesktop.App' -Directory -ErrorAction SilentlyContinue |
+                Where-Object Name -match '^10\.' | Sort-Object Name)
+            if ($runtime.Count -eq 0) {
+              Write-Output '::error title=安装后缺文件::runtime\dotnet\windowsdesktop-runtime-10-win-x64.exe 不在，而且本机也没有 .NET 10 桌面运行时（说明它压根没进包）'
+              exit 1
+            }
+            Write-Output "随包 .NET 安装包已被安装器删除（本机已有 .NET 10 桌面运行时 $($runtime[-1].Name)），符合预期"
           }
           # wheelhouse 是构建缓存，文件必须一个都不进包。
           # 只查目录会误报：Inno 会按源树建出空目录（0 字节），那是无害的。

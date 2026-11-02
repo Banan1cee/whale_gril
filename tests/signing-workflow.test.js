@@ -98,3 +98,19 @@ test('仓库里不留自签名/本机签名工具：对外只认公开受信任�
   const doc = fs.readFileSync(path.join(root, 'docs/打包与签名.md'), 'utf8');
   assert.doesNotMatch(doc, /一键签名|make-dev-cert|sign-local/, '文档不该再教怎么自签名');
 });
+
+test('安装烟测不把「随包 .NET 安装包被安装器删掉」当成缺文件', () => {
+  // 本机已有 .NET 10 桌面运行时的时候，installer 会删掉那个 57MB 的安装包（设计如此）。
+  // runner 上装了 .NET 10 SDK，所以这一步几乎每次都会删 —— 烟测必须区分
+  // 「被删了」和「压根没进包」，否则流水线每次都红。
+  const expectBlock = wf.slice(wf.indexOf('$expect = @('), wf.indexOf('$missing = $expect'));
+  assert.doesNotMatch(expectBlock, /windowsdesktop-runtime-10-win-x64\.exe/,
+    '随包 .NET 安装包不能再放在必检清单里（它会被安装器删掉）');
+  assert.match(wf, /\$dotnetInstaller = Join-Path \$dir 'runtime\\dotnet\\windowsdesktop-runtime-10-win-x64\.exe'/,
+    '要单独检查随包 .NET 安装包');
+  assert.match(wf, /Microsoft\.WindowsDesktop\.App/, '缺文件时要看本机有没有 .NET 10 桌面运行时');
+  assert.match(wf, /压根没进包/, '两种情况要分开报错');
+
+  const doc = fs.readFileSync(path.join(root, 'docs/打包与签名.md'), 'utf8');
+  assert.match(doc, /被安装器删掉/, '文档要写成「在，或者被删且本机已有运行时」');
+});
