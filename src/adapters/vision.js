@@ -12,9 +12,13 @@
  *   5. 环境变量 ZHIPU_API_KEY / VISION_API_KEY
  */
 const fs = require('node:fs');
+const crypto = require('node:crypto');
 const http = require('node:http');
 const https = require('node:https');
 const { resolveVisionConfig, resolveRuntime, isLocalUrl, PROVIDERS } = require('../infra/config');
+
+/** OpenCode Go 要求的稳定会话号（和 src/llm/client.js 用同一套规则） */
+const VISION_SESSION = 'whale-girl-' + crypto.randomBytes(12).toString('hex');
 
 /** 64x64 纯色 PNG，用来做「测试看图」（不联网也能构造，不依赖外部资源） */
 const TEST_IMAGE = 'iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAeklEQVR4nO3PUQkAIBTAwBfRYAYzliH8OITBAtxm7fN1wwUNaEEDWtCAFjSgBQ1oQQNa0IAWNKAFDWhBA1rQgBY0oAUNaEEDWtCAFjSgBQ1oQQNa0IAWNKAFDWhBA1rQgBY0oAUNaEEDWtCAFjSgBQ1oQQNa0IAWPHYBzStBhzKy9ToAAAAASUVORK5CYII=';
@@ -128,6 +132,29 @@ const DEFAULT_PROMPT = [
   '总长度控制在 900 字以内；宁可条目短一点，也不要漏掉人和话。',
 ].join('\n');
 
+/**
+ * OpenCode Go（opencode.ai）的请求要求客户端自报身份 + 一个稳定会话号：
+ *   不带 UA → Cloudflare 直接拦（HTTP 403 error code 1010）；
+ *   带 UA 但缺会话头 → HTTP 400 "Request is missing x-opencode-session"。
+ * 聊天链路 src/llm/client.js 早就加了这两个头，看图这边漏了——表现就是
+ * 「聊天正常，但图片/表情包一直识别失败」。其它服务商（智谱 / DeepSeek /
+ * Ollama / 自建）原样返回，一个额外头都不加。
+ */
+function requestHeaders(url, headers) {
+  const next = { ...headers };
+  let hostname = '';
+  try {
+    hostname = new URL(url).hostname;
+  } catch {
+    return next;
+  }
+  if (/(^|\.)opencode\.ai$/i.test(hostname)) {
+    next['x-opencode-session'] = VISION_SESSION;
+    next['User-Agent'] = 'whale-girl/3.54';
+  }
+  return next;
+}
+
 function postJson(url, body, headers, timeoutMs = 30000) {
   return new Promise((resolve, reject) => {
     const payload = Buffer.from(JSON.stringify(body), 'utf8');
@@ -148,11 +175,11 @@ function postJson(url, body, headers, timeoutMs = 30000) {
         port: u.port || (isHttps ? 443 : 80),
         path: u.pathname + u.search,
         method: 'POST',
-        headers: {
+        headers: requestHeaders(url, {
           'Content-Type': 'application/json',
           'Content-Length': payload.length,
           ...headers,
-        },
+        }),
         timeout: timeoutMs,
       },
       (res) => {
@@ -269,4 +296,4 @@ async function describe(config, { imageBase64, mime = 'image/jpeg', prompt = '' 
   return String(text || '').trim();
 }
 
-module.exports = { describe, resolveKey, status, TEST_IMAGE, maskKey, sniffMime };
+module.exports = { describe, resolveKey, status, TEST_IMAGE, maskKey, sniffMime, requestHeaders };
