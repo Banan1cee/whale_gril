@@ -55,6 +55,20 @@ namespace WhaleLauncher
                     outRes.Ok = res.IsSuccessStatusCode && ok.ValueKind == JsonValueKind.True;
                 if (outRes.Root.ValueKind == JsonValueKind.Object && outRes.Root.TryGetProperty("error", out var er) && er.ValueKind == JsonValueKind.String)
                     outRes.Error = er.GetString() ?? "";
+                // 老内核（或别的接口）只在 probe 里放一句人话，没有顶层 error：
+                // 取出来显示，别让用户对着一整段原始 JSON 猜自己哪里错了。
+                if (outRes.Error.Length == 0 && outRes.Root.ValueKind == JsonValueKind.Object
+                    && outRes.Root.TryGetProperty("probe", out var probe) && probe.ValueKind == JsonValueKind.Object
+                    && probe.TryGetProperty("message", out var pm) && pm.ValueKind == JsonValueKind.String)
+                {
+                    outRes.Error = pm.GetString() ?? "";
+                    if (probe.TryGetProperty("detail", out var pd) && pd.ValueKind == JsonValueKind.String)
+                    {
+                        var detail = pd.GetString() ?? "";
+                        if (detail.Length > 0 && !outRes.Error.Contains(detail))
+                            outRes.Error += "（原始错误：" + (detail.Length > 200 ? detail.Substring(0, 200) : detail) + "）";
+                    }
+                }
             }
             catch
             {

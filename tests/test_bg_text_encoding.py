@@ -54,6 +54,21 @@ def test_mode_decision_threshold():
     assert bg_sender._version_tuple('4.2.0.9') >= (4, 2)
 
 
+def test_mode_from_versions_prefers_first_trusted():
+    # 微信 4.1.x：第一可信候选就是 4.1 → GBK，不能被后面残留的 4.2 目录带偏
+    assert bg_sender._mode_from_versions(['4.1.15.56', '4.2.0.9']) == 'gbk'
+    # 微信 4.2.x：exe 版本资源是 4.2 → UTF-16
+    assert bg_sender._mode_from_versions(['Weixin', '4.2.0.9', '']) == 'utf16'
+    # 全认不出来 = 保持老行为 GBK（由调用方兜底）
+    assert bg_sender._mode_from_versions(['Weixin', '', 'x']) == ''
+
+
+def test_exe_version_missing_file_is_empty():
+    # 读不到版本资源时不能抛异常，detect_char_mode 还要继续往下判断
+    assert bg_sender._exe_version('') == ''
+    assert bg_sender._exe_version('Z:\\definitely-not-here\\Weixin.exe') == ''
+
+
 def test_gbk_still_available():
     # 老版本分支不能因为这次改动坏掉
     payload, skipped = bg_sender.encode_gbk('鲸鲸')

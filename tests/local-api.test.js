@@ -251,6 +251,83 @@ test('云端 404 不换路径乱试（那是模型名不对）', () => {
   cleanup(root);
 });
 
+/* ---------------- 测试连接失败的提示 ---------------- */
+
+test('测试连接失败时顶层带 error 文案，启动器不会把原始 JSON 当提示', async () => {
+  const fake = http.createServer((req, res) => {
+    req.resume();
+    req.on('end', () => {
+      res.writeHead(401, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: { message: 'Invalid API key（密钥无效）', type: 'authentication_error' } }));
+    });
+  });
+  await new Promise((r) => fake.listen(0, '127.0.0.1', r));
+  const root = tempRoot({
+    config: { provider: 'custom', server: { port: 0, openBrowser: false } },
+    settings: {
+      provider: 'custom',
+      baseUrl: `http://127.0.0.1:${fake.address().port}/v1`,
+      model: 'm1',
+      apiKey: 'sk-1234567890',
+      mock: false,
+    },
+  });
+  const app = await bootServer(root);
+  try {
+    const res = await (await fetch(app.url + '/api/settings/test', { method: 'POST', body: '{}' })).json();
+    assert.equal(res.ok, false);
+    assert.equal(res.probe.ok, false);
+    assert.equal(typeof res.error, 'string');
+    assert.ok(res.error.length > 0, '失败必须给一句能看懂的话，不能只丢一个 probe 对象');
+    assert.ok(!res.error.trimStart().startsWith('{'), '不能把原始 JSON 当提示贴出去');
+    assert.match(res.error, /密钥/, '要带上服务商给的错误说明');
+  } finally {
+    await app.close();
+    await new Promise((r) => fake.close(r));
+    cleanup(root);
+  }
+});
+
+/* ---------------- 看图服务商（自动跟随 / 手动选一家） ---------------- */
+
+test('看图服务商：自动跟随 = 跟聊天那把；手动选智谱 = 记下服务商和接口地址', async () => {
+  const root = tempRoot({ config: { server: { port: 0, openBrowser: false } } });
+  const app = await bootServer(root);
+  try {
+    const auto = await (
+      await fetch(app.url + '/api/settings', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ provider: 'deepseek', baseUrl: 'https://api.deepseek.com', model: 'deepseek-flash', visionProvider: '', visionModel: '', mock: true }),
+      })
+    ).json();
+    assert.equal(auto.ok, true);
+    assert.equal(auto.settings.vision.auto, true, '自动跟随要标成 auto');
+    assert.equal(auto.settings.vision.manual, false);
+    assert.equal(auto.settings.vision.provider, 'deepseek', '自动时服务商应等于聊天服务商');
+
+    const manual = await (
+      await fetch(app.url + '/api/settings', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ visionProvider: 'zhipu', visionModel: 'glm-4.6v-flash' }),
+      })
+    ).json();
+    assert.equal(manual.ok, true);
+    assert.equal(manual.settings.vision.manual, true, '手动选服务商后不该再跟随');
+    assert.equal(manual.settings.vision.model, 'glm-4.6v-flash');
+    assert.equal(manual.settings.vision.provider, 'zhipu');
+    assert.match(manual.settings.vision.baseUrl, /bigmodel\.cn/);
+
+    const settings = JSON.parse(fs.readFileSync(path.join(root, 'data', 'settings.json'), 'utf8'));
+    assert.equal(settings.visionProvider, 'zhipu');
+    assert.equal(settings.visionManual, true);
+  } finally {
+    await app.close();
+    cleanup(root);
+  }
+});
+
 /* ---------------- 网页设置面板 ---------------- */
 
 test('网页设置：本地地址要能自己判免 Key，并把演示模式关掉（静态断言）', () => {

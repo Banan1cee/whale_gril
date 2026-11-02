@@ -114,8 +114,9 @@
                     <TextBlock Text="固定用哪个号" Style="{StaticResource Small}" VerticalAlignment="Center" Margin="0,0,6,0" />
                     <TextBox x:Name="TxtAccount" Width="170" VerticalAlignment="Center" LostFocus="OnSaveSendSettings"
                              ToolTip="填 wxid；留空 = 按最近活跃" />
-                    <TextBlock Text="编码" Style="{StaticResource Small}" VerticalAlignment="Center" Margin="16,0,6,0" />
-                    <ComboBox x:Name="CmbCharMode" Width="76" FontSize="12" VerticalAlignment="Center"
+                    <TextBlock Text="编码" Style="{StaticResource Small}" VerticalAlignment="Center" Margin="16,0,6,0"
+                               ToolTip="后台通道打字用的编码：微信 4.1 及以前选 GBK，4.2+ 选 UTF-16；识别不出版本时手动选" />
+                    <ComboBox x:Name="CmbCharMode" Width="196" FontSize="12" VerticalAlignment="Center"
                               SelectionChanged="OnCharModeChanged" />
                     <TextBlock Text="码元间隔" Style="{StaticResource Small}" VerticalAlignment="Center" Margin="16,0,6,0" />
                     <TextBox x:Name="TxtCharGap" Width="48" VerticalAlignment="Center" LostFocus="OnSaveSendSettings" />
@@ -126,6 +127,8 @@
                     <CheckBox x:Name="ChkVerify" Content="发送后回读确认" FontSize="12" Margin="18,0,0,0" Click="OnSaveSendOpt" />
                     <CheckBox x:Name="ChkStrip" Content="跳过 GBK 编不了的字符" FontSize="12" Margin="18,0,0,0" Click="OnSaveSendOpt" />
                 </WrapPanel>
+                <TextBlock x:Name="CharModeHint" Style="{StaticResource Small}" Margin="0,6,0,0"
+                           Text="中文发出去变乱码时改「编码」：微信 4.1 及以前选 GBK，4.2+ 选 UTF-16；「自动」靠版本号判断，认不出时不会自己换。" />
 
                 <TextBlock Text="权限与窗口" Style="{StaticResource Label}" Margin="0,10,0,6" />
                 <TextBlock x:Name="PermLine" Text="—" Style="{StaticResource Value}" FontSize="12"

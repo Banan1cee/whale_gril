@@ -842,8 +842,6 @@ namespace WhaleLauncher.Views
         }
 
         // ── 模型 / 看图（一张卡，两组用页签切换）────────────────────
-        private const string AutoVision = "自动（跟随聊天模型）";
-
         /// <summary>模型卡片里的标签都短，标签列收到 110 就够；再宽就是白条。</summary>
         private const double ModelLabel = 110;
 
@@ -932,6 +930,8 @@ namespace WhaleLauncher.Views
 
             // 两组控件先都建出来：换聊天模型时要同步刷新看图的提示和角标
             var items = new List<ProviderItem>();
+            var suppressAuto = false;           // 程序化改控件时别触发自动保存
+            var autoSaving = false;
             var cmb = new ComboBox { Height = 28, DisplayMemberPath = "Label", MinWidth = 320, HorizontalAlignment = HorizontalAlignment.Left };
             var baseUrl = new TextBox();
             var model = new ComboBox { Height = 28, IsEditable = true, MinWidth = 320, HorizontalAlignment = HorizontalAlignment.Left };
@@ -939,6 +939,11 @@ namespace WhaleLauncher.Views
             var mock = new CheckBox();
             var chatResult = new TextBlock { Style = (Style)FindResource("Small"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 0) };
 
+            // 看图：和聊天页一样的「服务商 + 模型」两个下拉。
+            // 服务商第一项是「自动跟随聊天模型」（默认）；只有选了具体服务商，
+            // 模型和下面的接口地址/超时/Key 才显示，否则整页只留「测一下」。
+            var visionProviders = new List<ProviderItem>();
+            var visionProvider = new ComboBox { Height = 28, DisplayMemberPath = "Label", MinWidth = 320, HorizontalAlignment = HorizontalAlignment.Left };
             var visionModel = new ComboBox { Height = 28, MinWidth = 320, HorizontalAlignment = HorizontalAlignment.Left };
             var visionTip = new TextBlock { Style = (Style)FindResource("Small"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 3, 0, 0) };
             var visionBox = new StackPanel();
@@ -948,65 +953,212 @@ namespace WhaleLauncher.Views
             var visionHint = new TextBlock { Style = (Style)FindResource("Small"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) };
             var visionEndpoint = new TextBlock { Style = (Style)FindResource("Small"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) };
             var visionResult = new TextBlock { Style = (Style)FindResource("Small"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 0) };
+            // 这些行要按「自动 / 手动」切显隐，所以在事件挂上之前先声明、下面再赋值。
+            FrameworkElement visionModelRow = null;
+            FrameworkElement visionTimeoutRow = null;
+            FrameworkElement visionKeyRow = null;
+            Button vsave = null;
 
-            void FillOptions(JsonElement pv)
+            JsonElement currentPreset = default;   // 当前服务商预设（判断「聊天模型自己能不能看图」用）
+
+            void FillChatOptions(JsonElement pv)
             {
+                currentPreset = pv;
                 var chat = new List<string>();
-                var sight = new List<string> { AutoVision };
-                if (pv.ValueKind == JsonValueKind.Object)
-                {
-                    if (pv.TryGetProperty("models", out var arr) && arr.ValueKind == JsonValueKind.Array)
-                        foreach (var it in arr.EnumerateArray())
-                            if (it.ValueKind == JsonValueKind.String) chat.Add(it.GetString());
-                    if (pv.TryGetProperty("visionModels", out var varr) && varr.ValueKind == JsonValueKind.Array)
-                        foreach (var it in varr.EnumerateArray())
-                            if (it.ValueKind == JsonValueKind.String) sight.Add(it.GetString());
-                }
+                if (pv.ValueKind == JsonValueKind.Object
+                    && pv.TryGetProperty("models", out var arr) && arr.ValueKind == JsonValueKind.Array)
+                    foreach (var it in arr.EnumerateArray())
+                        if (it.ValueKind == JsonValueKind.String) chat.Add(it.GetString());
                 model.ItemsSource = chat;
-                var keep = visionModel.SelectedItem as string;
-                visionModel.ItemsSource = sight;
-                if (keep != null && sight.Contains(keep)) visionModel.SelectedItem = keep;
-                else visionModel.SelectedItem = AutoVision;   // 换服务商后原来的钉值不在了，回自动
             }
 
-            void SyncVisionToChat()
+            // 看图模型和聊天模型用同一份选项：当前服务商的 models + visionModels。
+            // 选了哪家服务商，就列哪家的模型；「自动跟随」时不显示这一行。
+            void FillVisionModels(string providerKey)
+            {
+                var list = new List<string>();
+                if (_providers != null && !string.IsNullOrEmpty(providerKey)
+                    && _providers.TryGetValue(providerKey, out var pv) && pv.ValueKind == JsonValueKind.Object)
+                {
+                    void Add(JsonElement arr)
+                    {
+                        if (arr.ValueKind != JsonValueKind.Array) return;
+                        foreach (var it in arr.EnumerateArray())
+                            if (it.ValueKind == JsonValueKind.String)
+                            {
+                                var s = it.GetString();
+                                if (!string.IsNullOrWhiteSpace(s) && !list.Contains(s)) list.Add(s);
+                            }
+                    }
+                    if (pv.TryGetProperty("models", out var arr)) Add(arr);
+                    if (pv.TryGetProperty("visionModels", out var varr)) Add(varr);
+                }
+                var keep = visionModel.SelectedItem as string;
+                visionModel.ItemsSource = list;
+                if (!string.IsNullOrWhiteSpace(keep) && list.Contains(keep)) visionModel.SelectedItem = keep;
+                else if (list.Count == 0) visionModel.SelectedItem = null;
+                else visionModel.SelectedItem = list[0];
+            }
+
+            bool VisionIsAuto() => string.IsNullOrEmpty((visionProvider.SelectedItem as ProviderItem)?.Key);
+
+            void SyncVisionTip()
             {
                 var picked = model.SelectedItem as string ?? model.Text;
-                var capable = false;
-                if (visionModel.ItemsSource is List<string> sight && !string.IsNullOrWhiteSpace(picked))
+                if (VisionIsAuto())
                 {
-                    foreach (var s in sight)
-                        if (s == picked && s != AutoVision) { capable = true; break; }
-                }
-                var sel = visionModel.SelectedItem as string ?? AutoVision;
-                if (sel == AutoVision)
-                {
+                    var fallbackModel = "";
+                    if (currentPreset.ValueKind == JsonValueKind.Object
+                        && currentPreset.TryGetProperty("visionModels", out var fv)
+                        && fv.ValueKind == JsonValueKind.Array)
+                        foreach (var it in fv.EnumerateArray())
+                            if (it.ValueKind == JsonValueKind.String) { fallbackModel = it.GetString(); break; }
+                    var capable = fallbackModel.Length > 0 && fallbackModel == picked;
                     visionTip.Text = capable
                         ? "自动跟随聊天模型：" + picked
-                        : "自动：聊天模型不能看图时用默认视觉模型（glm-4.6v-flash）";
-                    visionBadge.Text = capable ? "跟随中" : "";
+                        : fallbackModel.Length > 0
+                            ? "自动：聊天模型不能看图时用本服务商的看图模型 " + fallbackModel + "（复用同一把 Key）"
+                            : "自动：聊天服务商没有看图模型时用默认视觉模型（glm-4.6v-flash）";
+                    visionBadge.Text = capable ? "跟随中" : "自动";
                 }
                 else
                 {
-                    visionTip.Text = "已手动指定：" + sel + "（换聊天模型不会覆盖）";
+                    var prov = (visionProvider.SelectedItem as ProviderItem)?.Label ?? "";
+                    visionTip.Text = "手动指定：" + prov + " · " + (visionModel.SelectedItem as string ?? "");
                     visionBadge.Text = "已指定";
                 }
                 chatBadge.Text = model.Text.Trim().Length > 0 ? "" : "";
             }
 
-            cmb.SelectionChanged += (s, e) =>
+            // 老设置可能只存了 vision.model 没存 vision.provider：从模型名反推是哪家的。
+            string OwnerProviderOf(string visionModelName)
+            {
+                if (_providers == null || string.IsNullOrWhiteSpace(visionModelName)) return "";
+                foreach (var kv in _providers)
+                {
+                    var p = kv.Value;
+                    if (p.ValueKind != JsonValueKind.Object || !p.TryGetProperty("visionModels", out var arr)) continue;
+                    if (arr.ValueKind != JsonValueKind.Array) continue;
+                    foreach (var it in arr.EnumerateArray())
+                        if (it.ValueKind == JsonValueKind.String && it.GetString() == visionModelName) return kv.Key;
+                }
+                return "";
+            }
+
+            // 聊天模型自己能不能识图：只有能，才允许把看图服务商选成「自动跟随」。
+            bool ChatCanSeeImages()
+            {
+                var picked = (model.SelectedItem as string) ?? (model.Text ?? "").Trim();
+                if (picked.Length == 0 || currentPreset.ValueKind != JsonValueKind.Object) return false;
+                if (!currentPreset.TryGetProperty("visionModels", out var varr) || varr.ValueKind != JsonValueKind.Array) return false;
+                foreach (var it in varr.EnumerateArray())
+                    if (it.ValueKind == JsonValueKind.String && it.GetString() == picked) return true;
+                return false;
+            }
+
+            bool ProviderHasVision(string key)
+            {
+                if (_providers == null || key.Length == 0 || !_providers.TryGetValue(key, out var p)) return false;
+                return p.ValueKind == JsonValueKind.Object
+                    && p.TryGetProperty("visionModels", out var varr)
+                    && varr.ValueKind == JsonValueKind.Array
+                    && varr.GetArrayLength() > 0;
+            }
+
+            // 看图服务商列表：聊天模型能识图时第一项才是「自动跟随」；
+            // 只列真的有看图模型的服务商，免得选完模型下拉是空的。
+            void RebuildVisionProviders()
+            {
+                var keepKey = (visionProvider.SelectedItem as ProviderItem)?.Key;
+                visionProviders.Clear();
+                if (ChatCanSeeImages())
+                    visionProviders.Add(new ProviderItem { Key = "", Label = "自动跟随聊天模型" });
+                if (_providers != null)
+                    foreach (var kv in _providers)
+                        if (ProviderHasVision(kv.Key))
+                            visionProviders.Add(new ProviderItem { Key = kv.Key, Label = GetStr(kv.Value, "label") + "（" + kv.Key + "）" });
+                visionProvider.ItemsSource = null;
+                visionProvider.ItemsSource = visionProviders;
+                if (keepKey != null)
+                {
+                    var hit = visionProviders.FirstOrDefault(x => x.Key == keepKey);
+                    if (hit != null) visionProvider.SelectedItem = hit;
+                }
+            }
+
+            // 当前选择失效（比如刚把聊天模型换成不能识图的，自动项消失了）：落到聊天服务商或第一家。
+            void EnsureVisionSelection()
+            {
+                if (visionProvider.SelectedItem is ProviderItem) return;
+                var chatKey = (cmb.SelectedItem as ProviderItem)?.Key ?? "";
+                var hit = visionProviders.FirstOrDefault(x => x.Key == chatKey) ?? visionProviders.FirstOrDefault();
+                visionProvider.SelectedItem = hit;
+                if (hit != null) FillVisionModels(hit.Key);
+            }
+
+            cmb.SelectionChanged += async (s, e) =>
             {
                 if (_loading || !(cmb.SelectedItem is ProviderItem p)) return;
                 if (_providers != null && _providers.TryGetValue(p.Key, out var pv))
                 {
-                    baseUrl.Text = GetStr(pv, "baseUrl");
-                    FillOptions(pv);
-                    model.Text = GetStr(pv, "model");
-                    SyncVisionToChat();
+                    var wasAuto = VisionIsAuto();
+                    suppressAuto = true;
+                    try
+                    {
+                        baseUrl.Text = GetStr(pv, "baseUrl");
+                        FillChatOptions(pv);
+                        model.Text = GetStr(pv, "model");
+                        RebuildVisionProviders();   // 新服务商的聊天模型能不能识图，决定「自动跟随」还在不在
+                        if (!wasAuto || !VisionIsAuto()) EnsureVisionSelection();
+                        ApplyVisionMode();
+                    }
+                    finally { suppressAuto = false; }
+                    await AutoSaveChatAsync();
+                    if (wasAuto && !VisionIsAuto()) await AutoSaveVisionAsync();   // 自动失效，落成手动
                 }
             };
-            model.SelectionChanged += (s, e) => { if (!_loading) SyncVisionToChat(); };
-            visionModel.SelectionChanged += (s, e) => { if (!_loading) SyncVisionToChat(); };
+            model.SelectionChanged += async (s, e) =>
+            {
+                if (_loading) return;
+                var wasAuto = VisionIsAuto();
+                suppressAuto = true;
+                try
+                {
+                    RebuildVisionProviders();
+                    if (wasAuto && !VisionIsAuto()) EnsureVisionSelection();
+                    ApplyVisionMode();
+                }
+                finally { suppressAuto = false; }
+                SyncVisionTip();
+                await AutoSaveChatAsync();
+                if (wasAuto && !VisionIsAuto()) await AutoSaveVisionAsync();
+            };
+            visionProvider.SelectionChanged += async (s, e) =>
+            {
+                if (_loading || !_configLoaded) return;
+                suppressAuto = true;
+                try
+                {
+                    var key = (visionProvider.SelectedItem as ProviderItem)?.Key ?? "";
+                    if (key.Length > 0) FillVisionModels(key);
+                    ApplyVisionMode();
+                }
+                finally { suppressAuto = false; }
+                await AutoSaveVisionAsync();
+            };
+            visionModel.SelectionChanged += async (s, e) =>
+            {
+                if (_loading) return;
+                SyncVisionTip();
+                await AutoSaveVisionAsync();
+            };
+            // 输入/选择完离开控件就自动保存；手点「保存」仍然可用（老习惯不用改）
+            baseUrl.LostFocus += async (s, e) => await AutoSaveChatAsync();
+            model.LostFocus += async (s, e) => await AutoSaveChatAsync();
+            key.LostFocus += async (s, e) => { if (key.Password.Length > 0) await AutoSaveChatAsync(); };
+            mock.Click += async (s, e) => await AutoSaveChatAsync();
+            visionModel.LostFocus += async (s, e) => await AutoSaveVisionAsync();
+            visionKey.LostFocus += async (s, e) => { if (visionKey.Password.Length > 0) await AutoSaveVisionAsync(); };
 
             // ── 聊天面板 ────────────────────────────────────────
             chatPanel.Children.Add(Row("模型服务", cmb, "", false, ModelLabel));
@@ -1045,19 +1197,52 @@ namespace WhaleLauncher.Views
             chatPanel.Children.Add(chatButtons);
             chatPanel.Children.Add(chatResult);
 
+            // 看图取值：自动 = 服务商传空（服务端跟随聊天模型）；手动 = 服务商 + 模型。
+            string VisionProviderValue() => (visionProvider.SelectedItem as ProviderItem)?.Key ?? "";
+            string VisionValue()
+            {
+                if (VisionProviderValue().Length == 0) return "";
+                return visionModel.SelectedItem as string ?? "";
+            }
+
             string ModelRequest()
             {
                 var prov = (cmb.SelectedItem as ProviderItem)?.Key ?? "";
-                var vm = visionModel.SelectedItem as string ?? AutoVision;
-                if (vm == AutoVision) vm = "";
                 return "{"
                     + "\"provider\":\"" + Api.Esc(prov) + "\","
                     + "\"baseUrl\":\"" + Api.Esc(baseUrl.Text.Trim()) + "\","
                     + "\"model\":\"" + Api.Esc(model.Text.Trim()) + "\","
-                    + "\"visionModel\":\"" + Api.Esc(vm) + "\","
+                    + "\"visionProvider\":\"" + Api.Esc(VisionProviderValue()) + "\","
+                    + "\"visionModel\":\"" + Api.Esc(VisionValue()) + "\","
                     + "\"mock\":" + (mock.IsChecked == true ? "true" : "false")
                     + (key.Password.Length > 0 ? ",\"apiKey\":\"" + Api.Esc(key.Password.Trim()) + "\"" : "")
                     + "}";
+            }
+
+            // 自动保存：聊天/看图这些输入改完（失焦、换了选项、勾了开关）立刻写回，
+            // 不用再记得点「保存」。手动按钮保留，老习惯照样能用。
+            async Task AutoSaveChatAsync()
+            {
+                if (suppressAuto || autoSaving || _loading || _loadingConfig || !_configLoaded || !_sup.NodeRunning) return;
+                autoSaving = true;
+                try
+                {
+                    var res = await Api.Post(_sup.Url, "/api/settings", ModelRequest());
+                    if (!res.Ok)
+                    {
+                        chatResult.Text = "自动保存失败：" + (res.Error.Length > 0 ? res.Error : res.Raw);
+                        return;
+                    }
+                    key.Password = "";
+                    chatResult.Text = "已自动保存。";
+                }
+                finally { autoSaving = false; }
+            }
+
+            async Task AutoSaveVisionAsync()
+            {
+                if (suppressAuto || _loading || _loadingConfig || !_configLoaded || !_sup.NodeRunning) return;
+                await SaveVisionAsync("");
             }
 
             save.Click += async (s, e) =>
@@ -1066,6 +1251,10 @@ namespace WhaleLauncher.Views
                 if (!res.Ok) { chatResult.Text = "保存失败：" + (res.Error.Length > 0 ? res.Error : res.Raw); return; }
                 key.Password = "";
                 chatResult.Text = "已保存。";
+                // 服务端可能顺手改了看图模型（跟随/解除跟随），必须重新拉一次，
+                // 否则「看图」页还显示保存前的旧模型。
+                _lastLoad = DateTime.MinValue;
+                await LoadConfigAsync();
             };
             test.Click += async (s, e) =>
             {
@@ -1075,31 +1264,67 @@ namespace WhaleLauncher.Views
             };
 
             // ── 看图面板 ────────────────────────────────────────
+            // 和聊天页一样的两个下拉：服务商（第一项是「自动跟随聊天模型」）+ 模型。
+            // 选了「自动跟随」时，下面这些全部隐藏，只留「测一下」。
+            var visionProviderRow = Row("服务商", visionProvider, "自动跟随 = 用聊天模型同一家的看图模型和 Key", false, ModelLabel);
+            visionModelRow = Row("模型", visionBox, "", false, ModelLabel);
+            visionTimeoutRow = BuildField(new FieldSpec { Path = "vision.timeoutMs", Label = "超时(毫秒)", Kind = "num", Min = 1000, Max = 300000 }, false, ModelLabel);
+            visionKeyRow = Row("看图 Key", visionKey, "留空表示不改；本机 / 内网服务可以留空", false, ModelLabel);
             visionPanel.Children.Add(visionHint);
-            visionPanel.Children.Add(Row("看图模型", visionBox, "", false, ModelLabel));
+            visionPanel.Children.Add(visionProviderRow);
+            visionPanel.Children.Add(visionModelRow);
             visionPanel.Children.Add(visionEndpoint);
-            // 这一行别用 compact：同页另外两行是 ModelLabel 的标签列，窄了会让输入框缩进去一截（错位）
-            visionPanel.Children.Add(BuildField(new FieldSpec { Path = "vision.timeoutMs", Label = "超时(毫秒)", Kind = "num", Min = 1000, Max = 300000 }, false, ModelLabel));
-            visionPanel.Children.Add(Row("看图 Key", visionKey, "留空表示不改", false, ModelLabel));
+            visionPanel.Children.Add(visionTimeoutRow);
+            visionPanel.Children.Add(visionKeyRow);
 
             var visionButtons = new WrapPanel { Margin = new Thickness(0, 6, 0, 0) };
-            var vsave = new Button { Content = "保存看图 Key", Style = (Style)FindResource("Ghost") };
+            vsave = new Button { Content = "保存看图设置", Style = (Style)FindResource("Ghost") };
             var vtest = new Button { Content = "测一下", Style = (Style)FindResource("Ghost"), Margin = new Thickness(8, 0, 0, 0) };
             visionButtons.Children.Add(vsave);
             visionButtons.Children.Add(vtest);
             visionPanel.Children.Add(visionButtons);
             visionPanel.Children.Add(visionResult);
 
-            vsave.Click += async (s, e) =>
+            // 自动跟随：隐藏模型 / 接口地址 / 超时 / Key / 保存，只留「测一下」。
+            void ApplyVisionMode()
             {
-                if (visionKey.Password.Trim().Length == 0) { visionResult.Text = "留空就不改。"; return; }
-                var res = await Api.Post(_sup.Url, "/api/settings", "{\"visionApiKey\":\"" + Api.Esc(visionKey.Password.Trim()) + "\"}");
-                visionResult.Text = res.Ok ? "看图 Key 已保存。" : "保存失败：" + (res.Error.Length > 0 ? res.Error : res.Raw);
-                if (res.Ok) visionKey.Password = "";
-            };
+                if (visionModelRow == null) return;
+                var auto = VisionIsAuto();
+                visionModelRow.Visibility = auto ? Visibility.Collapsed : Visibility.Visible;
+                visionEndpoint.Visibility = auto ? Visibility.Collapsed : Visibility.Visible;
+                visionTimeoutRow.Visibility = auto ? Visibility.Collapsed : Visibility.Visible;
+                visionKeyRow.Visibility = auto ? Visibility.Collapsed : Visibility.Visible;
+                visionHint.Visibility = auto ? Visibility.Collapsed : Visibility.Visible;
+                vsave.Visibility = auto ? Visibility.Collapsed : Visibility.Visible;
+                SyncVisionTip();
+            }
+            ApplyVisionMode();   // 默认：自动跟随（模型 / Key 等都先藏起来）
+
+            // 保存这一页的全部内容：看图服务商 + 模型 + 看图 Key。
+            async Task<bool> SaveVisionAsync(string successText)
+            {
+                var payload = "{\"visionProvider\":\"" + Api.Esc(VisionProviderValue()) + "\","
+                    + "\"visionModel\":\"" + Api.Esc(VisionValue()) + "\""
+                    + (visionKey.Password.Length > 0 ? ",\"visionApiKey\":\"" + Api.Esc(visionKey.Password.Trim()) + "\"" : "")
+                    + "}";
+                var res = await Api.Post(_sup.Url, "/api/settings", payload);
+                if (!res.Ok)
+                {
+                    visionResult.Text = "保存失败：" + (res.Error.Length > 0 ? res.Error : res.Raw);
+                    return false;
+                }
+                if (visionKey.Password.Length > 0) visionKey.Password = "";
+                if (successText.Length > 0) visionResult.Text = successText;
+                _lastLoad = DateTime.MinValue;
+                await LoadConfigAsync();
+                return true;
+            }
+
+            vsave.Click += async (s, e) => await SaveVisionAsync("看图设置已保存。");
             vtest.Click += async (s, e) =>
             {
                 visionResult.Text = "正在测…";
+                if (!await SaveVisionAsync("")) return;      // 先落盘，测的就是刚才填的模型/Key
                 var res = await Api.Post(_sup.Url, "/api/vision/test", "{}");
                 visionResult.Text = res.Ok ? "看图通了，它说：" + res.Str("sample") : "没通：" + (res.Error.Length > 0 ? res.Error : res.Raw);
             };
@@ -1132,25 +1357,39 @@ namespace WhaleLauncher.Views
                 var cur = GetStr(set, "provider");
                 if (!cmb.IsKeyboardFocusWithin) cmb.SelectedItem = items.FirstOrDefault(x => x.Key == cur);
                 var picked = items.FirstOrDefault(x => x.Key == cur);
-                FillOptions(picked != null && provs.TryGetValue(picked.Key, out var pv) ? pv : default);
+                FillChatOptions(picked != null && provs.TryGetValue(picked.Key, out var pv) ? pv : default);
                 if (!baseUrl.IsKeyboardFocusWithin) baseUrl.Text = GetStr(set, "baseUrl");
                 if (!model.IsKeyboardFocusWithin) model.Text = GetStr(set, "model");
+                RebuildVisionProviders();   // 自动项是否出现取决于聊天模型能不能识图
                 var vis = set.ValueKind == JsonValueKind.Object && set.TryGetProperty("vision", out var vv) ? vv : default;
                 var vmodel = GetStr(vis, "model");
                 var manual = vis.ValueKind == JsonValueKind.Object && vis.TryGetProperty("manual", out var mf) && mf.ValueKind == JsonValueKind.True;
-                if (!visionModel.IsKeyboardFocusWithin)
+                var vprov = GetStr(vis, "provider");
+                if (!visionProvider.IsKeyboardFocusWithin && !visionModel.IsKeyboardFocusWithin)
                 {
                     if (manual && vmodel.Length > 0)
                     {
+                        if (vprov.Length == 0) vprov = OwnerProviderOf(vmodel);
+                        var hit = visionProviders.FirstOrDefault(x => x.Key == vprov);
+                        if (hit == null) hit = visionProviders.FirstOrDefault(x => x.Key == cur);   // 认不出就用聊天服务商，别把手动模型弄丢
+                        visionProvider.SelectedItem = hit ?? visionProviders.FirstOrDefault();
+                        if (hit != null && hit.Key.Length > 0) FillVisionModels(hit.Key);
                         var sight = visionModel.ItemsSource as List<string> ?? new List<string>();
                         if (!sight.Contains(vmodel)) { sight.Add(vmodel); visionModel.ItemsSource = null; visionModel.ItemsSource = sight; }
                         visionModel.SelectedItem = vmodel;
                     }
-                    else if (visionModel.ItemsSource is List<string> list2 && list2.Contains(AutoVision))
-                        visionModel.SelectedItem = AutoVision;
+                    else
+                    {
+                        // 自动跟随：聊天模型能识图时才存在这一项；不能识图就落到聊天服务商。
+                        var autoItem = visionProviders.FirstOrDefault(x => x.Key == "");
+                        visionProvider.SelectedItem = autoItem;
+                        EnsureVisionSelection();
+                        if (visionProvider.SelectedItem is ProviderItem sel && sel.Key.Length > 0) FillVisionModels(sel.Key);
+                    }
                 }
                 if (!mock.IsKeyboardFocusWithin) mock.IsChecked = set.ValueKind == JsonValueKind.Object && set.TryGetProperty("mock", out var m) && m.ValueKind == JsonValueKind.True;
-                SyncVisionToChat();
+                ApplyVisionMode();
+                SyncVisionTip();
                 _loading = false;
             };
 
@@ -1163,8 +1402,8 @@ namespace WhaleLauncher.Views
                 {
                     var configured = v.TryGetProperty("configured", out var c) && c.ValueKind == JsonValueKind.True;
                     var masked = v.TryGetProperty("keyMasked", out var km) && km.ValueKind == JsonValueKind.String ? km.GetString() : "";
-                    var follow = manual ? "" : "（自动跟随聊天模型）";
-                    visionHint.Text = (configured ? "已配置：" + masked : "没配置。可以填一把智谱 Key，也可以让聊天模型跟随它自带看图。")
+                    var follow = manual ? "" : "（自动）";
+                    visionHint.Text = (configured ? "已配置：" + masked : "没配置。选「自动跟随」就用聊天那把 Key；本机/内网看图服务可以留空。")
                         + (curModel.Length > 0 ? " 当前看图模型：" + curModel + follow : "");
                     var ep = GetStr(v, "baseUrl");
                     visionEndpoint.Text = ep.Length > 0 ? "接口地址：" + ep + (manual ? "（手动指定）" : "（自动跟随聊天模型）") : "";

@@ -105,9 +105,10 @@
     "keyboardFallback": true,
     "backgroundSend": true,
     "bgSend": {
-      "_说明": "零焦点发送（见 docs/微信消息后台发送.md）：用窗口消息打字 + 点发送按钮，全程不抢前台。enabled=总开关；charGapMs=每个 GBK 字节的间隔（20~80，太小会丢字）；verify=发完回读输入框是否清空（关掉省 0.5 秒）；fallbackToForeground=这条通道失败时要不要退回会抢前台的旧通道（设 false = 绝不抢前台，代价是失败时这条不发）；stripUnencodable=emoji 之类 GBK 编不了的字符是跳过还是整条退回旧通道；unhideWindow=微信缩在托盘里时用「显示但不激活」把它拉出来（不抢前台）。要求：微信窗口已显示、两边权限一致（都普通或都管理员）、中文系统。",
+      "_说明": "零焦点发送（见 docs/微信消息后台发送.md）：用窗口消息打字 + 点发送按钮，全程不抢前台。enabled=总开关；charGapMs=每个字符的间隔毫秒数（20~80，太小会丢字）；charMode=WM_CHAR 的编码语义（auto=按微信版本自动；utf16=微信 4.2+；gbk=微信 4.1 及以前。中文发出去是乱码时先调这里，也可以在启动器「微信桥接 → 编码」里改）；verify=发完回读输入框是否清空（关掉省 0.5 秒）；fallbackToForeground=这条通道失败时要不要退回会抢前台的旧通道（设 false = 绝不抢前台，代价是失败时这条不发）；stripUnencodable=emoji 之类 GBK 编不了的字符是跳过还是整条退回旧通道；unhideWindow=微信缩在托盘里时用「显示但不激活」把它拉出来（不抢前台）。要求：微信窗口已显示、两边权限一致（都普通或都管理员）、中文系统。",
       "enabled": true,
       "charGapMs": 40,
+      "charMode": "auto",
       "verify": true,
       "fallbackToForeground": true,
       "stripUnencodable": true,

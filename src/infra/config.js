@@ -480,13 +480,27 @@ function resolveVisionConfig(cfg) {
   // 自动跟随时 visionModel 也有值，所以要看 visionManual 这个显式标记；
   // 没有这个标记的老设置（只写了 visionModel）按手动处理。
   const manual = settings.visionManual === true || (hasModel && settings.visionManual === undefined);
-  return {
-    ...v,
-    model: String(settings.visionModel || v.model || 'glm-4.6v-flash').trim(),
-    baseUrl: String(settings.visionBaseUrl || v.baseUrl || 'https://open.bigmodel.cn/api/paas/v4').trim(),
-    manual,
-    auto: settings.visionAuto === true,
-  };
+  let model = String(settings.visionModel || v.model || 'glm-4.6v-flash').trim();
+  let baseUrl = String(settings.visionBaseUrl || v.baseUrl || 'https://open.bigmodel.cn/api/paas/v4').trim();
+  let auto = settings.visionAuto === true;
+  // 手动模式下用户可能指定了「看图服务商」（跟聊天页一样先选服务商再选模型）。
+  // 自动模式下服务商就是聊天服务商，不用单独存。
+  let provider = auto ? '' : String(settings.visionProvider || '').trim();
+  // 还没跟随过（新装 / 刚切到不能看图的聊天模型）时，优先用当前服务商自己的看图模型：
+  // 这样一把 Key 就能看图，不会退回需要智谱 Key 的默认模型。
+  if (!manual && !auto && hasModel === false && c.paths) {
+    try {
+      const rt = resolveRuntime(c);
+      const fallback = ((rt.preset && rt.preset.visionModels) || [])[0] || '';
+      if (fallback) {
+        model = fallback;
+        baseUrl = String(rt.preset.baseUrl || baseUrl);
+        auto = true;
+        provider = '';
+      }
+    } catch { /* 取不到服务商信息就按原值 */ }
+  }
+  return { ...v, model, baseUrl, manual, auto, provider };
 }
 
 /**

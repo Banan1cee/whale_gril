@@ -112,6 +112,42 @@ REMINDER_RUNNER = None
 # budget：看门狗预算，按文本长度动态放宽（H3），见 _SendStateScope。
 SEND_STATE = {"active": False, "start": 0.0, "budget": 40.0}
 
+# 会话名里「成员甲、成员乙」这种分隔
+_CHAT_NAME_SPLIT_RE = re.compile(r"[、,，\s]+")
+
+
+class ChatIdentityError(RuntimeError):
+    """当前开着的会话不是目标会话：宁可这条不发，也不能把正文打进别的群。
+
+    发送 = 先切会话、再往「当前输入框」里打字。只要切会话没成功（名字只是相似、
+    或者中途窗口被切走），正文就落到别的会话里 —— 表现就是「两个群同时回的时候
+    把消息搞混」。这种错不能靠换通道兜底：换哪条通道都是往「当前那个会话」打字，
+    所以整条放弃。
+    """
+
+
+def _chat_identity_level(current, aliases):
+    """当前会话名和目标候选名有多像：0 完全相同、1 成员名集合吻合，其它一律不收。
+
+    以前用「包含」也算命中（`name in alias`），于是「群A」和「群A2」互认：
+    点开 A2 也判定成「已经在 A 了」，正文就发到另一个群。这里只认两种确定情形，
+    未命名的群在会话列表里显示成「成员甲、成员乙」，所以保留成员名集合这一档。
+    """
+    cur = str(current or "").strip()
+    if not cur:
+        return None
+    keys = [str(a or "").strip() for a in (aliases or []) if str(a or "").strip()]
+    if not keys:
+        return None
+    if cur in keys:
+        return 0
+    parts = [p for p in _CHAT_NAME_SPLIT_RE.split(cur) if p]
+    if len(parts) >= 2:
+        for k in keys:
+            if all(p in k for p in parts):
+                return 1
+    return None
+
 
 class _SendStateScope:
     """发送临界区的看门狗心跳（M7/H3）：进区置位、出区清零，单一 owner 写 SEND_STATE。
@@ -2119,6 +2155,9 @@ def main():
                 try:
                     if fn():
                         return True
+                except ChatIdentityError:
+                    # 发错人是红线：绝不能「换到前台再试一遍」（前台照样往当前会话打字）
+                    raise
                 except Exception as e:                 # noqa: BLE001
                     log("后台发送异常，改走前台重试：", repr(e))
                 log("后台发送没成功，把微信拉到前台再试一次")
@@ -2343,6 +2382,35 @@ def main():
         except Exception:
             return 0
 
+    def _require_chat_identity(u, who, keys, where):
+        """发送前硬闸：当前开着的会话必须真是目标会话，对不上就整条不发。
+
+        日志里永远打一行「目标 / 当前 / 结论」：串会话时能一眼看出是谁发到了谁家。
+        抛 ChatIdentityError 让 send_text 直接放弃 —— 换通道救不了，因为换哪条
+        通道都是往「当前那个会话」的输入框里打字。
+
+        刚点完会话行时标题可能还没刷新，所以读不到/对不上都先重试 3 次（每次 0.3 秒），
+        仍然对不上才拒绝 —— 别把「还没刷出来」误判成「发错人」把正常发送全堵死。
+        """
+        cur = ""
+        lvl = None
+        for attempt in range(3):
+            try:
+                cur = u.current_chat()
+            except Exception as e:                 # noqa: BLE001
+                cur = ""
+                if attempt == 2:
+                    log_error("%s 会话核对：读不到当前会话名（%r），这条不发" % (where, e))
+            lvl = _chat_identity_level(cur, keys)
+            if lvl is not None:
+                break
+            time.sleep(0.3)
+        log("[核对] %s 目标=%s 当前=%r → %s"
+            % (where, who, cur, "通过" if lvl is not None else "不是目标，拒绝发送"))
+        if lvl is None:
+            raise ChatIdentityError("当前会话 %r 不是目标 %r" % (cur, who))
+        return cur
+
     def bg_send(text, chat_display_name, chat_username=""):
         """零焦点通道：用窗口消息打字 + 点发送，全程不抢前台。
 
@@ -2396,6 +2464,10 @@ def main():
         BG_STATS["tried"] += 1
         BG_STATS["last"] = why
         BG_STATS["lastAt"] = time.time()
+        if why == "chat_mismatch":
+            # 后台通道自己核对过「点开的是不是目标会话」，不是就一个字都没打。
+            # 属于「发错人」红线，不许再换通道重试（换通道还是打进当前会话）。
+            raise ChatIdentityError("后台通道：当前会话不是目标 %r" % chat_display_name)
         if ok:
             BG_STATS["ok"] += 1
             BG_STATS["treeFails"] = 0
@@ -2492,26 +2564,50 @@ def main():
                         log("UIA 已切到会话：", open_cache[username])
                     except Exception:
                         pass
+            # 硬闸：打字前必须确认「现在开着的就是目标会话」。以前只要名字像就算
+            # 切过去了（包含匹配），两个群同时回的时候 A 的正文会打进 B。
+            _require_chat_identity(u, who, keys, "UIA")
             t_open = time.time()
             sent_ok = False
             try:
                 sent_ok = bool(u.send_text(text))
+            except ChatIdentityError:
+                raise
             except Exception:
                 sent_ok = False
             if not sent_ok:
+                # 以前这里是 back_to_chat_tab() 之后直接再发一次 —— 回到会话列表后
+                # 「当前会话」可能已经是别的群，正文就打进别人家了。现在必须重新
+                # 打开目标会话，并再过一遍身份硬闸才允许发。
                 try:
                     u.back_to_chat_tab()
-                    sent_ok = bool(u.send_text(text))
+                    if not u.open_chat(keys):
+                        sent_ok = False
+                    else:
+                        _require_chat_identity(u, who, keys, "UIA 重试")
+                        sent_ok = bool(u.send_text(text))
+                except ChatIdentityError:
+                    raise
                 except Exception:
                     sent_ok = False
             log("UIA 发送耗时 %.1fs（打开会话+输入）" % (time.time() - t_open))
             if sent_ok:
-                # 多按几次：Enter 两次 + Ctrl+Enter 两次（兼容“按 Ctrl+Enter 发送”的设置）
-                press_enter(False)
-                press_enter(False)
-                press_enter(True)
-                press_enter(True)
+                # 不要再盲按回车：wechatauto 的 send_text 自己只按一次回车，而且要等到
+                # 输入框真的清空才返回成功（guia.py 的 click_send / _input_box_has_text）。
+                # 以前这里补 2 次 Enter + 2 次 Ctrl+Enter，全落在「已经发完、框已清空」
+                # 的输入框上 —— 线上表现就是每发完一条，输入框里多出几行空行；而且每
+                # 一下都要抢一次前台，一条消息白扔 1.5~2.5 秒。
+                # 只保留兜底：真的报成功、框里却还有文字，才补按一次回车。
+                try:
+                    leftover = _input_value(u).strip()
+                except Exception:                  # noqa: BLE001
+                    leftover = ""
+                if leftover:
+                    log("UIA 报发送成功但输入框还有 %d 字，补按一次回车" % len(leftover))
+                    press_enter(False)
                 return True
+        except ChatIdentityError:
+            raise
         except Exception as e:
             log_warn("UIA 发送异常：", repr(e))
         return False
@@ -2683,11 +2779,11 @@ def main():
             matched, cur = confirmed_target()
             if matched is None:
                 log("键盘通道：读不到当前会话名，为防发错人这次不发")
-                return False
+                raise ChatIdentityError("键盘通道读不到当前会话名")
             if not matched:
                 log("键盘通道：打开的是「%s」而不是「%s」，为防发错人这次不发"
                     % (cur or "", chat_display_name))
-                return False
+                raise ChatIdentityError("键盘通道打开的是 %r 而不是 %r" % (cur, chat_display_name))
             set_clip(text)                    # ③ 粘贴正文
             tap(ord("V"), (win32con.VK_CONTROL,))
             time.sleep(0.4)
@@ -2713,6 +2809,8 @@ def main():
                         return True
             log_error("键盘通道：按键发了，但数据库里没确认到（可能发到了别的会话），这条按失败处理")
             return False
+        except ChatIdentityError:
+            raise
         except Exception as e:                 # noqa: BLE001
             log("键盘通道按键失败：", repr(e))
             return False
@@ -3105,6 +3203,9 @@ def main():
                         log("发送成功（后台通道，%.1fs）→ %s"
                             % (time.time() - t_start, chat_display_name))
                         return True
+                except ChatIdentityError as e:
+                    log_error("会话核对没通过，这条不发（%s）：%s" % (chat_display_name, e))
+                    return False
                 except Exception as e:            # noqa: BLE001
                     log("后台通道异常，继续用旧通道：", repr(e))
                 if not BG_SEND.get("fallback", True):
@@ -3144,6 +3245,9 @@ def main():
                         log("发送成功（%.1fs）→ %s" % (time.time() - t_start, chat_display_name))
                         return True
                     log("UIA 发送未成功（第 %d 次，%.1fs），准备重试" % (attempt, time.time() - t_att))
+                except ChatIdentityError as e:
+                    log_error("会话核对没通过，这条不发（%s）：%s" % (chat_display_name, e))
+                    return False
                 except Exception as e:
                     log("UIA 发送异常（第 %d 次，%.1fs）：%r" % (attempt, time.time() - t_att, e))
                 time.sleep(0.5)
@@ -3156,6 +3260,9 @@ def main():
                             fail_streak.pop(chat_username, None)
                             log("重新激活 UIA 后发送成功（%.1fs）→ %s" % (time.time() - t_start, chat_display_name))
                             return True
+                    except ChatIdentityError as e:
+                        log_error("会话核对没通过，这条不发（%s）：%s" % (chat_display_name, e))
+                        return False
                     except Exception as e:            # noqa: BLE001
                         log("重新激活后仍失败：", repr(e))
                 log("UIA 发不出去，跳过 OCR 兜底：", chat_display_name)
@@ -3169,10 +3276,14 @@ def main():
             #      并用数据库回读确认。OCR 这条路会卡在截屏，所以先试它。
             if KEYBOARD_FALLBACK:
                 SEND_STATE["start"] = time.time()   # 进通道前刷新心跳（H3）
-                if keyboard_send(text, chat_display_name, chat_username):
-                    fail_streak.pop(chat_username, None)
-                    log("发送成功（键盘通道，%.1fs）→ %s" % (time.time() - t_start, chat_display_name))
-                    return True
+                try:
+                    if keyboard_send(text, chat_display_name, chat_username):
+                        fail_streak.pop(chat_username, None)
+                        log("发送成功（键盘通道，%.1fs）→ %s" % (time.time() - t_start, chat_display_name))
+                        return True
+                except ChatIdentityError as e:
+                    log_error("会话核对没通过，这条不发（%s）：%s" % (chat_display_name, e))
+                    return False
             # ② 兜底：仅当 UIA 不可用时才走 OCR。
             #    注意：OCR 这条路在这台机器上会卡死在 PIL.ImageGrab.grab 截屏里
             #    （data/bridge-hang.log 有栈），以前直接拖到 40 秒看门狗把整个桥接

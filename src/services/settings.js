@@ -56,10 +56,30 @@ function getSettings(runtime) {
  * - 没传，且从「能看图的聊天模型」切走了：解除跟随，回落默认看图模型。
  * 返回要合并进 settings.json 的字段；没有变化返回 null。
  */
-function decideVisionPatch({ preset, nextModel, saved = {}, manualValue = null } = {}) {
+function decideVisionPatch({ preset, nextModel, saved = {}, manualValue = null, manualProvider = null } = {}) {
   const capable = ((preset && preset.visionModels) || []).includes(nextModel);
+  // 看图服务商下拉：'' = 自动跟随（和聊天模型同一家），其它 = 显式钉一家。
+  const providerPick = typeof manualProvider === 'string' ? manualProvider.trim() : null;
+  const pickAuto = providerPick === '';
   // 空串表示「自动」：先解除手动钉住，再交给下面的跟随规则
-  const wantsAuto = typeof manualValue === 'string' && manualValue.trim() === '';
+  const wantsAuto = pickAuto || (typeof manualValue === 'string' && manualValue.trim() === '');
+  if (providerPick && providerPick !== 'auto') {
+    const target = PROVIDERS[providerPick];
+    if (!target) throw new Error('不认识的看图服务商：' + providerPick);
+    let vm = typeof manualValue === 'string' ? manualValue.trim() : '';
+    if (!vm) vm = ((target.visionModels || [])[0] || '').trim();
+    if (!vm) throw new Error('「' + target.label + '」没有预设看图模型，换一家或改回「自动跟随」');
+    if (!/^[a-zA-Z0-9._\-\/:]{1,80}$/.test(vm)) {
+      throw new Error('看图模型名只能包含字母、数字和 . _ - / :');
+    }
+    return {
+      visionModel: vm,
+      visionManual: true,
+      visionAuto: false,
+      visionBaseUrl: target.baseUrl || '',
+      visionProvider: providerPick,
+    };
+  }
   if (typeof manualValue === 'string' && manualValue.trim()) {
     const vm = manualValue.trim().slice(0, 80);
     if (!/^[a-zA-Z0-9._\-\/:]{1,80}$/.test(vm)) {
@@ -73,25 +93,38 @@ function decideVisionPatch({ preset, nextModel, saved = {}, manualValue = null }
       visionManual: true,
       visionAuto: false,
       visionBaseUrl: owner && owner[1].baseUrl ? owner[1].baseUrl : '',
+      visionProvider: owner ? owner[0] : '',
     };
   }
   const manual = wantsAuto ? false : saved.visionManual === true;
-  if (capable && !manual) {
+  if (capable && !manual && !providerPick) {
     if (!wantsAuto && saved.visionModel === nextModel) return null;
     return {
       visionModel: nextModel,
       visionManual: false,
       visionAuto: true,
+      visionProvider: '',
       ...(preset && preset.baseUrl ? { visionBaseUrl: preset.baseUrl } : {}),
     };
   }
-  // 选回「自动」但当前聊天模型不能看图：把之前手动钉的值清掉，回默认视觉模型
-  if (wantsAuto && saved.visionModel) {
-    return { visionModel: '', visionManual: false, visionAuto: false, visionBaseUrl: '' };
-  }
-  // 从「能看图的聊天模型」切走了：解除跟随，回落默认看图模型
-  if (!capable && saved.visionAuto === true && !manual) {
-    return { visionModel: '', visionAuto: false, visionBaseUrl: '' };
+  // 聊天模型不能看图（或用户选回「自动」）：改成这家服务商自己的看图模型。
+  // 以前这里清空、直接回落 config 里的智谱默认模型——只有 DeepSeek Key 的用户会当场 401。
+  if (!manual) {
+    const fallback = ((preset && preset.visionModels) || [])[0] || '';
+    if (fallback) {
+      if (!wantsAuto && saved.visionModel === fallback && saved.visionAuto === true && !saved.visionProvider) return null;
+      return {
+        visionModel: fallback,
+        visionManual: false,
+        visionAuto: true,
+        visionProvider: '',
+        ...(preset && preset.baseUrl ? { visionBaseUrl: preset.baseUrl } : {}),
+      };
+    }
+    if (saved.visionModel) {
+      return { visionModel: '', visionManual: false, visionAuto: false, visionProvider: '', visionBaseUrl: '' };
+    }
+    return null;
   }
   return null;
 }
@@ -156,6 +189,7 @@ async function applySettings(runtime, body) {
       nextModel,
       saved: savedSettings,
       manualValue: typeof body.visionModel === 'string' ? body.visionModel : null,
+      manualProvider: typeof body.visionProvider === 'string' ? body.visionProvider : null,
     });
     if (vp) Object.assign(patch, vp);
   }

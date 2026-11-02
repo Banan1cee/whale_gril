@@ -50,6 +50,15 @@ namespace WhaleLauncher.Views
             _mutedEditor.Status += ShowEditorStatus;
             MutedHost.Content = _mutedEditor;
 
+            // 所有输入都自动保存：输入框失焦、勾选框点一下就写回；手点「保存」按钮仍然可用。
+            TxtMaxPerDay.LostFocus += async (_, __) => await SaveRulesAsync();
+            TxtQuiet.LostFocus += async (_, __) => await SaveRulesAsync();
+            ChkEnabled.Click += async (_, __) => await SaveRulesAsync();
+            foreach (var box in new[] { TxtCareEvery, TxtCareJitter, TxtCareMax, TxtCareQuiet, TxtCareWindows })
+                box.LostFocus += async (_, __) => await SaveCareAsync();
+            foreach (var chk in new[] { ChkCareEnabled, ChkCareOnlyMaster, ChkCareGroups, ChkCareOthers })
+                chk.Click += async (_, __) => await SaveCareAsync();
+
             Loaded += async (_, __) => await RefreshAsync(true);   // 页面载入才全量回填（M30）
         }
 
@@ -191,13 +200,16 @@ namespace WhaleLauncher.Views
             CareStatus.Text = "";
         }
 
-        private async void OnSaveCare(object sender, RoutedEventArgs e)
+        private async void OnSaveCare(object sender, RoutedEventArgs e) => await SaveCareAsync();
+
+        private async Task<bool> SaveCareAsync()
         {
+            if (!_sup.NodeRunning) return false;
             if (!IntOr(TxtCareEvery.Text, 90, 5, 1440, out var every, "平均间隔")
                 || !IntOr(TxtCareJitter.Text, 25, 0, 180, out var jitter, "间隔浮动")
                 || !IntOr(TxtCareMax.Text, 0, 0, 50, out var max, "每天最多几次")
                 || !IntOr(TxtCareQuiet.Text, 0, 0, 240, out var quiet, "刚聊过先跳过"))
-                return;
+                return false;
 
             BtnSaveCare.IsEnabled = false;
             try
@@ -217,9 +229,10 @@ namespace WhaleLauncher.Views
                 if (!res.Ok)
                 {
                     CareStatus.Text = "保存失败：" + (res.Error.Length > 0 ? res.Error : Detail(res));
-                    return;
+                    return false;
                 }
                 CareStatus.Text = "已保存 " + DateTime.Now.ToString("HH:mm:ss");
+                return true;
             }
             finally
             {
@@ -277,19 +290,22 @@ namespace WhaleLauncher.Views
             RulesStatus.Text = "";
         }
 
-        private async void OnSaveRules(object sender, RoutedEventArgs e)
+        private async void OnSaveRules(object sender, RoutedEventArgs e) => await SaveRulesAsync();
+
+        private async Task<bool> SaveRulesAsync()
         {
+            if (!_sup.NodeRunning) return false;
             var maxText = (TxtMaxPerDay.Text ?? "").Trim();
             var quietText = (TxtQuiet.Text ?? "").Trim();
             if (!int.TryParse(maxText.Length == 0 ? "0" : maxText, out var maxPerDay) || maxPerDay < 0)
             {
                 RulesStatus.Text = "每天次数要填 0 或正整数";
-                return;
+                return false;
             }
             if (!int.TryParse(quietText.Length == 0 ? "0" : quietText, out var quiet) || quiet < 0)
             {
                 RulesStatus.Text = "「刚聊过先跳过」要填 0 或正整数";
-                return;
+                return false;
             }
             BtnSaveRules.IsEnabled = false;
             try
@@ -303,11 +319,12 @@ namespace WhaleLauncher.Views
                 if (!res.Ok)
                 {
                     RulesStatus.Text = "保存失败：" + (res.Error.Length > 0 ? res.Error : Detail(res));
-                    return;
+                    return false;
                 }
                 RulesStatus.Text = "规则已保存 " + DateTime.Now.ToString("HH:mm:ss");
                 _lastLoad = DateTime.MinValue;
                 await RefreshAsync();
+                return true;
             }
             finally
             {

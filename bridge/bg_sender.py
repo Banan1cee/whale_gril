@@ -475,15 +475,71 @@ def _version_tuple(text):
     return tuple(nums) if len(nums) >= 2 else ()
 
 
+def _exe_version(exe):
+    """读正在运行的 Weixin.exe 自己的版本资源，读不到返回 ""。
+
+    为什么优先读它：4.1.x 的用户机器上常常还留着升级前的 4.2 目录，
+    以前「扫子目录取最高版本」会把 4.1 误判成 4.2 → 用 UTF-16 打字，
+    中文全变乱码。exe 的版本资源跟着「当前装的是哪个版本」走，不受残留目录影响。
+    """
+    if not exe:
+        return ""
+    try:
+        import win32api
+        info = win32api.GetFileVersionInfo(exe, "\\")
+        ms = int(info.get("ProductVersionMS") or 0)
+        ls = int(info.get("ProductVersionLS") or 0)
+        if ms or ls:
+            return "%d.%d.%d.%d" % (ms >> 16, ms & 0xFFFF, ls >> 16, ls & 0xFFFF)
+    except Exception:
+        pass
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        size = wintypes.DWORD()
+        ver = ctypes.WinDLL("version")
+        path = ctypes.c_wchar_p(exe)
+        if not ver.GetFileVersionInfoSizeW(path, ctypes.byref(size)) or not size.value:
+            return ""
+        buf = ctypes.create_string_buffer(size.value)
+        if not ver.GetFileVersionInfoW(path, 0, size.value, buf):
+            return ""
+        ptr = ctypes.c_void_p()
+        length = wintypes.UINT()
+        if not ver.VerQueryValueW(buf, ctypes.c_wchar_p("\\"), ctypes.byref(ptr), ctypes.byref(length)):
+            return ""
+        fixed = ctypes.cast(ptr, ctypes.POINTER(wintypes.DWORD * 4)).contents
+        ms, ls = int(fixed[2]), int(fixed[3])
+        return "%d.%d.%d.%d" % (ms >> 16, ms & 0xFFFF, ls >> 16, ls & 0xFFFF)
+    except Exception:
+        return ""
+
+
+def _mode_from_versions(candidates):
+    """按可信度依次看候选版本号：第一个 >= 4.0 的说了算；都认不出返回 ""。
+
+    不能「取所有候选里最高的版本」：4.1 的用户机器上常留着旧版/新版安装目录，
+    取最大值会把 4.1 误判成 4.2，于是按 UTF-16 打字、中文全变乱码。
+    """
+    for text in candidates:
+        v = _version_tuple(text)
+        if v and v >= (4, 0):
+            return "utf16" if v >= (4, 2) else "gbk"
+    return ""
+
+
 def detect_char_mode(hwnd=0):
     """按微信版本决定用哪种编码：4.2+ 用 UTF-16 码元，老版本仍然用 GBK 字节。
 
     版本号不一定在 exe 所在目录（4.2 的启动器在 Weixin\\Weixin.exe，
-    真正的版本目录在 Weixin\\4.2.0.9\\ 下），所以按这个顺序找：
-      1. 进程里加载的 Weixin.dll 所在目录；
-      2. exe 目录本身能解析出版本号就用它；
-      3. exe 旁边带 Weixin.dll 的子目录，取最高的版本。
-    都读不到就退回 GBK（老行为），宁可保持原状也不乱换。
+    真正的版本目录在 Weixin\\4.2.0.9\\ 下），所以按优先级依次确认，谁先给出
+    可信版本号就用谁（以前是「所有候选取最大值」，残留目录会把 4.1 误判成 4.2）：
+      1. 进程里加载的 Weixin.dll（最贴近正在跑的那份程序）；
+      2. 正在跑的 exe 自己的版本资源（不受残留的旧/新版本目录干扰）；
+      3. exe 目录本身能解析出版本号就用它；
+      4. 以上都认不出，才扫 exe 旁边带 Weixin.dll 的子目录。
+    都读不到就退回 GBK（老行为，宁可保持原状也不乱换）。
     """
     try:
         import os as _os
@@ -499,36 +555,38 @@ def detect_char_mode(hwnd=0):
         except Exception:
             exe = ""
 
-        candidates = []
+        ordered = []
         # 1) 已加载的 Weixin.dll
         try:
             from wechatauto.accessibility import AccessibilityGate
             mod = AccessibilityGate._weixin_dll_module(pid)
             if mod and mod[2]:
-                candidates.append(_os.path.basename(_os.path.dirname(mod[2])))
+                ordered.append(_os.path.basename(_os.path.dirname(mod[2])))
         except Exception:
             pass
-        # 2) exe 目录名
+        # 2) 正在跑的 exe 的版本资源
+        ordered.append(_exe_version(exe))
+        # 3) exe 目录名
         if exe:
-            candidates.append(_os.path.basename(_os.path.dirname(exe)))
-        # 3) exe 旁边的版本目录
+            ordered.append(_os.path.basename(_os.path.dirname(exe)))
+        mode = _mode_from_versions(ordered)
+        if mode:
+            return mode
+        # 4) 最后才扫子目录：老版本可能把版本号只写在目录名上
         if exe:
             root = _os.path.dirname(exe)
+            best = ()
             try:
                 for name in _os.listdir(root):
                     sub = _os.path.join(root, name)
                     if _os.path.isdir(sub) and _os.path.exists(_os.path.join(sub, "Weixin.dll")):
-                        candidates.append(name)
+                        v = _version_tuple(name)
+                        if v > best:
+                            best = v
             except Exception:
                 pass
-
-        best = ()
-        for c in candidates:
-            v = _version_tuple(c)
-            if v > best:
-                best = v
-        if best and best >= (4, 2):
-            return "utf16"
+            if best and best >= (4, 2):
+                return "utf16"
     except Exception:
         return "gbk"
     return "gbk"
@@ -731,6 +789,26 @@ def name_score(alias, name):
     return None
 
 
+def _chat_is_target(current, aliases):
+    """当前会话名是否就是目标会话，返回 (是否通过, 当前名)。
+
+    只认 name_score 的 0（完全相同）和 1（未命名群的成员名集合），**不认 2（包含）**：
+    「群A」和「群A2」在包含匹配下互认，点错了也当切过去了，正文就发到别的群。
+    这条判据和 engine._chat_identity_level 保持一致。
+    """
+    cur = str(current or "").strip()
+    keys = aliases if isinstance(aliases, (list, tuple, set)) else [aliases]
+    keys = [str(a or "").strip() for a in keys if str(a or "").strip()]
+    if not cur or not keys:
+        return False, cur
+    best = None
+    for a in keys:
+        sc = name_score(a, cur)
+        if sc is not None and (best is None or sc < best):
+            best = sc
+    return (best is not None and best <= 1), cur
+
+
 def open_chat(sender, aliases, timeout=6.0, log=None):
     """在会话列表里点开目标会话。返回是否已切过去。
 
@@ -921,6 +999,14 @@ def send(text, chat=None, hwnd=0, log=None, char_gap=0.04,
                 return False, "no_input_field"
             if info["send_xy"] is None:
                 return False, "no_send_button"
+            # 硬闸：点开的那一行必须真是目标会话。以前只校验「点中的行名 == 当前会话」，
+            # 名字只是「包含」关系（群A / 群A2）也会放行 —— 正文就发到别的群了。
+            if chat:
+                ok_same, cur_chat = _chat_is_target(info.get("chat"), chat)
+                log("后台通道：核对 目标=%r 当前=%r → %s"
+                    % (chat, cur_chat, "通过" if ok_same else "不是目标，拒绝发送"))
+                if not ok_same:
+                    return False, "chat_mismatch"
             # 空框 UIA 读出来是 '\n'，按真值判会误报 input_not_empty（M1）；
             # 读不到（None）维持原语义：当作没草稿，继续发。
             if info["value"] is not None and not _is_blank(info["value"]):
@@ -955,6 +1041,15 @@ def send(text, chat=None, hwnd=0, log=None, char_gap=0.04,
                 sender.end_input()
                 log("后台通道：打完字找不到发送按钮，草稿可能残留在输入框")
                 return False, "input_dirty"
+            # 打字到点发送之间只有 0.35 秒，但这期间会话被切走（人手动切、别的程序
+            # 抢窗口）就会把草稿发到别人家。点之前再核一次，对不上就不点。
+            if chat:
+                ok_same, cur_now = _chat_is_target(info.get("chat"), chat)
+                if not ok_same:
+                    sender.end_input()
+                    log("后台通道：打字期间会话被切走了（当前 %r），这条不发，草稿可能残留"
+                        % (cur_now,))
+                    return False, "chat_mismatch"
             sender.click_screen(*xy)
             time.sleep(0.40)
             sender.end_input()
