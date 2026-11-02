@@ -72,6 +72,16 @@ function resolveKey(config) {
   // 手动指定了服务商（或从模型名能认出是哪家）时，用那家已存过的 Key：
   // 否则「只有 DeepSeek Key、手动选 deepseek-flash」还会报没 Key。
   if (!vc.auto) {
+    // 自定义看图接口：地址和聊天模型完全一样时，直接复用聊天那把 Key ——
+    // 「从聊天复制」只搬地址和模型，不用把同一把密钥在 settings.json 里再存一份；
+    // 只有同一家（地址一致）才这样，免得把聊天 Key 发给别的服务。
+    if (String(vc.provider || '').trim() === 'custom') {
+      try {
+        const rt = resolveRuntime(config);
+        const norm = (u) => String(u || '').trim().replace(/\/+$/, '').toLowerCase();
+        if (rt.apiKey && norm(rt.baseUrl) === norm(vc.baseUrl)) return rt.apiKey;
+      } catch { /* 取不到运行时配置就继续按下面的一般查找链走 */ }
+    }
     const wanted = String(vc.provider || st.visionProvider || '').trim();
     if (wanted && st.keys) {
       const key = String(st.keys[wanted] || '').trim();
@@ -99,11 +109,14 @@ function status(config) {
   const provider = String(v.provider || (v.auto ? (() => {
     try { return resolveRuntime(config).provider || ''; } catch { return ''; }
   })() : '') || '');
-  const hint = v.manual
-    ? '已手动指定：' + model + '（用这个模型对应服务商的 Key）'
-    : v.auto
-      ? '自动：用当前服务商的看图模型 ' + model + '（复用同一把 Key）'
-      : '默认智谱 ' + model + '（在 open.bigmodel.cn 申请的 Key）';
+  const custom = provider === 'custom';
+  const hint = custom
+    ? '自定义接口：' + baseUrl + ' · ' + model + (local ? '（本机/内网，免 Key）' : '')
+    : v.manual
+      ? '已手动指定：' + model + '（用这个模型对应服务商的 Key）'
+      : v.auto
+        ? '自动：用当前服务商的看图模型 ' + model + '（复用同一把 Key）'
+        : '默认智谱 ' + model + '（在 open.bigmodel.cn 申请的 Key）';
   return {
     configured: Boolean(key) || local,
     keyMasked: maskKey(key),
@@ -112,6 +125,8 @@ function status(config) {
     // manual=false：没手动选过，正在自动挑本服务商的看图模型。
     manual: Boolean(v.manual),
     auto: Boolean(v.auto),
+    // 自定义接口：启动器据此显示「接口地址」输入框（而不是只读的预设地址）
+    custom,
     provider,
     local,
     hint,
