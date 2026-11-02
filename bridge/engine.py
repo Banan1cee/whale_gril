@@ -1451,6 +1451,10 @@ def main():
             save_dir = os.path.join(ROOT, "data", "media-cache")
             os.makedirs(save_dir, exist_ok=True)
             dl = MediaDownloader(db, save_dir=save_dir)
+            # 解密探针必须跟着「当前这张图」走：第三方下载器默认拿历史缓存图当探针，
+            # 探针和当前待解密图片不一致时会验证失败或反复扫描（图片取不到本地文件）。
+            from image_cache import bind_target_probe
+            bind_target_probe(dl)
             # 微信改过「文件保存位置」后，图片缓存可能留在旧目录（msg/attach），而
             # 数据库已经搬到了新位置。这时只看 db.account_dir 图片就永远找不到：
             # 「图片识别只认默认微信文件地址，改了就不行」就是这个原因。
@@ -3379,19 +3383,27 @@ def main():
             shard = msg.get("shard")
             if not user or lid is None:
                 return ""
-            # 先用完整图（原图 > 压缩版），别拿缩略图去识别；两档都没有才退回 best
+            # 先用完整图（原图 > 压缩版），别拿缩略图去识别；两档都没有才退回 best。
+            # 消息先入库、缓存后落盘是常态：单轮取不到就等一会儿再取（0.5/1/2 秒），
+            # 最多四轮共八次下载尝试；仍然失败就不给视觉接口发空图。
             path = None
-            for _tier in ("full", "best"):
-                try:
-                    path = _get_media().download_image(user, int(lid), tier=_tier, shard=shard)
-                except Exception as _e:
-                    log("图片下载失败（tier=%s）：%r" % (_tier, _e))
-                    path = None
+            for _attempt in range(4):
+                for _tier in ("full", "best"):
+                    try:
+                        path = _get_media().download_image(user, int(lid), tier=_tier, shard=shard)
+                    except Exception as _e:
+                        log("图片下载失败（tier=%s）：%r" % (_tier, _e))
+                        path = None
+                    if path:
+                        log("图片档位：%s → %d KB" % (_tier, os.path.getsize(path) // 1024))
+                        break
                 if path:
-                    log("图片档位：%s → %d KB" % (_tier, os.path.getsize(path) // 1024))
                     break
+                if _attempt < 3:
+                    log("图片缓存尚未就绪，等待重试（%d/3）" % (_attempt + 1))
+                    time.sleep((0.5, 1.0, 2.0)[_attempt])
             if not path:
-                log("图片取不到本地文件")
+                log("图片读取失败：已重试；请确认接收端微信已下载图片（消息id=%s，分片=%s）" % (lid, shard))
                 return ""
             with open(path, "rb") as f:
                 raw = f.read()
@@ -3486,6 +3498,40 @@ def main():
             log_throttled("img-exc:" + type(e).__name__, "图片识别失败：", repr(e))
             return ""
 
+    def describe_emoji(msg):
+        """表情包 → 文字描述；失败返回空串（调用方跳过，不回话）。"""
+        try:
+            import base64
+            from emoji_vision import load_preview
+            preview = None
+            # 本地缓存落盘比消息入库慢：三轮等本地，最后一轮才允许回源 CDN。
+            for attempt in range(4):
+                preview = load_preview(db.account_dir, msg.get("content"), allow_network=(attempt == 3))
+                if preview:
+                    break
+                if attempt < 3:
+                    time.sleep((0.5, 1.0, 2.0)[attempt])
+            if not preview:
+                log("表情包读取失败：本地缓存不可解码，且消息没有可取得的原图")
+                return ""
+            raw, frames = preview
+            prompt = "这是对方发来的表情包。简短描述主体、表情、动作和画面文字，看不清就说明，不要编造。"
+            if frames > 1:
+                prompt += "从左到右是同一动画的%d个抽样帧，结合它们理解，不要当成不同图片；未展示的动作不要猜。" % frames
+            response = LOCAL_HTTP.post(
+                bot_url.rsplit("/webhook", 1)[0] + "/api/vision",
+                json={"image": base64.b64encode(raw).decode(), "mime": "image/png", "prompt": prompt}, timeout=120)
+            data = response.json()
+            if not data.get("ok"):
+                log("表情包识图接口失败：", str(data.get("error") or "未知错误")[:160])
+                return ""
+            text = str(data.get("text") or "").strip()[:1200]
+            log("表情包识别（%d帧）：" % frames, text[:80])
+            return text
+        except Exception as exc:
+            log("表情包识别异常：", type(exc).__name__)
+            return ""
+
     def transcribe_voice(msg):
         """语音消息 → 文字；失败返回空串。"""
         if not VOICE_ENABLED:
@@ -3556,11 +3602,14 @@ def main():
             mtype = msg.get("type") or ""
             content = (msg.get("content") or "").strip()
             # 有的微信版本把表情包报成「图片」，正文里还是 <emoji md5=...>：
-            # 一律按表情包装死，绝不能送进视觉模型当图片认。
-            if "<emoji" in content:
-                log("收到表情包（被标成图片），装死（不识别不回）")
-                return
-            if mtype == "图片":
+            # 这种一律走表情包识别链路，绝不能当普通图片去下载（下载器找不到表情文件）。
+            is_emoji = mtype in ("表情", "动画表情") or (mtype == "图片" and "<emoji" in content)
+            if is_emoji:
+                desc = describe_emoji(msg)
+                if not desc:
+                    return
+                content = "（对方发了一个表情包，画面是：%s）" % desc
+            elif mtype == "图片":
                 desc = describe_image(msg)
                 if not desc:
                     return
@@ -3571,11 +3620,6 @@ def main():
                     log("语音没识别出内容，先不说话")
                     return
                 content = "（对方发了一条语音，说的是：%s）" % said
-            if mtype in ("表情", "动画表情"):
-                # 表情包发了装死：不去识别、不回话。以前会把表情包当图片认（截图/转码/
-                # 送视觉模型），认出来还硬回一句，容易接岔；现在明确要的是「发了就装死」。
-                log("收到表情包，装死（不识别不回）")
-                return
             if mtype not in ("文本", "语音", "图片", "表情", "动画表情"):
                 if "移出群聊" in content or "移出" in content:
                     dead_chats.add(username)

@@ -40,28 +40,31 @@ test('收消息线程死了会被自动拉起并上报', () => {
   assert.match(bridge, /Thread\(target=listener_watch/, '看门狗要真的启动');
 });
 
-test('表情包发了装死：不识别、不回话', () => {
-  // 用户要的是「表情包发了装死」，所以整条识别链（找缓存/截图/转码/送视觉模型）都删了
-  assert.doesNotMatch(bridge, /def describe_sticker/, '表情包识别函数要删掉');
-  assert.doesNotMatch(bridge, /def screenshot_sticker/, '表情包截图兜底要删掉');
-  assert.doesNotMatch(bridge, /def _find_sticker_file/, '表情包找缓存要删掉');
-  assert.doesNotMatch(bridge, /def _sticker_label/, '表情包取名要删掉');
-  assert.match(bridge, /收到表情包，装死/, '要写清是装死');
+test('表情包进识别链路：不装死、不送进图片下载', () => {
+  // 2026-11-03 起产品口径变了：以前「表情包发了就装死」，现在要认出来再回话。
+  // 老的三件套（截图/找缓存/取名）仍然不存在，但它们的能力已经搬进 emoji_vision。
+  assert.doesNotMatch(bridge, /def describe_sticker/, '旧的表情包截图识别函数不要再回来');
+  assert.doesNotMatch(bridge, /def screenshot_sticker/, '表情包截图兜底不要再回来');
+  assert.doesNotMatch(bridge, /def _sticker_label/, '表情包取名不要再回来');
+  assert.doesNotMatch(bridge, /收到表情包，装死/, '不能一边说装死一边识别');
+  assert.match(bridge, /def describe_emoji\(msg\)/, '表情包要有识别入口');
+  assert.match(bridge, /from emoji_vision import load_preview/, '走 emoji_vision 解本地缓存/回源');
   const fn = bridge.slice(bridge.indexOf('def on_message_inner'));
   const body = fn.slice(0, fn.indexOf('\n    def ', 10));
-  assert.match(body, /表情包发了装死/, '处理分支里要说明为什么装死');
-  assert.doesNotMatch(body, /describe_sticker\(msg\)/, '不能再调用识别');
+  assert.match(body, /desc = describe_emoji\(msg\)/, '处理分支里要真的调用识别');
+  assert.match(body, /对方发了一个表情包，画面是/, '识别结果要变成一句话交给对话');
 });
 
-test('被标成「图片」的表情包也要装死，不能送视觉模型', () => {
+test('被标成「图片」的表情包也要走表情包链路，不能当图片下载', () => {
   // 有的微信版本把表情包报成「图片」，正文里仍是 <emoji md5=...>。
-  // 只删 describe_sticker 不够：那种消息会走 describe_image 被当图片认。
+  // 那种消息不能交给 describe_image：图片下载器找不到表情文件，只会白等 3.5 秒。
   const fn = bridge.slice(bridge.indexOf('def on_message_inner'));
   const body = fn.slice(0, fn.indexOf('\n    def ', 10));
-  assert.match(body, /if "<emoji" in content:/, '要按正文里的 emoji XML 兜底');
-  assert.ok(body.indexOf('if "<emoji" in content:') < body.indexOf('describe_image(msg)'),
-    '兜底必须排在图片识别之前');
-  assert.match(body, /收到表情包（被标成图片），装死/, '要留下日志');
+  assert.match(body, /mtype == "图片" and "<emoji" in content/, '要按正文里的 emoji XML 判定');
+  assert.match(body, /is_emoji = /, '表情/动画表情/图片+emoji 要统一判定');
+  assert.ok(body.indexOf('describe_emoji(msg)') < body.indexOf('describe_image(msg)'),
+    '表情包分支必须排在图片识别之前');
+  assert.doesNotMatch(body, /收到表情包（被标成图片），装死/, '不再装死');
 });
 test('UIA 彻底不行时有键盘兜底通道（Ctrl+F 搜索会话 → 粘贴 → 回车，并回读确认）', () => {
   assert.match(bridge, /def keyboard_send/);
