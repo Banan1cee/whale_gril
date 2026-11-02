@@ -120,6 +120,8 @@ class Gateway {
       lastSeen: 0, uia: null, rest: false, listener: null, ffmpeg: null,
       // 多账号：桥接当前用的是哪个号、窗口认没认出来
       account: '', accountNick: '', accountOk: null, accountWhy: '', accountGuard: true,
+      // 微信主窗现场（可见 / 最小化 / 托盘 / 句柄失效）：诊断包和自检都要它
+      window: '',
     };
   }
 
@@ -137,6 +139,7 @@ class Gateway {
       accountOk: typeof info.account_ok === 'boolean' ? info.account_ok : this.bridge.accountOk,
       accountWhy: String(info.account_why || this.bridge.accountWhy || ''),
       accountGuard: typeof info.account_guard === 'boolean' ? info.account_guard : this.bridge.accountGuard,
+      window: String(info.window || this.bridge.window || ''),
     };
     return { ok: true, online: true, serverTime: now };
   }
@@ -300,6 +303,7 @@ class Gateway {
         accountOk: this.bridge.accountOk,
         accountWhy: this.bridge.accountWhy,
         accountGuard: this.bridge.accountGuard,
+        window: online ? this.bridge.window : '',
       },
       ...this.stats,
     };

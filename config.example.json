@@ -154,8 +154,11 @@
     "cacheMinutes": 60
   },
   "log": {
-    "_说明": "日志级别：debug / info / warn / error，日志在 data/whale.log",
-    "level": "info"
+    "_说明": "level=界面/控制台级别，fileLevel=文件级别（默认 debug 全量），日志在 data/whale.log。trace=记「为什么回/为什么不回」的判定链（不含正文），traceRaw=本地留 24 小时的消息原文副本（导出日志包时默认不带，要带得手动勾选）",
+    "level": "info",
+    "fileLevel": "debug",
+    "trace": true,
+    "traceRaw": true
   },
   "vision": {
     "_说明": "图片理解（看图说话）。默认智谱 GLM-4.6V-Flash（免费视觉模型），免费额度就够用；apiKey 留空则用 data/settings.json 里的 Key",
