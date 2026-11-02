@@ -458,14 +458,18 @@ jobs:
                   ForEach-Object { "$($_.ProcessName)($($_.Id))" }) -join ', '
               try { $uninsProc.Kill() } catch { }
               $tail = if (Test-Path $uninsLog) { (Get-Content $uninsLog -Tail 60) -join "`n" } else { '（没有卸载日志）' }
+              # 运行摘要从外面（API）读不到，注解能读——所以把日志尾巴压成一行塞进 ::error，
+              # 这样「卸载卡在哪」不用再看 runner 上的文件。
+              $tailOneLine = if (Test-Path $uninsLog) { (@(Get-Content $uninsLog -Tail 8) -join ' | ') } else { '（没有卸载日志）' }
+              if ($tailOneLine.Length -gt 1200) { $tailOneLine = $tailOneLine.Substring($tailOneLine.Length - 1200) }
+              $left = @(Get-ChildItem $dir -Recurse -File -ErrorAction SilentlyContinue).Count
               '### 静默卸载超时（180s）' | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
               '' | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
-              "残留进程：$tmp" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+              "残留进程：$tmp；剩余文件：$left" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
               '```' | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
               $tail | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
               '```' | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
-              Write-Output "::error title=静默卸载超时::180 秒没跑完；残留进程 $tmp；卸载日志尾部见运行摘要"
-              Write-Output $tail
+              Write-Output ("::error title=静默卸载超时::180s；残留进程 {0}；剩余文件 {1}；日志尾：{2}" -f $tmp, $left, $tailOneLine)
               exit 1
             }
           }
