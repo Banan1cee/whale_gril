@@ -417,6 +417,17 @@ node server.js --doctor   # 自检
 
 ---
 
+## 下载（Download）
+
+安装包只从 **GitHub Releases** 下载：<https://github.com/Banan1cee/whale_gril/releases>
+
+Windows 发行包使用 **SignPath Foundation** 提供的免费代码签名
+（Free code signing provided by SignPath.io, certificate by SignPath Foundation），
+签名覆盖 `WhaleLauncher.exe` 与 `whale-girl-<版本>-setup.exe`。
+校验值与验证命令见 **[DOWNLOAD.md](DOWNLOAD.md)**。
+
+---
+
 ## 代码签名（Code signing policy）
 
 发行包的 Windows 签名由 SignPath 提供：
@@ -428,6 +439,7 @@ GitHub Actions 构建出来的产物签名（每个发版签名都要人工批�
 
 **完整的代码签名策略**（签哪些文件、谁批准、隐私声明、怎么验证签名）见
 **[CODE_SIGNING_POLICY.md](CODE_SIGNING_POLICY.md)**。
+隐私声明单独一份：**[PRIVACY.md](PRIVACY.md)**。
 
 验证方法：
 
