@@ -93,6 +93,14 @@ namespace WhaleLauncher.Views
                 : "不是管理员。微信若是管理员运行的，零焦点发送会被 UIPI 挡掉");
 
             AddCheck("UIA 可用", s.BrUia, s.BrUia ? "能读到微信窗口树" : "读不到：微信可能最小化，或桥接没起");
+            // 微信窗口现场：缩托盘 / 被自更新回收 / 双开钉错号，是「能心跳但发不出去」的头号原因
+            var winOk = s.BrWindow == "可见" || s.BrWindow == "已最小化";
+            AddCheck("微信窗口", winOk,
+                string.IsNullOrEmpty(s.BrWindow) ? "桥接没上报窗口状态（桥接离线或版本较旧）" : s.BrWindow);
+            AddCheck("微信账号", !s.BrOnline || s.BrAccountOk,
+                string.IsNullOrEmpty(s.BrAccountNick) && s.BrAccountOk
+                    ? "窗口已确认（桥接没上报昵称）"
+                    : (string.IsNullOrEmpty(s.BrAccountWhy) ? s.BrAccountNick : s.BrAccountNick + "：" + s.BrAccountWhy));
             AddCheck("模型 Key", !s.NeedsKey || s.HasKey || s.Mock, !s.NeedsKey ? "当前模型不需要 Key" : s.Mock ? "演示模式（不连模型）" : (s.HasKey ? "已配置" : "去「设置」填 Key"));
 
             var hasWheel = Directory.Exists(Path.Combine(_sup.BaseDir, "runtime", "wheelhouse"));
@@ -360,48 +368,86 @@ namespace WhaleLauncher.Views
         }
 
         // ── 日志导出（debug 日志包） ────────────────────────────
-        // 顶栏按钮只负责弹浮窗；浮窗里两个选项各自选时间范围，然后走同一个导出流程。
-        private enum LogRange { Recent10Min, ThisRun }
+        // 没有「时间范围」选项：点一下就是最常用的组合（当前这次 + 最近一次启动）
 
         private static readonly string[] LogFiles = { "launcher.log", "bridge.log", "kernel.log", "whale.log" };
 
-        // 日志行首时间戳：whale.log 是 [yyyy-MM-dd HH:mm:ss]，启动器自己写的是裸 HH:mm:ss
-        private static readonly Regex StampFull = new Regex(@"^\[?(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})", RegexOptions.Compiled);
-        private static readonly Regex StampClock = new Regex(@"^\[?(\d{2}:\d{2}:\d{2})", RegexOptions.Compiled);
+        // 崩溃 / 卡死 / UIA 诊断 / 桥接自己的全量文件。
+        // 「她突然不回了」的答案九成在这里，以前 info.txt 只报了大小、文件根本没进包。
+        private static readonly string[] CrashLogFiles =
+        {
+            "crash.log", "bridge-crash.log", "bridge-hang.log", "bridge-boot.log",
+            "uia-fault.log", "uia-selftest.log", "wechat-bridge-4x.log",
+        };
+
+        private static IEnumerable<string> AllLogFiles()
+        {
+            foreach (var f in LogFiles) yield return f;
+            foreach (var f in CrashLogFiles) yield return f;
+        }
 
         // 脱敏用：键名命中这些词的，值一律换成 "***"（结构保留）
         private static readonly Regex SecretKey =
             new Regex("apiKey|apikey|key|token|secret|password|cookie|session", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+        // 这些不是「密钥」，但一样是隐私：主人的名字、她认的别名、忽略名单、
+        // 主动搭话白名单、测试用的会话名。排查 bug 用不到这些字面值，但用户很在意。
+        private static readonly Regex PrivacyKey =
+            new Regex("^(ownerName|aliases|names|wxids|ignoreSenders|whitelist|testChat|chatTitle)$",
+                RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+        // 日志正文兜底：日志里没有做结构化脱敏（正文本来就可能带 Key 片段/微信号/手机号）
+        private static readonly Regex SkKey = new Regex(@"\b(?:sk|oc_sk|ak|ghp|xox[baprs])[-_][A-Za-z0-9_\-]{8,}", RegexOptions.Compiled);
+        private static readonly Regex Wxid = new Regex(@"\bwxid_[A-Za-z0-9_\-]{4,}", RegexOptions.Compiled);
+        private static readonly Regex BearerToken = new Regex(@"(Bearer\s+)[A-Za-z0-9._\-]{12,}", RegexOptions.Compiled);
+        private static readonly Regex PhoneNumber = new Regex(@"\b1[3-9]\d{9}\b", RegexOptions.Compiled);
+
+        /// <summary>日志正文里能把人/Key 认出来的部分打码；其余原样保留，别破坏可读性。</summary>
+        private static string MaskSecrets(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return text;
+            try
+            {
+                var s = SkKey.Replace(text, "***key***");
+                s = Wxid.Replace(s, "wxid_***");
+                s = BearerToken.Replace(s, "$1***");
+                s = PhoneNumber.Replace(s, "1**********");
+                return s;
+            }
+            catch { return text; }
+        }
+
+        /// <summary>按 UTF-8 读出来一堆替换符 = 不是文本（GBK 老日志/二进制），那就原样拷贝。</summary>
+        private static bool LooksBinary(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return false;
+            var bad = 0;
+            foreach (var ch in text) if (ch == '\uFFFD') bad++;
+            return bad > Math.Max(8, text.Length / 40);
+        }
+
         private bool _exporting;
 
-        /// <summary>顶栏「导出日志」：在按钮下方弹出浮窗。</summary>
-        private void OnExport(object sender, RoutedEventArgs e)
+        /// <summary>
+        /// 顶栏「导出日志」：点一下直接出包，不再问「要 10 分钟还是当次启动」。
+        /// 报障时人只会点这一下，所以默认就应该把该看的一次性装进去：
+        /// 当次启动 + 最近一次启动的日志、判定链、最近 30 分钟的原文、脱敏配置、doctor。
+        /// </summary>
+        private async void OnExport(object sender, RoutedEventArgs e)
         {
-            // StaysOpen=False 会先因这次点击把浮窗关掉，所以这里直接置 true（重复点击就是重新展开）
-            ExportPopup.IsOpen = true;
-        }
-
-        private async void OnExportRecent10(object sender, RoutedEventArgs e)
-        {
-            ExportPopup.IsOpen = false;
-            await ExportAsync(LogRange.Recent10Min);
-        }
-
-        private async void OnExportThisRun(object sender, RoutedEventArgs e)
-        {
-            ExportPopup.IsOpen = false;
-            await ExportAsync(LogRange.ThisRun);
+            await ExportAsync();
         }
 
         /// <summary>
         /// 导出流程：UI 线程只做 await，重活（读日志、跑 doctor、压 zip）都在后台线程，别把界面冻住。
         /// </summary>
-        private async Task ExportAsync(LogRange range)
+        private async Task ExportAsync()
         {
             if (_exporting) return;
             _exporting = true;
+            var oldText = BtnExport.Content;
             BtnExport.IsEnabled = false;
+            BtnExport.Content = "导出中…";
             try
             {
                 await LoadVersionsAsync();                       // node / python 版本，内部有缓存
@@ -410,7 +456,7 @@ namespace WhaleLauncher.Views
                 var settings = await Api.Get(_sup.Url, "/api/settings");
                 var doctor = await RunDoctorAsync();             // 15 秒超时，失败只写原因
 
-                var path = await Task.Run(() => WritePackage(range, probe, status, settings, doctor));
+                var path = await Task.Run(() => WritePackage(probe, status, settings, doctor));
                 Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{path}\"") { UseShellExecute = true });
             }
             catch (Exception ex)
@@ -419,13 +465,14 @@ namespace WhaleLauncher.Views
             }
             finally
             {
+                BtnExport.Content = oldText;
                 BtnExport.IsEnabled = true;
                 _exporting = false;
             }
         }
 
         /// <summary>在后台线程组装 zip。返回 zip 的绝对路径。</summary>
-        private string WritePackage(LogRange range, Snapshot probe, ApiResult status, ApiResult settings, string doctor)
+        private string WritePackage(Snapshot probe, ApiResult status, ApiResult settings, string doctor)
         {
             var name = "logs-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".zip";
             var path = Path.Combine(_sup.DataDir, name);
@@ -434,15 +481,16 @@ namespace WhaleLauncher.Views
             var skipped = new List<string>();
 
             // 先收集日志和配置（info.txt 里要写「哪些文件读失败了」，所以得排在 info.txt 之前）
-            var logs = CollectLogs(range, skipped);
+            var logs = CollectLogs(skipped);
             var config = RedactedJson(Path.Combine(_sup.BaseDir, "config.json"), skipped);
             var settingsRedacted = RedactedJson(Path.Combine(_sup.DataDir, "settings.json"), skipped);
             var waFiles = WechatAutoLogs();
+            var trace = CollectTrace(skipped);
 
             using (var zip = ZipFile.Open(path, ZipArchiveMode.Create))
             {
-                AddText(zip, "README.txt", BuildReadme(range));
-                AddText(zip, "info.txt", BuildInfo(range, probe, skipped));
+                AddText(zip, "README.txt", BuildReadme());
+                AddText(zip, "info.txt", BuildInfo(probe, skipped));
                 AddText(zip, "status.json", BuildStatus(status, settings));
                 AddText(zip, "doctor.txt", doctor);
                 if (config != null) AddText(zip, "config.redacted.json", config);
@@ -451,10 +499,22 @@ namespace WhaleLauncher.Views
                 foreach (var (entry, text) in logs)
                     AddText(zip, entry, text);
 
-                // wechatauto 库自己的日志：最近两天的也带上，桥接层的错常在这里露出
+                // 判定链 + 最近 30 分钟的原文：为什么回 / 为什么不回，全在这里
+                foreach (var (entry, text) in trace)
+                    AddText(zip, entry, text);
+
+                // wechatauto 库自己的日志：最近两天的也带上，桥接层的错常在这里露出。
+                // 改成读文本再打码（里面会带 wxid / 昵称），读不出文本才原样拷贝。
                 foreach (var f in waFiles)
                 {
-                    try { zip.CreateEntryFromFile(f, "wechatauto_logs/" + Path.GetFileName(f), CompressionLevel.Optimal); }
+                    try
+                    {
+                        var text = ReadShared(f, skipped);
+                        if (!string.IsNullOrEmpty(text) && !LooksBinary(text))
+                            AddText(zip, "wechatauto_logs/" + Path.GetFileName(f), MaskSecrets(text));
+                        else
+                            zip.CreateEntryFromFile(f, "wechatauto_logs/" + Path.GetFileName(f), CompressionLevel.Optimal);
+                    }
                     catch (Exception ex) { skipped.Add(Path.GetFileName(f) + "：" + ex.Message); }
                 }
             }
@@ -463,102 +523,46 @@ namespace WhaleLauncher.Views
         }
 
         // ── 日志收集 ────────────────────────────────────────────
-        private List<(string Entry, string Text)> CollectLogs(LogRange range, List<string> skipped)
+        private List<(string Entry, string Text)> CollectLogs(List<string> skipped)
         {
             var result = new List<(string, string)>();
 
-            void AddCurrentFull(string file)
+            // 当次启动：data/ 下这些文件就是当前这次（没在跑时它们就是最近一次）
+            foreach (var f in AllLogFiles())
             {
-                var text = ReadShared(file, skipped);
-                if (!string.IsNullOrEmpty(text)) result.Add(("logs/current/" + Path.GetFileName(file), text));
+                AddLog(result, "logs/current/" + f, Path.Combine(_sup.DataDir, f), skipped);
+                AddLog(result, "logs/current/" + f + ".1", Path.Combine(_sup.DataDir, f + ".1"), skipped);
             }
 
-            if (range == LogRange.ThisRun)
+            // 历史归档：崩溃重启过的话，真正的现场在 run-* 里；带上最近两份（连续崩两次也够用），
+            // 每份只留尾部 1MB，包不至于失控。
+            foreach (var run in RunDirs().Take(2))
             {
-                // 当前这次启动的日志就写在 data/ 下四个文件里。
-                // 不在运行时，这四个文件就是「最近一次启动」的；四个都空（刚启动还没写）才退回归档目录。
-                var anyContent = LogFiles.Any(f => FileLen(Path.Combine(_sup.DataDir, f)) > 0);
-                if (anyContent || _sup.NodeRunning || _sup.BridgeRunning)
-                {
-                    foreach (var f in LogFiles) AddCurrentFull(Path.Combine(_sup.DataDir, f));
-                }
-                else
-                {
-                    var latest = LatestRunDir();
-                    if (latest == null)
-                    {
-                        foreach (var f in LogFiles) AddCurrentFull(Path.Combine(_sup.DataDir, f));
-                    }
-                    else
-                    {
-                        foreach (var f in SafeFiles(latest))
-                        {
-                            var text = ReadShared(f, skipped);
-                            if (!string.IsNullOrEmpty(text))
-                                result.Add(("logs/" + Path.GetFileName(latest) + "/" + Path.GetFileName(f), text));
-                        }
-                    }
-                }
-                return result;
-            }
-
-            // 最近 10 分钟：当前四个文件 + 所有 run-* 归档，按行首时间戳过滤
-            var cutoff = DateTime.Now.AddMinutes(-10);
-            foreach (var f in LogFiles)
-                AddRecent(result, "logs/current/" + f, Path.Combine(_sup.DataDir, f), cutoff, skipped);
-            foreach (var run in RunDirs())
                 foreach (var f in SafeFiles(run))
-                    AddRecent(result, "logs/" + Path.GetFileName(run) + "/" + Path.GetFileName(f), f, cutoff, skipped);
+                    AddLog(result, "logs/" + Path.GetFileName(run) + "/" + Path.GetFileName(f), f, skipped, LogTailArchiveBytes);
+            }
 
             return result;
         }
 
-        /// <summary>最近 10 分钟模式：留时间戳在窗口内的行；解析不出时间戳的行原样留在文件里。</summary>
-        private static void AddRecent(List<(string, string)> target, string entry, string file, DateTime cutoff, List<string> skipped)
+        // 日志是追加写的：开头基本都是启动横幅，尾部才是现场。当前这次留 3MB，历史归档留 1MB。
+        private const int LogTailCurrentBytes = 3 * 1024 * 1024;
+        private const int LogTailArchiveBytes = 1024 * 1024;
+
+        private static void AddLog(List<(string, string)> target, string entry, string file, List<string> skipped,
+                                   int tailBytes = LogTailCurrentBytes)
         {
             if (!File.Exists(file)) return;
-            DateTime mtime;
-            try { mtime = File.GetLastWriteTime(file); } catch { mtime = DateTime.Now; }
-
-            try
+            var text = ReadShared(file, skipped);
+            if (string.IsNullOrEmpty(text)) return;
+            if (text.Length > tailBytes)
             {
-                using var fs = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-                using var sr = new StreamReader(fs, Encoding.UTF8, true);
-                var kept = new StringBuilder();
-                var inWindow = 0;                 // 窗口内的行数：一行都没有且文件早就不动了，整个文件跳过
-                string line;
-                while ((line = sr.ReadLine()) != null)
-                {
-                    var at = ParseStamp(line, mtime.Date);
-                    if (at.HasValue)
-                    {
-                        if (at.Value < cutoff) continue;
-                        inWindow++;
-                    }
-                    kept.AppendLine(line);
-                }
-                if (inWindow == 0 && mtime < cutoff) return;
-                if (kept.Length == 0) return;
-                target.Add((entry, kept.ToString()));
+                var cut = text.Length - tailBytes;
+                var nl = text.IndexOf('\n', cut);
+                text = "…（只保留尾部 " + (tailBytes / 1024 / 1024) + "MB，前面省略）…\n"
+                       + text.Substring(nl >= 0 ? nl + 1 : cut);
             }
-            catch (Exception ex)
-            {
-                skipped.Add(Path.GetFileName(file) + "：" + ex.Message);
-            }
-        }
-
-        private static DateTime? ParseStamp(string line, DateTime fileDate)
-        {
-            if (string.IsNullOrEmpty(line)) return null;
-            var s = line.TrimStart('\uFEFF', ' ', '\t');
-            var m = StampFull.Match(s);
-            if (m.Success && DateTime.TryParseExact(m.Groups[1].Value + " " + m.Groups[2].Value,
-                    "yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture, DateTimeStyles.None, out var at))
-                return at;
-            var c = StampClock.Match(s);
-            if (c.Success && TimeSpan.TryParse(c.Groups[1].Value, CultureInfo.InvariantCulture, out var ts))
-                return fileDate.Add(ts);
-            return null;
+            target.Add((entry, MaskSecrets(text)));
         }
 
         /// <summary>共享读：正在被内核/桥接写的日志也能读，读不到就记一笔跳过，不让整个导出失败。</summary>
@@ -632,6 +636,60 @@ namespace WhaleLauncher.Views
             return list;
         }
 
+        // ── 判定链（trace）────────────────────────────────────
+        /// <summary>
+        /// data/trace 里的判定链 + 原文副本。
+        /// 判定链全带（按天分的文件，一共也就几十 KB）；
+        /// 原文只带最近 30 分钟、最多 60 条 —— 够复现「为什么回/不回」，又不把一堆聊天内容带出去。
+        /// </summary>
+        private List<(string Entry, string Text)> CollectTrace(List<string> skipped)
+        {
+            var result = new List<(string, string)>();
+            var dir = Path.Combine(_sup.DataDir, "trace");
+            if (!Directory.Exists(dir)) return result;
+
+            foreach (var f in Directory.GetFiles(dir, "trace-*.jsonl").OrderByDescending(x => x))
+            {
+                var text = ReadShared(f, skipped);
+                if (!string.IsNullOrEmpty(text)) result.Add(("trace/" + Path.GetFileName(f), text));
+            }
+
+            var rawDir = Path.Combine(dir, "raw");
+            if (!Directory.Exists(rawDir)) return result;
+            var since = DateTime.Now.AddMinutes(-30);
+            foreach (var f in Directory.GetFiles(rawDir, "*.json")
+                         .OrderByDescending(x => LastWriteOrMin(x))
+                         .Where(x => LastWriteOrMin(x) >= since)
+                         .Take(60))
+            {
+                var text = ReadShared(f, skipped);
+                if (!string.IsNullOrEmpty(text)) result.Add(("trace/raw/" + Path.GetFileName(f), text));
+            }
+            return result;
+        }
+
+        private static DateTime LastWriteOrMin(string file)
+        {
+            try { return File.GetLastWriteTime(file); } catch { return DateTime.MinValue; }
+        }
+
+        private (int Lines, int Raw) TraceStats()
+        {
+            try
+            {
+                var dir = Path.Combine(_sup.DataDir, "trace");
+                if (!Directory.Exists(dir)) return (0, 0);
+                var lines = 0;
+                foreach (var f in Directory.GetFiles(dir, "trace-*.jsonl"))
+                {
+                    try { lines += File.ReadLines(f).Count(l => l.Trim().Length > 0); } catch { }
+                }
+                var rawDir = Path.Combine(dir, "raw");
+                var raw = Directory.Exists(rawDir) ? Directory.GetFiles(rawDir, "*.json").Length : 0;
+                return (lines, raw);
+            }
+            catch { return (0, 0); }
+        }
         // ── zip 内容 ────────────────────────────────────────────
         private static void AddText(ZipArchive zip, string entry, string content)
         {
@@ -640,33 +698,42 @@ namespace WhaleLauncher.Views
             w.Write(content ?? "");
         }
 
-        private static string BuildReadme(LogRange range)
+        private static string BuildReadme()
         {
             var sb = new StringBuilder();
             sb.AppendLine("鲸鲸 · debug 日志包");
             sb.AppendLine("==================================================");
             sb.AppendLine("这是排查问题用的 debug 日志包，不是给日常使用的日志。");
-            sb.AppendLine("时间范围：" + (range == LogRange.Recent10Min ? "最近 10 分钟" : "当次启动（含本次启动的全部日志）"));
+            sb.AppendLine("包含范围：当次启动 + 最近两次启动的归档（当前这次留尾部 3MB，归档各留尾部 1MB）");
             sb.AppendLine();
             sb.AppendLine("包含内容：");
             sb.AppendLine("  README.txt            本文件");
-            sb.AppendLine("  info.txt              运行环境、内核/桥接状态、各项大小与磁盘剩余");
+            sb.AppendLine("  info.txt              运行环境、微信窗口/账号现场、消息统计、各项大小与磁盘剩余");
             sb.AppendLine("  config.redacted.json  config.json 的完整副本，敏感值已脱敏");
             sb.AppendLine("  settings.redacted.json data/settings.json 的副本，敏感值已脱敏");
             sb.AppendLine("  status.json           /api/status 与 /api/settings 的原始返回");
             sb.AppendLine("  doctor.txt            node server.js --doctor 的输出（尽力而为）");
             sb.AppendLine("  logs/                 各日志文件（logs/current/ 是这一次，logs/run-*/ 是历史启动）");
+            sb.AppendLine("                        含 crash.log / bridge-crash.log / bridge-hang.log /");
+            sb.AppendLine("                        bridge-boot.log / uia-*.log / wechat-bridge-4x.log");
             sb.AppendLine("  wechatauto_logs/      微信自动化库最近两天的日志");
+            sb.AppendLine("  trace/                触发判定链 + 最近 30 分钟的消息原文（最多 60 条），见下面说明");
             sb.AppendLine();
             sb.AppendLine("关于脱敏：");
-            sb.AppendLine("  键名匹配 apiKey / key / token / secret / password / cookie / session 的值都换成了 \"***\"，");
-            sb.AppendLine("  配置结构、非敏感字段和模型名都原样保留，方便对齐配置。日志正文没有做脱敏处理。");
+            sb.AppendLine("  ① 密钥类：键名匹配 apiKey / key / token / secret / password / cookie / session 的值换成 \"***\"；");
+            sb.AppendLine("  ② 隐私类：主人的名字、别名、忽略名单、搭话白名单、测试会话名也换成 \"***\"；");
+            sb.AppendLine("  ③ 日志正文：sk-xxx / wxid_xxx / Bearer token / 手机号会打码，其余原样保留。");
+            sb.AppendLine("  配置结构、非敏感字段和模型名都原样保留，方便对齐配置。");
+            sb.AppendLine();
+            sb.AppendLine("关于 trace/：");
+            sb.AppendLine("  判定链（为什么回 / 为什么不回）每行只写原因和规则名，不含聊天正文。");
+            sb.AppendLine("  原文只带最近 30 分钟、最多 60 条：复现「为什么回/不回」够用，更早的聊天内容不进包。");
             sb.AppendLine();
             sb.AppendLine("遇到问题时，把整个 zip 原样发给对方即可，不用自己挑文件。");
             return sb.ToString();
         }
 
-        private string BuildInfo(LogRange range, Snapshot probe, List<string> skipped)
+        private string BuildInfo(Snapshot probe, List<string> skipped)
         {
             var (level, fileLevel) = ReadLogLevels();
             var (provider, model, vision) = ReadModelInfo();
@@ -677,7 +744,7 @@ namespace WhaleLauncher.Views
             sb.AppendLine("鲸鲸 debug 日志包 · info");
             sb.AppendLine("==================================================");
             sb.AppendLine("导出时间        : " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + "（时区 " + TimeZoneInfo.Local.Id + "）");
-            sb.AppendLine("导出范围        : " + (range == LogRange.Recent10Min ? "最近 10 分钟" : "当次启动"));
+            sb.AppendLine("导出范围        : 当次启动 + 最近两次启动的归档（当前留尾部 3MB，归档各留 1MB）");
             sb.AppendLine("启动器版本      : " + LauncherVersion());
             sb.AppendLine("操作系统        : " + SafeOsText());
             sb.AppendLine("系统架构        : " + RuntimeInformation.OSArchitecture + " / 进程 " + RuntimeInformation.ProcessArchitecture
@@ -696,10 +763,33 @@ namespace WhaleLauncher.Views
             sb.AppendLine("安装目录        : " + _sup.BaseDir);
             sb.AppendLine("数据目录        : " + _sup.DataDir);
             sb.AppendLine();
+            sb.AppendLine("微信现场：");
+            sb.AppendLine("  微信进程      : " + WechatProcessText());
+            sb.AppendLine("  主窗状态      : " + (string.IsNullOrEmpty(probe?.BrWindow) ? "桥接没上报（老版本或离线）" : probe.BrWindow));
+            sb.AppendLine("  当前账号      : " + AccountText(probe));
+            sb.AppendLine("  UIA           : " + BoolText(probe?.BrUia) + "   收消息线程: " + BoolText(probe?.BrListener)
+                          + "   ffmpeg: " + BoolText(probe?.BrFfmpeg) + "   账号闸: " + BoolText(probe?.BrAccountGuard));
+            sb.AppendLine("  ffmpeg 位置   : " + FfmpegText());
+            sb.AppendLine();
+            sb.AppendLine("消息通道：");
+            sb.AppendLine("  收到 " + (probe?.StReceived ?? 0) + " · 回复 " + (probe?.StReplied ?? 0)
+                          + " · 发送 " + (probe?.StSent ?? 0) + " · 失败 " + (probe?.StFailed ?? 0));
+            sb.AppendLine("  最后一条消息  : " + (probe != null && probe.StLastMessageAt > 0
+                ? DateTimeOffset.FromUnixTimeMilliseconds(probe.StLastMessageAt).LocalDateTime.ToString("yyyy-MM-dd HH:mm:ss") : "还没有"));
+            sb.AppendLine("  最近一次失败  : " + (string.IsNullOrEmpty(probe?.StLastError) ? "无" : probe.StLastError));
+            var (traceLines, traceRaw) = TraceStats();
+            sb.AppendLine("  判定链        : " + traceLines + " 条（data/trace），原文副本 " + traceRaw + " 条"
+                          + "（另含最近 30 分钟的原文，最多 60 条）");
+            sb.AppendLine();
+            sb.AppendLine("运行时：");
+            sb.AppendLine("  runtime 清单  : " + ManifestText());
+            sb.AppendLine("  Python 依赖   : " + PythonDepsText());
+            sb.AppendLine();
             sb.AppendLine("各日志文件大小：");
-            foreach (var f in LogFiles)
-                sb.AppendLine("  data/" + f.PadRight(16) + SizeText(FileLen(Path.Combine(_sup.DataDir, f))));
-            sb.AppendLine("  data/wechat-bridge-4x.log  " + SizeText(FileLen(Path.Combine(_sup.DataDir, "wechat-bridge-4x.log"))));
+            foreach (var f in AllLogFiles())
+                sb.AppendLine("  data/" + f.PadRight(24) + SizeText(FileLen(Path.Combine(_sup.DataDir, f)))
+                              + (FileLen(Path.Combine(_sup.DataDir, f + ".1")) > 0
+                                  ? "（+.1 " + SizeText(FileLen(Path.Combine(_sup.DataDir, f + ".1"))) + "）" : ""));
             sb.AppendLine("磁盘剩余        : " + DiskFreeText());
             sb.AppendLine("run-* 归档数量  : " + RunDirs().Count() + " 份（data/logs 下，启动器保留最近 5 份）");
             sb.AppendLine();
@@ -741,8 +831,74 @@ namespace WhaleLauncher.Views
             return JsonValue.Create(err);
         }
 
-        private string LauncherVersion()
+        // ── info.txt 的现场信息（都能单独回答一个「为什么她不回」）─────
+        private static string BoolText(bool? v) => v == null ? "未知" : (v == true ? "是" : "否");
+
+        private static string AccountText(Snapshot s)
         {
+            if (s == null) return "未知";
+            var nick = string.IsNullOrEmpty(s.BrAccountNick) ? "（没上报昵称）" : s.BrAccountNick;
+            var ok = s.BrAccountOk ? "窗口已确认" : "窗口未确认";
+            var why = string.IsNullOrEmpty(s.BrAccountWhy) ? "" : "：" + s.BrAccountWhy;
+            return nick + "（" + ok + why + "）";
+        }
+
+        private static string WechatProcessText()
+        {
+            try
+            {
+                var parts = new List<string>();
+                foreach (var name in new[] { "Weixin", "WeChat" })
+                {
+                    var ps = Process.GetProcessesByName(name);
+                    if (ps.Length == 0) continue;
+                    parts.Add(name + " " + ps.Length + " 个（pid " + string.Join(",", ps.Take(3).Select(p => p.Id)) + "）");
+                    foreach (var p in ps) p.Dispose();
+                }
+                return parts.Count > 0 ? string.Join(" / ", parts) : "没找到（Weixin.exe / WeChat.exe 都没有）";
+            }
+            catch (Exception ex) { return "读取失败：" + ex.Message; }
+        }
+
+        private string FfmpegText()
+        {
+            try
+            {
+                var bundled = Path.Combine(_sup.BaseDir, "runtime", "ffmpeg", "bin", "ffmpeg.exe");
+                if (File.Exists(bundled)) return "包里自带（runtime\\ffmpeg\\bin\\ffmpeg.exe）";
+                return "包里没有（微信 4.x 的 HEVC 图片转 jpg 要用它）";
+            }
+            catch { return "未知"; }
+        }
+
+        private string ManifestText()
+        {
+            try
+            {
+                var f = Path.Combine(_sup.BaseDir, "runtime", "manifest.json");
+                if (!File.Exists(f)) return "没有 manifest.json（旧运行时目录）";
+                var size = new FileInfo(f).Length;
+                var at = File.GetLastWriteTime(f).ToString("yyyy-MM-dd HH:mm");
+                return "有（" + size + " 字节，生成于 " + at + "）";
+            }
+            catch (Exception ex) { return "读取失败：" + ex.Message; }
+        }
+
+        private string PythonDepsText()
+        {
+            try
+            {
+                var sp = Path.Combine(_sup.BaseDir, "runtime", "python", "Lib", "site-packages");
+                if (!Directory.Exists(sp)) return "没有 site-packages（运行时可能没装好）";
+                var dirs = Directory.GetDirectories(sp);
+                var key = new[] { "win32gui", "win32api", "uiautomation", "wechatauto" }
+                    .Select(n => n + (Directory.Exists(Path.Combine(sp, n)) ? "✓" : "✗"));
+                return dirs.Length + " 个包；关键依赖 " + string.Join(" ", key);
+            }
+            catch (Exception ex) { return "读取失败：" + ex.Message; }
+        }
+
+        private string LauncherVersion()        {
             // 和 MainWindow 读版本的方式一致：优先 package.json，没有再退回程序集版本
             try
             {
@@ -895,10 +1051,21 @@ namespace WhaleLauncher.Views
             {
                 foreach (var kv in obj.ToList())
                 {
+                    // 密钥类：整个值换掉；隐私类（人名/别名/名单）：数组逐项换，保留条数
                     if (SecretKey.IsMatch(kv.Key))
                     {
                         if (kv.Value is JsonObject || kv.Value is JsonArray) RedactNode(kv.Value);
                         else obj[kv.Key] = "***";
+                    }
+                    else if (PrivacyKey.IsMatch(kv.Key))
+                    {
+                        if (kv.Value is JsonArray arr)
+                        {
+                            for (var i = 0; i < arr.Count; i++)
+                                if (arr[i] is JsonValue) arr[i] = "***";
+                        }
+                        else if (kv.Value is JsonValue) obj[kv.Key] = "***";
+                        else if (kv.Value != null) RedactNode(kv.Value);
                     }
                     else if (kv.Value != null)
                     {

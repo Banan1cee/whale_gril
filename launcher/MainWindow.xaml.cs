@@ -399,7 +399,7 @@ namespace WhaleLauncher
                 }
                 catch (Exception ex)
                 {
-                    _sup.Say("页面创建失败（" + key + "）：" + ex.Message);
+                    _sup.SayError("页面创建失败（" + key + "）：" + ex.Message);
                     page = new PlaceholderPage(key, "这一页创建失败了：" + ex.Message);
                 }
                 _pages[key] = page;
@@ -497,7 +497,7 @@ namespace WhaleLauncher
             }
             catch (Exception ex)
             {
-                _sup.Say("打开数据目录失败：" + ex.Message);
+                _sup.SayWarn("打开数据目录失败：" + ex.Message);
             }
         }
 

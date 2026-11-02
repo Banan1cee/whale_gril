@@ -265,7 +265,10 @@ const DEFAULT_CONFIG = {
     wechat: { enabled: true, inboundToken: 'change-me-wechat', outboundUrl: '', outboundHeaders: {} },
     douyin: { enabled: false, inboundToken: 'change-me-douyin', outboundUrl: '', outboundHeaders: {} },
   },
-  log: { level: 'info', fileLevel: 'debug' },
+  // 日志：level 管控制台，fileLevel 管文件（默认 debug 全量）。
+  // trace 记「为什么回/为什么不回」的判定链（不含正文）；traceRaw 在本地留 24 小时的原文副本，
+  // 只有导出日志包时手动勾选才会带出去。
+  log: { level: 'info', fileLevel: 'debug', trace: true, traceRaw: true },
 };
 
 function isPlainObject(v) {

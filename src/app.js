@@ -17,6 +17,7 @@ const memoryBackup = require('./memory/backup');
 const mediaCache = require('./adapters/mediaCache');
 const { DeepSeekClient } = require('./llm/client');
 const { Bot } = require('./pipeline/chat');
+const { createTrace } = require('./core/trace');
 const { createGateways } = require('./adapters/gateway');
 const personaStore = require('./persona/store');
 const { StickerService } = require('./services/stickerService');
@@ -53,7 +54,10 @@ function createRuntime({ root = path.resolve(__dirname, '..'), env = process.env
       );
     }
   } catch { /* 校验失败不影响启动 */ }
-  const store = new Store({ file: config.paths.storeFile, limits: config.memory, logger });
+  // 模块子日志：info 行首带 [memory] / [llm] 这种模块名，warn/error 仍由 logger 自己抓 file:line。
+  // 测试里传进来的 logger 是桩对象、没有 child，这里兜一下，别让日志把启动搞挂。
+  const child = (name) => (logger && typeof logger.child === 'function' ? logger.child(name) : logger);
+  const store = new Store({ file: config.paths.storeFile, limits: config.memory, logger: child('memory') });
   // 启动时先「忘」一遍：太久没被想起、又不重要的记忆沉到归档，别一直占着检索位
   try {
     const swept = store.sweep();
@@ -85,6 +89,7 @@ function createRuntime({ root = path.resolve(__dirname, '..'), env = process.env
   }
 
   const runtime = { config, logger, store, startedAt: Date.now(), version: VERSION };
+  runtime.child = child;
 
   // 长时间挂着也要有断点：每 30 分钟留一份（启动那份可能已经是几十小时前了）
   try {
@@ -101,19 +106,27 @@ function createRuntime({ root = path.resolve(__dirname, '..'), env = process.env
     runtime.snapshotTimer = timer;
   } catch { /* 定时器起不来不影响主流程 */ }
 
-  runtime.llm = new DeepSeekClient({ config, logger });
+  runtime.llm = new DeepSeekClient({ config, logger: child('llm') });
   // 记忆层用同一个模型做 episode 摘要/抽取（后台跑，不在回复热路径）
   store.llm = runtime.llm;
-  runtime.bot = new Bot({ config, store, llm: runtime.llm, logger });
+  // 判定链：为什么回 / 为什么不回。默认只记原因和状态；正文在 data/trace/raw 里留 24 小时，
+  // 导出日志包时默认不带（要带得在启动器里手动勾选）。
+  const trace = createTrace({
+    dataDir: config.paths.dataDir,
+    enabled: !(config.log && config.log.trace === false),
+    raw: Boolean(config.log && config.log.traceRaw !== false),
+  });
+  runtime.trace = trace;
+  runtime.bot = new Bot({ config, store, llm: runtime.llm, logger: child('pipeline'), trace });
   // 表情包任务队列：内存态，重启不重放（避免把上一条没发出去的表情再补发一次）
   // store 用来记动作账：发了哪张、桥接确认没确认，下一轮提示词才看得见
-  runtime.stickerService = new StickerService(config, { store, logger });
+  runtime.stickerService = new StickerService(config, { store, logger: child('sticker') });
   runtime.bot.stickerService = runtime.stickerService;
   // 联系人缓存：桥接推上来的 wxid 清单，给启动器选择器和 care 白名单用
-  runtime.contacts = new ContactsCache(config, { logger });
+  runtime.contacts = new ContactsCache(config, { logger: child('contacts') });
   // 提醒：到点由桥接来取（/api/reminders/due），这里只管存和状态
   runtime.reminders = new ReminderService(config, {
-    logger,
+    logger: child('reminder'),
     // 「刚聊过先跳过」规则要看会话最后一条消息的时间
     lastActiveAt: (wxid) => {
       const keys = [`wechat:u:${wxid}`, `wechat:g:${wxid}`];
@@ -149,7 +162,7 @@ function createRuntime({ root = path.resolve(__dirname, '..'), env = process.env
   } catch (err) {
     logger.warn('记忆启动恢复失败（不影响聊天）：' + ((err && err.message) || err));
   }
-  runtime.gateways = createGateways({ config, bot: runtime.bot, logger });
+  runtime.gateways = createGateways({ config, bot: runtime.bot, logger: child('gateway') });
   watchConfigFile(runtime);
   return runtime;
 }

@@ -39,6 +39,7 @@ namespace WhaleLauncher
         public int BrLastSeenSec = -1;
         public bool BrUia;
         public bool BrListener;
+        public bool BrFfmpeg;
         public bool BrRest;
         public bool BrAccountGuard;
         public bool BrAccountOk;
@@ -100,7 +101,13 @@ namespace WhaleLauncher
             {
                 var logsRoot = Path.Combine(DataDir, "logs");
                 Directory.CreateDirectory(logsRoot);
-                var current = new[] { "launcher.log", "bridge.log", "kernel.log", "whale.log" }
+                // 崩溃/卡死/UIA 这几个也得跟着归档：导出「上次启动」时它们才是重点
+                var current = new[]
+                    {
+                        "launcher.log", "bridge.log", "kernel.log", "whale.log",
+                        "crash.log", "bridge-crash.log", "bridge-hang.log", "bridge-boot.log",
+                        "uia-fault.log", "uia-selftest.log", "wechat-bridge-4x.log",
+                    }
                     .Select(f => Path.Combine(DataDir, f))
                     .Where(f => File.Exists(f) && new FileInfo(f).Length > 0)
                     .ToList();
@@ -125,6 +132,9 @@ namespace WhaleLauncher
 
         // ── 日志 ────────────────────────────────────────────────
         private static readonly Regex TimePrefix = new Regex(@"^\[(\d{2}:\d{2}:\d{2})\]\s?", RegexOptions.Compiled);
+        // 内核/桥接现在会打显式级别（[12:00:00] WARN [engine:3115] ...）。
+        // 有级别就照抄，别再靠关键词猜——猜的结果直接决定「只看错误」筛得准不准。
+        private static readonly Regex LevelPrefix = new Regex(@"^(DEBUG|INFO|WARN|ERROR)\s+", RegexOptions.Compiled);
 
         private static char InferLevel(string s)
         {
@@ -136,7 +146,10 @@ namespace WhaleLauncher
             return 'i';
         }
 
-        private void Emit(string src, string raw)
+        private static char LevelOfToken(string token)
+            => token == "ERROR" ? 'e' : token == "WARN" ? 'w' : token == "INFO" ? 'i' : 'd';
+
+        private void Emit(string src, string raw, char? forced = null)
         {
             var text = raw ?? "";
             var at = DateTime.Now;
@@ -146,7 +159,14 @@ namespace WhaleLauncher
                 if (TimeSpan.TryParse(m.Groups[1].Value, out var ts)) at = DateTime.Today.Add(ts);
                 text = text.Substring(m.Length);
             }
-            var line = new LogLine { At = at, Src = src, Level = InferLevel(text), Text = text };
+            char? explicitLevel = forced;
+            var lm = LevelPrefix.Match(text);
+            if (lm.Success)
+            {
+                explicitLevel ??= LevelOfToken(lm.Groups[1].Value);
+                text = text.Substring(lm.Length);
+            }
+            var line = new LogLine { At = at, Src = src, Level = explicitLevel ?? InferLevel(text), Text = text };
 
             lock (_histLock)
             {
@@ -180,6 +200,12 @@ namespace WhaleLauncher
         }
 
         public void Say(string text) => Emit("L", text);
+
+        /// <summary>已降级/已自愈，但值得记一笔。诊断页「只看错误」会把它算进去。</summary>
+        public void SayWarn(string text) => Emit("L", text, 'w');
+
+        /// <summary>这次功能真的坏了（进程起不来、连续崩溃、找不到运行时）。</summary>
+        public void SayError(string text) => Emit("L", text, 'e');
 
         public List<LogLine> History(int max = 5000)
         {
@@ -235,7 +261,7 @@ namespace WhaleLauncher
                 catch { }
                 await Task.Delay(250);
             }
-            Say("内核尚未就绪，请查看诊断日志");
+            SayWarn("内核尚未就绪，请查看诊断日志");
             return false;
         }
 
@@ -244,9 +270,9 @@ namespace WhaleLauncher
             lock (_processLock)
             {
                 if (_disposed || BridgeRunning) return;
-                if (!NodeRunning) { Say("内核尚未启动，请先启动服务"); return; }
+                if (!NodeRunning) { SayWarn("内核尚未启动，请先启动服务"); return; }
                 var exe = Path.Combine(BaseDir, "runtime", "python", "python.exe");
-                if (!File.Exists(exe)) { Say("找不到内置 Python，桥接起不来，请检查安装包"); return; }
+                if (!File.Exists(exe)) { SayError("找不到内置 Python，桥接起不来，请检查安装包"); return; }
                 try { File.Delete(Path.Combine(DataDir, "bridge-ready.json")); } catch { }
                 try { File.Delete(Path.Combine(DataDir, "PAUSED")); } catch { }
                 _bridgeWanted = true;
@@ -268,8 +294,8 @@ namespace WhaleLauncher
                     || !ReferenceEquals(_bridge, exited) || !NodeRunning
                     || File.Exists(Path.Combine(DataDir, "PAUSED"))) return;
                 if ((DateTime.UtcNow - _bridgeStartedAt).TotalSeconds >= 60) _restartCount = 0;
-                if (++_restartCount > 3) { _bridgeWanted = false; Say("桥接连续异常退出，已停止自动重启，请查看诊断"); return; }
-                Say(code == 7 ? "桥接请求重新连接，正在重启…" : "桥接异常退出，正在自动恢复…");
+                if (++_restartCount > 3) { _bridgeWanted = false; SayError("桥接连续异常退出，已停止自动重启，请查看诊断"); return; }
+                Emit("L", code == 7 ? "桥接请求重新连接，正在重启…" : "桥接异常退出，正在自动恢复…", 'w');
                 _bridge = null;
                 StartBridge();
             }
@@ -318,11 +344,32 @@ namespace WhaleLauncher
                 if (src == "K") psi.Environment["WHALE_CONTROL_STDIN"] = "1";
 
                 var p = new Process { StartInfo = psi, EnableRaisingEvents = true };
+                // 进程崩掉时，真正的死因往往只在最后几行 stderr 里（Python traceback /
+                // node 的 SyntaxError）。留一份，退出时补一条「退出前最后几行」。
+                var errTail = new Queue<string>(4);
                 p.OutputDataReceived += (_, e) => { if (e.Data != null) Emit(src, e.Data); };
-                p.ErrorDataReceived += (_, e) => { if (e.Data != null) Emit(src, e.Data); };
+                p.ErrorDataReceived += (_, e) =>
+                {
+                    if (e.Data == null) return;
+                    lock (errTail)
+                    {
+                        errTail.Enqueue(e.Data);
+                        while (errTail.Count > 3) errTail.Dequeue();
+                    }
+                    Emit(src, e.Data);
+                };
                 p.Exited += (_, __) =>
                 {
-                    Emit(src, $"{what}已退出（code={TryExitCode(p)}）");
+                    var code = TryExitCode(p);
+                    // 非 0 就是异常退出：标成 error，别让它在诊断页里混进 info 被过滤掉
+                    Emit(src, $"{what}已退出（code={code}，pid={SafePid(p)}）", code == "0" ? (char?)'i' : 'e');
+                    if (code != "0")
+                    {
+                        string[] tail;
+                        lock (errTail) tail = errTail.ToArray();
+                        if (tail.Length > 0)
+                            Emit(src, $"{what}退出前 stderr 最后 {tail.Length} 行：" + string.Join(" ⏎ ", tail), 'e');
+                    }
                     if (src == "B") _ = RecoverBridgeAsync(p, _restartGeneration);
                 };
                 p.Start();
@@ -341,6 +388,11 @@ namespace WhaleLauncher
         private static string TryExitCode(Process p)
         {
             try { return p.ExitCode.ToString(); } catch { return "?"; }
+        }
+
+        private static string SafePid(Process p)
+        {
+            try { return p.Id.ToString(); } catch { return "?"; }
         }
 
         public void StopAll()
@@ -430,6 +482,7 @@ namespace WhaleLauncher
                             s.BrLastSeenSec = (int)Long(br, "lastSeenSec");
                             s.BrUia = Bool(br, "uia");
                             s.BrListener = Bool(br, "listener");
+                            s.BrFfmpeg = Bool(br, "ffmpeg");
                             s.BrRest = Bool(br, "rest");
                             s.BrAccount = Str(br, "account");
                             s.BrAccountNick = Str(br, "accountNick");
