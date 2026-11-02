@@ -47,6 +47,8 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayName={#AppName}
 UninstallDisplayIcon={app}\{#AppExe}
+; 安装包自己的图标：编译期读，不进包（所以 launcher 源码不进包也不影响）
+SetupIconFile={#SrcDir}\launcher\Assets\app.ico
 SetupLogging=yes
 
 [Languages]

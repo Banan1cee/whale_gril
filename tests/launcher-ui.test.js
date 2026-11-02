@@ -200,3 +200,21 @@ test('启动脚本和新版 exe 都在仓库里', () => {
     assert.ok(fs.statSync(file).size > 100000, `${rel} 看起来不是完整 exe`);
   }
 });
+
+test('图标接好了：csproj 的 exe 图标 + 窗口图标 + 安装包图标', () => {
+  const csproj = readLauncher('WhaleLauncher.csproj');
+  assert.match(csproj, /<ApplicationIcon>Assets\\app\.ico<\/ApplicationIcon>/, 'csproj 没有 ApplicationIcon');
+  assert.match(csproj, /<Resource Include="Assets\\app\.ico"\s*\/>/, 'app.ico 没当 WPF 资源，窗口 Icon 会找不到');
+
+  const win = readLauncher('MainWindow.xaml').slice(0, 800);
+  assert.match(win, /Icon="Assets\/app\.ico"/, 'MainWindow 没挂窗口图标');
+
+  const ico = path.join(launcher, 'Assets', 'app.ico');
+  assert.ok(fs.existsSync(ico), '缺少 launcher/Assets/app.ico');
+  const head = fs.readFileSync(ico).subarray(0, 4);
+  assert.deepEqual([...head], [0x00, 0x00, 0x01, 0x00], 'app.ico 不是 ICO 文件');
+  assert.ok(fs.statSync(ico).size > 20000, 'app.ico 太小，多半只有单尺寸');
+
+  const iss = read('installer/whale.iss');
+  assert.match(iss, /SetupIconFile=\{#SrcDir\}\\launcher\\Assets\\app\.ico/, '安装包没有 SetupIconFile');
+});

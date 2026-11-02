@@ -1,0 +1,7 @@
+﻿<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <!-- 第 2 轮：安装包。文件名带版本号（whale-girl-4.0.0-setup.exe），
+       用通配符；默认 max-matches=1，所以必须只匹配到一个文件。 -->
+  <pe-file path="whale-girl-*-setup.exe">
+    <authenticode-sign />
+  </pe-file>
+</artifact-configuration>
