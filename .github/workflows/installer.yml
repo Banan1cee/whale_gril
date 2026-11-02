@@ -418,11 +418,19 @@ jobs:
           Write-Output "包内 Node：$(& (Join-Path $dir 'runtime\node.exe') -v)"
 
           Write-Output '阶段 4/5 包内 Python import…'
-          # 同样加超时：import uiautomation 在某些无交互会话里会等 COM，一挂就是几十分钟
+          # 同样加超时：import uiautomation 在某些无交互会话里会等 COM，一挂就是几十分钟。
+          # 注意别用 Start-Process -ArgumentList '-c','import ...'：PowerShell 会把数组按空格
+          # 拼成一条命令行，`-c` 后面带空格的代码会被拆开，python 收到的是 `-c import`，
+          # 于是报 SyntaxError。写成临时 .py 文件最省事。
           $py = Join-Path $dir 'runtime\python\python.exe'
+          $checkFile = Join-Path $env:RUNNER_TEMP 'whale-import-check.py'
+          Set-Content -LiteralPath $checkFile -Encoding utf8 -Value @(
+            'import wechatauto, psutil, win32com, uiautomation',
+            "print('imports ok')"
+          )
           $pyOut = Join-Path $env:RUNNER_TEMP 'whale-smoke-import.log'
           $pyProc = Start-Process -FilePath $py `
-              -ArgumentList '-c', "import wechatauto, psutil, win32com, uiautomation; print('imports ok')" `
+              -ArgumentList ('"{0}"' -f $checkFile) `
               -RedirectStandardOutput $pyOut -RedirectStandardError ($pyOut + '.err') -PassThru -NoNewWindow
           if (-not $pyProc.WaitForExit(180000)) {
             try { $pyProc.Kill() } catch { }
