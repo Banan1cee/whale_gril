@@ -85,6 +85,7 @@ Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon
 
 [Run]
+Filename: "{app}\runtime\vb-cable\VBCABLE_Setup_x64.exe"; Description: "安装 VB-CABLE 虚拟声卡（自动语音需要；VB-Audio Donationware）"; Verb: "runas"; Flags: shellexec postinstall skipifsilent unchecked; Check: FileExists(ExpandConstant('{app}\runtime\vb-cable\VBCABLE_Setup_x64.exe'))
 Filename: "{app}\{#AppExe}"; Description: "启动{#AppName}"; Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]

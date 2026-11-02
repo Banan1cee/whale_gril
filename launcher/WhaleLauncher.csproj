@@ -30,6 +30,7 @@
 
   <!-- 图标同时当资源：MainWindow 的 Icon="Assets/app.ico" 走 pack URI 读这个 -->
   <ItemGroup>
+    <PackageReference Include="NAudio" Version="2.2.1" />
     <Resource Include="Assets\app.ico" />
   </ItemGroup>
 

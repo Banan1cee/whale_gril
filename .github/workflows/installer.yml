@@ -166,6 +166,10 @@ jobs:
         shell: pwsh
         run: pwsh -NoProfile -File scripts/fetch-dotnet-runtime.ps1
 
+      - name: 下载 VB-CABLE 官方驱动（校验签名，不安装）
+        shell: pwsh
+        run: pwsh -NoProfile -File scripts/fetch-vb-cable.ps1
+
       - name: 发布启动器（framework-dependent 单文件）
         shell: pwsh
         run: |

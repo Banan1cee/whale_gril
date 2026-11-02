@@ -1,7 +1,6 @@
 <Application x:Class="WhaleLauncher.App"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             StartupUri="MainWindow.xaml">
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
     <Application.Resources>
         <!-- 主题色由 Appearance.cs 在启动时和切换时改写；这里只是深色默认值 -->        <SolidColorBrush x:Key="Bg" Color="#FF080C12" />
         <SolidColorBrush x:Key="BgDeep" Color="#FF05080D" />

@@ -14,8 +14,16 @@ namespace WhaleLauncher
         private Mutex _instance;
         private bool _ownsInstance;
 
-        protected override void OnStartup(StartupEventArgs e)
+        protected override async void OnStartup(StartupEventArgs e)
         {
+            if (e.Args.Length == 2 && e.Args[0] == "--voice-reply-job")
+            {
+                ShutdownMode = ShutdownMode.OnExplicitShutdown;
+                int code = 2;
+                try { code = await AutoVoiceWorker.Run(AppContext.BaseDirectory, e.Args[1]); }
+                finally { Shutdown(code); }
+                return;
+            }
             // 自更新后重启会带 --replace <pid>：等旧实例真的退出，再去抢单实例锁
             WaitForReplacedInstance();
             CleanupOldExes();
@@ -35,6 +43,8 @@ namespace WhaleLauncher
             Appearance.ApplyTheme();
             DispatcherUnhandledException += (_, ex) => Crash("UI", ex.Exception);
             AppDomain.CurrentDomain.UnhandledException += (_, ex) => Crash("进程", ex.ExceptionObject as Exception);
+            MainWindow = new MainWindow();
+            MainWindow.Show();
         }
 
         protected override void OnExit(ExitEventArgs e)

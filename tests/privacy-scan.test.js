@@ -54,6 +54,7 @@ test('群号 / 手机号 / 邮箱 / 密钥 / JWT 会命中，示例值不会', (
   assert.deepEqual(scanText('联系 dev@example.com'), [], '示例域名不算');
 
   assert.ok(rulesOf(scanText('key ' + 'sk-' + 'abcdefghijklmnopqrstuvwx')).includes('密钥'));
+  assert.ok(rulesOf(scanText('key ' + 'brz_' + 'abcdefghijklmnopqrstuvwx_12345678')).includes('BreezeBlue 密钥'));
   assert.ok(rulesOf(scanText('AKIA' + 'ABCDEFGHIJKLMNOP')).includes('云服务密钥'));
   const jwt = 'eyJhbGciOiJIUzI1NiJ9.' + 'eyJzdWIiOiIxMjM0NTY3ODkwIn0.' + 'abcdefghij';
   assert.ok(rulesOf(scanText('token ' + jwt)).includes('JWT'));

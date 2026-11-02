@@ -51,3 +51,8 @@ tests/launcher/**/obj/
 
 # 便携运行环境随发行包提供，不提交 Python 依赖及运行时缓存
 runtime/
+
+# 本机备份与新增语音功能测试产物，不上传 GitHub
+/backup/
+/tests/voice-send/bin/
+/tests/voice-send/obj/

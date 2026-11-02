@@ -51,6 +51,8 @@ _EXAMPLES_DIR = os.path.dirname(os.path.abspath(__file__))
 if _EXAMPLES_DIR not in sys.path:
     sys.path.insert(0, _EXAMPLES_DIR)
 from reminder_watch import start_reminder_watch
+import voice_reply
+import voice_send_test
 from sticker_transport import (guarded_send as guarded_sticker_send, read_enabled_config,
                                resolve_target as resolve_sticker_target, result as sticker_result,
                                WindowsDesktop, quarantined_input_value,
@@ -2957,6 +2959,40 @@ def main():
                 log("表情包结果：", outcome["status"], outcome["error"])
         return outcome
 
+    def send_voice_reply(text, who, username, cancelled=None, outcome=None):
+        nonlocal gui
+        if not group_is_alive(username) or not account_send_allowed("自动语音"):
+            return False
+        with send_lock:
+            if cancelled is not None and cancelled():
+                if outcome is not None:
+                    outcome.update(Status="failed", Error="语音测试已取消")
+                return False
+            if not sticker_quarantine_allows(username, who):
+                return False
+            hwnd = int(ACCOUNT.get("hwnd") or 0)
+            if not hwnd:
+                return False
+            def prepare():
+                nonlocal gui
+                if not account_send_allowed("自动语音发送前") or int(ACCOUNT.get("hwnd") or 0) != hwnd:
+                    return ""
+                with gui_lock:
+                    if gui is None:
+                        gui = WeChatGUI()
+                    bind_gui_window(gui)
+                    u = gui._get_uia()
+                    if u is None:
+                        return ""
+                    keys = aliases_for(username, who)
+                    if u.current_chat() not in keys and not u.open_chat(keys):
+                        return ""
+                    current = str(u.current_chat() or "")
+                    if current not in keys:
+                        return ""
+                    return current
+            return voice_reply.deliver(ROOT, text, hwnd, prepare, log, cancelled=cancelled, outcome=outcome)
+
     def send_text(text, chat_display_name, chat_username="", force=False, quote_text=None):
         # force 仅为兼容旧调用方保留：3.9 起没有「离开/游戏排队」了，它不再改变发送行为。
         nonlocal gui
@@ -3527,6 +3563,13 @@ def main():
             log("回复", ("群" if is_group else "私聊"), target, "→", nickname, "：", (bubbles[0] or "")[:40])
 
             first = True
+            # Select once per complete reply, never once per text bubble.
+            if (not data.get("error") and not data.get("commandType")
+                    and voice_reply.choose(voice_reply.settings(ROOT), content, is_group, random.random)):
+                spoken = "\n".join(line.strip() for line in bubbles if line.strip())
+                if send_voice_reply(spoken, target, username):
+                    return  # Voice replaces text and stickers; uncertain sends are not repeated.
+                log("语音合成或准备失败，回退本条原始文字：", target)
             for line in bubbles:
                 if not line:
                     continue
@@ -3590,6 +3633,16 @@ def main():
             time.sleep(5)
 
     threading.Thread(target=sticker_test_loop, daemon=True).start()
+
+    def voice_test_loop():
+        while True:
+            try:
+                voice_send_test.process_pending(ROOT, send_voice_reply)
+            except Exception:
+                pass
+            time.sleep(0.25)
+
+    threading.Thread(target=voice_test_loop, daemon=True, name="voice-send-test").start()
 
 
     def merge_text_batch(run, username):

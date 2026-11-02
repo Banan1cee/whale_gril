@@ -19,8 +19,10 @@ const read = (rel) => fs.readFileSync(path.join(root, rel), 'utf8').replace(/^\u
 const DEAD_SECTIONS = ['share', 'digest'];
 const DEAD_WORDS = /主动分享|消息汇总/;
 
-test('两份配置里不再有 share / digest 段', () => {
+test('出厂配置和存在的本机配置里不再有 share / digest 段', () => {
   for (const name of ['config.json', 'config.example.json']) {
+    // A clean checkout intentionally has no personal config.json.
+    if (name === 'config.json' && !fs.existsSync(path.join(root, name))) continue;
     let raw;
     try {
       raw = JSON.parse(read(name));
