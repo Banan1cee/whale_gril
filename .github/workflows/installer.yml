@@ -32,6 +32,8 @@ on:
 
 permissions:
   contents: write
+  # SignPath 那步要读本次运行的 artifact 和 job 信息
+  actions: read
 
 concurrency:
   group: installer-${{ github.ref }}
@@ -43,6 +45,11 @@ env:
   PYTHONIOENCODING: utf-8
   DOTNET_NOLOGO: '1'
   DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+  # 签名走哪条路（仓库 Settings → Variables 里改）：
+  #   signpath = SignPath.io 免费 OSS 签名（不需要证书，签名在 SignPath 服务器上做）
+  #   pfx      = 自备 PFX 证书 + secrets（老路子，还留着）
+  #   留空     = 不签名，摘要里写明
+  SIGNING_MODE: ${{ vars.SIGNING_MODE }}
 
 jobs:
   installer:
@@ -174,8 +181,58 @@ jobs:
           $exe = Get-Item .\WhaleLauncher.exe
           Write-Output ("启动器：{0:N0} KB，文件版本 {1}" -f ($exe.Length / 1KB), $exe.VersionInfo.FileVersion)
 
-      # 启动器必须先签、后编译安装包：反过来的话安装包里嵌的还是未签名 exe
-      - name: 签启动器（没有证书就跳过）
+      # ---------- 签名（第 1 轮：启动器）----------
+      # 顺序不能反：启动器必须先签、后编译安装包，否则包里嵌的还是未签名 exe。
+      # 两条路线二选一，由仓库变量 SIGNING_MODE 决定。
+
+      - name: 上传未签名启动器（SignPath 取件用）
+        id: upload-unsigned-launcher
+        if: env.SIGNING_MODE == 'signpath'
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-launcher
+          path: WhaleLauncher.exe
+          # 不打包成 zip：SignPath 那步加 skip-decompress，直接签裸 exe
+          # （对应 SignPath 里的 artifact configuration 根元素是 <pe-file>）
+          archive: false
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: 签启动器（SignPath）
+        id: signpath-launcher
+        if: env.SIGNING_MODE == 'signpath'
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORG_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ github.ref_type == 'tag' && 'release-signing' || 'test-signing' }}
+          artifact-configuration-slug: whale-launcher
+          github-artifact-id: ${{ steps.upload-unsigned-launcher.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed/launcher
+          skip-decompress: true
+
+      - name: 换上签好名的启动器
+        if: env.SIGNING_MODE == 'signpath'
+        shell: pwsh
+        run: |
+          $signed = @(Get-ChildItem signed/launcher -Recurse -Filter 'WhaleLauncher.exe' -File)
+          if ($signed.Count -ne 1) {
+            Write-Output "::error title=SignPath 回包不对::signed/launcher 里应有 1 个 WhaleLauncher.exe，实际 $($signed.Count)"
+            exit 1
+          }
+          Copy-Item $signed[0].FullName .\WhaleLauncher.exe -Force
+          Copy-Item $signed[0].FullName .\launcher\publish\WhaleLauncher.exe -Force
+          $sig = Get-AuthenticodeSignature .\WhaleLauncher.exe
+          Write-Output "启动器签名：$($sig.Status) / $($sig.SignerCertificate.Subject)"
+          if ($sig.Status -ne 'Valid') {
+            Write-Output '::error title=SignPath 签名无效::拿回来的 exe 不是 Valid 签名'
+            exit 1
+          }
+
+      - name: 签启动器（PFX 证书，没有证书就跳过）
+        if: env.SIGNING_MODE != 'signpath'
         shell: pwsh
         env:
           WINDOWS_SIGNING_PFX_BASE64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
@@ -207,7 +264,53 @@ jobs:
           if ($LASTEXITCODE -ne 0) { Write-Output '::error title=安装包编译失败::ISCC 退出码非 0，看上面的编译日志'; exit 1 }
           Get-ChildItem artifacts/setup | Select-Object Name, @{ n = 'MB'; e = { [math]::Round($_.Length / 1MB, 1) } } | Format-Table -AutoSize
 
-      - name: 签安装包（没有证书就跳过）
+      # ---------- 签名（第 2 轮：安装包）----------
+
+      - name: 上传未签名安装包（SignPath 取件用）
+        id: upload-unsigned-setup
+        if: env.SIGNING_MODE == 'signpath'
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-setup
+          path: artifacts/setup/*.exe
+          archive: false
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: 签安装包（SignPath）
+        id: signpath-setup
+        if: env.SIGNING_MODE == 'signpath'
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORG_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ github.ref_type == 'tag' && 'release-signing' || 'test-signing' }}
+          artifact-configuration-slug: whale-setup
+          github-artifact-id: ${{ steps.upload-unsigned-setup.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed/setup
+          skip-decompress: true
+
+      - name: 换上签好名的安装包
+        if: env.SIGNING_MODE == 'signpath'
+        shell: pwsh
+        run: |
+          $signed = @(Get-ChildItem signed/setup -Recurse -Filter '*.exe' -File)
+          if ($signed.Count -ne 1) {
+            Write-Output "::error title=SignPath 回包不对::signed/setup 里应有 1 个 exe，实际 $($signed.Count)"
+            exit 1
+          }
+          Copy-Item $signed[0].FullName (Join-Path 'artifacts/setup' $signed[0].Name) -Force
+          $sig = Get-AuthenticodeSignature (Join-Path 'artifacts/setup' $signed[0].Name)
+          Write-Output "安装包签名：$($sig.Status) / $($sig.SignerCertificate.Subject)"
+          if ($sig.Status -ne 'Valid') {
+            Write-Output '::error title=SignPath 签名无效::拿回来的安装包不是 Valid 签名'
+            exit 1
+          }
+
+      - name: 签安装包（PFX 证书，没有证书就跳过）
+        if: env.SIGNING_MODE != 'signpath'
         shell: pwsh
         env:
           WINDOWS_SIGNING_PFX_BASE64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
@@ -298,10 +401,22 @@ jobs:
           $sig = Get-AuthenticodeSignature $setup.FullName
           $launcherSig = Get-AuthenticodeSignature '.\WhaleLauncher.exe'
           $signState = if ($sig.Status -eq 'Valid') { "已签名（$($sig.SignerCertificate.Subject)）" } else { "未签名（$($sig.Status)）" }
+          $modeText = if ($env:SIGNING_MODE) { $env:SIGNING_MODE } else { '（没配 SIGNING_MODE）' }
 
           Write-Output "安装包：$($setup.Name)（$mb MB）"
           Write-Output "SHA256：$hash"
           Write-Output "签名：$signState"
+          Write-Output "签名方式：$modeText"
+
+          # 配了签名方式就要求真签上：别把「配置写错所以没签」当成正常结果发出去
+          if ($env:SIGNING_MODE -and $sig.Status -ne 'Valid') {
+            Write-Output "::error title=签名没生效::SIGNING_MODE=$($env:SIGNING_MODE)，但安装包签名状态是 $($sig.Status)"
+            exit 1
+          }
+          if ($env:SIGNING_MODE -and $launcherSig.Status -ne 'Valid') {
+            Write-Output "::error title=签名没生效::启动器签名状态是 $($launcherSig.Status)"
+            exit 1
+          }
 
           '## 鲸鲸安装包' | Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
           '' | Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
@@ -311,13 +426,14 @@ jobs:
           "| 版本 | $env:version |" | Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
           "| 大小 | $mb MB |" | Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
           "| SHA256 | ``$hash`` |" | Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          "| 签名方式 | $modeText |" | Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
           "| 安装包签名 | $signState |" | Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
           "| 启动器签名 | $($launcherSig.Status) |" | Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
           "| 内置运行时 | Node $(& .\runtime\node.exe -v) / CPython $((& .\runtime\python\python.exe -c 'import sys;print(sys.version.split()[0])')) |" | Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
           "| 目标框架 | net10.0-windows（framework-dependent，缺 .NET 10 时安装器提权装） |" | Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
 
           if ($sig.Status -ne 'Valid') {
-            '未签名：仓库还没有配置代码签名证书。配置步骤见 `docs/打包与签名.md`。' | Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+            '未签名：没有配置签名（SignPath 变量 / PFX secrets）。配置步骤见 `docs/打包与签名.md`。' | Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
           }
 
       - name: 上传安装包

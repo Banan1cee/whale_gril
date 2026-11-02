@@ -1,0 +1,7 @@
+﻿<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <!-- 第 1 轮：启动器。CI 上传的是裸 exe（upload-artifact 的 archive: false），
+       所以根元素直接是 pe-file，不用套一层 zip 包裹。 -->
+  <pe-file path="WhaleLauncher.exe">
+    <authenticode-sign />
+  </pe-file>
+</artifact-configuration>

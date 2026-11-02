@@ -2,6 +2,40 @@
 
 ## 4.0
 
+### 图标 · 启动器换上了鲸鲸（右下角那只小人，左上角气泡裁掉）
+
+**以前启动器是没有图标的默认 exe 脸，任务栏、桌面快捷方式、安装包全长一个样。**
+
+- 新增 `launcher/Assets/app.ico`（16/20/24/32/40/48/64/96/128/256 十个尺寸，透明底），
+  素材是那张「哦鲸鲸…」表情图：只留右下角的小人，左上角的气泡和两个小圆点整块去掉
+  - 白底是连通到画面边界的白色才判为背景，头饰蕾丝、衣领、眼睛高光这些**被描边包住的白色**
+    不会被掏空
+  - 边缘做了 0.8px 羽化，缩放时不会有白边
+- 三处一起接上：`WhaleLauncher.csproj` 的 `<ApplicationIcon>`（exe 文件图标）、
+  `MainWindow.xaml` 的 `Icon="Assets/app.ico"`（窗口/任务栏图标）、
+  `installer/whale.iss` 的 `SetupIconFile`（安装包自己的图标）
+- 图标同时以 `<Resource>` 打进程序集，窗口图标走 pack URI 读，不额外落文件
+- `tests/launcher-ui.test.js` 新增一条契约：图标文件、ICO 头、csproj/XAML/iss 三处接线，
+  以后谁把 `ApplicationIcon` 删了，测试直接红
+
+### 签名 · CI 接上 SignPath（免费 OSS）＋ 签名变成流水线里的硬检查
+
+**以前只认「仓库 secrets 里放 PFX」一条路，没证书就静悄悄跳过，签没签上全靠人看摘要。**
+
+- `installer.yml` 加了一个开关变量 `SIGNING_MODE`：
+  `signpath` 走 SignPath.io 免费 OSS 签名，`pfx`／留空走原来的 `scripts/sign-windows.ps1`
+- SignPath 走两轮签名（顺序不能反）：启动器先签 → 回填根目录与 `launcher\publish` → 再编安装包 → 再签安装包
+  - 上传用 `actions/upload-artifact` 的 `archive: false`（传裸 exe），签名那步配 `skip-decompress: true`，
+    对应 SignPath 的 artifact configuration 根元素是 `<pe-file>`
+  - 签完把包下载回来，**立刻用 `Get-AuthenticodeSignature` 回读**，不是 `Valid` 就 fail
+- 流水线从「能签就签、签不上就算了」改成「配了 `SIGNING_MODE` 就必须签上」：
+  摘要那步检查两种产物的签名状态，不是 `Valid` 直接红，避免把「配置写错所以没签」当正常结果发出去
+- 新增 `.github/signpath/`：两份 artifact configuration（`whale-launcher.xml` / `whale-setup.xml`）
+  和一份对照表（后台要建哪些 slug、CI 里怎么引用）
+- `docs/打包与签名.md` 第四节重写：两条路（SignPath / PFX，或都不配）怎么选、要配哪些
+  secret 与 variable、SignPath 后台要建什么对象；并写明 2023 年 6 月起 OV/EV 证书的私钥
+  必须在硬件 token / HSM 里，新证书基本给不出 PFX
+
 ### 启动器设置页 · 标签贴近输入框 · 一键恢复默认 · 预算说明说人话
 
 **看图页那行「超时」跟同页对不齐、标签和输入框之间空半个屏幕、高级选项没有恢复默认 —— 这三件一起修。**
