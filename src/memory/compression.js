@@ -111,11 +111,12 @@ function recomputeSummary(chat) {
   chat.summary.updatedAt = Date.now();
 }
 
-/** summary 超 900：合并最旧两段（保留每段开头），直到回到上限 */
-function trimSummary(chat, { now = Date.now() } = {}) {
+/** summary 超上限（默认 900，随预算变化）：合并最旧两段（保留每段开头），直到回到上限 */
+function trimSummary(chat, { now = Date.now(), summaryTokens = LIMITS.summaryTokens } = {}) {
+  const limit = Math.max(100, Number(summaryTokens) || LIMITS.summaryTokens);
   const segments = Array.isArray(chat.summary.segments) ? chat.summary.segments : [];
   let guard = 0;
-  while (estimateTokens(segments.map((s) => s.text).join('\n')) > LIMITS.summaryTokens && segments.length > 1 && guard < 50) {
+  while (estimateTokens(segments.map((s) => s.text).join('\n')) > limit && segments.length > 1 && guard < 50) {
     guard += 1;
     const a = segments.shift();
     const b = segments.shift();
@@ -128,8 +129,8 @@ function trimSummary(chat, { now = Date.now() } = {}) {
       at: now,
     });
   }
-  if (segments.length === 1 && estimateTokens(segments[0].text) > LIMITS.summaryTokens) {
-    const textValue = segments[0].text.slice(0, LIMITS.summaryTokens);
+  if (segments.length === 1 && estimateTokens(segments[0].text) > limit) {
+    const textValue = segments[0].text.slice(0, limit);
     segments[0].text = textValue;
     segments[0].tokens = estimateTokens(textValue);
   }
@@ -138,7 +139,7 @@ function trimSummary(chat, { now = Date.now() } = {}) {
 }
 
 /** 写入一段摘要，并推进 coveredThroughSeq */
-function applySegment(chat, { text, fromSeq, toSeq, now = Date.now() }) {
+function applySegment(chat, { text, fromSeq, toSeq, now = Date.now(), summaryTokens = LIMITS.summaryTokens }) {
   const body = String(text || '').trim();
   if (!body) return false;
   chat.summary.segments = Array.isArray(chat.summary.segments) ? chat.summary.segments : [];
@@ -150,22 +151,32 @@ function applySegment(chat, { text, fromSeq, toSeq, now = Date.now() }) {
     at: now,
   });
   chat.summary.coveredThroughSeq = Math.max(Number(chat.summary.coveredThroughSeq) || 0, toSeq);
-  trimSummary(chat, { now });
+  trimSummary(chat, { now, summaryTokens });
   return true;
+}
+
+/** 解析压缩阈值：默认取 3,200 那套常量，store 会按 budgetPlan 传实际值 */
+function thresholds({ hardTrigger = LIMITS.hardTriggerTokens, recentLow = LIMITS.recentLowTokens, compressChunk = LIMITS.compressChunkTokens } = {}) {
+  const hard = Math.max(1, Number(hardTrigger) || LIMITS.hardTriggerTokens);
+  const low = Math.min(hard, Math.max(0, Number(recentLow) || LIMITS.recentLowTokens));
+  const chunk = Math.max(1, Number(compressChunk) || LIMITS.compressChunkTokens);
+  return { hard, low, chunk };
 }
 
 /**
  * 同步压缩：只用 pending 摘要或抽取式摘要，绝不等待模型。
+ * @param {{currentSeq?:number, now?:number, hardTrigger?:number, recentLow?:number, compressChunk?:number, summaryTokens?:number}} [opts]
  * @returns {{before:number, after:number, compressed:number, chunks:number}}
  */
-function compressSync(chat, { currentSeq = 0, now = Date.now() } = {}) {
+function compressSync(chat, { currentSeq = 0, now = Date.now(), hardTrigger, recentLow, compressChunk, summaryTokens } = {}) {
+  const bar = thresholds({ hardTrigger, recentLow, compressChunk });
   const before = recentTokens(chat, { currentSeq });
   let recent = recentSince(chat, { currentSeq });
   let tokens = before;
   let compressed = 0;
   let chunks = 0;
-  while (tokens > LIMITS.hardTriggerTokens && recent.length) {
-    const target = Math.max(LIMITS.compressChunkTokens, tokens - LIMITS.recentLowTokens);
+  while (tokens > bar.hard && recent.length) {
+    const target = Math.max(bar.chunk, tokens - bar.low);
     const { chunk, tokens: chunkTokens } = takeChunk(recent, target);
     if (!chunk.length) break;
     const fromSeq = chunk[0].seq;
@@ -179,7 +190,7 @@ function compressSync(chat, { currentSeq = 0, now = Date.now() } = {}) {
       textValue = extractor.extractiveSummary(chunk, 220);
     }
     if (!textValue) break;
-    applySegment(chat, { text: textValue, fromSeq, toSeq, now });
+    applySegment(chat, { text: textValue, fromSeq, toSeq, now, summaryTokens });
     recent = recent.slice(chunk.length);
     tokens -= chunkTokens;
     compressed += chunkTokens;
@@ -192,16 +203,17 @@ function compressSync(chat, { currentSeq = 0, now = Date.now() } = {}) {
  * 异步压缩：可以调用模型生成高质量摘要。模型失败 → 什么都不改（原文保留、coverage 不前进）。
  * @returns {Promise<{before:number, after:number, compressed:number, chunks:number, failed?:boolean}>}
  */
-async function compressAsync(chat, { currentSeq = 0, now = Date.now(), llm = null, logger = null, requireLlm = false } = {}) {
+async function compressAsync(chat, { currentSeq = 0, now = Date.now(), llm = null, logger = null, requireLlm = false, hardTrigger, recentLow, compressChunk, summaryTokens } = {}) {
+  const bar = thresholds({ hardTrigger, recentLow, compressChunk });
   const before = recentTokens(chat, { currentSeq });
-  if (before <= LIMITS.hardTriggerTokens) return { before, after: before, compressed: 0, chunks: 0 };
+  if (before <= bar.hard) return { before, after: before, compressed: 0, chunks: 0 };
   if (requireLlm && (!llm || llm.isMock)) return { before, after: before, compressed: 0, chunks: 0, failed: true };
   let recent = recentSince(chat, { currentSeq });
   let tokens = before;
   let compressed = 0;
   let chunks = 0;
-  while (tokens > LIMITS.hardTriggerTokens && recent.length) {
-    const target = Math.max(LIMITS.compressChunkTokens, tokens - LIMITS.recentLowTokens);
+  while (tokens > bar.hard && recent.length) {
+    const target = Math.max(bar.chunk, tokens - bar.low);
     const { chunk, tokens: chunkTokens } = takeChunk(recent, target);
     if (!chunk.length) break;
     const fromSeq = chunk[0].seq;
@@ -217,7 +229,7 @@ async function compressAsync(chat, { currentSeq = 0, now = Date.now(), llm = nul
       if (requireLlm) return { before, after: before, compressed: 0, chunks: 0, failed: true };
       textValue = extractor.extractiveSummary(chunk, 220);
     }
-    applySegment(chat, { text: textValue, fromSeq, toSeq, now });
+    applySegment(chat, { text: textValue, fromSeq, toSeq, now, summaryTokens });
     recent = recent.slice(chunk.length);
     tokens -= chunkTokens;
     compressed += chunkTokens;
@@ -227,14 +239,16 @@ async function compressAsync(chat, { currentSeq = 0, now = Date.now(), llm = nul
 }
 
 /**
- * 软阈值预热：准备「最旧 800 token」的摘要，不删消息。
+ * 软阈值预热：准备「最旧一块」的摘要，不删消息。
  * 同一时间只准备一份；失败就下次再试。
  */
-async function prepareSoft(chat, { currentSeq = 0, llm = null, logger = null, now = Date.now() } = {}) {
+async function prepareSoft(chat, { currentSeq = 0, llm = null, logger = null, now = Date.now(), softTrigger, compressChunk } = {}) {
   if (chat.pendingSummary) return false;
-  if (recentTokens(chat, { currentSeq }) < LIMITS.softTriggerTokens) return false;
+  const soft = Math.max(1, Number(softTrigger) || LIMITS.softTriggerTokens);
+  const chunkSize = Math.max(1, Number(compressChunk) || LIMITS.compressChunkTokens);
+  if (recentTokens(chat, { currentSeq }) < soft) return false;
   const recent = recentSince(chat, { currentSeq });
-  const { chunk } = takeChunk(recent, LIMITS.compressChunkTokens);
+  const { chunk } = takeChunk(recent, chunkSize);
   if (!chunk.length) return false;
   const fromSeq = chunk[0].seq;
   const toSeq = chunk[chunk.length - 1].seq;

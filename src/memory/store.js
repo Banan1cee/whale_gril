@@ -17,6 +17,7 @@ const retrieval = require('./retrieval');
 const format = require('./format');
 const extractor = require('./extractor');
 const migrate = require('./migrate');
+const budgetPlan = require('./budgetPlan');
 const { LIMITS, DAY_MS } = require('./constants');
 const { estimateTokens, estimateBudgetTokens } = require('./tokens');
 
@@ -95,9 +96,14 @@ class Store {
       maxSessions: Number(limits.maxSessions) || 200,
       maxMessages: Number(limits.maxMessages) || LIMITS.maxMessagesPerChat,
       maxNotesPerUser: Number(limits.maxNotesPerUser) || LIMITS.maxPreferencesPerPerson,
-      // 对话预算由 config.memory.dialogueBudget 传入（app.js 就是这么传的），没传就用默认 5,500
+      // 对话预算由 config.memory.dialogueBudget 传入（app.js 就是这么传的），没传就用默认 5,500。
+      // 分片（recent / memory / summary / reserve / relations）全部由 budgetPlan 按比例算出来，
+      // 这里只保存用户可调的那一个数。
       dialogueBudget: Number(limits.dialogueBudget) || LIMITS.dialogueBudget,
+      relationsEnabled: limits.relationsEnabled === true || limits.relationsEnabled === 'true',
     };
+    // 预算分片：唯一事实源，见 src/memory/budgetPlan.js
+    this.plan = budgetPlan.planBudget(this.limits.dialogueBudget, { relations: this.limits.relationsEnabled });
     this.sessions = new Map();
     this.digest = [];
     this.stats = { messages: 0, replies: 0 };
@@ -284,12 +290,19 @@ class Store {
       }
     }
 
-    // 软阈值：后台准备「最旧 800 token」摘要，不删消息、不阻塞回复
+    // 软阈值：后台准备一块摘要，不删消息、不阻塞回复（阈值随预算走）
     if (this.llm && !this.llm.isMock && !chat.softPreparing) {
       const currentSeq = chat.meta.nextSeq;
-      if (compression.recentTokens(chat, { currentSeq }) >= LIMITS.softTriggerTokens) {
+      if (compression.recentTokens(chat, { currentSeq }) >= this.plan.recentSoft) {
         chat.softPreparing = true;
-        const task = compression.prepareSoft(chat, { currentSeq, llm: this.llm, logger: this.logger, now: entry.ts })
+        const task = compression.prepareSoft(chat, {
+          currentSeq,
+          llm: this.llm,
+          logger: this.logger,
+          now: entry.ts,
+          softTrigger: this.plan.recentSoft,
+          compressChunk: this.plan.compressChunk,
+        })
           .catch(() => false)
           .then(() => { chat.softPreparing = false; });
         this._track(Promise.resolve(task));
@@ -315,15 +328,22 @@ class Store {
     if (!card) card = this.chatStore.ensurePerson(chat, uid, name);
     const last = chat.messages[chat.messages.length - 1];
     const protectSeq = Number(currentSeq) || (last && last.role === 'user' ? last.seq : 0);
-    const compressed = compression.compressSync(chat, { currentSeq: protectSeq, now: at });
+    const compressed = compression.compressSync(chat, {
+      currentSeq: protectSeq,
+      now: at,
+      hardTrigger: this.plan.recent,
+      recentLow: this.plan.recentLow,
+      compressChunk: this.plan.compressChunk,
+      summaryTokens: this.plan.summary,
+    });
     if (compressed.chunks) {
       this.chatStore.saveSummary(chat);
       this.chatStore.saveMeta(chat);
     }
     const recent = compression.recentForPrompt(chat, {
       currentSeq: protectSeq,
-      maxTokens: LIMITS.recentMaxTokens,
-      maxCount: isGroup ? LIMITS.groupRecentMessages : LIMITS.recentMessages,
+      maxTokens: this.plan.recent,
+      maxCount: isGroup ? this.plan.groupRecentCount : this.plan.recentCount,
     });
     const recentUser = chat.messages
       .filter((m) => m.role === 'user' && m.seq !== protectSeq && m.text)
@@ -335,9 +355,17 @@ class Store {
       activeTopic: chat.meta.episode ? chat.meta.episode.activeTopic : '',
       now: at,
       uid,
-      topK: LIMITS.retrievalTopK,
+      topK: this.plan.caps.events,
     });
-    const block = format.buildMemoryBlock({ card, events, summary: chat.summary.text });
+    const block = format.buildMemoryBlock({
+      card,
+      events,
+      summary: chat.summary.text,
+      // 这个块里同时装了「人物卡 + 事件」和「摘要」，所以上限是两者之和；
+      // 只给 memory 的话，摘要一长就会把卡的展示空间挤掉。
+      budget: this.plan.memory + this.plan.summary,
+      caps: this.plan.caps,
+    });
     return {
       chatId: chat.chatId,
       card,
@@ -349,9 +377,10 @@ class Store {
       summaryTokens: chat.summary.tokens,
       memoryTokens: estimateBudgetTokens(block),
       // 对话预算（不含 system）：system 只由上层测量，不参与这里的挤压
-      dialogueBudget: this.limits.dialogueBudget,
+      dialogueBudget: this.plan.dialogueBudget,
       hardTotalTokens: LIMITS.hardTotalTokens,
-      reserveTokens: LIMITS.reserveTokens,
+      reserveTokens: this.plan.reserve,
+      plan: this.plan,
       notes: activePreferenceTexts(card),
       compressed,
     };
@@ -537,12 +566,13 @@ class Store {
       totalMessages,
       totalReplies,
       budget: {
-        dialogueBudget: this.limits.dialogueBudget,
+        dialogueBudget: this.plan.dialogueBudget,
         hardTotalTokens: LIMITS.hardTotalTokens,
-        memoryTokens: LIMITS.memoryTokens,
-        summaryTokens: LIMITS.summaryTokens,
-        recentMaxTokens: LIMITS.recentMaxTokens,
-        reserveTokens: LIMITS.reserveTokens,
+        memoryTokens: this.plan.memory,
+        summaryTokens: this.plan.summary,
+        recentMaxTokens: this.plan.recent,
+        reserveTokens: this.plan.reserve,
+        relationsTokens: this.plan.relations,
       },
     };
   }
@@ -634,8 +664,17 @@ class Store {
     const closed = (await Promise.all(tasks)).reduce((a, b) => a + b, 0);
     for (const chat of this.chatStore.chats.values()) {
       const before = compression.recentTokens(chat, { currentSeq: 0 });
-      if (before > LIMITS.hardTriggerTokens) {
-        await compression.compressAsync(chat, { currentSeq: 0, llm: model, logger: this.logger, now: this._now() });
+      if (before > this.plan.recent) {
+        await compression.compressAsync(chat, {
+          currentSeq: 0,
+          llm: model,
+          logger: this.logger,
+          now: this._now(),
+          hardTrigger: this.plan.recent,
+          recentLow: this.plan.recentLow,
+          compressChunk: this.plan.compressChunk,
+          summaryTokens: this.plan.summary,
+        });
         this.chatStore.saveSummary(chat);
         this.chatStore.saveMeta(chat);
       }
@@ -755,3 +794,4 @@ class Store {
 }
 
 module.exports = { Store, readStoreFile, trimText };
+

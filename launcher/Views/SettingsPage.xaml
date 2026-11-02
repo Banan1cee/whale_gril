@@ -2,6 +2,61 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              Background="Transparent">
+    <UserControl.Resources>
+        <!-- 对话预算专用的细滑轨：6px 轨道 + 圆头滑块。默认 WPF 那个灰槽+金属滑块太丑。 -->
+        <Style x:Key="BudgetSlider" TargetType="Slider">
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Height" Value="24" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Slider">
+                        <Grid Background="Transparent" VerticalAlignment="Center">
+                            <Border Height="4" CornerRadius="2" VerticalAlignment="Center"
+                                    Background="{DynamicResource Muted}" Opacity="0.18" />
+                            <Track x:Name="PART_Track" VerticalAlignment="Center">
+                                <Track.DecreaseRepeatButton>
+                                    <RepeatButton Focusable="False" IsTabStop="False"
+                                                  Command="{x:Static Slider.DecreaseLarge}"
+                                                  CommandTarget="{Binding RelativeSource={RelativeSource TemplatedParent}}">
+                                        <RepeatButton.Template>
+                                            <ControlTemplate TargetType="RepeatButton">
+                                                <Border Height="4" CornerRadius="2" VerticalAlignment="Center"
+                                                        Background="{DynamicResource Accent}" />
+                                            </ControlTemplate>
+                                        </RepeatButton.Template>
+                                    </RepeatButton>
+                                </Track.DecreaseRepeatButton>
+                                <Track.Thumb>
+                                    <Thumb Width="14" Height="14" Focusable="False">
+                                        <Thumb.Template>
+                                            <ControlTemplate TargetType="Thumb">
+                                                <!-- 不留深色外圈：外圈和已填充的轨道同色，接缝就看不出来了；亮环 3px + 深色内芯 -->
+                                                <Grid Width="14" Height="14">
+                                                    <Ellipse Fill="{DynamicResource Accent}" />
+                                                    <Ellipse Width="8" Height="8" Fill="{DynamicResource Bg}" />
+                                                </Grid>
+                                            </ControlTemplate>
+                                        </Thumb.Template>
+                                    </Thumb>
+                                </Track.Thumb>
+                                <Track.IncreaseRepeatButton>
+                                    <RepeatButton Focusable="False" IsTabStop="False"
+                                                  Command="{x:Static Slider.IncreaseLarge}"
+                                                  CommandTarget="{Binding RelativeSource={RelativeSource TemplatedParent}}">
+                                        <RepeatButton.Template>
+                                            <ControlTemplate TargetType="RepeatButton">
+                                                <Border Height="4" Background="Transparent" VerticalAlignment="Center" />
+                                            </ControlTemplate>
+                                        </RepeatButton.Template>
+                                    </RepeatButton>
+                                </Track.IncreaseRepeatButton>
+                            </Track>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </UserControl.Resources>
     <!-- 单列滚动：不再有分类侧栏，也没有「设置」标题；内容靠卡片分组 -->
     <Grid Margin="28,20,32,16">
         <Grid.RowDefinitions>
@@ -21,3 +76,8 @@
         </StackPanel>
     </Grid>
 </UserControl>
+
+
+
+
+

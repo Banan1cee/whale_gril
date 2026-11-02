@@ -6,6 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { once } = require('node:events');
+const { pipedSpawnBlocked, SKIP_REASON } = require('./support/spawn-env');
 const { checkRequest } = require('../src/http/security');
 const { loadConfig, resolveRuntime, saveSettings } = require('../src/infra/config');
 
@@ -37,6 +38,7 @@ test('切换服务不回退旧配置密钥，切回后保留原凭据，清空�
 });
 
 test('启动器管道正常关闭内核并保存刚收到的会话', { timeout: 15000 }, async (t) => {
+  if (pipedSpawnBlocked()) return t.skip(SKIP_REASON);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-shutdown-fix-'));
   const source = path.resolve(__dirname, '..');
   for (const name of ['src', 'resources', 'personas', 'server.js', 'package.json'])
@@ -68,3 +70,5 @@ test('启动器管道正常关闭内核并保存刚收到的会话', { timeout: 
   try { assert.ok(reopened.messages('web:u:shutdown-regression:private', 20).some(m => m.text === '你好')); }
   finally { reopened.close(); }
 });
+
+

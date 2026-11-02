@@ -100,7 +100,7 @@ namespace WhaleLauncher.Views
             }},
             new SectionSpec { Title = "高级", Note = "改完要重启的项都在这里（对话预算例外，改完立刻生效）；管理员口令也归这一组，平时不用碰。", Fields =
             {
-                new FieldSpec { Path = "memory.dialogueBudget", Label = "对话预算(token)", Kind = "sliderInput", Min = 2000, Max = 20000, InputMin = 1000, Hint = "每轮带多少对话内容（不含人设）：默认 5,500 = 记忆 900 + 摘要 900 + 原文 3,200 + 预留 500。滑块 2,000–20,000；右边输入框可以直接填（最低 1,000，不设上限）。模型一次能收的 token 有硬上限（具体值看下面那行），人设越长留给对话的越少；加起来超了内核不会偷偷截断，而是这一轮干脆不调用" },
+                new FieldSpec { Path = "memory.dialogueBudget", Label = "对话预算(token)", Kind = "sliderInput", Min = 2000, Max = 20000, InputMin = 1000, Hint = "每轮带多少对话内容（不含人设）：默认 5,500。记忆和原文按比例分，预算越大带得越多；滑块 2,000–20,000，下面四个胶囊是一键跳档，右边输入框可以填到 1,000 以上。" },
                 new FieldSpec { Path = "server.host", Label = "监听地址", Kind = "text", Hint = "只给本机用就 127.0.0.1；0.0.0.0 = 同 WiFi 也能连（改完重启）" },
                 new FieldSpec { Path = "server.port", Label = "本机端口", Kind = "selectnum", Options = new[] { "8787", "9191", "1919", "7878" }, Hint = "默认 8787；只在这四个里选，改完重启内核生效" },
                 new FieldSpec { Path = "log.level", Label = "日志级别", Kind = "select", Options = new[] { "debug", "info", "error" }, Hint = "界面 / 控制台用哪一档；日志文件始终记 debug 全量（data/whale.log、data/wechat-bridge-4x.log），改完重启生效" },
@@ -527,15 +527,43 @@ namespace WhaleLauncher.Views
                 {
                     // 滑块管「常用范围」，右边输入框管「精确值 / 超出滑块范围的值」；
                     // 下面那行说明由 /api/budget/estimate 实时算（只读估算，不联网、不花钱）。
+                    // 滑轨按真实比例画 4 个档位刻度（2,000 / 5,500 / 10,000 / 20,000 并不等距），
+                    // 下面再给 4 个一键跳档的胶囊；拖到档位 ±5% 以内时对应胶囊高亮。
+                    const double sliderWidth = 420;
+                    var tiers = new[]
+                    {
+                        (Name: "极简", Value: 2000d), (Name: "默认", Value: 5500d),
+                        (Name: "标准", Value: 10000d), (Name: "重度", Value: 20000d),
+                    };
                     var slider = new Slider
                     {
                         Minimum = double.IsNaN(f.Min) ? 0 : f.Min,
                         Maximum = double.IsNaN(f.Max) ? 100 : f.Max,
                         TickFrequency = 100,
                         IsSnapToTickEnabled = true,
-                        Width = 240,
-                        VerticalAlignment = VerticalAlignment.Center
+                        Width = sliderWidth,
+                        VerticalAlignment = VerticalAlignment.Center,
+                        Style = (Style)FindResource("BudgetSlider"),
                     };
+                    var tickLayer = new Canvas { Width = sliderWidth, Height = 24, IsHitTestVisible = false };
+                    foreach (var tier in tiers)
+                    {
+                        var ratio = (tier.Value - slider.Minimum) / Math.Max(1, slider.Maximum - slider.Minimum);
+                        var tick = new System.Windows.Shapes.Rectangle
+                        {
+                            Width = 2,
+                            Height = 10,
+                            Fill = (Brush)FindResource("Muted"),
+                            Opacity = 0.45,
+                        };
+                        Canvas.SetLeft(tick, 7 + ratio * (sliderWidth - 14) - 1);
+                        Canvas.SetTop(tick, 8);
+                        tickLayer.Children.Add(tick);
+                    }
+                    var trackGrid = new Grid { Width = sliderWidth, Height = 24, VerticalAlignment = VerticalAlignment.Center };
+                    trackGrid.Children.Add(slider);
+                    trackGrid.Children.Add(tickLayer);
+                    var pillMap = new List<(Border Box, TextBlock Label, double Value)>();
                     var box = new TextBox
                     {
                         Width = 96,
@@ -558,17 +586,53 @@ namespace WhaleLauncher.Views
                         Text = f.Hint,
                     };
                     var bar = new WrapPanel { HorizontalAlignment = HorizontalAlignment.Left };
-                    bar.Children.Add(slider);
+                    bar.Children.Add(trackGrid);
                     bar.Children.Add(box);
                     bar.Children.Add(unit);
-                    var stack = new StackPanel { HorizontalAlignment = HorizontalAlignment.Stretch };
-                    stack.Children.Add(bar);
-                    stack.Children.Add(line);
 
+                    // 计时器要先声明：下面的胶囊和 Show/Schedule 都会捕获它们
                     var saveTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(450) };
                     var hintTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(180) };
                     var syncing = false;
                     var saved = double.NaN;
+
+                    // 四档快捷按钮：点一下跳到该档，滑块照旧可以拖任意值
+                    var pills = new WrapPanel { HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 6, 0, 0) };
+                    foreach (var tier in tiers)
+                    {
+                        var caption = new TextBlock
+                        {
+                            Text = tier.Name + " " + tier.Value.ToString("N0"),
+                            FontSize = 11.5,
+                            VerticalAlignment = VerticalAlignment.Center,
+                        };
+                        var pill = new Border
+                        {
+                            CornerRadius = new CornerRadius(12),
+                            BorderThickness = new Thickness(1),
+                            Padding = new Thickness(10, 0, 10, 0),
+                            Height = 24,
+                            Margin = new Thickness(0, 0, 6, 0),
+                            Cursor = System.Windows.Input.Cursors.Hand,
+                            Background = Brushes.Transparent,
+                            BorderBrush = (Brush)FindResource("Line"),
+                            Child = caption,
+                        };
+                        var jumpTo = tier.Value;
+                        pill.MouseLeftButtonUp += (s, e) =>
+                        {
+                            if (_loading) return;
+                            Show(jumpTo);
+                            Schedule(true);
+                        };
+                        pills.Children.Add(pill);
+                        pillMap.Add((pill, caption, jumpTo));
+                    }
+
+                    var stack = new StackPanel { HorizontalAlignment = HorizontalAlignment.Stretch };
+                    stack.Children.Add(bar);
+                    stack.Children.Add(pills);
+                    stack.Children.Add(line);
 
                     double Clamp(double v)
                     {
@@ -583,12 +647,25 @@ namespace WhaleLauncher.Views
                         return double.TryParse(text, out var v) ? Clamp(v) : Math.Round(slider.Value);
                     }
 
+                    void PaintPills(double v)
+                    {
+                        foreach (var pill in pillMap)
+                        {
+                            // ±5% 以内算「就是这一档」，拖到别处就四个都不亮，避免错觉
+                            var active = Math.Abs(v - pill.Value) <= Math.Max(150, pill.Value * 0.05);
+                            pill.Box.Background = active ? (Brush)FindResource("AccentDim") : Brushes.Transparent;
+                            pill.Box.BorderBrush = active ? (Brush)FindResource("Accent") : (Brush)FindResource("Line");
+                            pill.Label.Foreground = active ? (Brush)FindResource("Text") : (Brush)FindResource("Text2");
+                        }
+                    }
+
                     void Show(double v)
                     {
                         syncing = true;
                         slider.Value = Math.Max(slider.Minimum, Math.Min(slider.Maximum, v));
                         if (!box.IsKeyboardFocusWithin) box.Text = Math.Round(v).ToString();
                         syncing = false;
+                        PaintPills(Math.Round(v));
                     }
 
                     async void RefreshHint(double v)
@@ -602,18 +679,20 @@ namespace WhaleLauncher.Views
                                 return;
                             }
                             var sys = res.Long("systemTokens");
-                            var sp = res.Long("systemPrivateTokens");
-                            var sg = res.Long("systemGroupTokens");
                             var maxIn = res.Long("maxInputTokens");
                             var hard = res.Long("hardTotalTokens");
                             var room = Math.Max(0, hard - sys);
                             var over = res.Bool("overHardLimit");
+                            // 只分三类：人设 / 记忆 / 对话（记忆 = 人物卡+摘要，对话 = 原文+余量）
+                            var mem = (long)Num(res.Root, "split", "memory");
+                            var dlg = (long)Num(res.Root, "split", "dialogue");
                             var first = Num(res.Prop("cost"), "idle", "first");
-                            var cached = Num(res.Prop("cost"), "idle", "cached");
+                            var steady = Num(res.Prop("cost"), "idle", "cached");
+                            var hitRate = Num(res.Prop("cache"), "hitRate");
                             line.Text =
-                                $"人设 system ≈ {sys:N0} token（私聊 {sp:N0} / 群聊 {sg:N0}，取中间）+ 对话预算 {Math.Round(v):N0} → 单轮最多 ≈ {maxIn:N0} token（上限 {hard:N0}）\n"
-                                + $"谷时：首次约 ¥{first:0.0000}，之后缓存命中约 ¥{cached:0.0000} / 次（人设走缓存，新对话仍按新内容计费）"
-                                + (over ? $"\n⚠ 已经超过 {hard:N0} 上限：这个预算下每轮都会被拒绝，最多只能填 {room:N0}" : "");
+                                $"人设 {sys:N0} · 记忆 {mem:N0} · 对话 {dlg:N0} → 单轮最多 ≈ {maxIn:N0}（上限 {hard:N0}）\n"
+                                + $"稳定期约 ¥{steady:0.0000} / 次（缓存命中 ≈{hitRate * 100:0}%，首轮 ¥{first:0.0000}）"
+                                + (over ? $"\n⚠ 超过 {hard:N0} 上限：这个预算下每轮都会被拒绝，最多只能填 {room:N0}" : "");
                         }
                         catch
                         {
@@ -633,6 +712,9 @@ namespace WhaleLauncher.Views
 
                     slider.ValueChanged += (s, e) =>
                     {
+                        // 注意：这里要顺手刷胶囊高亮。以前只有 Show() 刷，
+                        // 结果是「拖着滑块走，下面四个胶囊一直不亮」。
+                        PaintPills(Math.Round(slider.Value));
                         if (syncing || _loading) return;
                         box.Text = Math.Round(slider.Value).ToString();
                         Schedule(true);
@@ -679,7 +761,8 @@ namespace WhaleLauncher.Views
                         RefreshHint(Current());
                     };
 
-                    return Row(f.Label, stack, "", false, labelWidth);
+                    // 三行（滑轨 / 胶囊 / 说明）在上面，标签贴顶才不会落到胶囊那一行
+                    return Row(f.Label, stack, "", true, labelWidth);
                 }
                 default:
                 {
@@ -1163,4 +1246,13 @@ namespace WhaleLauncher.Views
                 ? (v.GetString() ?? "") : "";
     }
 }
+
+
+
+
+
+
+
+
+
 

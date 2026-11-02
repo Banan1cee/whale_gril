@@ -445,22 +445,33 @@ score = 0.55 * relevance
 
 > 2026-10 预算语义调整：system prompt 不再纳入总预算，不裁剪、不截断。
 > `contextBudget: 7,500` / `systemTokens: 2,000` 已废弃，不要再按旧值实现。
+>
+> 2026-11 分片比例化：`dialogueBudget` 是唯一可调项，下面四段（含 `relations`）
+> 由 `src/memory/budgetPlan.js` 按比例换算，不再是四个独立写死的常数。
+> 5,500 时的结果与旧值 1:1 相同；`memory` / `summary` 先按比例涨，到结构上限
+> （2,200 / 1,500）后剩下的全给 `recent`，所以 20,000 时 recent 占 78%。
+> 人物卡显示条数也跟着 `memory` 预算放大（6/10/4/5 → 12/24/10/10，封顶 12/30/10/10）。
+> 每段都是**独立上限，不互相挪用**：空卡省下的记忆额度不会转给 recent。
+> 推荐档位见 `budgetPlan.TIERS`（2,000 / 4,500 / 10,000 / 20,000，只是提示不是开关）。
+> 压缩阈值（`softTriggerTokens` / `hardTriggerTokens` / `recentLowTokens` /
+> `compressChunkTokens`）也从 `recent` 派生，改这四个常数不再生效。
 
 | 参数 | 默认值 | 说明 |
 |---|---:|---|
-| `dialogueBudget` | 5,500 | 对话预算 = memory 900 + summary 900 + recent 3,200 + reserve 500 |
+| `dialogueBudget` | 5,500 | 对话预算（唯一可调）= `recent` + `memory` + `summary` + `reserve` + `relations` |
 | `hardTotalTokens` | 64,000 | 只有 `systemTokens + dialogueBudget` 超过它才拒绝/报错（2026-11 由 32,000 提到 64,000） |
-| `memoryTokens` | 900 | 人物卡 + 事件 |
-| `summaryTokens` | 900 | L3 摘要 |
-| `recentMaxTokens` | 3,200 | 最近原文上限 |
-| `recentLowTokens` | 2,400 | 压缩后低水位 |
-| `compressChunkTokens` | 800 | 每次移走 |
-| `softTriggerTokens` | 2,400 | 预热摘要 |
-| `hardTriggerTokens` | 3,200 | 应用摘要 |
+| `memoryTokens` | 900 | 人物卡 + 事件（16.36% 比例基准，上限 2,200） |
+| `summaryTokens` | 900 | L3 摘要（16.36% 比例基准，上限 1,500） |
+| `recentMaxTokens` | 3,200 | 最近原文上限（剩余份额，58%→78%） |
+| `recentLowTokens` | 2,400 | 压缩后低水位（= 75% × `recent`） |
+| `compressChunkTokens` | 800 | 每次移走（= 25% × `recent`） |
+| `softTriggerTokens` | 2,400 | 预热摘要（= 75% × `recent`） |
+| `hardTriggerTokens` | 3,200 | 应用摘要（= `recent`） |
+| `relationsTokens` | 120 | 关系卡（2.18% 比例基准，上限 200；功能未启用时并回 `recent`） |
 | `episodeMaxTokens` | 6,000 | episode 强制关闭 |
 | `episodeIdleMinutes` | 30 | 空闲关闭 |
 | `episodeMaxHours` | 3 | 最长 episode |
-| `reserveTokens` | 500 | 当前消息 + 输出 + 估算误差 |
+| `reserveTokens` | 500 | 当前消息 + 输出 + 估算误差（9.09% 比例基准，上限 800） |
 
 token 估算（`src/memory/tokens.js`，不引 tokenizer）：
 
@@ -619,20 +630,23 @@ card.chatId === source.chatId
 
 > 预算派生、接口、滑块、UI、迁移步骤属于实现细节，不在本设计文档展开。
 > 2026-10 调整：`contextBudget: 7,500` / `systemTokens: 2,000` 已废弃；system 只测量，不裁剪。
+> 2026-11 调整：下表的 `memory` / `summary` / `recent` / `reserve` / `relations` 由
+> `dialogueBudget` 按比例派生（见 8.1），单独改这几个常数不生效。
 
 | 参数 | 默认值 | 说明 |
 |---|---:|---|
-| `dialogueBudget` | 5,500 | 对话预算（不含 system）= memory 900 + summary 900 + recent 3,200 + reserve 500 |
+| `dialogueBudget` | 5,500 | 对话预算（不含 system），唯一可调；分片由 budgetPlan 换算 |
 | `hardTotalTokens` | 64,000 | `systemTokens + dialogueBudget` 超过它才拒绝 |
 | `estimateSafety` | 1.08 | 预算裁剪时的估算安全系数 |
 | `usageWarnRatio` | 0.15 | API usage 与估算误差告警阈值 |
-| `memoryTokens` | 900 | 人物卡 + 事件 |
-| `summaryTokens` | 900 | L3 摘要 |
-| `recentMaxTokens` | 3,200 | 最近原文上限 |
-| `recentLowTokens` | 2,400 | 压缩后低水位 |
-| `compressChunkTokens` | 800 | 每次移走 |
-| `softTriggerTokens` | 2,400 | 预热摘要 |
-| `hardTriggerTokens` | 3,200 | 应用摘要 |
+| `memoryTokens` | 900 | 人物卡 + 事件（比例基准 16.36%） |
+| `summaryTokens` | 900 | L3 摘要（比例基准 16.36%） |
+| `recentMaxTokens` | 3,200 | 最近原文上限（剩余份额） |
+| `relationsTokens` | 120 | 关系卡（比例基准 2.18%，未启用时并回 recent） |
+| `recentLowTokens` | 2,400 | 压缩后低水位（= 75% × recent） |
+| `compressChunkTokens` | 800 | 每次移走（= 25% × recent） |
+| `softTriggerTokens` | 2,400 | 预热摘要（= 75% × recent） |
+| `hardTriggerTokens` | 3,200 | 应用摘要（= recent） |
 | `reserveTokens` | 500 | 当前消息 + 输出 + 估算误差 |
 | `episodeMaxTokens` | 6,000 | episode 强制关闭 |
 | `episodeIdleMinutes` | 30 | 空闲关闭 |
@@ -793,3 +807,5 @@ B：小海住哪？
 → 首条回复前按预算压缩
 → 不丢已收到的对话
 ```
+
+

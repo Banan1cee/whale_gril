@@ -37,17 +37,24 @@ test('滑块预览：传 dialogueBudget 就按它算，不用先写 config', () 
   assert.equal(r.maxInputTokens, r.systemTokens + 8000);
 });
 
-test('价格：首次全按未命中，高命中时只有新增对话要重新计费', () => {
+test('价格：首次全按未命中，稳定期按前缀缓存计费（命中 ≥70%）', () => {
   const r = estimate(defaults(), { dialogueBudget: 5500, outputTokens: 100 });
-  const sys = r.systemTokens;
-  const expectedFirst = (sys + 5500) / 1e6 * PRICING.idle.inputMiss + 100 / 1e6 * PRICING.idle.output;
-  const expectedCached = 5500 / 1e6 * PRICING.idle.inputMiss + sys / 1e6 * PRICING.idle.inputHit
+  const p = r.cache.promptTokens;
+  const hit = r.cache.hitTokens;
+  assert.ok(r.cache.hitRate >= 0.7, '稳定期命中率应该 ≥70%：' + r.cache.hitRate.toFixed(3));
+  assert.equal(p, r.systemTokens + r.plan.memory + r.plan.summary + r.plan.recent);
+  assert.equal(hit, r.systemTokens + (r.plan.recent - r.cache.tailRefresh));
+  const expectedFirst = p / 1e6 * PRICING.idle.inputMiss + 100 / 1e6 * PRICING.idle.output;
+  const expectedCached = (p - hit) / 1e6 * PRICING.idle.inputMiss + hit / 1e6 * PRICING.idle.inputHit
     + 100 / 1e6 * PRICING.idle.output;
   assert.ok(Math.abs(r.cost.idle.first - expectedFirst) < 1e-9, '首次成本：' + r.cost.idle.first);
   assert.ok(Math.abs(r.cost.idle.cached - expectedCached) < 1e-9, '命中成本：' + r.cost.idle.cached);
   assert.ok(r.cost.idle.first > r.cost.idle.cached, '命中缓存后应该更便宜');
   assert.ok(r.cost.peak.first > r.cost.idle.first, '高峰比谷时贵');
   assert.equal(r.pricing.model, 'deepseek-flash');
+  // 预算越大，历史占比越高，命中率应该上升（20,000 时 >80%）
+  const big = estimate(defaults(), { dialogueBudget: 20000 });
+  assert.ok(big.cache.hitRate > 0.8, '20,000 档命中率应 >80%：' + big.cache.hitRate.toFixed(3));
 });
 
 test('超过 64,000 硬上限会被标出来，而不是静默截断', () => {
@@ -100,3 +107,4 @@ test('GET /api/budget/estimate：真实 HTTP 上支持 dialogueBudget 覆盖', a
     fs.rmSync(dir, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
   }
 });
+
