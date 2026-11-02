@@ -47,7 +47,7 @@ const FIELDS = {
 
   // ---- 记忆（旧键，运行时只读 constants.js）----
   // 唯一生效的可调项：对话预算（不含 system prompt）。没有上限：
-  // 启动器里可以用输入框手填任意值，但 system + 它不仅会超过 hardTotalTokens 32,000 时被拒绝，
+  // 启动器里可以用输入框手填任意值，但 system + 它超过 hardTotalTokens（64,000）时会被拒绝，
   // 那个提示由 /api/budget/estimate 的 overHardLimit 在界面上提前给出来。
   'memory.dialogueBudget': { type: 'int', min: 1000 },
   'memory.maxSessions': { type: 'int', min: 1, max: 10000 },

@@ -2,7 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { loadConfig } = require('./config');
+const { loadConfig, DEFAULT_CONFIG } = require('./config');
 const configSchema = require('./configSchema');
 
 /* ------------------------------------------------------------------ */
@@ -214,6 +214,42 @@ function applyConfigPatch(runtime, patch) {
   return { changed, cleared };
 }
 
+/** 默认值：按点号路径从 DEFAULT_CONFIG 里取（没有这一项就返回 undefined） */
+function defaultOf(dotted) {
+  return getByPath(DEFAULT_CONFIG, dotted);
+}
+
+/**
+ * 「恢复默认」：把传进来的字段写回 DEFAULT_CONFIG 里的值。
+ *
+ * 默认值只从这里取一份 —— 启动器要是自己抄一遍，抄的那份迟早和 config.js 对不上，
+ * 用户点了「恢复默认」却拿到个看不见的旧值。只动传进来的字段：别的配置、
+ * 密钥（SECRET_PATHS）和 data/ 里的聊天记忆一概不碰。
+ *
+ * @param {object} runtime 运行时（config / logger / paths）
+ * @param {string[]} paths 要恢复的字段名，比如 ['group.requireAt', 'deepseek.temperature']
+ * @returns {{changed:string[], cleared:string[], unknown:string[]}} unknown = 不认识的字段（不是可恢复项）
+ */
+function resetConfig(runtime, paths) {
+  if (!Array.isArray(paths) || paths.length === 0) {
+    throw Object.assign(new Error('要指定恢复哪些字段（paths 不能为空）'), { statusCode: 400 });
+  }
+  const patch = {};
+  const unknown = [];
+  for (const raw of paths) {
+    const p = String(raw == null ? '' : raw).trim();
+    if (!p) continue;
+    // 密钥不给重置：界面上看不到已存的 Key，「恢复默认」顺手把它清掉是灾难
+    if (SECRET_PATHS.has(p)) { unknown.push(p); continue; }
+    const def = defaultOf(p);
+    if (def === undefined) { unknown.push(p); continue; }
+    patch[p] = JSON.parse(JSON.stringify(def));
+  }
+  if (!Object.keys(patch).length) return { changed: [], cleared: [], unknown };
+  const out = applyConfigPatch(runtime, patch);
+  return { changed: out.changed, cleared: out.cleared, unknown };
+}
+
 /** 监听 config.json：手动改完存盘就生效，不用再重启服务。 */
 function watchConfigFile(runtime) {
   // 测试/沙箱里 fs.watch 可能不可用，允许关掉（config.watchConfig=false）
@@ -304,5 +340,7 @@ module.exports = {
   mergeConfigInPlace,
   applyConfigPatch,
   saveConfigPatch,
+  defaultOf,
+  resetConfig,
   watchConfigFile,
 };

@@ -50,10 +50,17 @@ test('价格：首次全按未命中，高命中时只有新增对话要重新�
   assert.equal(r.pricing.model, 'deepseek-flash');
 });
 
-test('超过 32,000 硬上限会被标出来，而不是静默截断', () => {
-  const r = estimate(defaults(), { dialogueBudget: 40000 });
+test('超过 64,000 硬上限会被标出来，而不是静默截断', () => {
+  const r = estimate(defaults(), { dialogueBudget: 70000 });
   assert.equal(r.overHardLimit, true);
-  assert.equal(r.maxInputTokens, r.systemTokens + 40000);
+  assert.equal(r.maxInputTokens, r.systemTokens + 70000);
+});
+
+test('刚好卡在 64,000 以内不算超限', () => {
+  const config = defaults();
+  const system = estimate(config).systemTokens;
+  const r = estimate(config, { dialogueBudget: 64000 - system });
+  assert.equal(r.overHardLimit, false);
 });
 
 test('config 没有 memory 段时回退默认 5,500', () => {

@@ -449,7 +449,7 @@ score = 0.55 * relevance
 | 参数 | 默认值 | 说明 |
 |---|---:|---|
 | `dialogueBudget` | 5,500 | 对话预算 = memory 900 + summary 900 + recent 3,200 + reserve 500 |
-| `hardTotalTokens` | 32,000 | 只有 `systemTokens + dialogueBudget` 超过它才拒绝/报错 |
+| `hardTotalTokens` | 64,000 | 只有 `systemTokens + dialogueBudget` 超过它才拒绝/报错（2026-11 由 32,000 提到 64,000） |
 | `memoryTokens` | 900 | 人物卡 + 事件 |
 | `summaryTokens` | 900 | L3 摘要 |
 | `recentMaxTokens` | 3,200 | 最近原文上限 |
@@ -478,13 +478,13 @@ estimatedInputTokens  = systemTokens + dialogueBudget
 ```
 
 `systemTokens` 只测量，不参与 recent/memory 的挤压。只有
-`estimatedInputTokens > hardTotalTokens (32,000)` 才拒绝调用并明确报错，不静默截断。
+`estimatedInputTokens > hardTotalTokens (64,000)` 才拒绝调用并明确报错，不静默截断。
 
 API 返回的 `usage.prompt_tokens / completion_tokens` 会记录并与估算对比；
 误差超过 15% 记 warning，用于校准。
 
 人设保存 / 导入时单独做一次精确校验：调用当前选中模型的官方 tokenizer
-（读取服务商返回的 `usage.prompt_tokens`），上限 = `32,000 - 5,500 = 26,500`。
+（读取服务商返回的 `usage.prompt_tokens`），上限 = `64,000 - 5,500 = 58,500`。
 没有 Key / 离线 / 接口失败时退回估算并标 `exact:false`。
 每轮聊天仍然只用轻量估算，不调官方 tokenizer。
 
@@ -623,7 +623,7 @@ card.chatId === source.chatId
 | 参数 | 默认值 | 说明 |
 |---|---:|---|
 | `dialogueBudget` | 5,500 | 对话预算（不含 system）= memory 900 + summary 900 + recent 3,200 + reserve 500 |
-| `hardTotalTokens` | 32,000 | `systemTokens + dialogueBudget` 超过它才拒绝 |
+| `hardTotalTokens` | 64,000 | `systemTokens + dialogueBudget` 超过它才拒绝 |
 | `estimateSafety` | 1.08 | 预算裁剪时的估算安全系数 |
 | `usageWarnRatio` | 0.15 | API usage 与估算误差告警阈值 |
 | `memoryTokens` | 900 | 人物卡 + 事件 |
