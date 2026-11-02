@@ -83,7 +83,7 @@ test('数据库目录：直填账号目录、拍平布局、L: 盘都能认出�
   try {
     out = execFileSync(py, ['-c', code], { encoding: 'utf8' });
   } catch (err) {
-    if (err && err.code === 'ENOENT') return; // 这台机器没有 python，跳过
+    if (err && (err.code === 'ENOENT' || err.code === 'EPERM')) return; // 没有 python / 环境不允许起子进程，跳过
     // CI 上的系统 python 没装 requests（桥接 import 就挂）→ 这类环境跳过，
     // 真正的语法/逻辑在本地有 runtime 的机器上跑。
     const msg = String((err && (err.stderr || err.stdout || err.message)) || '');
@@ -103,3 +103,5 @@ test('媒体兜底：盘符不再写死 C..K，会扫真实挂载点', () => {
   assert.match(mediaSrc, /psutil\.disk_partitions/, '要用真实分区列表');
   assert.doesNotMatch(mediaSrc, /for letter in \(drives or ""\):\n\s+for name in root_names:/, '不能继续无脑按写死盘符扫');
 });
+
+

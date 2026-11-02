@@ -156,6 +156,9 @@ class DeepSeekClient {
     if (!u) return;
     this.lastUsage = {
       promptTokens: Number(u.prompt_tokens) || 0,
+      // 支持前缀缓存的服务商会给出这两项（DeepSeek: prompt_cache_hit_tokens）
+      promptCacheHitTokens: Number(u.prompt_cache_hit_tokens) || 0,
+      promptCacheMissTokens: Number(u.prompt_cache_miss_tokens) || 0,
       completionTokens: Number(u.completion_tokens) || 0,
       totalTokens: Number(u.total_tokens) || (Number(u.prompt_tokens) || 0) + (Number(u.completion_tokens) || 0),
       at: Date.now(),
@@ -581,3 +584,4 @@ class DeepSeekClient {
 }
 
 module.exports = { DeepSeekClient, LlmError, FRIENDLY, parseSseLines, friendlyForStatus, looksDegenerate, cutToSentence };
+

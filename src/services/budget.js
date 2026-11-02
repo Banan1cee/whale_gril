@@ -17,6 +17,7 @@
 
 const { LIMITS } = require('../memory/constants');
 const { estimateTokens } = require('../memory/tokens');
+const { planBudget, nearestTier, TIERS } = require('../memory/budgetPlan');
 const persona = require('../persona');
 
 const PRICING = Object.freeze({
@@ -89,10 +90,32 @@ function estimate(config, { outputTokens = LIMITS.maxOutputNormal, dialogueBudge
   const systemTokens = Math.round((variants.private + variants.group) / 2);
   const maxInputTokens = systemTokens + budget;
   const out = Math.max(0, Number(outputTokens) || 0);
+  // 这个预算实际会被分成几块（recent / memory / summary / reserve / relations），
+  // 给启动器的说明区和调试台/status 用
+  const plan = planBudget(budget, { relations: false });
+  // 启动器只显示三类，太细的拆分别放界面上
+  const split = {
+    persona: systemTokens,
+    memory: plan.memory + plan.summary + plan.relations,
+    dialogue: plan.recent + plan.reserve,
+  };
 
-  const firstCost = costOf(PRICING.idle, maxInputTokens, 0, out);
-  // 命中率很高的情形：固定的 system 每轮都命中，只有新增的对话部分要重新计费
-  const cachedCost = costOf(PRICING.idle, maxInputTokens, systemTokens, out);
+  // ── 前缀缓存怎么算才不离谱 ──
+  // 服务商缓存的是「前缀」：system 在最前面、历史只往后追加，所以稳定期命中的是
+  //   人设 + 历史里除了最后两条以外的部分
+  // （上一轮的 user 消息里挂过记忆块、这一轮的又换了，那一段每轮都要重算）。
+  const TAIL_REFRESH = 120;   // 最后两条消息 ≈ 120 token
+  const promptTokens = systemTokens + plan.memory + plan.summary + plan.recent;   // 一轮真实输入（reserve 是余量，不算正文）
+  const hitTokens = Math.min(promptTokens, systemTokens + Math.max(0, plan.recent - TAIL_REFRESH));
+  const cache = {
+    promptTokens,
+    hitTokens,
+    missTokens: Math.max(0, promptTokens - hitTokens),
+    hitRate: promptTokens > 0 ? hitTokens / promptTokens : 0,
+    tailRefresh: TAIL_REFRESH,
+  };
+  const firstCost = costOf(PRICING.idle, promptTokens, 0, out);
+  const cachedCost = costOf(PRICING.idle, promptTokens, hitTokens, out);
 
   return {
     ok: true,
@@ -104,17 +127,39 @@ function estimate(config, { outputTokens = LIMITS.maxOutputNormal, dialogueBudge
     hardTotalTokens: LIMITS.hardTotalTokens,
     overHardLimit: maxInputTokens > LIMITS.hardTotalTokens,
     outputTokens: out,
+    plan,
+    split,
+    cache,
+    // 推荐档位：给启动器做「提示」用（不是开关），滑块仍然连续
+    tier: nearestTier(budget),
+    tiers: TIERS.map((t) => {
+      const p = planBudget(t.budget, { relations: false });
+      return {
+        key: t.key,
+        label: t.label,
+        budget: t.budget,
+        note: t.note,
+        recent: p.recent,
+        memory: p.memory,
+        summary: p.summary,
+        reserve: p.reserve,
+        recentShare: Number((p.recent / p.dialogueBudget).toFixed(3)),
+      };
+    }),
     pricing: { model: PRICING.model, idle: PRICING.idle, peak: PRICING.peak },
     cost: {
       // 谷时（空闲时段）
       idle: { first: firstCost, cached: cachedCost },
       // 高峰时段，只为参照
       peak: {
-        first: costOf(PRICING.peak, maxInputTokens, 0, out),
-        cached: costOf(PRICING.peak, maxInputTokens, systemTokens, out),
+        first: costOf(PRICING.peak, promptTokens, 0, out),
+        cached: costOf(PRICING.peak, promptTokens, hitTokens, out),
       },
     },
   };
 }
 
 module.exports = { estimate, dialogueBudget, systemVariants, costOf, PRICING };
+
+
+

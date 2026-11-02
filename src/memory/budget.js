@@ -1,10 +1,11 @@
 'use strict';
 
 /**
- * 单轮预算语义（2026-10 调整，覆盖 docs/memory-v2-spec.md 第 11 节的旧值）：
+ * 单轮预算语义（2026-11 改为按比例分配，覆盖 docs/memory-v2-spec.md 第 11 节的旧值）：
  *
- *   dialogueBudget = 5500
- *     = memory 900 + summary 900 + recent 3200 + reserve 500
+ *   dialogueBudget = D（默认 5,500，启动器可调）
+ *     分片由 src/memory/budgetPlan.js 按比例算：recent 吃剩余，memory/summary/reserve
+ *     按 16.36% / 16.36% / 9.09% 给并有结构上限，relations 2.18%（默认关闭）。
  *   systemTokens = 运行时估算的 system 实际占用（只测量，不裁剪）
  *   estimatedInputTokens = systemTokens + dialogueBudget
  *
@@ -13,6 +14,7 @@
  */
 const { LIMITS } = require('./constants');
 const { estimateTokens } = require('./tokens');
+const budgetPlan = require('./budgetPlan');
 
 class BudgetExceededError extends Error {
   constructor(budget) {
@@ -28,21 +30,25 @@ class BudgetExceededError extends Error {
 
 /**
  * @param {string} system 组装好的 system prompt
- * @param {{dialogueBudget?:number}} [opts]
- * @returns {{systemTokens:number, dialogueBudget:number, estimatedInputTokens:number, hardTotalTokens:number, memoryTokens:number, summaryTokens:number, recentMaxTokens:number, reserveTokens:number}}
+ * @param {{dialogueBudget?:number, relations?:boolean}} [opts]
+ * @returns {{systemTokens:number, dialogueBudget:number, estimatedInputTokens:number, hardTotalTokens:number, memoryTokens:number, summaryTokens:number, recentMaxTokens:number, reserveTokens:number, relationsTokens:number, plan:object}}
  */
-function buildBudget(system, { dialogueBudget = LIMITS.dialogueBudget } = {}) {
+function buildBudget(system, { dialogueBudget = LIMITS.dialogueBudget, relations = false } = {}) {
   const systemTokens = estimateTokens(system);
-  const dialogue = Math.max(0, Number(dialogueBudget) || LIMITS.dialogueBudget);
+  const requested = Math.max(0, Number(dialogueBudget) || LIMITS.dialogueBudget);
+  const plan = budgetPlan.planBudget(requested, { relations });
   return {
     systemTokens,
-    dialogueBudget: dialogue,
-    estimatedInputTokens: systemTokens + dialogue,
+    dialogueBudget: plan.dialogueBudget,
+    // 用用户填的原值算单轮上限：分片会被夹到 64,000，但「填太大」本身必须报错
+    estimatedInputTokens: systemTokens + Math.max(requested, plan.dialogueBudget),
     hardTotalTokens: LIMITS.hardTotalTokens,
-    memoryTokens: LIMITS.memoryTokens,
-    summaryTokens: LIMITS.summaryTokens,
-    recentMaxTokens: LIMITS.recentMaxTokens,
-    reserveTokens: LIMITS.reserveTokens,
+    memoryTokens: plan.memory,
+    summaryTokens: plan.summary,
+    recentMaxTokens: plan.recent,
+    reserveTokens: plan.reserve,
+    relationsTokens: plan.relations,
+    plan,
   };
 }
 

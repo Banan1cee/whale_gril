@@ -10,6 +10,7 @@ const { startServer } = source('server');
 const { Store, readStoreFile } = source('src/memory/store');
 const { loadConfig } = source('src/infra/config');
 const backup = source('src/memory/backup');
+const { pipedSpawnBlocked, SKIP_REASON } = require('./support/spawn-env');
 const stickers = source('src/adapters/stickers');
 const { StickerService } = source('src/services/stickerService');
 const { refreshWechatAccounts } = source('src/services/wechat');
@@ -94,6 +95,7 @@ test('桥接用户流程与语音凭据隔离的离线回归',t=>{
  const exe=fs.existsSync(bundled)?bundled:'python';
  const out=spawnSync(exe,['-B','-m','unittest','discover','-s',__dirname,'-p','test_user_flows.py'],{encoding:'utf8',windowsHide:true,env:{...process.env,PYTHONUTF8:'1'},timeout:15000});
  if(out.error?.code==='ENOENT')return t.skip('未找到Python');
+ if(out.error?.code==='EPERM')return t.skip(SKIP_REASON);
  assert.equal(out.status,0,(out.stderr||'')+(out.stdout||''));
 });
 
@@ -139,7 +141,7 @@ test('命令行记忆工具可运行，服务在线时拒绝直接覆盖磁盘�
  fs.copyFileSync(path.join(__dirname,'../scripts/memory-tool.js'),path.join(root,'scripts/memory-tool.js'));
  fs.writeFileSync(path.join(root,'data/store.json'),JSON.stringify({sessions:{}}));
  const script=path.join(root,'scripts/memory-tool.js');
- const info=spawnSync(process.execPath,[script,'info'],{encoding:'utf8',windowsHide:true});assert.equal(info.status,0,info.stderr);
+ const info=spawnSync(process.execPath,[script,'info'],{encoding:'utf8',windowsHide:true});if(info.error&&info.error.code==='EPERM')return t.skip(SKIP_REASON);assert.equal(info.status,0,info.stderr);
  const listener=net.createServer(socket=>socket.end());await new Promise(r=>listener.listen(0,'127.0.0.1',r));
  t.after(()=>new Promise(r=>listener.close(r)));
  fs.writeFileSync(path.join(root,'data/server-port.txt'),String(listener.address().port));
@@ -182,3 +184,5 @@ test('记忆v2停止准备接口只返回结果，要求本机令牌且拒绝未
  }finally{fs.writeFileSync=write;}
  assert.equal((await fetch(app.url+'/api/memory/export')).status,404);
 });
+
+

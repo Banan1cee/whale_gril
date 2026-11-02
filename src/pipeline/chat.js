@@ -1630,6 +1630,8 @@ class Bot {
     if (!cmp) return null;
     this.lastUsage = {
       promptTokens: cmp.actualPromptTokens,
+      cacheHitTokens: Number(usage.promptCacheHitTokens) || 0,
+      cacheMissTokens: Number(usage.promptCacheMissTokens) || 0,
       completionTokens: Number(usage.completionTokens) || 0,
       estimatedInputTokens: cmp.estimatedInputTokens,
       errorRatio: cmp.errorRatio,
@@ -1659,3 +1661,4 @@ class Bot {
 }
 
 module.exports = { Bot, extractCommand, COMMAND_HELP };
+
