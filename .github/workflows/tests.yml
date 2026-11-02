@@ -149,6 +149,11 @@ jobs:
         if: always()
         run: dotnet build launcher/WhaleLauncher.csproj -c Release --nologo
 
+      - name: 语音实验开关与发送回归（模拟接口，不发消息）
+        if: always()
+        timeout-minutes: 3
+        run: dotnet run --project tests/voice-send/VoiceSendChecks.csproj -c Release
+
       - name: 启动器进程生命周期回归（模拟桥接）
         if: always()
         shell: pwsh

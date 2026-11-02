@@ -36,6 +36,7 @@ const { COMMAND_HELP, extractCommand } = require('../core/commands');
 const { cannedReply, dismissReply } = require('./stages/canned');
 const reminderCore = require('../core/reminder');
 const stickers = require('../adapters/stickers');
+const voiceReply = require('../core/voiceReply');
 const { LIMITS } = require('../memory/constants');
 
 // 全局硬上限：所有会话加起来每分钟最多这么多条回复。
@@ -237,12 +238,14 @@ class Bot {
     const rawText = String(msg.text || '').replace(/^[A-Za-z0-9_\-]{4,}:\s+/, '');
     const clean = persona.cleanIncoming(rawText, this.config);
     msg.cleanText = clean.text;
-    const atMe = msg.atMe || clean.atMe;
+    let atMe = msg.atMe || clean.atMe;
     const isGroup = msg.chatType === 'group';
     const mentionedNames = isGroup
       ? [...new Set([...(msg.mentionedNames || []), ...extractMentionNames(rawText, persona.aliasList(this.config))])].slice(0, 4)
       : [];
     msg.mentionedNames = mentionedNames;
+    const voiceRequested = msg.platform === 'wechat' && voiceReply.enabled(this.config, isGroup) && voiceReply.requested(clean.text);
+    if (voiceRequested && !mentionedNames.length) atMe = true;
     msg.externalMentionNames = mentionedNames;
     msg.addressedToBot = Boolean(atMe || msg.replyToBot);
 
@@ -786,7 +789,7 @@ class Bot {
     msg.fightTarget = fightTarget;
     msg.fightOnMaster = fightOnMaster;
 
-    const system = persona.buildSystem({
+    let system = persona.buildSystem({
       config: this.config,
       msg: { ...msg, senderName: displayName, chatTitle: msg.chatTitle || session.title, isMaster, atMe, addressedToBot: Boolean(atMe || msg.replyToBot), mentionedNames, groupParticipants, linkText, discussion, model: this.llm.model, provider: this.llm.providerLabel, groupStyleText, webText, fight, fightDirty, fightOnMaster },
       profile,
@@ -799,6 +802,7 @@ class Bot {
       events: this.store.events(key, 12),
       now,
     });
+    if (voiceRequested) system += '\n用户希望下一条以语音形式回复。直接生成你此刻要说的自然内容，发送层会把正文转成语音；不要说无法发语音，也不要只承诺稍后发送。';
     const turns = this.buildTurns(msg, historyForTurns, mem.block);
 
     // 预算：system 只测量，不裁剪；对话预算默认 5,500（memory+summary+recent+reserve），

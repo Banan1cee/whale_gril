@@ -29,6 +29,7 @@ class BridgeUserFlows(unittest.TestCase):
         clock.sleep = lambda *_: None
         http = types.SimpleNamespace(post=lambda *a, **k: response or Response({'ok': True, 'action': 'reply', 'reply': '回答', 'bubbles': ['回答'], 'sticker': {'id': 'test'}}))
         env = dict(time=clock, me='self', START_TS=100., SKIP_OLDER_THAN=10, STALE_AFTER=4.,
+            voice_reply=types.SimpleNamespace(settings=lambda *a: {}, choose=lambda *a: False), ROOT='test', random=types.SimpleNamespace(random=lambda: .5),
             ONLY_CHATS=[], aliases=['鲸鲸'], _GROUP_SENDER_PREFIX_RE=re.compile(r'^wxid_x:\s*'),
             log=lambda *a: logs.append(a), log_throttled=lambda *a, **k: logs.append(a),
             db=types.SimpleNamespace(get_nickname=lambda s: '好友'), display_name=lambda s: '好友',
@@ -84,6 +85,22 @@ class BridgeUserFlows(unittest.TestCase):
         env, _, sent, stickers, _ = self.env(Response({'ok': True, 'action': 'reply', 'reply': '回答', 'bubbles': ['第一句', '第二句'], 'sticker': {'id': 'test'}}), send_ok=False)
         function('on_message_inner', env)(self.message(), None)
         self.assertEqual(sent, ['第一句']); self.assertEqual(stickers, [])
+
+    def test_voice_replaces_all_text_bubbles_with_the_same_reply(self):
+        env, _, sent, stickers, _ = self.env(Response({'ok': True, 'action': 'reply', 'reply': '模型回复', 'bubbles': ['第一句', '第二句']}))
+        captured=[]
+        env['voice_reply'].choose=lambda *a: True
+        env['send_voice_reply']=lambda text, *a: captured.append(text) or True
+        function('on_message_inner',env)(self.message(),None)
+        self.assertEqual(captured,['第一句\n第二句'])
+        self.assertEqual(sent,[]);self.assertEqual(stickers,[])
+
+    def test_voice_failure_before_recording_keeps_original_text(self):
+        env, _, sent, _, _ = self.env(Response({'ok': True, 'action': 'reply', 'reply': '原始回复', 'bubbles': ['原始回复']}))
+        env['voice_reply'].choose=lambda *a: True
+        env['send_voice_reply']=lambda *a: False
+        function('on_message_inner',env)(self.message(),None)
+        self.assertEqual(sent,['原始回复'])
 
     def test_auth_failure_is_not_reported_as_successful_connection(self):
         env, _, sent, _, logs = self.env(Response({'ok': False, 'error': 'token'}, 403))

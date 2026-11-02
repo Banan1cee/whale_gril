@@ -138,7 +138,8 @@ test('设置页去掉侧栏和标题，单列铺开，模型/高级模式/外观
   for (const tab of ['聊天（文本）', '看图（视觉）', '语音']) {
     assert.ok(modelSection.includes(tab), '模型卡缺少页签：' + tab);
   }
-  assert.ok(modelSection.includes('voice.enabled'), '语音设置应并进模型卡');
+  assert.ok(modelSection.includes('语音（识别）') && modelSection.includes('voice.model'), '识别参数应留在模型卡');
+  assert.ok(!modelSection.includes('Label = "语音回复"'), '识别页不应显示语音回复开关');
 
   // 高级模式：一张卡默认收起，含四组
   const advSection = code.slice(code.indexOf('private Border BuildAdvancedSection()'), code.indexOf('private Border BuildAppearanceSection()'));

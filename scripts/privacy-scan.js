@@ -27,6 +27,7 @@ const SKIP_PREFIX = [
   'dist/', 'release/', '.tools/', 'artifacts/',
   'tests/launcher/Checks/bin/', 'tests/launcher/Checks/obj/',
   'tests/launcher/FakeBridge/bin/', 'tests/launcher/FakeBridge/obj/',
+  'tests/voice-send/bin/', 'tests/voice-send/obj/',
   '.venv/', 'venv/',
 ];
 const SKIP_FILES = /(^|\/)(config\.json|settings\.json|.*\.log|.*\.bak.*|.*\.zip)$/;
@@ -58,6 +59,7 @@ function textRules() {
   );
   return [
     { name: '密钥', re: /\bsk-[A-Za-z0-9]{16,}/g },
+    { name: 'BreezeBlue 密钥', re: /\bbrz_[A-Za-z0-9_-]{24,}/g },
     {
       name: '云服务密钥',
       re: /\b(?:AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{35})\b/g,

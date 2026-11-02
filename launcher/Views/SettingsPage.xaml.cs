@@ -818,7 +818,7 @@ namespace WhaleLauncher.Views
 
             var chatTab = MakeTab("聊天（文本）", out var chatBadge);
             var visionTab = MakeTab("看图（视觉）", out var visionBadge);
-            var voiceTab = MakeTab("语音", out var voiceBadge);
+            var voiceTab = MakeTab("语音（识别）", out var voiceBadge);
             var strip = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 14) };
             strip.Children.Add(chatTab);
             strip.Children.Add(visionTab);
@@ -1027,10 +1027,9 @@ namespace WhaleLauncher.Views
                 Style = (Style)FindResource("Small"),
                 TextWrapping = TextWrapping.Wrap,
                 Margin = new Thickness(0, 0, 0, 8),
-                Text = "别人发语音时先转成文字再回复；Key 留空则沿用主模型那把。",
+                Text = "接收微信语音并识别成文字；发送语音请使用工作台「语音发送」。",
             };
             voicePanel.Children.Add(voiceHint);
-            voicePanel.Children.Add(BuildField(new FieldSpec { Path = "voice.enabled", Label = "语音回复", Kind = "bool" }, false, ModelLabel));
             voicePanel.Children.Add(BuildField(new FieldSpec { Path = "voice.apiKey", Label = "语音接口 Key", Kind = "secret", Hint = "留空表示不改；留空则用主模型的 Key" }, false, ModelLabel));
             voicePanel.Children.Add(BuildField(new FieldSpec { Path = "voice.baseUrl", Label = "接口地址", Kind = "text" }, false, ModelLabel));
             voicePanel.Children.Add(BuildField(new FieldSpec { Path = "voice.model", Label = "语音模型", Kind = "text" }, false, ModelLabel));
