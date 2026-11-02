@@ -40,15 +40,17 @@ public sealed class VoiceSendPage : UserControl
         title.SetResourceReference(StyleProperty,"H1");body.Children.Add(title);
         experimental.SetResourceReference(StyleProperty,"DarkCheck");
         body.Children.Add(experimental);body.Children.Add(panel);
+        Button driverButton=null;
+        panel.Children.Add(VoiceSendGuide.Create(()=>driverButton?.BringIntoView()));
         panel.Children.Add(Note("将正常回复转成语音，按概率发送，或响应对方的语音请求。关闭实验开关即可停用。"));
         Heading("回复方式");
         Add("随机语音概率（0～100%，0 表示只响应明确要求）",probability);
         probability.Width=140;probability.HorizontalAlignment=HorizontalAlignment.Left;
         var scopes=new WrapPanel{Margin=new Thickness(0,12,0,2)};
         groups.Margin=new Thickness(0,0,24,0);scopes.Children.Add(groups);scopes.Children.Add(privates);panel.Children.Add(scopes);
-        shortcut.ItemsSource=new[]{"Ctrl+Alt","Alt+=","Ctrl+Shift+F11","F11"};
+        shortcut.ItemsSource=new[]{"Ctrl+Tab","Ctrl+Alt","Alt+=","Ctrl+Shift+F11","F11"};
         Add("微信录音快捷键（可直接输入自定义组合，须与微信设置一致）",shortcut);
-        panel.Children.Add(Note("支持 Ctrl、Alt、Shift 搭配字母、数字、F1～F24 或 =。录音和松开按键由程序完成。"));
+        panel.Children.Add(Note("教程使用 Ctrl+Tab；请在微信和本页设置相同组合。也支持字母、数字、F1～F24 或 =。录音和松开按键由程序完成。"));
         Heading("模型与音色");
         Add("BreezeBlue Key（留空沿用已保存的 Key）",key);
         Button("测试 API Key 连接",async token=>{
@@ -57,17 +59,23 @@ public sealed class VoiceSendPage : UserControl
             token.ThrowIfCancellationRequested();ShowResult(keyStatus,result.Message,result.Available?"Ok":"Bad");
         },keyStatus);
         panel.Children.Add(keyStatus);
-        Add("模型 ID",model);Add("音色 ID",voice);Add("语气指令",instructions);Add("搜索音色",search);
+        Add("语音模型",models);Add("回复音色",voices);
+        panel.Children.Add(Note("已预选中英双语版和大肥鱼（机灵版）。填好 Key 后即可测试连接、配置声卡并保存，无需先读取列表或手选音色。"));
+        Add("语气指令（可选）",instructions);Add("搜索其他音色（可选）",search);
         Button("读取模型和音色（不合成、不发送）",async token=>{
             string secret=string.IsNullOrWhiteSpace(key.Password)?BreezeSpeech.LoadKey(keyFile):key.Password;
             var modelOptions=await BreezeSpeech.Catalog(secret,false,"",token);
             var voiceOptions=await BreezeSpeech.Catalog(secret,true,search.Text.Trim(),token);
-            token.ThrowIfCancellationRequested();models.ItemsSource=modelOptions;voices.ItemsSource=voiceOptions;
-            status.Text="已读取；音色最多显示100个，可搜索或直接填写 ID";
+            token.ThrowIfCancellationRequested();BindChoices(models,modelOptions,model,false);BindChoices(voices,voiceOptions,voice,true);
+            status.Text="已读取，保留当前选择。音色一次最多返回100个，可搜索其他音色。";
         });
-        Add("可用模型",models);Add("可用音色",voices);
         models.SelectionChanged+=(_,_)=>{if(models.SelectedItem is BreezeSpeech.Choice c)model.Text=c.Id;};
         voices.SelectionChanged+=(_,_)=>{if(voices.SelectedItem is BreezeSpeech.Choice c)voice.Text=c.Id;};
+        model.LostKeyboardFocus+=(_,_)=>BindChoices(models,models.Items.Cast<BreezeSpeech.Choice>().ToArray(),model,false);
+        voice.LostKeyboardFocus+=(_,_)=>BindChoices(voices,voices.Items.Cast<BreezeSpeech.Choice>().ToArray(),voice,true);
+        var advanced=new StackPanel{Visibility=Visibility.Collapsed};
+        Button("高级：手动填写模型 / 音色 ID",_=>{advanced.Visibility=advanced.Visibility==Visibility.Visible?Visibility.Collapsed:Visibility.Visible;return Task.CompletedTask;});
+        Add("模型 ID",model,advanced);Add("音色 ID",voice,advanced);panel.Children.Add(advanced);
         Heading("声卡与测试");
         Add("虚拟声卡播放端（例如 CABLE Input）",devices);
         Button("刷新声卡",_=>{RefreshDevices();return Task.CompletedTask;});
@@ -87,7 +95,7 @@ public sealed class VoiceSendPage : UserControl
         },testStatus);
         panel.Children.Add(testStatus);
         Heading("虚拟声卡驱动");
-        Button("安装 VB-CABLE 官方驱动",_=>{
+        driverButton=Button("安装 VB-CABLE 官方驱动",_=>{
             string exe=Path.Combine(root,"runtime","vb-cable","VBCABLE_Setup_x64.exe");
             if(!File.Exists(exe))throw new Exception("运行包缺少驱动，请从 https://vb-audio.com/Cable/ 安装");
             Process.Start(new ProcessStartInfo(exe){UseShellExecute=true,Verb="runas"});
@@ -103,6 +111,12 @@ public sealed class VoiceSendPage : UserControl
             result.SetResourceReference(ForegroundProperty,"Muted");
         }
         Load();experimental.Checked+=Toggle;experimental.Unchecked+=Toggle;
+        key.PasswordChanged+=(_,_)=>{
+            if(loading||experimental.IsChecked!=true||string.IsNullOrWhiteSpace(key.Password))return;
+            BindChoices(models,models.Items.Cast<BreezeSpeech.Choice>().ToArray(),model,false);
+            BindChoices(voices,voices.Items.Cast<BreezeSpeech.Choice>().ToArray(),voice,true);
+            ShowResult(keyStatus,"Key 已填写，模型和音色已就绪。请点击「测试 API Key 连接」确认可用后保存。","Muted");
+        };
         Unloaded+=(_,_)=>requests.Cancel();
         Loaded+=(_,_)=>{if(requests.IsCancellationRequested){requests.Dispose();requests=new();}};
 
@@ -116,15 +130,16 @@ public sealed class VoiceSendPage : UserControl
             var heading=new TextBlock{Text=text,Margin=new Thickness(0,24,0,4)};
             heading.SetResourceReference(StyleProperty,"H2");panel.Children.Add(heading);
         }
-        void Add(string label,Control control)
+        void Add(string label,Control control,Panel target=null)
         {
+            target??=panel;
             var caption=new TextBlock{Text=label,TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,12,0,6)};
-            caption.SetResourceReference(StyleProperty,"Label");panel.Children.Add(caption);
+            caption.SetResourceReference(StyleProperty,"Label");target.Children.Add(caption);
             // Explicitly retain the application's input styles for code-built controls.
             control.SetResourceReference(StyleProperty,control.GetType());
-            panel.Children.Add(control);
+            target.Children.Add(control);
         }
-        void Button(string label,Func<CancellationToken,Task> action,TextBlock feedback=null)
+        Button Button(string label,Func<CancellationToken,Task> action,TextBlock feedback=null)
         {
             var button=new Button{Content=label,Margin=new Thickness(0,10,0,2),HorizontalAlignment=HorizontalAlignment.Left,MinHeight=34};
             button.SetResourceReference(StyleProperty,"Ghost");
@@ -136,12 +151,20 @@ public sealed class VoiceSendPage : UserControl
                 finally{button.IsEnabled=true;}
             };
             panel.Children.Add(button);
+            return button;
         }
     }
 
     static void ShowResult(TextBlock target,string text,string tone)
     {
         target.Text=text;target.Visibility=Visibility.Visible;target.SetResourceReference(TextBlock.ForegroundProperty,tone);
+    }
+
+    static void BindChoices(ComboBox combo,BreezeSpeech.Choice[] options,TextBox field,bool isVoice)
+    {
+        string id=BreezeSpeech.SelectionId(field.Text,isVoice);
+        var choices=BreezeSpeech.Choices(options,id,isVoice);
+        combo.ItemsSource=choices;combo.SelectedItem=choices.First(c=>c.Id==id);field.Text=id;
     }
 
     void Toggle(object sender,RoutedEventArgs args)
@@ -190,6 +213,7 @@ public sealed class VoiceSendPage : UserControl
             experimental.IsChecked=saved.Enabled;panel.Visibility=saved.Enabled?Visibility.Visible:Visibility.Collapsed;
             groups.IsChecked=saved.Groups;privates.IsChecked=saved.Private;probability.Text=saved.Probability.ToString(CultureInfo.InvariantCulture);
             model.Text=saved.Model;voice.Text=saved.Voice;instructions.Text=saved.Instructions;shortcut.Text=saved.RecordingHotkey;
+            BindChoices(models,null,model,false);BindChoices(voices,null,voice,true);
             if(saved.Enabled){RefreshDevices();devices.SelectedItem=devices.Items.Cast<Device>().FirstOrDefault(d=>d.Id==saved.Device);}
         }
         catch{saved=new();experimental.IsChecked=false;panel.Visibility=Visibility.Collapsed;}

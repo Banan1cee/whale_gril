@@ -14,6 +14,7 @@ class Program {
  await BreezeChecks.Run(dir);
  await AutoVoiceChecks.Run(dir);
  ExperimentalVoiceChecks.Run(dir);
+ DefaultVoiceChecks.Run(dir);
  await VoiceTestChecks.Run(dir);
  Assert(VoiceSendEngine.Endpoint("https://example.com/audio/speech").Scheme=="https");Assert(VoiceSendEngine.Endpoint("http://127.0.0.1/audio/speech").IsLoopback);
  Reject(()=>VoiceSendEngine.Endpoint("http://example.com/audio/speech"));Reject(()=>VoiceSendEngine.Endpoint("file:///private"));Reject(()=>VoiceSendEngine.Endpoint("https://key@example.com/audio/speech"));
