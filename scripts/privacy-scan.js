@@ -82,8 +82,21 @@ function textRules() {
   ];
 }
 
+// 第三方库自带的构建机路径：上游发布时就带着，不算本仓库泄露。
+// 只放行精确前缀，不要写成通配 —— 白名单越宽，越容易放过真的本机路径。
+const BINARY_PATH_ALLOWLIST = [
+  'C:\\Users\\markh\\code\\mygithub\\NAudio\\', // NAudio 包内 PDB 路径（上游构建机）
+];
+
 const BINARY_RULES = [
-  { name: '本机用户目录（二进制）', re: /C:\\Users\\/g },
+  {
+    name: '本机用户目录（二进制）',
+    re: /C:\\Users\\/g,
+    keep: (m, index, text) => {
+      const rest = text.slice(index, index + 160);
+      return !BINARY_PATH_ALLOWLIST.some((prefix) => rest.startsWith(prefix));
+    },
+  },
   { name: '源码托管链接（二进制）', re: /raw\.githubusercontent\.com/gi },
 ];
 
@@ -107,6 +120,7 @@ function scanBinaryBuffer(buffer, file = '') {
     for (const rule of BINARY_RULES) {
       rule.re.lastIndex = 0;
       for (const m of text.matchAll(rule.re)) {
+        if (rule.keep && !rule.keep(m[0], m.index, text)) continue;
         const key = rule.name + ':' + m.index;
         if (seen.has(key)) continue;
         seen.add(key);
