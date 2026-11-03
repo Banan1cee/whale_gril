@@ -359,7 +359,7 @@ test('调试台：会话列表只给计数，不暴露记忆正文', async () =>
   } finally { await app.close(); }
 });
 
-test('调试台：魔咒配置 + 网页聊天触发管理员权限', async () => {
+test('调试台：网页同名昵称不能借魔咒取得管理员权限', async () => {
   const app = await boot();
   try {
     const s = await (await fetch(app.url + '/api/debug/state')).json();
@@ -368,11 +368,13 @@ test('调试台：魔咒配置 + 网页聊天触发管理员权限', async () =>
     assert.match(s.admin.spellMasked, /\*\*\*\*/);
     assert.doesNotMatch(s.admin.spellMasked, /test-spell/);
 
-    await collectSse(app.url + '/api/chat', { text: 'test-spell', mode: 'private', sessionId: 'adm', senderName: 'Master' });
+    const attempt = await fetch(app.url + '/api/chat', {method:'POST',headers:{'content-type':'application/json','x-bot-token':TOKEN},body:JSON.stringify({ text: 'test-spell', mode: 'private', sessionId: 'adm', senderName: 'Master' })});
+    const denied = await attempt.json();
+    assert.equal(denied.reason, 'not_owner');
     const d = await (await fetch(app.url + '/api/debug/sessions')).json();
     const sess = d.sessions.find((x) => x.key.includes('adm'));
     assert.ok(sess, '应能找到这个会话');
-    assert.ok(sess.adminUntil > Date.now(), '管理员权限应已激活');
+    assert.equal(Number(sess.adminUntil)||0, 0, '未绑定 ID 的网页同名用户不得激活管理员权限');
   } finally {
     await app.close();
   }

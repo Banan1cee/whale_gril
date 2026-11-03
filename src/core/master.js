@@ -85,4 +85,10 @@ function masterWarnings(config) {
   return out;
 }
 
-module.exports = { matchMaster, masterWarnings, masterLists, looksLikeWxid };
+// 称呼可以按昵称兜底，管理权限必须绑定已配置的发送者 ID。
+function isVerifiedOwner(config, msg) {
+  const hit = matchMaster(config, msg);
+  return hit.reason === 'wxid' && hit.senderId !== 'unknown';
+}
+
+module.exports = { matchMaster, masterWarnings, masterLists, looksLikeWxid, isVerifiedOwner };

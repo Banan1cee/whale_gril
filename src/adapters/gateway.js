@@ -161,7 +161,11 @@ class Gateway {
 
   verifyToken(req, body) {
     const expected = String(this.options.inboundToken || '');
-    if (!expected) return true; // 没设置 token 就不校验（只建议本机测试时这样）
+    if (!expected.trim()) return false; // 空凭据不能变成免鉴权入口。
+    if (/^change-me-(wechat|douyin)$/.test(expected)) {
+      const ip = String(req.socket && req.socket.remoteAddress || '');
+      if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(ip)) return false;
+    }
     const header = req.headers['x-bot-token'] || req.headers['x-bot-signature'];
     const query = req.url && req.url.includes('token=')
       ? new URL(req.url, 'http://localhost').searchParams.get('token')

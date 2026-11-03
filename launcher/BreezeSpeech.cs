@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
@@ -96,13 +97,29 @@ public static class BreezeSpeech
         catch (FormatException) { return new(false, "API Key 不可用：Key 格式错误"); }
     }
 
-    public static async Task Generate(string key, string model, string voice, string text, string instructions, string file, CancellationToken ct)
+    public sealed class RequestMetrics
     {
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct); timeout.CancelAfter(TimeSpan.FromSeconds(90)); ct = timeout.Token;
-        using var client = Client(); using var request = CreateRequest(key, model, voice, text, instructions);
+        public long RequestMs { get; set; }
+        public long? HeadersMs { get; set; }
+        public int? HttpStatus { get; set; }
+    }
+
+    public static async Task Generate(string key, string model, string voice, string text, string instructions, string file, CancellationToken ct,
+        RequestMetrics metrics = null, TimeSpan? limit = null, HttpClient transport = null)
+    {
+        var caller = ct;
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct); timeout.CancelAfter(limit ?? TimeSpan.FromSeconds(20)); ct = timeout.Token;
+        using var owned = transport == null ? Client() : null;
+        var client = transport ?? owned;
+        if (owned != null) owned.Timeout = Timeout.InfiniteTimeSpan; // 合成时限统一由上面的取消令牌控制。
+        metrics ??= new();
+        var clock = Stopwatch.StartNew();
+        try {
+        using var request = CreateRequest(key, model, voice, text, instructions);
         using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+        metrics.HeadersMs = clock.ElapsedMilliseconds; metrics.HttpStatus = (int)response.StatusCode;
         if (response.StatusCode == System.Net.HttpStatusCode.Accepted) throw new Exception("BreezeBlue 返回异步任务，未取得音频。请检查服务端任务记录后再试，程序不会自动重复扣费请求。");
-        if (!response.IsSuccessStatusCode) throw new Exception("BreezeBlue HTTP " + (int)response.StatusCode + "：请检查 Key 权限、余额、模型和音色");
+        if (!response.IsSuccessStatusCode) throw new HttpRequestException("BreezeBlue HTTP " + (int)response.StatusCode + "：请检查 Key 权限、余额、模型和音色", null, response.StatusCode);
         using var source = await response.Content.ReadAsStreamAsync(ct);
         using (var output = new FileStream(file, FileMode.CreateNew, FileAccess.Write))
         {
@@ -114,6 +131,10 @@ public static class BreezeSpeech
             }
         }
         VoiceSendEngine.ValidateWave(file);
+        }
+        catch (OperationCanceledException) when (!caller.IsCancellationRequested)
+        { throw new TimeoutException("BreezeBlue 语音合成超时，尚未开始微信录音"); }
+        finally { metrics.RequestMs = clock.ElapsedMilliseconds; }
     }
 
     public static async Task<Choice[]> Catalog(string key, bool voices, string search, CancellationToken ct)

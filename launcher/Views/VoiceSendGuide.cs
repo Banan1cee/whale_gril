@@ -10,7 +10,7 @@ public static class VoiceSendGuide
     public const string KeyUrl="https://breezeblue.ai/zh/app/developer/api-keys";
     public static Border Create(Action goToDriver)
     {
-        var card=new Border{Padding=new Thickness(18),Margin=new Thickness(0,12,0,4)};
+        var card=new Border{Padding=new Thickness(16,12,16,12),Margin=new Thickness(0,0,0,12)};
         card.SetResourceReference(FrameworkElement.StyleProperty,"Card");
         var layout=new StackPanel();card.Child=layout;
         var toggle=new Button{Content="首次使用 · 展开完整教程 ▾",HorizontalAlignment=HorizontalAlignment.Left};
@@ -65,6 +65,11 @@ public static class VoiceSendGuide
             "勾选希望使用语音的「群聊」「私聊」，设置概率后保存。25% 表示每条完整回复抽一次，不是每四条必发一次；0% 不随机发，只响应明确的语音请求；100% 会尽量走语音，仍受范围与发送条件限制。\n"+
             "在允许的会话里说“发一条语音听听”，下一条正常回复会优先转成语音。程序自动完成文本转语音和微信发送，不需要一直停留在本页。\n"+
             "要停用时关闭第一行实验开关即可；会停止新的语音任务并请求取消未完成的任务，已发出的消息不会因此撤回。");
+
+        Step("接口慢时的保护",
+            "语音合成最长等待默认 20 秒，可在本页调为 5～90 秒。超时且尚未录音时会取消本次请求，改发原始文字。合成期间其他会话可以继续发文字，同一会话保持原有顺序。\n"+
+            "连续两次接口失败或超时后暂停语音 5 分钟，期间要求语音也回退文字，随后自动再试；不会自动重试同一条付费请求。取消本地请求不代表服务端一定取消计费。\n"+
+            "虚拟声卡需要播完整段音频，例如 15 秒语音还需约 15 秒录音。已经开始录音且发送结果不明时，不会补发文字，以免重复。");
 
         Step("常见问题 · 按顺序检查",
             "• 没有 CABLE 设备：确认驱动安装完成并重启电脑，再刷新声卡。\n"+

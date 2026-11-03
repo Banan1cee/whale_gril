@@ -217,7 +217,9 @@ test('drip-fed response has an absolute deadline and destroys the request', asyn
 
 test('redirect cycles are bounded and preserve required Weibo headers', async (t) => {
   const calls = fakeHttps(t, () => ({ status: 302, headers: { location: '/ajax/side/hotSearch' } }));
-  assert.equal(await web.weiboHotText(10, 200), '');
+  // This case checks the redirect count. The next case checks the short deadline.
+  // Leave enough wall-clock budget when the full suite runs concurrently in CI.
+  assert.equal(await web.weiboHotText(10, 2000), '');
   assert.equal(calls.length, 6);
   for (const call of calls) assert.equal(call.options.headers.Referer, 'https://weibo.com/');
 });

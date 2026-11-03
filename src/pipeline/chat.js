@@ -20,7 +20,7 @@
 const path = require('node:path');
 const persona = require('../persona');
 const features = require('../infra/features');
-const { matchMaster } = require('../core/master');
+const { matchMaster, isVerifiedOwner } = require('../core/master');
 const links = require('../adapters/links');
 const websearch = require('../adapters/websearch');
 const searchRouter = require('../adapters/searchRouter');
@@ -180,6 +180,9 @@ class Bot {
 
     // 取消 / 查看：只处理「取消提醒」「提醒列表」这种整句
     if (/^(?:取消|删除|清空)(?:所有|全部)?提醒[。.!！~～]*$/.test(text)) {
+      if (isGroup && !isVerifiedOwner(this.config, msg)) {
+        return { action: 'reply', key, msg, atMe, canned: '群里的提醒统一由已绑定 ID 的主人取消，避免误删其他人的提醒。', reason: 'not_owner' };
+      }
       const pending = service.pendingFor(msg.chatId);
       if (!pending.length) return { action: 'reply', key, msg, atMe, canned: '这个会话没有待发的提醒。', reason: 'reminder_cancel' };
       let cancelled = 0;
@@ -1029,10 +1032,12 @@ class Bot {
 
   /** 魔咒 + 管理员命令。返回 decision，或 null 表示继续走普通聊天流程 */
   handleAdmin({ msg, clean, key, state, isMaster, nowMs }) {
+    // 不接受昵称兜底或上游传来的 isMaster 标记作为管理凭据。
+    isMaster = isVerifiedOwner(this.config, msg);
     const adminCfg = this.config.admin || {};
     const spell = String(adminCfg.spell || '').trim();
     const minutes = Math.max(1, Math.min(1440, Number(adminCfg.minutes) || 30));
-    const allowAll = Boolean(adminCfg.allowAll);
+    const allowAll = adminCfg.allowAll === true;
     const text = String((clean && clean.text) || '').trim();
     const say = (msgText, commandType = 'admin') => ({
       action: 'command', commandType, key, msg, atMe: true, reason: 'admin', text: msgText,
@@ -1058,15 +1063,9 @@ class Bot {
       );
     }
 
-    // 2) 管理员命令：主人直接生效，不用开魔咒；allowAll=true 时任何人也能用。
-    // 其他人要靠魔咒发的时限权限（adminUntil）才能用，到期就真的失去权限。
-    // 以前这里是 if (!isMaster && !allowAll) return null 一票否决，把下一行的 adminUntil
-    // 检查永远堵死（死代码）：「管理员权限 N 分钟」只是句空承诺（H7）。
-    // 注意 adminUntil 认发放对象（adminUser）：不能让同聊天里的路人甲借着主人刚开的
-    // 时限拿到管理员命令 —— bot.test.js 固化了「别人发『状态』不会拿到管理员回复」，
-    // 字面只判 adminUntil 的写法会让那条测试挂掉，所以这里按人放行。
-    const adminOk = isMaster || allowAll
-      || (Number(state.adminUntil) > nowMs && String(state.adminUser || '') === String(msg.senderId || ''));
+    // 管理权限每次按当前配置复核；旧会话中的魔咒时限不是独立凭据。
+    // 移除主人 ID 或关闭 allowAll 后应立即撤销旧权限，避免历史冒名授权继续生效。
+    const adminOk = isMaster || allowAll;
     if (!adminOk) {
       const looksControl =
         /(禁言|解禁|静音)/.test(text) ||
@@ -1077,11 +1076,7 @@ class Bot {
       }
       return null;
     }
-    // 剩余时间按新语义算：主人/allowAll 不限时；临时管理员看 adminUntil，到期即失效
-    const remaining = (isMaster || allowAll)
-      ? 0
-      : Math.max(1, Math.ceil((Number(state.adminUntil) - nowMs) / 60000));
-    const remainingText = remaining > 0 ? `剩 ${remaining} 分钟` : '不限时';
+    const remainingText = '不限时';
 
     // —— 群禁言（让某个群安静） ——
     let mg;
@@ -1308,10 +1303,12 @@ class Bot {
       return say(on ? '群聊主动接话已打开（按概率接话，仍受冷却限制）。' : '群聊主动接话已关闭。');
     }
     if (/^重置记忆$/.test(text)) {
+      if (!isMaster) return say('只有已绑定发送者 ID 的主人才能清空记忆。', 'permission_denied');
       this.store.resetSession(key);
       return say('这个聊天的记忆已清空。');
     }
     if (/^清空所有记忆$/.test(text)) {
+      if (!isMaster) return say('只有已绑定发送者 ID 的主人才能清空记忆。', 'permission_denied');
       this.store.resetAll();
       return say('所有聊天的记忆已清空。');
     }
@@ -1331,10 +1328,15 @@ class Bot {
   runCommand({ command, msg, key, profile, state, nowMs, atMe }) {
     const g = this.config.group;
     const finish = (text, extra = {}) => ({ action: 'command', commandType: command.type, key, msg, atMe, text, reason: 'command', ...extra });
+    const owner = isVerifiedOwner(this.config, msg);
+    if ((command.type === 'reset' || (msg.chatType === 'group' && ['mute', 'unmute'].includes(command.type))) && !owner) {
+      return finish('这个操作仅限已绑定发送者 ID 的主人。', { commandType: 'permission_denied', reason: 'not_owner' });
+    }
     switch (command.type) {
       case 'help':
         return finish(COMMAND_HELP);
       case 'status': {
+        if (!owner) return finish('人家在线，详细运行状态仅主人可查看。');
         const summary = this.store.summary();
         const mood = persona.moodFor(new Date(nowMs));
         const mode = this.llm.isMock ? '演示模式（未配置 API Key）' : `DeepSeek ${this.llm.model}`;
