@@ -84,6 +84,11 @@ namespace WhaleLauncher
         private int _restartGeneration;
         private int _restartCount;
         private DateTime _bridgeStartedAt;
+        // 重启风暴刹车：不是「进程活了 60 秒就清零」，而是看最近 10 分钟重启了几次。
+        // 视频号/链接预览会让 UIA 卡住 → 看门狗 exit 7 → 3 秒重启，循环起来拦不住。
+        private readonly List<DateTime> _bridgeRestarts = new List<DateTime>();
+        private const int BridgeRestartCap = 5;
+        private static readonly TimeSpan BridgeRestartWindow = TimeSpan.FromMinutes(10);
         private Process _node;
         private Process _bridge;
         private readonly HttpClient _http = new HttpClient(new HttpClientHandler { UseProxy = false })
@@ -309,6 +314,17 @@ namespace WhaleLauncher
                     || File.Exists(Path.Combine(DataDir, "PAUSED"))) return;
                 if ((DateTime.UtcNow - _bridgeStartedAt).TotalSeconds >= 60) _restartCount = 0;
                 if (++_restartCount > 3) { _bridgeWanted = false; SayError("桥接连续异常退出，已停止自动重启，请查看诊断"); return; }
+                // 窗口计数：60 秒的「存活清零」会把「3 秒崩一次」也当成健康，
+                // 所以刹车只看最近 10 分钟重启次数，跟单次活了多久无关。
+                var nowUtc = DateTime.UtcNow;
+                _bridgeRestarts.RemoveAll((t) => nowUtc - t > BridgeRestartWindow);
+                if (_bridgeRestarts.Count >= BridgeRestartCap)
+                {
+                    _bridgeWanted = false;
+                    SayError("桥接 10 分钟内反复退出 " + _bridgeRestarts.Count + " 次，已停止自动重启（不是无限重启）。看「诊断」里的桥接日志，关掉视频号/链接预览窗口后再点启动。");
+                    return;
+                }
+                _bridgeRestarts.Add(nowUtc);
                 Emit("L", code == 7 ? "桥接请求重新连接，正在重启…" : "桥接异常退出，正在自动恢复…", 'w');
                 _bridge = null;
                 StartBridge();
@@ -317,6 +333,7 @@ namespace WhaleLauncher
 
         public async Task StartAllAsync()
         {
+            lock (_processLock) _bridgeRestarts.Clear();   // 用户手动启动 = 重新计数
             StartNode();
             if (await WaitForNodeAsync()) StartBridge();
         }
@@ -328,6 +345,7 @@ namespace WhaleLauncher
                 _bridgeWanted = false;
                 _restartGeneration++;
                 _restartCount = 0;
+                _bridgeRestarts.Clear();                       // 用户手动重启 = 重新计数
                 Kill(_bridge, "B", "桥接");
                 _bridge = null;
                 StartBridge();

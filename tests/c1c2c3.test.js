@@ -68,6 +68,31 @@ test('C3：能解析「3 天之前」和「2026年9月5日」两种时间', () =
   assert.equal(websearch.parseSnippetAgeDays('没有日期'), null);
 });
 
+test('C3-2：更多时间写法都认（X天前 / 刚刚 / 昨天 / 11月2日 / 2026-11-02）', () => {
+  const now = new Date(2026, 10, 3, 12, 0, 0).getTime();   // 2026-11-03 12:00
+  assert.equal(Math.round(websearch.parseSnippetAgeDays('4 天前 正文', now)), 4);
+  assert.equal(websearch.parseSnippetAgeDays('刚刚 正文', now), 0);
+  assert.equal(websearch.parseSnippetAgeDays('昨天 20:11 正文', now), 1);
+  assert.equal(Math.floor(websearch.parseSnippetAgeDays('11月2日 正文', now)), 1);
+  assert.equal(Math.floor(websearch.parseSnippetAgeDays('2026-11-01 正文', now)), 2);
+  // 跨年：1 月读到「12月20日」的稿子是去年的，不能算成未来/今天
+  const jan = new Date(2026, 0, 5, 12, 0, 0).getTime();
+  const age = websearch.parseSnippetAgeDays('12月20日 正文', jan);
+  assert.ok(age > 10 && age < 40, '按去年 12 月 20 日算（约 16 天），不能算成未来：' + age);
+});
+
+test('C3-2：「今天」把丢旧结果的阈值收紧到 2 天，四天前的旧闻不再当今天', () => {
+  const results = [
+    { title: '今天的', snippet: '今天 09:12 最新消息' },
+    { title: '四天前', snippet: '4 天之前 旧闻' },
+  ];
+  assert.deepEqual(websearch.dropStaleResults('今天有什么新闻', results).map((x) => x.title), ['今天的']);
+  assert.equal(websearch.effectiveMaxAgeDays('今天显卡多少钱', 'strict'), 2);
+  assert.equal(websearch.effectiveMaxAgeDays('显卡行情', 'strict'), 90);
+  assert.equal(websearch.effectiveMaxAgeDays('这周发布会', 'normal'), 7);
+  assert.equal(websearch.effectiveMaxAgeDays('今天有什么新闻', 'any'), null);
+});
+
 test('C3：问「最新」时丢掉明显过期结果', () => {
   const results = [
     { title: '新文', snippet: '1 天之前 最新情况' },
