@@ -135,6 +135,35 @@ function Get-StoreStats {
     param([string]$Root)
     $file = Join-Path $Root 'data\store.json'
     $res = [pscustomobject]@{ Path = $file; Exists = $false; Sessions = 0; Messages = 0; Notes = 0; Size = 0; SavedAt = '' }
+
+    # 4.0 记忆 v2：没有 store.json，只有 data\memory\manifest.json + chats\<hash>\
+    # 不认这个分支的话，纯 v2 目录会被判定成「没有聊天记忆」，-Migrate 直接拒绝。
+    $v2 = Join-Path $Root 'data\memory\manifest.json'
+    if (Test-Path -LiteralPath $v2) {
+        try {
+            $m = (Get-Content -LiteralPath $v2 -Raw -Encoding UTF8) | ConvertFrom-Json
+            $chats = 0; $msgs = 0
+            if ($m.stats) { $chats = [int]$m.stats.chats; $msgs = [int]$m.stats.messages }
+            if ($chats -le 0) {
+                $chatRoot = Join-Path $Root 'data\memory\chats'
+                if (Test-Path -LiteralPath $chatRoot) {
+                    $chats = @(Get-ChildItem -LiteralPath $chatRoot -Directory -ErrorAction SilentlyContinue).Count
+                }
+            }
+            if ($chats -gt 0) {
+                $res.Path = $v2
+                $res.Exists = $true
+                $res.Sessions = $chats
+                $res.Messages = $msgs
+                try { $res.Size = (Get-Item -LiteralPath $v2 -Force).Length } catch { }
+                if ($m.updatedAt) {
+                    try { $res.SavedAt = [DateTimeOffset]::FromUnixTimeMilliseconds([long]$m.updatedAt).ToLocalTime().ToString('o') } catch { }
+                }
+                return $res
+            }
+        } catch { }
+    }
+
     if (-not (Test-Path -LiteralPath $file)) { return $res }
     try { $j = (Get-Content -LiteralPath $file -Raw -Encoding UTF8) | ConvertFrom-Json } catch { return $res }
     $sessions = 0; $messages = 0; $notes = 0
@@ -562,7 +591,10 @@ function Find-OldInstalls {
                         if ($st.Exists -and [int]$st.Sessions -gt 0) {
                             $appSeen[$full] = $true
                             $saved = $null
-                            try { $saved = (Get-Item -LiteralPath $st.Path -Force).LastWriteTime } catch { $saved = $null }
+                            try {
+                                if ($st.SavedAt) { $saved = [datetime]::Parse([string]$st.SavedAt) }
+                            } catch { $saved = $null }
+                            if (-not $saved) { try { $saved = (Get-Item -LiteralPath $st.Path -Force).LastWriteTime } catch { $saved = $null } }
                             if (-not $saved) { $saved = [datetime]::MinValue }
                             $found.Add([pscustomobject]@{
                                 Path        = $full
