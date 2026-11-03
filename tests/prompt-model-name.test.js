@@ -76,3 +76,17 @@ test('调用方把模型/服务商塞进 msg 也不影响 system', () => {
   assert.equal(polluted, base, 'system 不能再读 msg.model / msg.provider');
   assert.equal(polluted.includes(model), false);
 });
+
+test('演示模式台词不点名模型（mockReply 输出不含 DeepSeek）', () => {
+  const { mockReply } = require('../src/persona');
+  const asks = ['你是谁', '你叫什么', '你是不是 AI', '你是不是机器人', '你是什么模型', '你用的什么 AI', '你是什么版本'];
+  // 把 rng 从 0 扫到 0.99，覆盖每个规则里的所有备选台词
+  for (const text of asks) {
+    for (const chatType of ['private', 'group']) {
+      for (const rng of [0, 0.2, 0.4, 0.6, 0.8, 0.99]) {
+        const reply = mockReply({ text, chatType, rng: () => rng });
+        assert.equal(/deepseek/i.test(reply), false, `演示台词不能提模型名：${reply}`);
+      }
+    }
+  }
+});
