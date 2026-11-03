@@ -155,24 +155,81 @@ function listImages(dir, { recursive = true, root = dir, depth = 0, result = [] 
   }
   return result;
 }
+
+/**
+ * 目录扫描结果缓存：只缓存「不递归」的整目录扫描（status / 提示词 / 选图 / 缩略图都走这条）。
+ *
+ * 目录 mtime 变了（增删改名、explorer 里拖文件）就重扫；上传和删除还会显式失效，
+ * 不指望毫秒级的 mtime 精度兜底。缓存的是路径列表，发送前的 regularFile 校验照旧执行。
+ */
+const scanCache = new Map();
+const SCAN_CACHE_MAX = 32;
+
+function scanStamp(folder) {
+  try {
+    const stat = fs.statSync(folder);
+    return stat.mtimeMs + '/' + stat.size;
+  } catch { return ''; }
+}
+
+function invalidateScan(folder) {
+  if (folder) scanCache.delete(path.resolve(folder));
+}
+
+function clearScanCache() { scanCache.clear(); }
+
+function listImagesCached(folder, root) {
+  const stamp = scanStamp(folder);
+  if (!stamp) { invalidateScan(folder); return []; }
+  const key = path.resolve(folder);
+  const hit = scanCache.get(key);
+  if (hit && hit.root === root && hit.stamp === stamp) {
+    // Map 保持插入顺序：命中后挪到末尾，简单的 LRU。
+    scanCache.delete(key);
+    scanCache.set(key, hit);
+    return hit.files.slice();
+  }
+  const files = listImages(folder, { root, recursive: false });
+  scanCache.set(key, { root, stamp, files });
+  while (scanCache.size > SCAN_CACHE_MAX) scanCache.delete(scanCache.keys().next().value);
+  return files.slice();
+}
 // Every public entry has a relative ID, not just a basename: legacy folders can
 // contain different images with the same name. Preview/delete must identify one file.
+/** 某个分类允许的目录（内置分类含旧别名，自定义分类只有同名目录） */
+function categoryFolders(key) {
+  if (key.startsWith(EXTRA_PREFIX)) return [key.slice(EXTRA_PREFIX.length)];
+  return FOLDERS[key] || [];
+}
 function categoryImages(dir, emotion) {
   const key = normalizeEmotion(emotion);
   if (!key) return [];
   if (key.startsWith(EXTRA_PREFIX)) {
     // 自定义分类：目录名就是标签，不递归（用户自己往里复制/拖文件）
-    return listImages(path.join(dir, key.slice(EXTRA_PREFIX.length)), { root: dir, recursive: false });
+    return listImagesCached(path.join(dir, categoryFolders(key)[0]), dir);
   }
-  const files = FOLDERS[key].flatMap((name) => listImages(path.join(dir, name), { root: dir, recursive: false }));
-  if (key === 'other') files.push(...listImages(dir, { root: dir, recursive: false }));
+  const files = FOLDERS[key].flatMap((name) => listImagesCached(path.join(dir, name), dir));
+  if (key === 'other') files.push(...listImagesCached(dir, dir));
   return [...new Set(files)].sort((a, b) => a.localeCompare(b));
 }
 function imagesFor(dir, emotion) { return categoryImages(dir, emotion); }
 function anyImages(dir) { return [...new Set(Object.keys(EMOTIONS).flatMap((key) => categoryImages(dir, key)))]; }
 function resolveImage(dir, emotion, id) {
   if (typeof id !== 'string' || !id || /[\\:\x00-\x1f]/.test(id)) return '';
-  if (id.split('/').some((part) => !part || part === '.' || part === '..')) return '';
+  const segments = id.split('/');
+  if (segments.some((part) => !part || part === '.' || part === '..')) return '';
+  const key = normalizeEmotion(emotion);
+  if (!key) return '';
+  // 界面一次只要一张（缩略图、删除）：两段形态「分类目录/文件名」直接拼出来校验，
+  // 不再把整个分类重扫一遍。真正的安全判断仍由 regularFile 完成，没变。
+  if (segments.length === 2) {
+    const [folder, name] = segments;
+    if (!categoryFolders(key).includes(folder)) return '';
+    if (!EXTS.includes(path.extname(name).toLowerCase())) return '';
+    const file = path.join(dir, folder, name);
+    return regularFile(file, dir) ? file : '';
+  }
+  // 老调用方按纯文件名（或更深的相对路径）找：只能在分类里比对，回落到扫描。
   const files = categoryImages(dir, emotion);
   const matches = id.includes('/') ? files.filter((file) => path.relative(dir, file).split(path.sep).join('/') === id)
     : files.filter((file) => path.basename(file) === id);
@@ -198,6 +255,8 @@ function migrateLegacy(config, root) {
   if (!isOn(config)) return { moved: 0, deduplicated: 0, errors: [] };
   const dir = stickerDir(config, root);
   const report = { moved: 0, deduplicated: 0, errors: [] };
+  // 迁移会大量搬文件：先把扫描缓存清掉，避免拿到搬之前的目录内容。
+  clearScanCache();
   try { safeDirectory(dir); } catch (err) { report.errors.push(err.message); return report; }
   for (const [key, label] of Object.entries(EMOTIONS)) {
     const targetDir = path.join(dir, label);
@@ -240,6 +299,8 @@ function migrateLegacy(config, root) {
       } catch (err) { report.errors.push(legacy + '：' + err.message); }
     }
   }
+  // 搬完再清一次：上面按目录读数时又把缓存填回来了。
+  clearScanCache();
   return report;
 }
 
@@ -405,8 +466,10 @@ function upload(config, root, emotion, files) {
     }
     uploaded.push({ name: entry.name, emotion: key });
   }
+  // 目录 mtime 通常已经变了，但上传后界面会立刻读状态，别指望毫秒精度。
+  invalidateScan(target);
   return uploaded;
 }
 module.exports = { EMOTIONS, EMOTION_LABELS, EXTRA_PREFIX, cleanCategoryLabel, extraKey, hasCategory, readExtraCategories, writeExtraCategories, categoryFile, normalizeEmotion, categoryFromName, promptCategories, GENERIC, EXTS, MAX_FILE_BYTES, MAX_UPLOAD_BYTES, MAX_UPLOAD_FILES,
   hasEmotion, resolveImage, safeDirectory, migrateLegacy, ensureBuiltinDirs, stickerDir, regularFile, listImages, categoryImages, imagesFor, anyImages, isOn,
-  choose, pick, isStickerRequest, imageType, upload };
+  invalidateScan, clearScanCache, choose, pick, isStickerRequest, imageType, upload };

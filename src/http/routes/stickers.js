@@ -79,6 +79,8 @@ module.exports = function register(router) {
         } catch (err) {
           return json(res, 500, { ok: false, error: '删除失败：' + ((err && err.message) || err) });
         }
+        // 删完马上就读 status 列表，别等目录 mtime 生效。
+        stickers.invalidateScan(path.dirname(hit.file));
         logger.info(`表情包已删除：${path.basename(path.dirname(hit.file))}/${path.basename(hit.file)}`);
         return json(res, 200, { ok: true, emotions: service.status().emotions });
       })();
