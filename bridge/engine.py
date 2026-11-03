@@ -764,6 +764,65 @@ def list_accounts_cli():
     return 0
 
 
+def write_accounts_cache(db_dir, account="", nick="", probe_others=True, deadline_sec=8):
+    """桥接自己补写 data/accounts.json（启动器「微信桥接」页的账号卡从这读）。
+
+    为什么要写：用户删掉 data/ 之后缓存就没了，而旧版启动器的「刷新账号」按钮
+    只重新读缓存、不会再扫一次，双开用户就只剩桥接上报的那一张兜底卡。
+    这里在启动时补一份：dbDir + 所有账号目录，当前号的昵称已知，其它号尽力开库读。
+
+    只做只读扫描，失败一律吞掉（不能因为列账号失败影响收消息）。
+    """
+    try:
+        if not db_dir:
+            return False
+        names = find_account_dirs(db_dir)
+        if not names:
+            return False
+        wechat_db = None
+        if probe_others:
+            try:
+                from wechatauto import WeChatDB as wechat_db  # noqa: F401
+            except Exception:
+                wechat_db = None
+        deadline = time.time() + max(1, deadline_sec)
+        rows = []
+        for n in names:
+            item = {"account": n, "wxid": account_wxid(n), "nick": "", "lastActive": 0}
+            if n == account:
+                item["nick"] = nick or ""
+            newest = 0.0
+            try:
+                for root, _dirs, files in os.walk(os.path.join(db_dir, n, "db_storage")):
+                    for f in files:
+                        if f.endswith(".db") and not f.endswith(("-wal", "-shm")):
+                            newest = max(newest, os.path.getmtime(os.path.join(root, f)))
+            except Exception:
+                pass
+            item["lastActive"] = int(newest * 1000)
+            if not item["nick"] and wechat_db is not None and time.time() < deadline:
+                try:
+                    probe = wechat_db(db_dir=db_dir, account=n)
+                    if probe.account == n:
+                        info = probe.get_self_info() or {}
+                        item["nick"] = str(info.get("nick_name") or info.get("remark") or "").strip()
+                except Exception:
+                    pass
+            rows.append(item)
+        rows.sort(key=lambda x: -x["lastActive"])
+        payload = {"dbDir": db_dir, "generatedAt": int(time.time() * 1000), "accounts": rows}
+        path = os.path.join(ROOT, "data", "accounts.json")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        log("账号缓存已补写：%d 个号（%s）"
+            % (len(rows), "、".join((r["nick"] or r["account"]) for r in rows)))
+        return True
+    except Exception as e:                        # noqa: BLE001
+        log("账号缓存补写失败（不影响收发）：", repr(e))
+        return False
+
+
 # （原先这里还有一份 SYSTEM_SENDER_NAMES 的重复定义，已删除（M10）：两处快照时机不同、
 #   互相覆盖，ignoreSenders 的热更新会打摆子。名单只在上面定义一次。）
 _SYSTEM_TEXT_RE = __import__("re").compile(r"<a\s+href=|weixin://|&lt;a\s+href=", __import__("re").I)
@@ -1486,6 +1545,27 @@ def main():
     if len(acct_dirs) > 1:
         log("（这台机器有 %d 个账号目录：%s）" % (len(acct_dirs), "、".join(acct_dirs)))
     log("数据库目录：", db.db_dir)
+
+    # 账号卡缓存：data/accounts.json 被删或内容为空时自己补一份。
+    # 旧版启动器「刷新账号」只重读缓存、不会真扫，补不上这个文件双开就只看到当前号。
+    def _heal_accounts_cache():
+        try:
+            path = os.path.join(ROOT, "data", "accounts.json")
+            stale = True
+            if os.path.exists(path):
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        old = json.load(f)
+                    stale = not (str(old.get("dbDir") or "").strip() and old.get("accounts"))
+                except Exception:
+                    stale = True
+            if stale:
+                write_accounts_cache(db.db_dir or db_dir, db.account, _self_nick)
+        except Exception as e:                    # noqa: BLE001
+            log("账号缓存检查失败（不影响收发）：", repr(e))
+
+    threading.Thread(target=_heal_accounts_cache, daemon=True,
+                     name="accounts-cache").start()
 
     sessions = {}
     try:
