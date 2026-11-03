@@ -129,6 +129,9 @@ class Bot {
 
     // 取消 / 查看：只处理「取消提醒」「提醒列表」这种整句
     if (/^(?:取消|删除|清空)(?:所有|全部)?提醒[。.!！~～]*$/.test(text)) {
+      if (isGroup && !isVerifiedOwner(this.config, msg)) {
+        return { action: 'reply', key, msg, atMe, canned: '群里的提醒统一由已绑定 ID 的主人取消，避免误删其他人的提醒。', reason: 'not_owner' };
+      }
       const pending = service.pendingFor(msg.chatId);
       if (!pending.length) return { action: 'reply', key, msg, atMe, canned: '这个会话没有待发的提醒。', reason: 'reminder_cancel' };
       let cancelled = 0;
