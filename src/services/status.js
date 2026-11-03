@@ -18,7 +18,12 @@ function budgetSnapshot(runtime) {
   return {
     systemTokens: b ? b.systemTokens : 0,
     dialogueBudget: b ? b.dialogueBudget : LIMITS.dialogueBudget,
-    estimatedInputTokens: b ? b.estimatedInputTokens : LIMITS.dialogueBudget,
+    // 真实输入估算（system + 实际 turns），不再是 system + 预算上限
+    estimatedPromptTokens: b ? (b.estimatedPromptTokens || b.estimatedInputTokens || 0) : 0,
+    estimatedInputTokens: b ? (b.estimatedPromptTokens || b.estimatedInputTokens || 0) : 0,
+    calibratedPromptTokens: b ? (b.calibratedPromptTokens || 0) : 0,
+    calibrationScale: b ? (b.calibrationScale || 1) : 1,
+    calibrationSamples: b ? (b.calibrationN || 0) : 0,
     hardTotalTokens: b ? b.hardTotalTokens : LIMITS.hardTotalTokens,
     memoryTokens: b ? b.memoryTokens : 0,
     summaryTokens: b ? b.summaryTokens : 0,

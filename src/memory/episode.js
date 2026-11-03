@@ -12,6 +12,7 @@ const personCard = require('./personCard');
 const extractor = require('./extractor');
 const compression = require('./compression');
 const retrieval = require('./retrieval');
+const relations = require('./relations');
 const { personHash } = require('./hash');
 
 const TOPIC_SHIFT_RE = /(换个话题|换话题|不说这个|不聊这个|聊点别的|说点别的|跳过这个话题|别聊了|算了不聊)/;
@@ -122,6 +123,25 @@ async function closeEpisode({ chat, chatStore, llm = null, logger = null, now = 
       || extractor.extractiveSummary(messages, 200);
     const messageIds = messages.filter((m) => m.role === 'user').map((m) => m.id).slice(-40);
     let writtenEvents = 0;
+    let writtenRelations = 0;
+
+    // 关系边（L1）：只接受本段发言人之间的边（extractEpisode 已经按 speakers 过滤）。
+    // 写进当前 chat 的 meta.relations，跨群会直接抛 MEMORY_CHAT_MISMATCH。
+    chat.meta.relations = chat.meta.relations || [];
+    for (const rel of extracted.relations || []) {
+      try {
+        const edge = relations.upsert(chat.meta.relations, {
+          a: rel.a,
+          b: rel.b,
+          text: rel.text,
+          confidence: rel.confidence,
+          source: { chatId: chat.chatId, messageIds },
+        }, { chatId: chat.chatId, now });
+        if (edge) writtenRelations += 1;
+      } catch (err) {
+        if (logger) logger.warn('关系边写入失败：' + ((err && err.message) || err));
+      }
+    }
 
     // 没有发言人（只有机器人自己的消息）：不建卡，只记一条 chat 级关闭
     for (const speaker of speakers) {
@@ -206,9 +226,9 @@ async function closeEpisode({ chat, chatStore, llm = null, logger = null, now = 
     chatStore.saveMeta(chat, { immediate: true });
 
     if (logger) {
-      logger.info(`episode 关闭（${reason}）：事件 ${writtenEvents} 条（chat ${chat.chatId}）`);
+      logger.info(`episode 关闭（${reason}）：事件 ${writtenEvents} 条、关系 ${writtenRelations} 条（chat ${chat.chatId}）`);
     }
-    return { closed: true, episodeId: ep.id, reason, events: writtenEvents, summary: summaryText };
+    return { closed: true, episodeId: ep.id, reason, events: writtenEvents, relations: writtenRelations, summary: summaryText };
   } finally {
     if (chat.closingEpisode === ep.id) delete chat.closingEpisode;
   }

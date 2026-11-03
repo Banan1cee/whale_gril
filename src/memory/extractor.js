@@ -133,11 +133,12 @@ function lightweightCandidates(messages, { now = Date.now() } = {}) {
 
 const EPISODE_SYSTEM = [
   '你在整理一段聊天 episode，供以后回忆用。只输出 JSON，不要解释、不要代码块。',
-  '格式：{"summary":"...","facts":[{"uid":"u1","text":"...","confidence":0.8}],"traits":[{"uid":"u1","text":"...","confidence":0.7,"evidence":["msg_1"]}],"events":[{"uid":"u1","title":"≤20字","summary":"60~150字","keywords":["..."],"importance":0.6,"confidence":0.8}],"threads":[{"uid":"u1","text":"..."}]}',
+  '格式：{"summary":"...","facts":[{"uid":"u1","text":"...","confidence":0.8}],"traits":[{"uid":"u1","text":"...","confidence":0.7,"evidence":["msg_1"]}],"events":[{"uid":"u1","title":"≤20字","summary":"60~150字","keywords":["..."],"importance":0.6,"confidence":0.8}],"threads":[{"uid":"u1","text":"..."}],"relations":[{"a":"u1","b":"u2","text":"同事","confidence":0.8}]}',
   'summary：80~150 字，写这段在聊什么、情绪基调、有没有没解决的事；群聊必须保留「谁说的」，不要揉成「用户说」。',
   'facts：只写这些人自己明确说过的、以后还用得上的事实；第三人称转述、玩笑、假设、反问不写。',
   'traits：至少两次独立观察才写，confidence ≥ 0.65，evidence 填消息 id；一次情绪不写。',
   'events：一段事一条，不要每句话一条；summary 60~150 字。',
+  'relations：只写两人之间明确说出口的关系（朋友 / 同事 / 同学 / 室友 / 情侣 / 夫妻 / 兄弟 / 姐妹 / 亲戚等），text ≤40 字；a、b 都必须是下面发言人列表里的 uid，不确定就不写。',
   'uid 只能从下面给出的发言人列表里选；不要编造没出现的人。',
 ].join('\n');
 
@@ -201,8 +202,17 @@ function parseEpisode(raw) {
     if (!body) return null;
     return { uid: String(t.uid || ''), text: body };
   }).filter(Boolean);
-  if (!summary && !facts.length && !events.length && !threads.length) return null;
-  return { summary, facts, traits, events, threads };
+  // 关系边：a/b 都是发言人 uid；这里只做字段清洗，是否都在 speakers 里由 extractEpisode 判断
+  const relations = (Array.isArray(obj.relations) ? obj.relations : []).slice(0, 12).map((r) => {
+    if (!r || typeof r !== 'object') return null;
+    const a = clampText(r.a, 100);
+    const b = clampText(r.b, 100);
+    const body = clampText(r.text, 40);
+    if (!a || !b || a === b || !body) return null;
+    return { a, b, text: body, confidence: clamp01(r.confidence, 0.75) };
+  }).filter(Boolean);
+  if (!summary && !facts.length && !events.length && !threads.length && !relations.length) return null;
+  return { summary, facts, traits, events, threads, relations };
 }
 
 function clamp01(v, fallback) {
@@ -244,6 +254,7 @@ async function extractEpisode({ messages, llm, speakers = [], logger = null, now
       traits: [],
       events: [],
       threads: [],
+      relations: [],
       fallback: true,
     };
   };
@@ -271,6 +282,10 @@ async function extractEpisode({ messages, llm, speakers = [], logger = null, now
     parsed.traits = parsed.traits.map(fix).filter(Boolean);
     parsed.events = parsed.events.map(fix).filter(Boolean);
     parsed.threads = parsed.threads.map(fix).filter(Boolean);
+    // 关系边：a/b 必须都是本段发言人。任一端不认识就整条丢——不猜、也不落到最后一个说话人。
+    parsed.relations = (parsed.relations || []).filter(
+      (r) => allowed.has(String(r.a)) && allowed.has(String(r.b)),
+    );
     return parsed;
   } catch (err) {
     if (logger) logger.warn('episode 抽取失败，退回规则：' + ((err && err.message) || err));

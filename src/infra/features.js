@@ -55,6 +55,13 @@ const REGISTRY = [
     default: true,
   },
   {
+    key: 'relations',
+    path: 'features.relations',
+    label: '群聊关系加载（A 提到 B）',
+    desc: '群里有人提到另一个人时，把「两人的关系 + 那个人的卡 + 最近说过的话」加载进提示词。只是给模型看的内部状态，网页/启动器上看不到正文。关掉=不加载关系块（已记录的关系边保留，重新打开还能用）。',
+    default: true,
+  },
+  {
     key: 'wechatAccountGuard',
     path: 'wechat.accountGuard',
     label: '微信双开时钉死账号（认不出就不发）',

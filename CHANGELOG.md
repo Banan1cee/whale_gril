@@ -30,6 +30,27 @@
 - 新增 `scripts/measure-cache-hit.js`：私聊/群聊各 3 轮，用真实接口打印 `prompt_cache_hit_tokens`
   的改造前后对比（没配 Key 时只打印用法，不发请求）
 
+### 新增 · 群聊关系加载：A 提到 B 时，把「两人的关系 + B 的情况」带进提示词
+
+**以前群里 A 说「我和小明是同事」，模型只看到这一句：不知道小明是谁、两人什么关系；
+等小明再说话时，也只按小明自己的卡加载。**
+
+- 关系边存在 `chat.meta.relations`（每个群独立，旧 meta 没有这个字段 = 空，不需要迁移）：
+  `{ id, a, b, text ≤40 字, confidence, source:{chatId,messageIds}, createdAt, updatedAt }`，
+  `a` / `b` 按字典序排好，同一个 pair 只留一条；上限 200 条，按 `updatedAt` 淘汰最旧的
+- 两条生产路径：① 规则即时——「我和 X 是同事」「X 是我朋友」「我朋友叫 X」三句式，
+  「我朋友说…」这类转述不误判；② episode 关闭时由模型抽 `relations`，
+  `a` / `b` 必须都是本段发言人，否则整条丢掉
+- 名字 → uid 只查本群最近 200 条消息：查不到就只保留名字，不建卡、不编 uid；
+  多人同名取最近发言的那个
+- 消费：`buildContext` 收到 `mentionedNames` 时输出 ≤200 token 的一小块
+  （关系 + 那个人的卡最多 3 条 + 最近 2 句、各 40 字），挂在最后一条 user 消息的尾部；
+  没有关系边就只给卡和最近发言；名字对不上任何人整块不输出
+- 新增开关 `features.relations`（默认开，调试台自动出现）：关掉不再注入关系块
+- 预算：启用已有的 `relations` 份额（120 token，关掉并回 recent），块内硬上限 200 token
+- 新增 `tests/relations.test.js` 19 条：三句式、合并、200 条淘汰、同名解析、渲染与 token 上限、
+  跨群隔离、开关、episode 过滤、敏感词脱敏
+
 ### 修复 · 记忆块超预算时不再裁掉结尾声明和半句摘要
 
 **现象：记忆一多，`buildMemoryBlock` 拼出来的块就开始「断头断尾」——结尾那句
@@ -48,6 +69,40 @@
 - 测试：新增 `tests/memory-format.test.js` 7 条，钉住三段顺序与声明位置、只超一点只丢最旧
   事件、超很多时事件清空且摘要仍是整句、50 token 不抛异常且声明仍在、空卡返回空串、
   中文 + emoji + 换行混排不产生半个字符、减半只裁条数不切半行
+
+### 修复 · token 估算拿预算上限冒充真实输入，日志偏差 188% 却没人校准
+
+**现象：日志写「token 估算偏差 188.5%（估算 7036 / 实际 2489）」，看起来像估算器坏得很离谱，
+实际上 7036 是 system 估算 1436 + dialogueBudget 5600，而 2489 才是真实 prompt_tokens。**
+
+- `src/memory/tokens.js` 新增 `estimatePrompt(system, turns)`：按真正要发的消息逐条算，
+  不再拿对话预算上限冒充输入
+- `buildBudget()` 返回 `estimatedPromptTokens`（system + 实际 turns），硬上限判断改用它；
+  `dialogueBudget` 继续保留给裁剪窗口，`estimatedInputTokens` 只作为语义修正后的兼容字段
+- 新增 `src/memory/calibration.js`：按 provider|model 用 Adam 学估算倍数，前 3 个样本预热、
+  scale 限制 [0.5, 2.0]、单步 ≤0.05，异常 ratio / 过短 prompt 直接丢弃；
+  持久化 `data/calibration.json`（原子写、5 秒防抖、损坏静默回落 1.0）
+- `compareUsage` 改成「实际 vs 校准后的真估算」，只有实际用量超出 >15% 才告警，
+  文案改为「实际用量超出估算 X%」；实际更少不再叫「低估」
+- 裁剪窗口只有在样本 ≥10 且 scale 量化到 0.05 后才采用校准值，避免每轮抖动破坏前缀缓存
+- LLM 报 context_length / maximum context / too long 时，砍掉一半 turns 重试一次，
+  保留当前消息；仍失败再走现有降级，不再退化成只发当前一句
+- 测试：新增 `tests/token-calibration.test.js`，更新预算与 memory 预算用例
+
+### 修复 · 图片 / 表情 / 语音识别失败后「为什么不回」查不到
+
+**现象：临时的图片下载失败、表情包缓存解不开、语音转写报错时，她都不回话（这是对的），
+但 `data/bridge.log` 里没有会话、发送者和消息 id，事后只能猜是哪条消息、为什么失败。**
+
+- `on_message_inner` 的三条失败分支（图片 / 表情 / 语音）在静默 `return` 前补一条 `log_error`：
+  会话、发送者、消息类型、消息 id、失败原因（异常类型，或「空描述」）一次写全
+- 节流走现成的 `log_throttled`，key 带消息 id（`media-fail:<会话>:<分片>:<本地id>:<类型>`）：
+  同一条消息反复失败只记一次，别的消息照常各记一条，不会因为节流被吞
+- `describe_image` / `describe_emoji` / `transcribe_voice` 在异常被吞掉时把异常类型写回消息，
+  失败原因不再是「空」；识别成功的路径与图片 / 表情预处理逻辑一律没动，仍然不回话
+- 加测试：`tests/test_received_media.py` 6 条（图片 / 表情 / 语音失败都调 `log_error` 且不回复、
+  识别成功不产生 error 日志、同一条消息重复失败只记一次、异常类型带回日志）；
+  `tests/bridge-recovery.test.js` 一条钉住三条链路都先记日志再 return、key 带消息 id、写 error 级
 
 ### 修复 · 图片与表情包识别：缓存重试、解密探针、表情包进识别链路、看图补 OpenCode 会话头
 
