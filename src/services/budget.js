@@ -27,7 +27,41 @@ const PRICING = Object.freeze({
   peak: { inputHit: 0.04, inputMiss: 2, output: 8 },
 });
 
+// 有公开价目表的模型：DeepSeek 官方 deepseek-flash，以及 OpenCode Go 那条线的 deepseek-v4.1-flash。
+// 其它模型一律不猜价（价格可能完全不一样），界面不显示金额。
+const PRICED_MODELS = Object.freeze(['deepseek-flash', 'deepseek-v4.1-flash']);
+
 const PER_MILLION = 1e6;
+
+/**
+ * 现在是不是高峰时段。
+ * 高峰 = 周一至周五 9:00-12:00、14:00-18:00（本地时间）；
+ * 其余时段（含午休、夜间、周末 / 节假日）都算谷时。
+ */
+function isPeakHour(now = new Date()) {
+  const d = now instanceof Date ? now : new Date(now);
+  if (Number.isNaN(d.getTime())) return false;
+  const day = d.getDay(); // 0 = 周日、6 = 周六
+  if (day === 0 || day === 6) return false;
+  const minutes = d.getHours() * 60 + d.getMinutes();
+  return (minutes >= 9 * 60 && minutes < 12 * 60) || (minutes >= 14 * 60 && minutes < 18 * 60);
+}
+
+/**
+ * 这个模型此刻的价格（按峰谷价）。
+ * 只认有公开价目表的模型（deepseek-flash / deepseek-v4.1-flash），其它返回 null，
+ * 界面不显示金额，不拿别家的价目表去猜。
+ * @param {string} provider 服务商标识（保留参数：价格按模型定，不按服务商）
+ * @param {string} model 模型名（例如 deepseek-flash / deepseek-v4.1-flash）
+ * @param {Date|number} [now] 计价时刻（默认现在；测试里传固定时间）
+ * @returns {{model:string, band:'idle'|'peak', price:{inputHit:number, inputMiss:number, output:number}}|null}
+ */
+function pricingFor(provider, model, now = new Date()) {
+  const m = String(model == null ? '' : model).trim().toLowerCase();
+  if (!PRICED_MODELS.includes(m)) return null;
+  const band = isPeakHour(now) ? 'peak' : 'idle';
+  return { model: m, band, price: PRICING[band] };
+}
 
 /** 当前生效的对话预算：config.memory.dialogueBudget 优先，否则 5,500 */
 function dialogueBudget(config) {
@@ -163,7 +197,7 @@ function estimate(config, { outputTokens = LIMITS.maxOutputNormal, dialogueBudge
   };
 }
 
-module.exports = { estimate, dialogueBudget, systemVariants, costOf, PRICING };
+module.exports = { estimate, dialogueBudget, systemVariants, costOf, PRICING, pricingFor, isPeakHour };
 
 
 

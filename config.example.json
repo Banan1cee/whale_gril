@@ -148,6 +148,12 @@
     "city": "",
     "timeoutMs": 8000
   },
+  "env": {
+    "_说明": "提示词 <env> 块里的环境信息。location 手填可以精确到区（比如「厦门市思明区」）；留空就自动探测：优先 Windows 定位服务（不吃公网 IP，挂 VPN 也是本机位置，精度差时只报城市），拿不到才按出口 IP 猜（会写明「挂 VPN 可能不符」）。autoDetect=false 完全关掉探测，只用手填和 websearch.city。timezone 留空=系统时区。地点最多到区，不落盘",
+    "location": "",
+    "timezone": "",
+    "autoDetect": true
+  },
   "links": {
     "_说明": "别人发链接时要不要读标题/摘要/正文（视频只读得到文案）",
     "enabled": true,

@@ -54,6 +54,20 @@ namespace WhaleLauncher
         public int StFailed;
         public long StLastMessageAt;
         public string StLastError = "";
+
+        // 本轮用量（/api/status 的 budget.lastUsage）：只有真模型调过才有数
+        public bool HasUsage;
+        public int UsPromptTokens;
+        public int UsCacheHitTokens;
+        public int UsCompletionTokens;
+        public double UsHitRate;
+        public int UsEstimatedTokens;
+        public double UsRatio;
+        public string UsModel = "";
+        // 只有 deepseek-flash / deepseek-v4.1-flash 有价目表；其它模型 HasCost=false，界面不显示金额
+        public bool UsHasCost;
+        public double UsCny;
+        public string UsBand = "";
     }
 
     /// <summary>内核（Node）与桥接（Python）的起停、日志、状态探测。界面只调用这里。</summary>
@@ -463,6 +477,27 @@ namespace WhaleLauncher
                     s.HasKey = Bool(root, "hasKey");
                     s.Mock = Bool(root, "mock");
 
+                    // 本轮用量：命中 / 输入 / 输出 / 命中率 / 估算（没有就保持 HasUsage=false，界面显示「—」）
+                    if (root.TryGetProperty("budget", out var budget) && budget.ValueKind == JsonValueKind.Object
+                        && budget.TryGetProperty("lastUsage", out var usage) && usage.ValueKind == JsonValueKind.Object)
+                    {
+                        s.HasUsage = true;
+                        s.UsPromptTokens = (int)Long(usage, "promptTokens");
+                        s.UsCacheHitTokens = (int)Long(usage, "cacheHitTokens");
+                        s.UsCompletionTokens = (int)Long(usage, "completionTokens");
+                        s.UsHitRate = Dbl(usage, "hitRate");
+                        s.UsEstimatedTokens = (int)Long(usage, "estimatedPromptTokens");
+                        s.UsRatio = Dbl(usage, "ratio");
+                        if (usage.TryGetProperty("cost", out var cost) && cost.ValueKind == JsonValueKind.Object)
+                        {
+                            s.UsHasCost = cost.TryGetProperty("cny", out var cny) && cny.ValueKind == JsonValueKind.Number;
+                            if (s.UsHasCost) s.UsCny = cny.GetDouble();
+                            s.UsBand = Str(cost, "band");
+                            s.UsModel = Str(cost, "model");
+                        }
+                        if (string.IsNullOrEmpty(s.UsModel)) s.UsModel = s.Model;
+                    }
+
                     if (root.TryGetProperty("gateways", out var gws) && gws.ValueKind == JsonValueKind.Array && gws.GetArrayLength() > 0)
                     {
                         var gw = gws.EnumerateArray().FirstOrDefault(g => Str(g, "platform") == "wechat");
@@ -511,6 +546,13 @@ namespace WhaleLauncher
             if (!e.TryGetProperty(name, out var v)) return 0;
             if (v.ValueKind == JsonValueKind.Number && v.TryGetInt64(out var n)) return n;
             if (v.ValueKind == JsonValueKind.String && long.TryParse(v.GetString(), out var m)) return m;
+            return 0;
+        }
+
+        private static double Dbl(JsonElement e, string name)
+        {
+            if (!e.TryGetProperty(name, out var v)) return 0;
+            if (v.ValueKind == JsonValueKind.Number && v.TryGetDouble(out var n)) return n;
             return 0;
         }
 

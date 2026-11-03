@@ -374,6 +374,26 @@ function dayLine(now = new Date()) {
   return `今天是 ${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${WEEKDAYS[d.getDay()]}`;
 }
 
+/**
+ * 环境块的静态说明：环境信息是程序给的，不是模型自己「感觉」到的。
+ * 这句话必须跟着 <env> 一起出现，否则问到系统/时间她还是会按训练数据编。
+ */
+const ENV_RULE = '【环境】<env> 里的系统、架构、时区和所在地是程序给你的真实信息，不是猜的：'
+  + '问到「你用的什么系统 / 你那边几点 / 你电脑卡不卡 / 你在哪」就按它说（具体时间以【时间怎么看】为准）；'
+  + '所在地是这台电脑所在的地方，不是网络的出口，所以挂了 VPN 也照样按它说；'
+  + '所在地只到城市这一级：问你具体在哪个区、哪条街，就说「大概就在这城里，具体哪块真不清楚」，别往下编；'
+  + '括注写着「按网络出口 IP 推算」的，说得更含糊一点（挂 VPN 时可能不符）；'
+  + '<env> 里没写到的、或者你拿不准的，就说不知道，别编。';
+
+/**
+ * 环境块要不要生效：调用方把拼好的字符串传进来，persona 自己不做 IO。
+ * 开关关掉 = 整块不出现，调用方就算传了字符串也不认。
+ */
+function envTextOf(config, envBlock) {
+  if (!features.isOn(config, 'envContext')) return '';
+  return String(envBlock || '').trim();
+}
+
 /** 两种人设共用：角色语气不能覆盖对话对象、事实和当前问题。 */
 function guidanceStaticLines() {
   return [
@@ -784,12 +804,14 @@ function maxCharsFor(config, msg = {}) {
  * static 进 system；dynamic 进最后一条 user 消息（顺序：正文 → 记忆块 → 本轮状态）。
  * @returns {{static: string[], dynamic: string[]}}
  */
-function buildBlocks({ config, msg = {}, profile, notes = [], noteReminders = [], sessionSummary = '', events = [], now = new Date() } = {}) {
+function buildBlocks({ config, msg = {}, profile, notes = [], noteReminders = [], sessionSummary = '', events = [], now = new Date(), envBlock = '' } = {}) {
   const isGroup = msg.chatType === 'group';
   const isMaster = msg.isMaster === true;
   const P = config.persona || {};
   const custom = String(P.customPrompt || '').trim();
   const masterRoast = Boolean(P.masterRoast);
+  // 环境块由调用方（services/envInfo.js）拼好传进来，这里只决定放不放进静态段
+  const envText = envTextOf(config, envBlock);
   const mood = moodFor(now);
   const activity = activityFor(now);
   const discussing = Boolean(msg.discussion);
@@ -853,6 +875,8 @@ function buildBlocks({ config, msg = {}, profile, notes = [], noteReminders = []
   statics.push(HARD_REQUIREMENT);
   statics.push(guidanceStaticLines().join('\n'));
   if (stickerBlock) statics.push(stickerBlock);
+  // 环境块紧挨着时间规则：同一类「程序给的事实」，问系统/时间/所在地时一起翻
+  if (envText) statics.push(envText + '\n' + ENV_RULE);
   statics.push(TIME_RULES);
   statics.push(dayLine(now));
 
@@ -947,9 +971,11 @@ function buildTurnState(ctx = {}) {
  * 顺序、空行、措辞都跟改造前逐字一致，用来回滚；改这里的文案等于改旧行为，
  * 新布局请改上面的静态/动态块。
  */
-function buildLegacySystem({ config, msg, profile, notes = [], noteReminders = [], sessionSummary = '', events = [], now = new Date() }) {
+function buildLegacySystem({ config, msg, profile, notes = [], noteReminders = [], sessionSummary = '', events = [], now = new Date(), envBlock = '' }) {
   const stickerBlock = stickerCapability(config, msg);
   const webContext = webSearchContext(msg, now);
+  // 环境块（旧行为路径也认，否则关了 staticSystem 的问系统/所在地就哑了）
+  const envText = envTextOf(config, envBlock);
   // 自定义人设保留，但两条路径都必须遵守共享的对话理解规则。
   const custom = String((config.persona && config.persona.customPrompt) || '').trim();
   if (custom) {
@@ -984,7 +1010,7 @@ function buildLegacySystem({ config, msg, profile, notes = [], noteReminders = [
     }
     // 自定义人设也要看得见自己做过什么，否则同样是「发了图不知道」
     const actionBlock = actionEvents.formatBlock(events, { now });
-    return custom + '\n\n' + CORE_TEMPER + '\n\n' + scene + '\n' + nowLine + '\n' + tone + masterBlock + '\n' + CUSTOM_TEASE + '\n' + CUSTOM_NET_RULE + webBlock + styleBlock + slangBlock + abbrevText + fightBlock + roastTail + (actionBlock ? '\n\n' + actionBlock : '') + (stickerBlock ? '\n\n' + stickerBlock : '') + '\n\n' + conversationGuidance(msg) + (msg.voiceRequested ? '\n' + VOICE_SUFFIX : '');
+    return custom + '\n\n' + CORE_TEMPER + '\n\n' + scene + '\n' + nowLine + (envText ? '\n' + envText + '\n' + ENV_RULE : '') + '\n' + tone + masterBlock + '\n' + CUSTOM_TEASE + '\n' + CUSTOM_NET_RULE + webBlock + styleBlock + slangBlock + abbrevText + fightBlock + roastTail + (actionBlock ? '\n\n' + actionBlock : '') + (stickerBlock ? '\n\n' + stickerBlock : '') + '\n\n' + conversationGuidance(msg) + (msg.voiceRequested ? '\n' + VOICE_SUFFIX : '');
   }
   const isGroup = msg.chatType === 'group';
   const mood = moodFor(now);
@@ -1004,6 +1030,9 @@ function buildLegacySystem({ config, msg, profile, notes = [], noteReminders = [
   // Bot 已经按 senderId 做过认证；绝不能再次相信可由用户修改的显示昵称。
   const isMaster = msg.isMaster === true;
   lines.push(...legacyIdentityLines({ isMaster, userName, ownerName, masterRoast: Boolean(P.masterRoast) }));
+
+  // 旧行为路径也挂环境块（挂在人设静态段之后）
+  if (envText) lines.push('', envText, ENV_RULE);
 
   lines.push('');
   lines.push(...speakingLines());

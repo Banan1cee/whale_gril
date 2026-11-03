@@ -20,7 +20,63 @@
 - 自定义人设（`customPrompt` 非空）分支本来就没有这行，补断言钉住，防止以后被加回来
 - 同步改掉【回答原则】里「问模型就报模型名」的反向指令：它在 system 里更靠后，等于给模型发了报型号的许可证，两条必须一致
 - 测试：新增 `tests/prompt-model-name.test.js`：随机型号不进 system、含「别报具体型号」、自定义分支同样不含、换模型前后 system 字节完全一致
-- legacy 快照（`tests/fixtures/prompt-legacy/`）同步改这一行，`features.staticSystem=false` 的逐字回滚仍然成立
+- legacy 快照（`tests/fixtures/prompt-legacy/`）同步改这两行，`features.staticSystem=false` 的逐字回滚仍然成立
+
+### 新增 · 启动器「状态」页显示本轮用量
+
+**本轮用量原来只打在日志里，exe 里看不到。**
+
+- 「状态」页在「本次运行」下面新增一行：
+  `本轮用量   命中 1234 / 输入 2489（49.6%）/ 输出 87 · 估算 2610（+4.6%） · deepseek-flash · ¥0.00042（谷时）`；
+  没调用过真实模型（演示模式）时显示「—」，不猜
+- 启动器从 `/api/status` 的 `budget.lastUsage` 读这几个数，和内核日志里那行同一个口径
+
+### 修复 · 「主动与提醒」页没有滚动条，内容一多就顶出窗口
+
+**现象：这一页把提醒规则、主动搭话、提醒列表堆在一屏里，窗口一小就顶出去；鼠标滚轮完全没反应，下面的白名单 / 黑名单和列表都够不着。**
+
+- 根因：整页没有 ScrollViewer，Grid 的第二行是 Auto 高度，内容多高它就多高，超出的部分直接被裁掉
+- 现在标题、刷新按钮和底部状态行固定，中间的规则卡 + 提醒列表整体滚动
+- 提醒列表不再自己套一层 ScrollViewer（嵌套滚动会让滚轮打架），空列表给 180 的最小高度，空状态文字还能看见
+
+### 新增 · 本轮用量：每轮命中 / 输入 / 输出 / 命中率 / 估算
+
+**以前 usage 只记了 prompt / cacheHit / completion 三个数，界面上看不到，也不知道这一轮花了多少钱。**
+
+- 每轮回复结束写 `bot.lastUsage`：命中输入、输入、输出、命中率、本轮估算与偏差、花费、计价时段、时间；
+  复读重写 / 上下文半窗 / 降级重试一轮调了多次模型时按轮累加（客户端记 usage 水位），取总和而不是最后一次
+- 估算沿用 token 校准（`provider|model` 的 scale）；一轮调了多次模型时总和和单轮估算对不上，不喂校准样本，免得学歪
+- 价格只对 `deepseek-flash` 和 `deepseek-v4.1-flash` 计价（谷时输入命中 0.02 / 未命中 1 / 输出 4 元每百万 token，
+  高峰翻倍；高峰 = 周一至周五 9:00-12:00、14:00-18:00）；其它模型不算价、界面不显示金额
+- `/api/status` 的 `budget.lastUsage` 带全部新字段，按白名单输出，不泄露 API Key、不带提示词或消息正文
+- 内核日志每轮多一行 INFO：`用量 · 命中 1234 / 输入 2489（49.6%）/ 输出 87 · 估算 2610（+4.6%） · ¥0.00042（谷时 deepseek-flash）`
+
+### 新增 · 环境信息注入（提示词里的 `<env>` 块）
+
+**以前问她「你用的什么系统」「你那边几点了」「你电脑卡不卡」「你在哪」，她只能按训练数据猜，
+或者干脆说「我不太清楚」。**
+
+- 新增 `src/core/env.js`：`snapshot()` 采一次机器信息（系统名与版本、架构、CPU 核数、
+  内存、时区、Node 版本）后进程内缓存，字段里没有任何时间类数据；`formatBlock()` 拼成 `<env>` 文本
+- 新增 `src/services/envInfo.js`：`systemBlock(config, version)` 合并快照 + 地点 + 程序版本，
+  按配置记忆化（同一配置下逐字节一致，不打断前缀缓存）；`bridgeLine(msg)` 把「桥接在线 /
+  UIA 可用 / ffmpeg 是否找到」拼成一行
+- 挂在 `buildBlocks()` 的静态段（紧挨时间规则）：整段 system 仍然逐字节稳定；
+  旧行为路径 `buildLegacySystem` 也认这个块，关掉 `features.staticSystem` 不会丢
+- 地点解析顺序：手填 `config.env.location`（可到区）→ `config.websearch.city`（城市级）→
+  **自动探测**（`src/services/location.js`，`env.autoDetect` 默认开）→ 都没有就不写这一行
+- 所在地自动探测**先系统、后 IP**：优先 Windows 定位服务（`Windows.Devices.Geolocation`，
+  Wi-Fi / GPS 定位，不吃公网 IP，**挂 VPN 也取本机位置**）→ 坐标交给 `api.bigdatacloud.net`
+  换成地名 → 系统定位被关掉 / 没权限 / 拿不到时才退回 `ipinfo.io` 按出口 IP 猜城市
+- **自动探测只到市，不报区县**（实测定位落点会偏到隔壁区，说错区比只说市更糟）；
+  `<env>` 括注写明来源与精度（「系统定位，精度约 50 公里，只到市」/「按网络出口 IP 推算，
+  挂了 VPN 时可能不符」），模型据此知道该说得多确定，被追问区 / 街道就说不知道
+- 桥接状态每轮都可能变，所以不进静态 system，改放「本轮状态」尾部
+- 开关注册 `features.envContext`（默认开）：关掉 = system 里没有 `<env>` 块，回到旧行为
+- `config.json` 新增 `env: { location, timezone, autoDetect }`；`config.env` 同时保留进程环境变量视图
+  （原来 config.json 里的 env 段会被 process.env 整个盖掉）
+- 隐私：环境信息只在本机拼装、只给模型看，不发给维护者、不写日志、不落盘；地点最多到区、
+  自动探测只到市，主机名、用户名、家目录、安装路径、经纬度不进提示词（`PRIVACY.md` 已写明）
 
 ### 改进 · system 静态化 + 日期/时间分层（前缀缓存命中）
 
