@@ -175,6 +175,9 @@ namespace WhaleLauncher.Views
                         Margin = new Thickness(0, 0, 0, 8),
                     });
                 foreach (var f in spec.Fields) panel.Children.Add(BuildField(f));
+                // 高级 → 记忆：旧版（3.x）记忆的一键入账，放在「高级」这一组最后。
+                // 启动时其实已经自动迁移，这里是给「服务已经在跑、用户又拖了一份 data 进来」补的入口。
+                if (spec.Title == "高级") panel.Children.Add(BuildMemoryImportBlock());
 
                 // 这一组「恢复默认」：只写回这个页签里的字段，默认值由内核给
                 var foot = new WrapPanel { Margin = new Thickness(0, 10, 0, 0) };
@@ -349,6 +352,129 @@ namespace WhaleLauncher.Views
             Grid.SetColumn(right, 1);
             grid.Children.Add(right);
             return grid;
+        }
+
+        /// <summary>
+        /// 高级 → 记忆：识别并转换 3.x 旧记忆（data\store.json / memory.json / 旧备份包）。
+        /// 走内核的 /api/memory/import，已导入过的签名会跳过，所以反复点也不会重复。
+        /// </summary>
+        private FrameworkElement BuildMemoryImportBlock()
+        {
+            var box = new StackPanel { Margin = new Thickness(0, 14, 0, 0) };
+            var divider = new Border { Height = 1, Margin = new Thickness(0, 0, 0, 12) };
+            divider.SetResourceReference(Border.BackgroundProperty, "Line");
+            box.Children.Add(divider);
+            box.Children.Add(new TextBlock { Text = "旧版记忆（3.x）", Style = (Style)FindResource("Label") });
+
+            var hint = new TextBlock
+            {
+                Text = "3.x 的 data\\store.json（含 .journal）/ memory.json / 旧备份包会转成现在的格式；"
+                     + "同名聊天按时间合并，已经转过的不会重复导入。启动时也会自动检查一次。",
+                Style = (Style)FindResource("Small"),
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 4, 0, 8),
+            };
+            box.Children.Add(hint);
+
+            var btn = new Button
+            {
+                Content = "一键识别转换记忆",
+                Style = (Style)FindResource("Ghost"),
+                HorizontalAlignment = HorizontalAlignment.Left,
+            };
+            var result = new TextBlock
+            {
+                Style = (Style)FindResource("Small"),
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 6, 0, 0),
+            };
+            box.Children.Add(btn);
+            box.Children.Add(result);
+
+            btn.Click += async (s, e) =>
+            {
+                if (!_sup.NodeRunning)
+                {
+                    result.Text = "内核没在运行，先启动鲸鲸再试。";
+                    return;
+                }
+                btn.IsEnabled = false;
+                var original = btn.Content;
+                btn.Content = "正在检查…";
+                try
+                {
+                    var status = await Api.Get(_sup.Url, "/api/memory/import/status");
+                    if (!status.Ok)
+                    {
+                        result.Text = "检查失败：" + (string.IsNullOrEmpty(status.Error) ? status.Raw : status.Error);
+                        return;
+                    }
+                    if (!status.Bool("pending"))
+                    {
+                        result.Text = "没有发现待转换的旧版记忆（data 里没有 store.json / memory.json，或已经转过了）。";
+                        return;
+                    }
+                    var plan = status.Prop("plan");
+                    var imported = NestedLong(plan, "imported");
+                    var merged = NestedLong(plan, "merged");
+                    var messages = NestedLong(plan, "messages");
+                    var notes = NestedLong(plan, "notes");
+                    var answer = MessageBox.Show(
+                        Window.GetWindow(this),
+                        "发现旧版记忆：\n\n"
+                        + "· 新增 " + imported + " 个聊天\n"
+                        + "· 合并 " + merged + " 个已有聊天\n"
+                        + "· 补进 " + messages + " 条消息 / " + notes + " 条偏好\n\n"
+                        + "开始转换吗？原文件会保留，转换前也会自动备份当前记忆。",
+                        "转换旧版记忆",
+                        MessageBoxButton.OKCancel,
+                        MessageBoxImage.Question);
+                    if (answer != MessageBoxResult.OK)
+                    {
+                        result.Text = "已取消，什么都没改。";
+                        return;
+                    }
+
+                    btn.Content = "正在转换…";
+                    var res = await Api.Post(_sup.Url, "/api/memory/import", "{}");
+                    if (!res.Ok)
+                    {
+                        result.Text = "转换失败：" + (string.IsNullOrEmpty(res.Error) ? res.Raw : res.Error);
+                        return;
+                    }
+                    if (res.Bool("idle"))
+                    {
+                        result.Text = "没有需要转换的旧记忆。";
+                        return;
+                    }
+                    result.Text = "完成：新增 " + res.Long("imported") + " 个聊天、合并 " + res.Long("merged")
+                        + " 个，补进 " + res.Long("messages") + " 条消息 / " + res.Long("notes") + " 条偏好。";
+                    MessageBox.Show(
+                        Window.GetWindow(this),
+                        "记忆已导入并转换格式。\n\n" + result.Text + "\n\n原文件保留在 data\\memory\\legacy\\。",
+                        "记忆已导入",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Information);
+                    await Api.Post(_sup.Url, "/api/memory/import/ack", "{}");
+                }
+                catch (Exception ex)
+                {
+                    result.Text = "出错：" + ex.Message;
+                }
+                finally
+                {
+                    btn.Content = original;
+                    btn.IsEnabled = true;
+                }
+            };
+            return box;
+        }
+
+        private static long NestedLong(JsonElement el, string name)
+        {
+            if (el.ValueKind == JsonValueKind.Object && el.TryGetProperty(name, out var v)
+                && v.ValueKind == JsonValueKind.Number && v.TryGetInt64(out var n)) return n;
+            return 0;
         }
 
         private Border BuildSection(SectionSpec spec)

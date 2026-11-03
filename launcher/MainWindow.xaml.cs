@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Windows;
@@ -31,6 +32,7 @@ namespace WhaleLauncher
         private readonly Dictionary<string, UserControl> _pages = new Dictionary<string, UserControl>();
         private bool _busy;
         private bool _refreshing;
+        private bool _memoryNoticeChecked;
         private Snapshot _last;
 
         private static readonly NavEntry[] NavKeys =
@@ -134,6 +136,49 @@ namespace WhaleLauncher
             if (_lastManifest != null && _lastManifest.HasUpdate) _ = RunUpdateAsync(_lastManifest, askFirst: true);
             else OnCheckUpdate(sender, null);
             e.Handled = true;
+        }
+
+        /// <summary>
+        /// 内核启动时如果自动迁移了 3.x 旧记忆，弹一次「已导入并转换格式」。
+        /// 服务端在 data\memory\import-report.json 记报告，这里看完就 ack，之后重启不再弹。
+        /// </summary>
+        private async Task CheckMemoryImportNoticeAsync()
+        {
+            try
+            {
+                var res = await Api.Get(_sup.Url, "/api/memory/import/notice");
+                if (!res.Ok) return;
+                var notice = res.Prop("notice");
+                if (notice.ValueKind != JsonValueKind.Object) return;
+
+                var imported = NestedLong(notice, "imported");
+                var merged = NestedLong(notice, "merged");
+                var messages = NestedLong(notice, "messages");
+                var notes = NestedLong(notice, "notes");
+                var skipped = NestedLong(notice, "skipped");
+
+                var text = "检测到旧版本（3.x）记忆，已自动导入并转换格式：\n\n";
+                if (imported > 0) text += "· 新增 " + imported + " 个聊天\n";
+                if (merged > 0) text += "· 合并 " + merged + " 个已有聊天\n";
+                text += "· 补进 " + messages + " 条消息 / " + notes + " 条偏好\n";
+                if (skipped > 0) text += "· " + skipped + " 个聊天转换失败，详见 data\\whale.log\n";
+                text += "\n原文件保留在 data\\memory\\legacy\\，不会删除。\n"
+                      + "以后可以在「设置 → 高级 → 旧版记忆」里手动再识别。";
+
+                MessageBox.Show(this, text, "记忆已导入", MessageBoxButton.OK, MessageBoxImage.Information);
+                await Api.Post(_sup.Url, "/api/memory/import/ack", "{}");
+            }
+            catch
+            {
+                // 提示失败不影响启动，下次启动会再试
+            }
+        }
+
+        private static long NestedLong(JsonElement el, string name)
+        {
+            if (el.ValueKind == JsonValueKind.Object && el.TryGetProperty(name, out var v)
+                && v.ValueKind == JsonValueKind.Number && v.TryGetInt64(out var n)) return n;
+            return 0;
         }
 
         private void SetUpdateButton(bool hasUpdate)
@@ -654,6 +699,14 @@ namespace WhaleLauncher
             {
                 var s = await _sup.ProbeAsync();
                 _last = s;
+
+                // 内核每次就绪后查一次：启动时自动迁移了旧记忆就弹一次提示（ack 后不再弹）
+                if (!s.NodeReady) _memoryNoticeChecked = false;
+                else if (!_memoryNoticeChecked)
+                {
+                    _memoryNoticeChecked = true;
+                    _ = CheckMemoryImportNoticeAsync();
+                }
 
                 DotNode.Fill = s.NodeReady ? (Brush)FindResource("Ok") : (Brush)FindResource(s.NodeUp ? "Warn" : "Idle");
                 DotBridge.Fill = s.BrOnline ? (Brush)FindResource("Ok")

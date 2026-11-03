@@ -11,6 +11,8 @@ const os = require('node:os');
 const path = require('node:path');
 
 const { Store } = require('../src/memory/store');
+const { ChatStore } = require('../src/memory/chatStore');
+const { migrateIfNeeded } = require('../src/memory/migrate');
 const { chatHash } = require('../src/memory/hash');
 const personCard = require('../src/memory/personCard');
 
@@ -134,5 +136,113 @@ test('独立 data/memory.json 也能迁移（没有 store.json 时）', () => {
   assert.equal(store.chatStore.chats.size, 1);
   assert.equal(store.listNotes('web:u:s1:private')[0].notes[0], '旧网页里的一句话');
   store.close();
+  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 60 });
+});
+
+test('4.0 已有的 chat 也能合并旧记忆：按时间补消息、notes 去重、seq 重排', () => {
+  const { dir, data } = legacyRoot();
+  const s1 = new Store({ file: path.join(data, 'store.json'), logger: null });
+  assert.equal(s1.messages('wechat:u:wxid_a', 50).length, 2);
+  s1.appendMessage('wechat:u:wxid_a', { role: 'user', name: '小海', uid: 'u-a', text: '今天的新消息', ts: Date.now() });
+  s1.close();
+
+  // 3.x 那边又补了一条旧消息 + 一条新 note
+  const legacy = JSON.parse(fs.readFileSync(path.join(data, 'store.json'), 'utf8'));
+  legacy.sessions['wechat:u:wxid_a'].messages.push({ role: 'user', name: '小海', uid: 'u-a', text: '补一条旧的', ts: 3 });
+  legacy.sessions['wechat:u:wxid_a'].profiles['u-a'].notes = ['住在杭州', '喜欢猫', '养了只狗'];
+  fs.writeFileSync(path.join(data, 'store.json'), JSON.stringify(legacy), 'utf8');
+
+  const s2 = new Store({ file: path.join(data, 'store.json'), logger: null });
+  const chat = s2.chatStore.chats.get('wechat:u:wxid_a');
+  assert.deepEqual(chat.messages.map((m) => m.text), ['我叫小海', '记住啦', '补一条旧的', '今天的新消息']);
+  assert.deepEqual(chat.messages.map((m) => m.seq), [1, 2, 3, 4], '重排后 seq 必须连续');
+  const notes = s2.listNotes('wechat:u:wxid_a')[0].notes;
+  assert.equal(notes.length, 3, '重复的「住在杭州」不能再加一份');
+  assert.ok(notes.includes('养了只狗'));
+  s2.close();
+
+  // migratedFrom 不能被 ChatStore 用迁移前的 manifest 覆盖掉
+  const manifest = JSON.parse(fs.readFileSync(path.join(data, 'memory', 'manifest.json'), 'utf8'));
+  assert.ok(manifest.migratedFrom.length >= 1);
+  assert.ok(JSON.stringify(manifest.migratedFrom).includes('store.json'));
+
+  // 再启动一次：签名已记录，不重复合并
+  const s3 = new Store({ file: path.join(data, 'store.json'), logger: null });
+  assert.equal(s3.messages('wechat:u:wxid_a', 50).length, 4);
+  s3.close();
+  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 60 });
+});
+
+test('首次迁移后 journal 再追加：签名含 journal，仍会被合并进来', () => {
+  const { dir, data } = legacyRoot();
+  const s1 = new Store({ file: path.join(data, 'store.json'), logger: null });
+  s1.close();
+
+  fs.appendFileSync(path.join(data, 'store.json.journal'), JSON.stringify({
+    sessions: {
+      'wechat:u:wxid_a': {
+        platform: 'wechat', chatId: 'wxid_a', chatType: 'private',
+        messages: [
+          { role: 'user', name: '小海', uid: 'u-a', text: '我叫小海', ts: 1 },
+          { role: 'assistant', name: '鲸鲸', text: '记住啦', ts: 2 },
+          { role: 'user', name: '小海', uid: 'u-a', text: '只写在 journal 的一条', ts: 5 },
+        ],
+        profiles: { 'u-a': { uid: 'u-a', name: '小海', notes: [] } },
+      },
+    },
+  }) + '\n', 'utf8');
+
+  const s2 = new Store({ file: path.join(data, 'store.json'), logger: null });
+  const texts = s2.messages('wechat:u:wxid_a', 50).map((m) => m.text);
+  assert.ok(texts.includes('只写在 journal 的一条'));
+  assert.equal(texts.length, 3, '已在 v2 里的两条不能重复');
+  s2.close();
+  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 60 });
+});
+
+test('刚导入的老 chat 不会被启动 sweep 立刻归档', () => {
+  const { dir, data } = legacyRoot();
+  const store = new Store({ file: path.join(data, 'store.json'), logger: null });
+  store.sweep();
+  assert.equal(store.chatStore.chats.size, 2, '刚导入的会话不能当天就被扫进 archive/');
+  const chat = store.chatStore.chats.get('wechat:u:wxid_a');
+  assert.ok(chat.meta.importedAt > 0);
+  store.close();
+  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 60 });
+});
+
+test('补进来的旧消息早于摘要覆盖线：摘要清空重压，不冒充已覆盖', () => {
+  const { dir, data } = legacyRoot();
+  const s1 = new Store({ file: path.join(data, 'store.json'), logger: null });
+  s1.close();
+
+  const legacy = JSON.parse(fs.readFileSync(path.join(data, 'store.json'), 'utf8'));
+  legacy.sessions['wechat:u:wxid_a'].messages.push({ role: 'user', name: '小海', uid: 'u-a', text: '更早的一句话', ts: 1 });
+  fs.writeFileSync(path.join(data, 'store.json'), JSON.stringify(legacy), 'utf8');
+
+  const s2 = new Store({ file: path.join(data, 'store.json'), logger: null });
+  const chat = s2.chatStore.chats.get('wechat:u:wxid_a');
+  assert.ok(chat.messages.map((m) => m.text).includes('更早的一句话'));
+  assert.equal(chat.summary.coveredThroughSeq, 0, '覆盖线被旧消息打断，不能继续宣称已覆盖');
+  assert.equal(chat.summary.text, '');
+  s2.close();
+  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 60 });
+});
+
+test('dry-run 只出报告，不写记忆', () => {
+  const { dir, data } = legacyRoot();
+  const s1 = new Store({ file: path.join(data, 'store.json'), logger: null });
+  s1.close();
+
+  const legacy = JSON.parse(fs.readFileSync(path.join(data, 'store.json'), 'utf8'));
+  legacy.sessions['wechat:u:wxid_a'].messages.push({ role: 'user', name: '小海', uid: 'u-a', text: '只做预览的一条', ts: 9 });
+  fs.writeFileSync(path.join(data, 'store.json'), JSON.stringify(legacy), 'utf8');
+
+  const chatStore = new ChatStore({ dir: path.join(data, 'memory') });
+  const before = chatStore.chats.get('wechat:u:wxid_a').messages.length;
+  const res = migrateIfNeeded({ memoryDir: path.join(data, 'memory'), chatStore, dryRun: true });
+  assert.equal(res.report.messages, 1);
+  assert.equal(chatStore.chats.get('wechat:u:wxid_a').messages.length, before, 'dry-run 不能改原文');
+  chatStore.close();
   fs.rmSync(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 60 });
 });

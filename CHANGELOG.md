@@ -2,6 +2,29 @@
 
 ## 4.0.1
 
+### 兼容 · 4.0 能直接读 3.x 旧记忆（含同 chat 合并）
+
+**以前升级到 4.0 后再放回 `data\store.json`，同名 chat 会被整段跳过——旧对话看着像没导进来。**
+
+- 迁移不再 `exists → 跳过`：缺的消息按 `ts` 合并、去重后整体重排 `seq`（`ChatStore.replaceMessages`），
+  notes 按文本去重补进人物卡；旧消息比当前摘要覆盖线还早时清空摘要重压，避免「没概括却算已覆盖」。
+- 幂等签名加上 `.journal` 的 size + mtime：3.x 只追加 journal 的增量也能再次迁移；
+  `migrate.js` 把 `migratedFrom` 回写进 `ChatStore.manifest`，不会再被防抖保存时的旧对象抹掉。
+- 新增 `node scripts/memory-tool.js import <store.json|memory.json|旧备份包> [--dry-run]`：
+  写盘前自动留 `before-import` 快照，dry-run 只出「会补多少条」的报告。
+- **不用命令**：旧 `data\` 合并进来后正常启动就会自动迁移；写一份 `data/memory/import-report.json`，
+  启动器下次内核就绪时弹「记忆已导入并转换格式」（展示后 ack，重启不再弹）。
+- 启动器「设置 → 高级 → 旧版记忆」新增「一键识别转换记忆」：先 dry-run 预览，再
+  `POST /api/memory/import` 执行；只读检测 `GET /api/memory/import/status`。只回计数、只允许本机。
+- 刚导入的 chat 标 `meta.importedAt`：7 天内不被 `archiveIdle` 归档、也不被 `pruneRaw`
+  清掉旧原文，避免「刚导入就少一段」。
+- `一键更新.bat` 的 `Get-StoreStats` 认 `data\memory\manifest.json`（有 chats 目录兜底），
+  纯 v2 目录不再被判成「没有聊天记忆」；旧安装排序也读 manifest 的 `updatedAt`。
+- 顺手修 `ChatStore.load()` 不关闭旧 chat 文件句柄导致的 fd 泄漏——Windows 上会让之后的
+  `messages.jsonl` 原子重命名一直 `EPERM`。
+- 测试：`tests/memory-migration.test.js` 补「已有 chat 合并 / journal 二次迁移 / 摘要覆盖线被打断 /
+  dry-run 不写盘」4 条。
+
 ### 改进 · 演示模式台词不再点名模型
 
 **现象：没配 Key 的演示模式里，「你是谁 / 你是不是 AI」的内置台词会回「本鲸是 DeepSeek 养的」「DeepSeek 大模型驱动」。**
