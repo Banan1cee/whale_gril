@@ -85,6 +85,18 @@ const FIELDS = {
   'wechat.accountGuard': { type: 'bool' },
   'wechat.bgSend.enabled': { type: 'bool' },
   'wechat.bgSend.charGapMs': { type: 'int', min: 20, max: 80 },
+  // 后台通道的固定等待（秒，见 bridge/bg_sender.py 的 TIMING）：默认值线上实测过，
+  // 放出来是为了「想快一点」不用改代码；0 也合法（=完全不等）。
+  'wechat.bgSend.timing.gatePulse': { type: 'float', min: 0, max: 3 },
+  'wechat.bgSend.timing.unhide': { type: 'float', min: 0, max: 3 },
+  'wechat.bgSend.timing.spiSettle': { type: 'float', min: 0, max: 3 },
+  'wechat.bgSend.timing.gateWait': { type: 'float', min: 0, max: 3 },
+  'wechat.bgSend.timing.focusGap': { type: 'float', min: 0, max: 3 },
+  'wechat.bgSend.timing.clickSettle': { type: 'float', min: 0, max: 3 },
+  'wechat.bgSend.timing.pollSwitch': { type: 'float', min: 0, max: 3 },
+  'wechat.bgSend.timing.sendEnabled': { type: 'float', min: 0, max: 3 },
+  'wechat.bgSend.timing.afterClick': { type: 'float', min: 0, max: 3 },
+  'wechat.bgSend.timing.verifyPoll': { type: 'float', min: 0, max: 3 },
   // 后台通道 WM_CHAR 的编码语义：4.1 及以前按 GBK 字节、4.2+ 按 UTF-16 码元。
   // auto = 按版本自动；版本识别不出来时可以在「微信桥接」页手动钉死。
   'wechat.bgSend.charMode': { type: 'enum', values: ['auto', 'utf16', 'gbk'] },

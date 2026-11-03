@@ -31,6 +31,38 @@ import threading
 import time
 from ctypes import wintypes
 
+# 后台通道里的「固定等待」（秒）。这些都是防丢字/等控件就绪的保险，默认值来自线上实测；
+# 想快一点不用改代码：在 config.json 的 wechat.bgSend.timing 里覆盖同名键即可
+# （例如 {"timing": {"spiSettle": 0.6, "sendEnabled": 0.2}}）。
+TIMING = {
+    "gatePulse": 0.15,     # 写 accessibility gate 字节前后
+    "unhide": 0.4,         # 用「显示但不激活」把窗口拉出来之后
+    "spiSettle": 1.2,      # 开 SPI_SETSCREENREADER 之后等 Qt 建树（文档 §4.1：1~1.5s）
+    "gateWait": 0.5,       # gate 热激活后每轮轮询间隔（最多 6 轮）
+    "focusGap": 0.10,      # WM_SETFOCUS 之后、以及每个 WM_CHAR 之后（char_gap 另算）
+    "clickSettle": 0.07,   # 鼠标按下到抬起
+    "pollSwitch": 0.3,     # 切会话后的轮询间隔
+    "sendEnabled": 0.35,   # 打完字等发送按钮变 enabled（文档 §9）
+    "afterClick": 0.40,    # 点完发送按钮
+    "verifyPoll": 0.2,     # 回读输入框是否已清空的轮询间隔
+}
+
+
+def configure(bg_cfg=None):
+    """从 config 的 wechat.bgSend.timing 覆盖 TIMING（缺省保持原值）。
+
+    只认 0~3 秒、数字类型；写错就忽略 —— 这里绝不能因为配置笔误把发送卡死。
+    """
+    over = (bg_cfg or {}).get("timing") or {}
+    for key in list(TIMING):
+        if key not in over:
+            continue
+        try:
+            TIMING[key] = max(0.0, min(3.0, float(over[key])))
+        except (TypeError, ValueError):
+            pass
+    return TIMING
+
 __all__ = [
     "send",
     "probe",
@@ -281,7 +313,7 @@ def _gate_pulse(hwnd):
                 continue
             if cur == 1:
                 G._write_process_byte(handle, addr, 0)
-                time.sleep(0.15)
+                time.sleep(TIMING["gatePulse"])
             G._write_process_byte(handle, addr, 1)
         return True
     except Exception:
@@ -320,7 +352,7 @@ def _ensure_tree(hwnd, log=None, unhide=True, want_edit=False):
             if (not user32.IsWindowVisible(hwnd)) or user32.IsIconic(hwnd):
                 fg0 = user32.GetForegroundWindow()
                 user32.ShowWindow(hwnd, SW_SHOWNOACTIVATE)
-                time.sleep(0.4)
+                time.sleep(TIMING["unhide"])
                 fg1 = user32.GetForegroundWindow()
                 log("后台通道：窗口原来隐藏/最小化，已用「显示但不激活」拉出来（前台 %s → %s%s）"
                     % (fg0, fg1, "，没抢" if fg0 == fg1 else "，**被抢了**"))
@@ -335,7 +367,7 @@ def _ensure_tree(hwnd, log=None, unhide=True, want_edit=False):
         return info
 
     _ScreenReader.enable()
-    time.sleep(1.2)                       # 文档 §4.1：实测 1~1.5 秒
+    time.sleep(TIMING["spiSettle"])        # 文档 §4.1：实测 1~1.5 秒（可用 bgSend.timing 覆盖）
     info = read_ui(hwnd)
     if _tree_ok(info, want_edit):
         log("后台通道：控件树已物化（SPI），%d 个节点" % len(info["nodes"]))
@@ -344,7 +376,7 @@ def _ensure_tree(hwnd, log=None, unhide=True, want_edit=False):
     if _gate_pulse(hwnd):
         # 写完之后 Qt 需要一点时间重建控件树；最多等 3 秒
         for _ in range(6):
-            time.sleep(0.5)
+            time.sleep(TIMING["gateWait"])
             info = read_ui(hwnd)
             if _tree_ok(info, want_edit):
                 log("后台通道：控件树已物化（gate 热激活），%d 个节点" % len(info["nodes"]))
@@ -386,7 +418,9 @@ class WeChatSender:
             raise ctypes.WinError(err)
         return True
 
-    def click_screen(self, sx, sy, settle=0.07):
+    def click_screen(self, sx, sy, settle=None):
+        if settle is None:
+            settle = TIMING["clickSettle"]
         """在屏幕坐标处点击微信窗口。被遮挡也有效。（文档 §4.3 / §4.8 / §4.9）
 
         - 坐标必须转成**客户区**坐标（`ScreenToClient`）；
@@ -419,7 +453,7 @@ class WeChatSender:
         先 `encode("gbk")` 再逐字节发。
         """
         self._post(WM_SETFOCUS, 0, 0)              # 伪焦点（§4.5）
-        time.sleep(0.10)
+        time.sleep(TIMING["focusGap"])
         for b in payload:
             self._post(WM_CHAR, b, 1)
             time.sleep(char_gap)
@@ -428,7 +462,7 @@ class WeChatSender:
     def type_units(self, units, char_gap=0.04):
         """逐个投递 UTF-16 码元（微信 4.2+ 的 WM_CHAR 语义）。"""
         self._post(WM_SETFOCUS, 0, 0)
-        time.sleep(0.10)
+        time.sleep(TIMING["focusGap"])
         for u in units:
             self._post(WM_CHAR, u, 1)
             time.sleep(char_gap)
@@ -860,7 +894,7 @@ def open_chat(sender, aliases, timeout=6.0, log=None):
     deadline = time.time() + max(1.0, float(timeout))
     rematerialized = False
     while time.time() < deadline:
-        time.sleep(0.3)
+        time.sleep(TIMING["pollSwitch"])
         info = read_ui(sender.hwnd)
         cur = info["chat"]
         if cur and name_score(nm, cur) == 0:
@@ -1034,7 +1068,7 @@ def send(text, chat=None, hwnd=0, log=None, char_gap=0.04,
                 log("后台通道：GBK 编不了 %d 个字符，已跳过：%s"
                     % (len(skipped), "".join(skipped)[:20]))
 
-            time.sleep(0.35)                       # 等按钮变 enabled（文档 §9）
+            time.sleep(TIMING["sendEnabled"])      # 等按钮变 enabled（文档 §9）
             info = read_ui(hwnd)                   # 再读一次：按钮此刻才 enabled
             xy = info["send_xy"]
             if xy is None:
@@ -1051,7 +1085,7 @@ def send(text, chat=None, hwnd=0, log=None, char_gap=0.04,
                         % (cur_now,))
                     return False, "chat_mismatch"
             sender.click_screen(*xy)
-            time.sleep(0.40)
+            time.sleep(TIMING["afterClick"])
             sender.end_input()
 
             partial = "sent_partial" if skipped else "sent"
@@ -1069,7 +1103,7 @@ def send(text, chat=None, hwnd=0, log=None, char_gap=0.04,
                     return True, "sent_unverified"
                 if _is_blank(v):
                     return True, partial
-                time.sleep(0.2)
+                time.sleep(TIMING["verifyPoll"])
             return False, "residue_left"
 
         except UipiDenied as e:

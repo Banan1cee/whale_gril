@@ -14,6 +14,15 @@ def requested(text):
     text = str(text or "")
     return len(text) <= 500 and not NEGATIVE.search(text) and bool(REQUEST.search(text))
 
+def _clamp(value, default, low, high):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(number):
+        return default
+    return max(low, min(high, number))
+
 def settings(root):
     try:
         with open(os.path.join(root, "data", "voice-send.json"), encoding="utf-8-sig") as f:
@@ -61,12 +70,19 @@ def deliver(root, text, hwnd, prepare, log, allow_foreground=None, cancelled=Non
             json.dump({"Text": text, "Hwnd": int(hwnd)}, f, ensure_ascii=False)
         process = subprocess.Popen([os.path.join(root, "WhaleLauncher.exe"), "--voice-reply-job", path],
                                    cwd=root, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        deadline = time.monotonic() + 125
+        # 合成阶段等多久。以前写死 125 秒：语音接口一卡，这条回复就陪它等两分钟，
+        # 用户看到的是「发消息特别慢」。现在默认 20 秒（可用 voice-send.json 的
+        # SynthTimeoutSec 调），超时就取消 worker、回退发原始文字。
+        synth_timeout = _clamp(settings(root).get("SynthTimeoutSec"), 20.0, 5.0, 180.0)
+        started = time.monotonic()
+        deadline = started + synth_timeout
         while process.poll() is None and not os.path.exists(path + ".ready"):
             check_cancelled()
             if time.monotonic() > deadline:
-                raise TimeoutError("语音合成超时")
+                raise TimeoutError("语音合成超时（%.0fs）" % synth_timeout)
             time.sleep(0.1)
+        if os.path.exists(path + ".ready"):
+            log("自动语音：合成用时 %.1fs" % (time.monotonic() - started))
         if os.path.exists(path + ".ready") and process.poll() is None:
             check_cancelled()
             current = settings(root)
