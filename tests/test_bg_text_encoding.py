@@ -6,6 +6,7 @@
 """
 import os
 import sys
+import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -193,6 +194,20 @@ def main():
         t()
         print('ok', t.__name__)
     print('全部通过：%d 项' % len(tests))
+
+
+# CI 走 `python -m unittest discover -s tests -p 'test_*.py'`，只收 TestCase。
+# 这里把上面的 test_* 函数挂进去，保证这些编码回归在 CI 里真的会跑
+# （以前这个文件只能手动 `python tests/test_bg_text_encoding.py`）。
+_CASES = [(k, v) for k, v in sorted(globals().items())
+          if k.startswith('test_') and callable(v)]
+
+
+class EncodingRegression(unittest.TestCase):
+    def test_all_cases(self):
+        for name, fn in _CASES:
+            with self.subTest(case=name):
+                fn()
 
 
 if __name__ == '__main__':
