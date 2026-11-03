@@ -44,13 +44,14 @@ for (const staticSystem of [true, false]) {
     assert.equal(sys.includes(model), false, '明确要求不向对方报型号');
   });
 
-  test(`${mode}：默认人设要求「别报具体型号」，且没有「我的模型是」模板`, () => {
+  test(`${mode}：默认人设让被问型号时打哈哈，且不出现「不报型号」式念规则`, () => {
     const sys = systemFor(makeConfig({ model: randomModel(), staticSystem }));
-    assert.match(sys, /别报具体型号/, '被问模型时不能报型号');
+    assert.match(sys, /就当被问体重，打个哈哈带过去/, '被问模型时要自然带过，而不是声明不报');
     assert.doesNotMatch(sys, /我的模型是/, '旧的报型号模板必须删掉');
-    // 【回答原则】里不能再有「问模型就报模型名」这种和上面相反的指令
-    assert.doesNotMatch(sys, /问模型就报模型名/, '回答原则不能和「别报具体型号」自相矛盾');
-    assert.match(sys, /被问模型\/服务商\/版本时不报具体型号/);
+    // 否定式规则会被模型复述成「不报型号，…」的开头，system 里不应再有这种措辞
+    assert.doesNotMatch(sys, /别报具体型号|不报具体型号/, '不要用否定式规则，模型会念出来');
+    // 【回答原则】里也不能再出现授权报型号或重复型号规则的句子
+    assert.doesNotMatch(sys, /问模型就报模型名/, '回答原则不能和上面自相矛盾');
   });
 }
 
@@ -62,6 +63,7 @@ test('自定义人设分支同样不含模型名（防止以后被加回来）',
     assert.equal(sys.includes(model), false, '自定义人设也不能拼模型名');
     assert.doesNotMatch(sys, /我的模型是/);
     assert.doesNotMatch(sys, /问模型就报模型名/, '共用的回答原则不能授权报型号');
+    assert.doesNotMatch(sys, /别报具体型号|不报具体型号/, '共用的回答原则不能加否定式规则');
   }
 });
 
