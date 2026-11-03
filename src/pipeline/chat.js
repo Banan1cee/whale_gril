@@ -44,6 +44,57 @@ const tokenCalibration = require('../memory/calibration');
 const budgetPricing = require('../services/budget');
 
 /**
+ * 把正文里的 [[sticker:分类]] 标记抠干净，返回 { text, category }。
+ *
+ * 不用正则：模型有时把标记写在开头还没闭合，`[[sticker[\s\S]*$` 这类贪心写法
+ * 会把整条回复吃光（用户那边就是「她突然不说话」）。这里逐个字符扫描：
+ *   1. 小写副本里找 '[['，位置与原串一一对应（ASCII 大小写同长度）；
+ *   2. 跳过空白后必须是 'sticker'（兼容 "[[ sticker : 炸毛"），再跳到分隔符；
+ *   3. 有 ':' / '：' 才算给了分类，分类名去空白后 1~40 字且不含换行；
+ *   4. 有 ']]' 删到 ']]'；没闭合就删到这一行末尾（不吞后面的段落）；
+ *      没有分隔符只删标记本身。
+ * 最多处理 3 个，全部删掉但只取第一个分类名。
+ */
+function stripStickerMarks(input) {
+  let text = String(input == null ? '' : input);
+  let category = '';
+  let count = 0;
+  let from = 0;
+  while (count < 3) {
+    const lower = text.toLowerCase();
+    const open = lower.indexOf('[[', from);
+    if (open < 0) break;
+    let i = open + 2;
+    while (i < lower.length && (lower[i] === ' ' || lower[i] === '\t')) i++;
+    if (lower.slice(i, i + 7) !== 'sticker') { from = open + 2; continue; }
+    let j = i + 7;
+    while (j < lower.length && (lower[j] === ' ' || lower[j] === '\t')) j++;
+    const hasDelimiter = lower[j] === ':' || lower[j] === '：';
+    const start = hasDelimiter ? j + 1 : j;
+    const close = text.indexOf(']]', start);
+    let stop;
+    if (close >= 0) {
+      stop = close + 2;
+      if (hasDelimiter && !category) category = text.slice(start, close);
+    } else if (hasDelimiter) {
+      // 没闭合：删到行尾，后面的段落不动；分类名最多取到行尾
+      const lineEnd = text.indexOf('\n', start);
+      stop = lineEnd < 0 ? text.length : lineEnd;
+      if (!category) category = text.slice(start, stop);
+    } else {
+      stop = close === start ? close + 2 : start;
+    }
+    if (stop <= open) stop = Math.min(text.length, open + 9);
+    text = text.slice(0, open) + text.slice(stop);
+    count++;
+    from = open;
+  }
+  category = String(category).split('\r').join('').split('\n').join('').trim();
+  if (category.length < 1 || category.length > 40) category = '';
+  return { text: text.trim(), category };
+}
+
+/**
  * 服务商报「上下文超长」时，不能把整段历史原样再发一次，也不该退化成只留当前一句。
  * 这里只认明确的上下文错误，别把普通 400 内容审核也当成超长。
  */
@@ -1457,15 +1508,10 @@ class Bot {
   finalize(decision, text, { error = false } = {}) {
     text = String(text == null ? '' : text).trim();
     // 表情包标记 [[sticker:分类]]：发哪一类由模型决定。标记必须从正文里剥干净，
-    // 没闭合的半截也要清掉，绝不能漏给用户看到。
-    const mark = text.match(/\[\[\s*sticker\s*[:：]\s*([^\]\n]{1,40}?)\s*\]\]/i);
-    if (mark && decision) decision.stickerCategory = String(mark[1] || '').trim();
-    if (/\[\[\s*sticker/i.test(text)) {
-      text = text
-        .replace(/\[\[\s*sticker\s*[:：][^\]\n]*\]\]/gi, '')
-        .replace(/\[\[\s*sticker[\s\S]*$/i, '')
-        .trim();
-    }
+    // 没闭合的半截也要清掉，绝不能漏给用户看到（也不能因此吞掉正文）。
+    const stickerMark = stripStickerMarks(text);
+    if (stickerMark.category && decision) decision.stickerCategory = stickerMark.category;
+    text = stickerMark.text;
     // 正文里的 emoji 剥出来，单独发一条
     const emojiRe = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{1F1E6}-\u{1F1FF}\u{FE0F}]/gu;
     const foundEmoji = (text.match(emojiRe) || []).join('');

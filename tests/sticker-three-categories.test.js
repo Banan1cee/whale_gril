@@ -35,18 +35,23 @@ test('旧中英文分类、通用、根目录图片全部有明确归属；不�
   put('root.gif');
   for (const label of ['撒娇', 'cute', '傲娇']) put(label + '/a.gif');
   put('angry/a.gif'); put('炸毛/a.gif');
-  assert.equal(stickers.categoryImages(dir, 'happy').length, 9);
+  assert.equal(stickers.categoryImages(dir, 'happy').length, 10, '根目录的图也算开心');
   assert.equal(stickers.categoryImages(dir, 'cute').length, 3);
   assert.equal(stickers.categoryImages(dir, 'angry').length, 2);
   assert.deepEqual(stickers.categoryImages(dir, 'constructor'), []);
 });
 
-test('分类为空绝不偷发别的分类；没给分类就不发', (t) => {
+test('分类为空 / 认不出时兜底发一张，但会记下模型原本写的分类', (t) => {
   const { cfg, root, put } = fixture(t);
   put('炸毛/a.gif'); put('傲娇/a.gif');
-  assert.equal(stickers.pick({ config: cfg, root, category: '其他', rng: () => 0 }), null);
-  assert.equal(stickers.pick({ config: cfg, root, category: '', rng: () => 0 }), null);
-  assert.equal(stickers.pick({ config: cfg, root, rng: () => 0 }), null);
+  // 认不出 → 兜底：没有自定义分类时按 开心 → 傲娇 → 炸毛 找第一个有图的
+  const guess = stickers.pick({ config: cfg, root, category: '前去报到', rng: () => 0 });
+  assert.equal(guess.emotion, 'cute');
+  assert.equal(guess.fallbackFrom, '前去报到');
+  // 没写分类也兜底（链路层由 stickerFor 挡住，这里不拦）
+  const bare = stickers.pick({ config: cfg, root, category: '', rng: () => 0 });
+  assert.ok(bare && bare.path);
+  assert.equal(bare.fallbackFrom, '');
   put('其他/a.gif');
   const hit = stickers.pick({ config: cfg, root, category: '其他', rng: () => 0 });
   assert.equal(hit.emotion, 'happy'); assert.equal(path.basename(path.dirname(hit.path)), '其他');
@@ -60,8 +65,8 @@ test('chances / genericChance 不再参与自动发送，指定分类就必发',
   assert.equal(stickers.pick({ config: cfg, root, category: '其他', rng: () => 0 }).emotion, 'happy');
   assert.equal(stickers.pick({ config: cfg, root, category: '炸毛', rng: () => 0 }).emotion, 'angry');
   assert.equal(stickers.pick({ config: cfg, root, category: '傲娇', rng: () => 0 }).emotion, 'cute');
-  // 没有任何分类时，概率再高也不发
-  assert.equal(stickers.pick({ config: cfg, root, text: '气死我了', rng: () => 0 }), null);
+  // 概率字段不参与：认不出也照样兜底发，只是记下原分类
+  assert.equal(stickers.pick({ config: cfg, root, text: '气死我了', rng: () => 0 }).emotion, 'happy');
 });
 
 test('其他选择多个文件可遍历全部，轮换一圈也不立刻重复最后一张', (t) => {
@@ -88,13 +93,14 @@ test('迁移无覆盖、字节不变、可重复执行；相同内容去重，�
   put('root.gif', Buffer.from('root'));
   const report = stickers.migrateLegacy(cfg, root);
   assert.deepEqual(report.errors, []);
-  assert.equal(report.moved, 5); assert.equal(report.deduplicated, 1);
+  assert.equal(report.moved, 6); assert.equal(report.deduplicated, 1);
+  assert.equal(report.rootImages, 1, '根目录那张要单独计数');
   assert.equal(fs.readFileSync(path.join(dir, '开心/same.gif'), 'utf8'), 'happy');
   const bytes = stickers.categoryImages(dir, 'happy').map((file) => fs.readFileSync(file, 'utf8')).sort();
-  assert.deepEqual(bytes, ['canonical', 'happy', 'english', 'generic'].sort());
+  assert.deepEqual(bytes, ['canonical', 'happy', 'english', 'generic', 'root'].sort());
   assert.equal(stickers.categoryImages(dir, 'cute').length, 1);
   assert.equal(stickers.categoryImages(dir, 'angry').length, 1);
-  assert.deepEqual(stickers.migrateLegacy(cfg, root), { moved: 0, deduplicated: 0, errors: [] });
+  assert.deepEqual(stickers.migrateLegacy(cfg, root), { moved: 0, deduplicated: 0, rootImages: 0, errors: [] });
 });
 
 test('迁移复制失败保留旧图，带相对ID仍能预览；未知文件不被清理', (t) => {
@@ -115,12 +121,61 @@ test('迁移复制失败保留旧图，带相对ID仍能预览；未知文件不
 
 test('关闭总开关不创建目录、不迁移图，启动一次服务也不碰旧库', (t) => {
   const { cfg, root, dir, put } = fixture(t, false);
-  assert.deepEqual(stickers.migrateLegacy(cfg, root), { moved: 0, deduplicated: 0, errors: [] });
+  assert.deepEqual(stickers.migrateLegacy(cfg, root), { moved: 0, deduplicated: 0, rootImages: 0, errors: [] });
   assert.equal(fs.existsSync(dir), false);
   const src = put('开心/old.gif');
   new StickerService(cfg);
   assert.equal(fs.existsSync(src), true);
   assert.equal(fs.existsSync(path.join(dir, '其他')), false);
+});
+
+test('根目录的图并入「开心」：能挑到，迁移后进「开心」目录、根目录清空', (t) => {
+  const { cfg, root, dir, put } = fixture(t);
+  const a = put('root-a.gif'); const b = put('root-b.gif');
+  assert.equal(stickers.categoryImages(dir, 'happy').length, 2, '根目录的图要算进开心');
+  assert.equal(stickers.pick({ config: cfg, root, category: '开心', rng: () => 0 }).emotion, 'happy');
+  const report = stickers.migrateLegacy(cfg, root);
+  assert.equal(report.rootImages, 2, '根目录处理的张数要单独计数');
+  assert.equal(report.moved, 2);
+  assert.ok(fs.existsSync(path.join(dir, '开心/root-a.gif')));
+  assert.ok(fs.existsSync(path.join(dir, '开心/root-b.gif')));
+  assert.equal(fs.existsSync(a), false);
+  assert.equal(fs.existsSync(b), false);
+  assert.deepEqual(stickers.listImages(dir, { root: dir, recursive: false }), [], '根目录要搬空');
+});
+
+test('resolveCategory：精确 → 用户分类优先 → 子串 → 内置同义词 → 认不出', (t) => {
+  const { cfg, root, put } = fixture(t);
+  // b 精确：中文标签、内部 key、ALIASES 旧名
+  assert.equal(stickers.resolveCategory(cfg, '傲娇'), 'cute');
+  assert.equal(stickers.resolveCategory(cfg, 'cute'), 'cute');
+  assert.equal(stickers.resolveCategory(cfg, 'other'), 'happy');
+  assert.equal(stickers.resolveCategory(cfg, 'meh'), 'happy');
+  // d 内置同义词
+  assert.equal(stickers.resolveCategory(cfg, '可爱'), 'cute');
+  assert.equal(stickers.resolveCategory(cfg, '生气'), 'angry');
+  assert.equal(stickers.resolveCategory(cfg, '哈哈'), 'happy');
+  // e 认不出
+  assert.equal(stickers.resolveCategory(cfg, '前来报到'), '');
+  assert.equal(stickers.resolveCategory(cfg, ''), '');
+
+  put('生气/a.gif'); put('猫猫/a.gif');
+  stickers.writeExtraCategories(cfg, root, [{ label: '生气' }, { label: '猫猫' }]);
+  // b 排在 d 前面：用户自己建的「生气」不能被内置的同义词抢走
+  assert.equal(stickers.resolveCategory(cfg, '生气'), 'x:生气');
+  assert.equal(stickers.resolveCategory(cfg, 'x:生气'), 'x:生气');
+  // c 子串走自定义分类：标签比 value 短也认
+  assert.equal(stickers.resolveCategory(cfg, '猫猫头'), 'x:猫猫');
+  assert.equal(stickers.resolveCategory(cfg, '这是猫猫'), 'x:猫猫');
+  // 单字不参与子串（用户建「猫」时只有完全相等才算）
+  assert.equal(stickers.resolveCategory(cfg, '猫'), '');
+});
+
+test('resolveCategory：候选集现读，刚加的自定义分类不用重启就能认', (t) => {
+  const { cfg, root } = fixture(t);
+  assert.equal(stickers.resolveCategory(cfg, '刚建好的分类'), '');
+  stickers.writeExtraCategories(cfg, root, [{ label: '刚建好的分类' }]);
+  assert.equal(stickers.resolveCategory(cfg, '刚建好的分类'), 'x:刚建好的分类');
 });
 
 test('旧同名文件使用相对id精确解析，basename歧义拒绝而不是误删', (t) => {

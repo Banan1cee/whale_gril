@@ -77,13 +77,17 @@ test('表情包：按情绪找文件夹（中文/英文都认），没图回落�
   fs.rmSync(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 80 });
 });
 
-test('表情包：没有分类标记就绝对不发（不再猜情绪、不再掷概率）', () => {
+test('表情包：没有分类标记时链路不发；pick 自己的兜底只服务「认不出」', () => {
   const root = makeRoot(['炸毛/a.gif', '其他/o.gif']);
-  // 概率字段全拉满也没用：发不发只看有没有模型给的分类
+  // 概率字段全拉满也没用：发不发只看 finalize 有没有抠出分类
   const cfg = cfgOn(root, { chances: { angry: 1, cute: 1, other: 1 }, genericChance: 1 });
-  assert.equal(stickers.pick({ config: cfg, root, key: 'u:1', text: '你个傻逼', rng: () => 0 }), null);
-  assert.equal(stickers.pick({ config: cfg, root, key: 'u:1', text: '发个表情包', request: '发个表情包', rng: () => 0 }), null);
-  assert.equal(stickers.pick({ config: cfg, root, key: 'u:1' }), null);
+  const { Bot } = require('../src/pipeline/chat');
+  const ctx = { config: cfg, stickerService: { plan: () => { throw new Error('没有分类时不该调用服务'); } } };
+  assert.equal(Bot.prototype.stickerFor.call(ctx, { msg: { platform: 'wechat' } }), null);
+  // pick 本身不再因为「没写分类」返回 null：图库有图就兜底一张，供「认不出」那条路用
+  const hit = stickers.pick({ config: cfg, root });
+  assert.ok(hit && hit.path);
+  assert.equal(hit.fallbackFrom, '');
   fs.rmSync(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 80 });
 });
 
@@ -99,11 +103,15 @@ test('表情包：模型指定哪个分类就发哪个分类，跟概率字段�
   fs.rmSync(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 80 });
 });
 
-test('表情包：分类不存在或该分类没图，一律不发', () => {
+test('表情包：分类不存在或该分类没图，兜底发一张并记下原写的分类名', () => {
   const root = makeRoot(['其他/o.gif']);
   const cfg = cfgOn(root);
-  assert.equal(stickers.pick({ config: cfg, root, category: '不存在' }), null);
-  assert.equal(stickers.pick({ config: cfg, root, category: '炸毛' }), null, '炸毛目录不存在');
+  const unknown = stickers.pick({ config: cfg, root, category: '不存在', rng: () => 0 });
+  assert.equal(unknown.emotion, 'happy');
+  assert.equal(unknown.fallbackFrom, '不存在');
+  const empty = stickers.pick({ config: cfg, root, category: '炸毛', rng: () => 0 });
+  assert.equal(empty.emotion, 'happy', '炸毛没有图，退到开心的根目录图');
+  assert.equal(empty.fallbackFrom, '炸毛');
   assert.ok(stickers.pick({ config: cfg, root, category: '其他' }), '有图的分类正常发');
   fs.rmSync(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 80 });
 });
@@ -117,7 +125,9 @@ test('表情包：自定义分类登记后能按标签或 x: 选中', () => {
   assert.match(byLabel.path, /猫猫/);
   const byKey = stickers.pick({ config: cfg, root, category: 'x:猫猫', rng: () => 0 });
   assert.equal(byKey.emotion, 'x:猫猫');
-  assert.equal(stickers.pick({ config: cfg, root, category: 'x:没登记' }), null);
+  const missing = stickers.pick({ config: cfg, root, category: 'x:没登记', rng: () => 0 });
+  assert.equal(missing.emotion, 'x:猫猫', '没登记的分类兜底到用户自己建的有图分类');
+  assert.equal(missing.fallbackFrom, 'x:没登记');
   fs.rmSync(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 80 });
 });
 

@@ -49,10 +49,34 @@ test('标记在句中：剥掉后句子还完整', () => {
   assert.equal(out.joined.replace(/\s/g, ''), '好呀明天见');
 });
 
-test('多个标记：取第一个分类，全部剥掉', () => {
-  const out = fin('给你看 [[sticker:傲娇]] 还有 [[sticker:炸毛]]');
+test('标记在开头且没闭合：正文保留，只删标记，不再整条消失', () => {
+  const out = fin('[[sticker:炸毛\n明天见，去吃饭了');
+  assert.equal(out.decision.stickerCategory, '炸毛');
+  assert.equal(out.joined.replace(/\s/g, ''), '明天见去吃饭了');
+  assert.doesNotMatch(out.joined, /\[\[|sticker/);
+  // 没有分隔符、也没闭合：只删标记本身
+  const bare = fin('[[sticker\n后面这句要留着');
+  assert.equal(bare.decision.stickerCategory, undefined);
+  assert.match(bare.joined, /后面这句要留着/);
+});
+
+test('标记在句尾 + 正文：分类取到，正文干净', () => {
+  const out = fin('今天风好大，别穿裙子 [[sticker:傲娇]]');
   assert.equal(out.decision.stickerCategory, '傲娇');
-  assert.doesNotMatch(out.joined, /sticker|\[\[/);
+  assert.equal(out.joined.replace(/\s/g, ''), '今天风好大别穿裙子');
+});
+
+test('多个标记：只取第一个分类，全部删掉，正文不残缺', () => {
+  const out = fin('开头 [[sticker:炸毛]] 中间 [[sticker:开心]] 结尾');
+  assert.equal(out.decision.stickerCategory, '炸毛');
+  assert.equal(out.joined.replace(/\s/g, ''), '开头中间结尾');
+  assert.doesNotMatch(out.joined, /\[\[|sticker/);
+});
+
+test('超过三个标记也只处理三个，其余不动（不无限循环）', () => {
+  const out = fin('[[sticker:a]][[sticker:b]][[sticker:c]][[sticker:d]]');
+  assert.doesNotMatch(out.joined, /\[\[sticker:[abc]\]\]/, '前三个应被删掉');
+  assert.match(out.joined, /\[\[sticker:d\]\]/, '第四个原样保留，交给下一轮清理');
 });
 
 test('半截标记（没闭合）也不能漏给用户', () => {

@@ -24,6 +24,12 @@ function fixture(t, on = true) {
 function upload(cfg, root, emotion = 'other', name = '动画.gif', bytes = GIF) {
   return stickers.upload(cfg, root, emotion, [{ name, data: bytes.toString('base64') }]);
 }
+/** 收集日志行，断言「有没有说、说了什么」，不依赖真实 logger */
+function loggerStub() {
+  const lines = [];
+  const push = (level) => (...args) => lines.push(level + ' ' + args.join(' '));
+  return { lines, info: push('info'), warn: push('warn'), debug: push('debug'), error: push('error') };
+}
 
 test('上传按情绪归档，保留 GIF 原始字节且同名不覆盖', (t) => {
   const { root, cfg } = fixture(t);
@@ -293,6 +299,92 @@ test('内置分类不能删；文件夹被删掉会自动补回来', async (t) =
   // 没有「其他」这个内置分类了
   const status = (await request('/api/stickers/status')).body;
   assert.deepEqual(status.emotions.map((e) => e.label), ['傲娇', '炸毛', '开心']);
+});
+
+test('分类认不出：照发一张，记 fallbackFrom 并 warn 说明改发了哪类', (t) => {
+  const { root, cfg } = fixture(t);
+  upload(cfg, root);
+  const log = loggerStub();
+  const service = new StickerService(cfg, { rng: () => 0, logger: log });
+  const msg = { platform: 'wechat', chatId: 'wxid-a', chatType: 'private' };
+  const job = service.plan(msg, '猫猫头');
+  assert.ok(job, '认不出也要发得出去');
+  assert.equal(job.emotion, 'happy');
+  assert.equal(job.fallbackFrom, '猫猫头');
+  assert.ok(log.lines.some((line) => line.startsWith('warn') && line.includes('猫猫头') && line.includes('改发')), '要说明改发了哪一类');
+});
+
+test('有自定义分类时，兜底优先发用户自己建的分类里的图', (t) => {
+  const { root, cfg } = fixture(t);
+  upload(cfg, root);
+  fs.mkdirSync(path.join(root, 'data/stickers/猫猫'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'data/stickers/猫猫/cat.gif'), GIF);
+  stickers.writeExtraCategories(cfg, root, [{ label: '猫猫' }]);
+  const service = new StickerService(cfg, { rng: () => 0 });
+  const job = service.plan({ platform: 'wechat', chatId: 'wxid-b', chatType: 'private' }, '认不出的分类');
+  assert.equal(job.emotion, 'x:猫猫');
+  assert.match(job.path, /猫猫/);
+  assert.equal(job.fallbackFrom, '认不出的分类');
+});
+
+test('图库全空：plan 返回 null，并说明该分类没有图', (t) => {
+  const { root, cfg } = fixture(t);
+  const log = loggerStub();
+  const service = new StickerService(cfg, { rng: () => 0, logger: log });
+  const job = service.plan({ platform: 'wechat', chatId: 'wxid-empty', chatType: 'private' }, '炸毛');
+  assert.equal(job, null);
+  assert.ok(log.lines.some((line) => line.includes('没有对应图片')));
+});
+
+test('总闸关着：plan 返回 null，一行表情包日志都没有', (t) => {
+  const { root, cfg } = fixture(t, false);
+  const log = loggerStub();
+  const service = new StickerService(cfg, { rng: () => 0, logger: log });
+  assert.equal(service.plan({ platform: 'wechat', chatId: 'wxid-off', chatType: 'private' }, '炸毛'), null);
+  assert.deepEqual(log.lines, []);
+});
+
+test('动作账本写清「原写分类」和实际发出去的分类', (t) => {
+  const { root, cfg } = fixture(t);
+  upload(cfg, root);
+  const events = [];
+  const store = {
+    appendEvent: (sessionKey, entry) => { const ts = events.length + 1; events.push({ sessionKey, ...entry, ts }); return { ts }; },
+    updateEvent: () => true,
+  };
+  const service = new StickerService(cfg, { rng: () => 0, store });
+  service.plan({ platform: 'wechat', chatId: 'wxid-note', chatType: 'private' }, '猫猫头');
+  const entry = events.find((item) => String(item.detail || '').includes('原写'));
+  assert.ok(entry, 'detail 要带上原写的分类，模型下一轮才知道自己发的是什么');
+  assert.match(entry.detail, /开心\/.+（原写「猫猫头」）/);
+});
+
+test('任务超时作废要留日志，不静默改状态', (t) => {
+  const { root, cfg } = fixture(t);
+  upload(cfg, root);
+  let now = 1000;
+  const log = loggerStub();
+  const service = new StickerService(cfg, { rng: () => 0, logger: log, now: () => now });
+  assert.ok(service.plan({ platform: 'wechat', chatId: 'wxid-timeout', chatType: 'private' }, '开心'));
+  now += 91 * 1000;
+  service.status();   // 触发 reconcile
+  assert.ok(log.lines.some((line) => line.startsWith('warn') && line.includes('超时作废') && line.includes('状态=cancelled')));
+});
+
+test('根目录还有图但迁移为 0：warn 说清它们不会被发送', (t) => {
+  const { root, cfg } = fixture(t);
+  const dir = stickers.stickerDir(cfg, root);
+  fs.mkdirSync(path.join(dir, '开心'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'root-x.gif'), GIF);
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-sticker-out-'));
+  t.after(() => fs.rmSync(outside, { recursive: true, force: true }));
+  // 把「开心」换成链接，迁移必然失败 → 走「迁移为 0 但根目录还有图」这一支
+  fs.rmSync(path.join(dir, '开心'), { recursive: true, force: true });
+  try { fs.symlinkSync(outside, path.join(dir, '开心'), process.platform === 'win32' ? 'junction' : 'dir'); }
+  catch (err) { if (['EPERM', 'EACCES'].includes(err.code)) { t.skip('无创建链接权限'); return; } throw err; }
+  const log = loggerStub();
+  new StickerService(cfg, { logger: log });
+  assert.ok(log.lines.some((line) => line.startsWith('warn') && line.includes('根目录还有')), log.lines.join('|'));
 });
 
 test('桥接：mock-only Python安全行为测试', (t) => {

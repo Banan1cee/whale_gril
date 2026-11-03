@@ -165,7 +165,9 @@ function categoryImages(dir, emotion) {
     return listImages(path.join(dir, key.slice(EXTRA_PREFIX.length)), { root: dir, recursive: false });
   }
   const files = FOLDERS[key].flatMap((name) => listImages(path.join(dir, name), { root: dir, recursive: false }));
-  if (key === 'other') files.push(...listImages(dir, { root: dir, recursive: false }));
+  // 直接扔在 data/stickers 根目录的图也算「开心」：以前这里是 key === 'other'，
+  // 但 normalizeEmotion 早把 other 映射成 happy，那段是死代码，根目录的图永远收不到。
+  if (key === 'happy') files.push(...listImages(dir, { root: dir, recursive: false }));
   return [...new Set(files)].sort((a, b) => a.localeCompare(b));
 }
 function imagesFor(dir, emotion) { return categoryImages(dir, emotion); }
@@ -195,15 +197,16 @@ function safeDirectory(dir) {
 }
 function migrateLegacy(config, root) {
   // OFF is a hard boundary: do not even stat/create a directory.
-  if (!isOn(config)) return { moved: 0, deduplicated: 0, errors: [] };
+  if (!isOn(config)) return { moved: 0, deduplicated: 0, rootImages: 0, errors: [] };
   const dir = stickerDir(config, root);
-  const report = { moved: 0, deduplicated: 0, errors: [] };
+  const report = { moved: 0, deduplicated: 0, rootImages: 0, errors: [] };
   try { safeDirectory(dir); } catch (err) { report.errors.push(err.message); return report; }
   for (const [key, label] of Object.entries(EMOTIONS)) {
     const targetDir = path.join(dir, label);
     try { safeDirectory(targetDir); } catch (err) { report.errors.push(label + '：' + err.message); continue; }
     for (const source of categoryImages(dir, key)) {
       if (path.dirname(source) === targetDir) continue;
+      const fromRoot = path.dirname(path.resolve(source)) === path.resolve(dir);
       try {
         if (!regularFile(source, dir)) continue;
         const bytes = fs.readFileSync(source);
@@ -227,6 +230,7 @@ function migrateLegacy(config, root) {
         }
         fs.unlinkSync(source);
         if (existed) report.deduplicated++; else report.moved++;
+        if (fromRoot) report.rootImages++;   // 本次从 data/stickers 根目录并进来的张数
       } catch (err) { report.errors.push(path.relative(dir, source) + '：' + err.message); }
     }
     // Remove only proven-empty, known legacy folders. Unknown files/subfolders
@@ -308,6 +312,53 @@ function categoryFromName(config, value) {
   return key && hasCategory(config, key) ? key : '';
 }
 
+/**
+ * 内置同义词表：模型爱写「可爱」「生气」这种口语，映射回内置三类。
+ * 只在精确匹配和子串都没命中时才用 —— 用户自己建了个「生气」分类时，
+ * 「生气」要归到用户的分类，不能被内置的 angry 抢走。
+ */
+const SYNONYMS = Object.freeze({
+  cute: ['可爱', '萌', '撒娇', '害羞', '亲亲'],
+  angry: ['生气', '愤怒', '火大', '暴躁', '烦', '讨厌'],
+  happy: ['高兴', '开心', '好笑', '搞笑', '哈哈', '乐', '笑', '鼓掌'],
+});
+
+/**
+ * 模型写的分类名 → 真实存在的分类 key（cute / angry / happy / x:标签）。
+ * 候选集每次现读（内置三类 + data/sticker-categories.json 里的自定义分类），
+ * 所以用户刚加的分类不用重启就能认出来。认不出返回 ''。
+ *
+ * 判断顺序：候选为空 → 精确（label / key / ALIASES 旧名）→ 子串 → 内置同义词 → ''。
+ * 全用 === / includes / 查表，不用正则。
+ */
+function resolveCategory(config, value) {
+  const raw = String(value == null ? '' : value).trim();
+  if (!raw) return '';
+  const candidates = promptCategories(config, config && config.root);
+  if (!candidates.length) return '';
+  // b. 精确：标签、内部 key、旧别名
+  for (const cat of candidates) if (raw === cat.label) return cat.key;
+  const direct = normalizeEmotion(raw);
+  if (direct && candidates.some((cat) => cat.key === direct)) return direct;
+  // c. 子串：标签 ≥2 字才参与；单字（例如用户建的「猫」）只认精确
+  const hits = new Map();
+  for (const cat of candidates) {
+    const label = cat.label;
+    if (label.length < 2) continue;
+    const byLabel = raw.includes(label);
+    const byValue = raw.length >= 2 && label.includes(raw);
+    if (byLabel || byValue) hits.set(cat.key, Math.max(hits.get(cat.key) || 0, label.length));
+  }
+  if (hits.size) {
+    const longest = Math.max(...hits.values());
+    const top = [...hits.entries()].filter(([, len]) => len === longest);
+    if (top.length === 1) return top[0][0];   // 并列第一 → 不猜，留给同义词和兜底
+  }
+  // d. 内置同义词（必须排在 b、c 之后，否则会抢走用户自建的同名分类）
+  for (const [key, words] of Object.entries(SYNONYMS)) if (words.includes(raw)) return key;
+  return '';
+}
+
 /** 给提示词用：可用分类 + 各自张数（内置三类在前，自定义分类在后） */
 function promptCategories(config, root) {
   const dir = stickerDir(config, root);
@@ -337,16 +388,39 @@ function ensureBuiltinDirs(config, root) {
 }
 
 /**
- * 挑一张表情包。分类完全由调用方（模型标记）决定：
- * 没给分类、分类不存在、该分类没有图 → 一律不发，不再自己猜情绪、不再掷概率。
+ * 挑一张表情包。分类由调用方（模型标记）给出，认不出也照样发一张：
+ *   ① 认出的分类有图 → 用它；
+ *   ② 否则先在有图的自定义分类里随机挑（用户自己建的优先）；
+ *   ③ 再退到「开心」，然后按 cute / angry 找第一个有图的；
+ *   ④ 整个图库一张图都没有 → null（这是唯一允许不发的情况，外加总闸关着）。
+ * 返回带 fallbackFrom：模型原本写的分类名，没写就是空串，方便上层说明「改发了哪类」。
  */
 function pick({ config, root, category = '', recent = [], rng = Math.random } = {}) {
   if (!isOn(config)) return null;
-  const emotion = categoryFromName(config, category);
-  if (!emotion) return null;
   const dir = stickerDir(config, root);
-  const file = choose(categoryImages(dir, emotion), rng, recent);
-  return file ? { emotion, path: file } : null;
+  const wanted = resolveCategory(config, category);
+  const original = String(category == null ? '' : category).trim();
+  if (wanted) {
+    const file = choose(categoryImages(dir, wanted), rng, recent);
+    if (file) return { emotion: wanted, path: file, fallbackFrom: '' };
+  }
+  // 兜底：自定义分类优先，其次开心，最后傲娇/炸毛
+  const extras = readExtraCategories(config, root)
+    .map((cat) => extraKey(cat && cat.label))
+    .filter((key) => key && key !== wanted)
+    .map((key) => ({ key, files: categoryImages(dir, key) }))
+    .filter((item) => item.files.length);
+  if (extras.length) {
+    const index = Math.min(extras.length - 1, Math.max(0, Math.floor((Number(rng()) || 0) * extras.length)));
+    const picked = extras[index];
+    return { emotion: picked.key, path: choose(picked.files, rng, recent), fallbackFrom: original };
+  }
+  for (const key of ['happy', 'cute', 'angry']) {
+    if (key === wanted) continue;
+    const file = choose(categoryImages(dir, key), rng, recent);
+    if (file) return { emotion: key, path: file, fallbackFrom: original };
+  }
+  return null;
 }
 
 // Validate magic + basic dimensions before writing. Bridge additionally decodes via Pillow before sending.
@@ -407,6 +481,6 @@ function upload(config, root, emotion, files) {
   }
   return uploaded;
 }
-module.exports = { EMOTIONS, EMOTION_LABELS, EXTRA_PREFIX, cleanCategoryLabel, extraKey, hasCategory, readExtraCategories, writeExtraCategories, categoryFile, normalizeEmotion, categoryFromName, promptCategories, GENERIC, EXTS, MAX_FILE_BYTES, MAX_UPLOAD_BYTES, MAX_UPLOAD_FILES,
+module.exports = { EMOTIONS, EMOTION_LABELS, EXTRA_PREFIX, cleanCategoryLabel, extraKey, hasCategory, readExtraCategories, writeExtraCategories, categoryFile, normalizeEmotion, categoryFromName, resolveCategory, SYNONYMS, promptCategories, GENERIC, EXTS, MAX_FILE_BYTES, MAX_UPLOAD_BYTES, MAX_UPLOAD_FILES,
   hasEmotion, resolveImage, safeDirectory, migrateLegacy, ensureBuiltinDirs, stickerDir, regularFile, listImages, categoryImages, imagesFor, anyImages, isOn,
   choose, pick, isStickerRequest, imageType, upload };

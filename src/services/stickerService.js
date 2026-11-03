@@ -43,6 +43,10 @@ class StickerService {
       if (ACTIVE.has(job.status) && this.now() - job.at > 90 * 1000) {
         job.status = job.status === 'sending' ? 'unconfirmed' : 'cancelled';
         job.error = '任务超时，未自动重试';
+        // 不许再静默改状态：超时作废也要留一行，方便回查为什么那张图没发出去
+        if (this.logger && enabled) {
+          this.logger.warn(`表情包任务超时作废：会话=${job.chat || job.key || '-'} 状态=${job.status}`);
+        }
         this._note(job, job.status);
       }
     }
@@ -63,7 +67,13 @@ class StickerService {
         const m = this.migration;
         if (m && (m.moved || m.deduplicated) && this.logger) {
           this.logger.info(`表情包旧分类已并入「开心」：迁移 ${m.moved} 张、去重 ${m.deduplicated} 张`
+            + (m.rootImages ? `（含根目录 ${m.rootImages} 张）` : '')
             + (m.errors && m.errors.length ? `、${m.errors.length} 张失败（原图保留）` : ''));
+        } else if (m && this.logger) {
+          // 根目录的图只有并进「开心」才会被发出去；没搬成要明确告诉用户，别让它们静默失效
+          const left = stickers.listImages(dir, { root: dir, recursive: false })
+            .filter((file) => path.dirname(file) === path.resolve(dir)).length;
+          if (left) this.logger.warn(`data/stickers 根目录还有 ${left} 张图没并进「开心」，它们不会被发送`);
         }
       }
     } else this.libraryDir = '';
@@ -86,7 +96,9 @@ class StickerService {
     const name = job.path ? path.basename(job.path) : '';
     // 用中文分类名，别把 cute/x:猫猫 这种内部 key 写进提示词
     const label = stickers.EMOTIONS[job.emotion] || String(job.emotion || '').replace(/^x:/, '');
-    const detail = [label, name].filter(Boolean).join('/') || '表情包';
+    // 模型原话和实际发的不一致时写清楚，否则模型下一轮会以为自己发的是原来那类
+    const fallback = job.fallbackFrom ? `（原写「${job.fallbackFrom}」）` : '';
+    const detail = ([label, name].filter(Boolean).join('/') || '表情包') + fallback;
     try {
       // 回执到了就改写排队那条，一次发送只占一行
       if (job.eventTs && typeof this.store.updateEvent === 'function'
@@ -108,7 +120,14 @@ class StickerService {
       (j) => ACTIVE.has(j.status) && (j.key === key || j.chat === chatName))) return null;
     const hit = stickers.pick({ config: this.config, root: this.config.root, category,
       recent: this.recent.get(key) || [], rng: this.rng });
-    if (!hit) return null;
+    if (!hit) {
+      if (category && this.logger) this.logger.warn(`表情包分类「${category}」没有对应图片，这次没发`);
+      return null;
+    }
+    if (hit.fallbackFrom && this.logger) {
+      const to = stickers.EMOTIONS[hit.emotion] || String(hit.emotion || '').replace(/^x:/, '');
+      this.logger.warn(`表情包分类「${hit.fallbackFrom}」不存在或无图，改发「${to}」`);
+    }
     const added = this.add(hit, chatName, msg.chatId, key, 'reserved');
     const job = this.jobs.get(added.id);
     // 会话 key 和聊天记录一致（wechat:u:/wechat:g:），ack 回来才写得到同一段上下文
