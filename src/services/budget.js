@@ -29,6 +29,38 @@ const PRICING = Object.freeze({
 
 const PER_MILLION = 1e6;
 
+/**
+ * 现在是不是高峰时段。
+ * 高峰 = 周一至周五 9:00-12:00、14:00-18:00（本地时间）；
+ * 其余时段（含午休、夜间、周末 / 节假日）都算谷时。
+ */
+function isPeakHour(now = new Date()) {
+  const d = now instanceof Date ? now : new Date(now);
+  if (Number.isNaN(d.getTime())) return false;
+  const day = d.getDay(); // 0 = 周日、6 = 周六
+  if (day === 0 || day === 6) return false;
+  const minutes = d.getHours() * 60 + d.getMinutes();
+  return (minutes >= 9 * 60 && minutes < 12 * 60) || (minutes >= 14 * 60 && minutes < 18 * 60);
+}
+
+/**
+ * 这个服务商 / 模型此刻的价格。
+ * 只有 DeepSeek 官方的 deepseek-flash 有公开价格；其它一律返回 null，
+ * 让界面显示「—」，不拿别家的价目表去猜。
+ * @param {string} provider 服务商标识（config.provider，例如 deepseek / zhipu / qwen）
+ * @param {string} model 模型名（例如 deepseek-flash）
+ * @param {Date|number} [now] 计价时刻（默认现在；测试里传固定时间）
+ * @returns {{model:string, band:'idle'|'peak', price:{inputHit:number, inputMiss:number, output:number}}|null}
+ */
+function pricingFor(provider, model, now = new Date()) {
+  const p = String(provider == null ? '' : provider).trim().toLowerCase();
+  const m = String(model == null ? '' : model).trim().toLowerCase();
+  if (p !== 'deepseek') return null;
+  if (m !== PRICING.model) return null;
+  const band = isPeakHour(now) ? 'peak' : 'idle';
+  return { model: PRICING.model, band, price: PRICING[band] };
+}
+
 /** 当前生效的对话预算：config.memory.dialogueBudget 优先，否则 5,500 */
 function dialogueBudget(config) {
   const v = config && config.memory ? Number(config.memory.dialogueBudget) : NaN;
@@ -163,7 +195,7 @@ function estimate(config, { outputTokens = LIMITS.maxOutputNormal, dialogueBudge
   };
 }
 
-module.exports = { estimate, dialogueBudget, systemVariants, costOf, PRICING };
+module.exports = { estimate, dialogueBudget, systemVariants, costOf, PRICING, pricingFor, isPeakHour };
 
 
 
