@@ -2,6 +2,34 @@
 
 ## 4.0
 
+### 改进 · system 静态化 + 日期/时间分层（前缀缓存命中）
+
+**现象：DeepSeek 的前缀缓存基本不命中。** system 里塞了时间（每分钟）、心情（每小时）、
+说话人、@名单、字数上限、群风格、梗、联网资料、动作账本，群里换个人说话 system 就变一次，
+私聊每分钟也变一次；缓存要求「完整匹配一个缓存前缀单元」，改一个字符后面全部重算。
+
+- `src/persona/index.js` 拆成「块 + 位置」：`buildBlocks()` 产出 static / dynamic 两组文本，
+  `buildSystem()` 只返回 static，`buildTurnState()` 把 dynamic 拼成尾部，`buildPromptParts()` 一次给两块
+- system 只留：人设卡、核心性格、怎么说话/别这样说/示例、抽象模式、风格设置、情绪/主动/立场开关、
+  硬性要求、对话理解规则（去掉参与者/提及/是否请求回应三行）、表情包能力、群聊场景规则（不含人名）、
+  私聊时的主人段、时间怎么看，最后一行「今天是 YYYY年M月D日 周X」
+- 尾部（最后一条 user 消息里，顺序：正文 → 记忆块 → 本轮状态）：语气底子、本条说话者、字数上限、
+  认真讨论、@名单/引用/参与者、群风格、梗、缩写、联网资料、链接、语音后缀、FIGHT_STYLE 与靶子、
+  动作账本、群聊里主人说话时的主人段、此刻在干嘛
+- 历史消息前加 `[MM-DD HH:mm]` 时间戳（`src/core/context.js`），只在首条 / 间隔 ≥5 分钟 / 跨天时输出；
+  当前这条永远带。同一个 `ts` 当「当前」和当「历史」渲染结果完全一致
+- 开关 `features.staticSystem`（默认开）：关掉 = 完全回到旧行为（`buildLegacySystem`，逐字兼容，
+  用 `tests/fixtures/prompt-legacy` 的快照钉住），用来回滚
+- `/api/debug/prompt` 增加 `tail` / `turns` / `systemTokens` / `tailTokens`，调试台「提示词预览」
+  分区展示 system 和尾部，并标注哪些块在尾部
+- 测试：新增 `tests/prompt-layout.test.js`（system 字节稳定、日期跨天、时间戳节流、
+  当前/历史时间戳一致、三段顺序、legacy 逐字回归）；`prompt-runtime-date` / `persona` /
+  `status-mention` / `sticker-capability` / `owner-name` / `action-events` / `weather` / `search-bot`
+  统一走 `tests/support/prompt.js` 的 `assemblePrompt()` / `promptOf()`
+- 预算估算跟着调整：system 只算静态块，缓存「每轮重算区」从 120 token 提到 320（记忆块 + 本轮状态）
+- 新增 `scripts/measure-cache-hit.js`：私聊/群聊各 3 轮，用真实接口打印 `prompt_cache_hit_tokens`
+  的改造前后对比（没配 Key 时只打印用法，不发请求）
+
 ### 修复 · 图片与表情包识别：缓存重试、解密探针、表情包进识别链路、看图补 OpenCode 会话头
 
 **现象：私聊文字正常，图片却「取不到本地文件」；表情包发过来完全没反应。**

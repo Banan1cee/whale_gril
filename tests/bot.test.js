@@ -1,4 +1,5 @@
 'use strict';
+const { promptOf } = require('./support/prompt');
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -141,7 +142,7 @@ test('可以改昵称，并写进提示词', async () => {
   const res = await bot.decide(privateMsg('叫我小海豚'));
   assert.equal(res.commandType, 'name');
   const decision = await bot.decide(privateMsg('你好呀'));
-  assert.match(decision.system, /小海豚/);
+  assert.match(promptOf(decision), /小海豚/);
   assert.equal(store.profile(decision.key, 'u1').nickname, '小海豚');
   assert.equal(store.displayName(decision.key, 'u1'), '小海豚');
   cleanup();
@@ -201,7 +202,7 @@ test('真实模式下：会组装群聊上下文并调用模型', async () => {
   assert.match(result.reply, /收到啦，我在的/);
   assert.doesNotMatch(result.reply, /~/);
   assert.ok(result.bubbles.join('').includes('收到啦'));
-  assert.match(captured.system, /深海鱼塘/);
+  assert.match(promptOf({ system: captured.system, turns: captured.turns }), /深海鱼塘/);
   const joined = captured.turns.map((t) => t.content).join('\n');
   assert.match(joined, /阿螈/);
   assert.match(joined, /加班好累/);
@@ -272,8 +273,8 @@ test('消息里有链接时会先读链接，并把内容写进提示词', async
   const { bot, cleanup } = makeBot({ linkReader });
   const d = await bot.decide(privateMsg('这个视频好好笑 https://v.douyin.com/abc123/ 哈哈哈哈'));
   assert.equal(d.action, 'reply');
-  assert.match(d.system, /对方发的链接/);
-  assert.match(d.system, /猫猫跳舞视频/);
+  assert.match(promptOf(d), /对方发的链接/);
+  assert.match(promptOf(d), /猫猫跳舞视频/);
   cleanup();
 });
 
@@ -282,7 +283,7 @@ test('链接读不到时也不会崩', async () => {
   const { bot, cleanup } = makeBot({ linkReader });
   const d = await bot.decide(privateMsg('看这个 https://example.com/x'));
   assert.equal(d.action, 'reply');
-  assert.match(d.system, /打不开|对方发的链接/);
+  assert.match(promptOf(d), /打不开|对方发的链接/);
   cleanup();
 });
 

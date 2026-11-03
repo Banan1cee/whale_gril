@@ -34,6 +34,13 @@ const REGISTRY = [
     default: true,
   },
   {
+    key: 'staticSystem',
+    path: 'features.staticSystem',
+    label: '系统提示词静态化（前缀缓存）',
+    desc: 'system 只留人设/规则/日期，时间、心情、说话人、@、字数、梗、联网资料、动作账本全部挪到最后一轮消息的「本轮状态」。关掉 = 完全回到旧行为（system 里什么都塞）。',
+    default: true,
+  },
+  {
     key: 'mediaCleanup',
     path: 'features.mediaCleanup',
     label: '启动时清理媒体缓存',

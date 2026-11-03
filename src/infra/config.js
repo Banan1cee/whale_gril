@@ -178,6 +178,8 @@ const DEFAULT_CONFIG = {
   // 图片理解：默认智谱 GLM-4V-Flash（免费）
   features: {
     stickers: false,
+    // 系统提示词静态化（前缀缓存）：关掉 = 回到「每轮都塞时间/心情/说话人」的旧行为
+    staticSystem: true,
     groupAddressGuard: true,
     fightQuoteCheck: true,
     mediaCleanup: true,
