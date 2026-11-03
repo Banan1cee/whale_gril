@@ -658,6 +658,15 @@ class Store {
     return n;
   }
 
+  /**
+   * 手动导入旧记忆之后用：chatStore 里新加的 chat 直接出现在 sessions 视图里。
+   * 不重建 chat 对象（避免打断正在进行的回复），只重建预览映射。
+   */
+  refreshSessions() {
+    this._syncSessions();
+    return this.sessions.size;
+  }
+
   summary() {
     let messages = 0;
     let notes = 0;
@@ -799,7 +808,10 @@ class Store {
     const at = Number(now) || this._now();
     let evicted = 0;
     for (const chat of this.chatStore.chats.values()) {
-      this.chatStore.pruneRaw(chat, at);
+      // 刚导入的旧记忆先原样留着（pruneRaw 会删「已被摘要覆盖且超过 90 天」的原文，
+      // 用户刚导进来就少一段很难解释）；一周后按正常规则清理。
+      const freshImport = chat.meta.importedAt && at - chat.meta.importedAt < 7 * DAY_MS;
+      if (!freshImport) this.chatStore.pruneRaw(chat, at);
       for (const card of chat.people.values()) {
         evicted += this._consolidateCard(chat, card, at);
       }

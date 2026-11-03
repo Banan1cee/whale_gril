@@ -11,6 +11,10 @@
 >
 > 想手动备份也行：`备份记忆.bat` 导出 json；`恢复记忆.bat` 放回去。详见下面的「3.51 更新」。
 >
+> **旧版（3.x）的 `data\store.json` 会被自动识别并转成 4.0 格式**：直接把旧 `data\` 合并进来启动即可，
+> 导入完启动器会弹一次「记忆已导入并转换格式」（原文件留在 `data\memory\legacy\`）。也可以随时在
+> 「设置 → 高级 → 旧版记忆」点「一键识别转换记忆」，重复点不会重复导入。
+>
 > ---
 >
 > 这里的 `Code → Download ZIP` 只有 **400 KB 源码**（不含运行时，也不含你本地的 Key 和聊天记录）。从源码跑有两条路：
@@ -114,7 +118,13 @@ node scripts/memory-tool.js info     # 现在有几段会话、几条消息
 node scripts/memory-tool.js backup   # 立刻备份
 node scripts/memory-tool.js export "D:\鲸鲸记忆.json"
 node scripts/memory-tool.js restore "D:\鲸鲸记忆.json"
+node scripts/memory-tool.js import "D:\旧版\data\store.json" --dry-run   # 3.x 旧记忆先预览
+node scripts/memory-tool.js import "D:\旧版\data\store.json"             # 真导入（同 chat 会合并）
 ```
+
+旧版（3.x）记忆可以在 4.0 里直接读：`data\store.json`（含 `.journal`）、`data\memory.json`
+和旧备份包都能导。已有 chat 不会被整段跳过——消息按时间合并、重排 `seq`，notes 去重；
+导入前自动留 `before-import` 快照。
 
 ## 3.50 更新
 

@@ -127,12 +127,19 @@ class ChatStore {
   }
 
   load() {
+    // 重新从磁盘加载前先收掉旧对象：迁移过程中 appendMessage 会打开文件句柄，
+    // 如果这里直接替换 Map，旧 chat 的 fd 会泄漏，Windows 上表现为之后 rename 一直 EPERM。
+    for (const chat of this.chats.values()) this._closeFd(chat);
+    for (const timer of this._saveTimers.values()) clearTimeout(timer);
+    this._saveTimers.clear();
+
     let dirs = [];
     try {
       dirs = fs.readdirSync(this.chatRoot).filter((n) => /^[0-9a-f]{16}$/.test(n));
     } catch {
       dirs = [];
     }
+    this.chats.clear();
     for (const hash of dirs) {
       const chat = this._loadChat(hash);
       if (chat) this.chats.set(chat.chatId, chat);
@@ -178,6 +185,8 @@ class ChatStore {
         // 读盘时按 chatId 过滤，别的群写进来的条目直接丢掉。
         relations: relations.normalizeRelations(meta.relations, { chatId: String(meta.chatId) }),
         legacy: Boolean(meta.legacy),
+        // 刚导入的旧 chat：sweep 当天不要立刻归档，否则用户刚看到「已导入」就找不到会话
+        importedAt: Number(meta.importedAt) || 0,
       },
       messages: [],
       summary: null,
@@ -297,6 +306,7 @@ class ChatStore {
         checkpointSeq: 0,
         relations: [],
         legacy: Boolean(meta.legacy),
+        importedAt: 0,
       },
       messages: [],
       summary: normalizeSummary(null, id),
@@ -412,6 +422,67 @@ class ChatStore {
     return true;
   }
 
+  /**
+   * 迁移 / 合并用：按传入顺序整体重写原文，重新编号 seq（原子替换）。
+   *
+   * 为什么不能直接 append：messages.jsonl 的尾部就是 prompt 的 recent 窗口，
+   * 把 10 月的旧消息追加到今天后面，模型会以为旧话题刚发生。必须先按时间排好序再整体重写。
+   *
+   * @param {object} chat
+   * @param {Array} entries 已按时间排序的消息（旧 v1 消息没有 seq 也可以）
+   * @returns {{count:number, seqOf:Map<number,number>}} seqOf: 旧 seq → 新 seq
+   */
+  replaceMessages(chat, entries) {
+    const seqOf = new Map();
+    const next = [];
+    let seq = 1;
+    let users = 0;
+    let replies = 0;
+    let lastTs = 0;
+    for (const raw of entries) {
+      if (!raw || !raw.text) continue;
+      const oldSeq = Number(raw.seq);
+      const role = raw.role === 'assistant' ? 'assistant' : 'user';
+      const ts = Number(raw.ts) || this.now();
+      const entry = {
+        ...raw,
+        id: `msg_${seq}`,
+        seq,
+        chatId: chat.chatId,
+        role,
+        name: String(raw.name || '').slice(0, 60),
+        uid: raw.uid ? String(raw.uid).slice(0, 100) : '',
+        text: String(raw.text).slice(0, 4000),
+        ts,
+      };
+      delete entry.__order;
+      entry.tokens = messageTokens(entry);
+      next.push(entry);
+      if (Number.isFinite(oldSeq) && oldSeq > 0 && !seqOf.has(oldSeq)) seqOf.set(oldSeq, seq);
+      if (role === 'user') users += 1;
+      else replies += 1;
+      if (ts > lastTs) lastTs = ts;
+      seq += 1;
+    }
+
+    chat.messages = next;
+    chat.meta.nextSeq = seq;
+    chat.meta.stats.messages = next.length;
+    chat.meta.stats.userMessages = users;
+    chat.meta.stats.replies = replies;
+    // 合并进来的旧消息可能很久以前就抽过 fact；从 0 重新累计，下一轮最多多抽一次
+    chat.meta.stats.userMessagesSinceExtract = 0;
+    chat.meta.checkpointSeq = 0;
+    if (lastTs) chat.lastActiveAt = lastTs;
+
+    this._rewriteMessages(chat);
+    this.saveMeta(chat, { immediate: true });
+    // 旧 checkpoint 记的是旧 seq，重排后没有意义，清掉重写一份
+    try { fs.rmSync(path.join(chat.dir, 'checkpoints'), { recursive: true, force: true }); } catch { /* ignore */ }
+    this.checkpoint(chat);
+    return { count: next.length, seqOf };
+  }
+
   /** 只删「已被 summary 覆盖」的原文；未覆盖的一条都不删 */
   pruneRaw(chat, now = this.now()) {
     const covered = Number(chat.summary && chat.summary.coveredThroughSeq) || 0;
@@ -494,6 +565,7 @@ class ChatStore {
         checkpointSeq: chat.meta.checkpointSeq,
         relations: chat.meta.relations || [],
         legacy: chat.meta.legacy,
+        importedAt: chat.meta.importedAt || 0,
       });
       chat.dirtyMeta = false;
     } catch (err) {
@@ -578,6 +650,9 @@ class ChatStore {
   archiveIdle(now = this.now()) {
     const moved = [];
     for (const chat of [...this.chats.values()]) {
+      // 旧记忆刚导入的一周内不归档：否则用户刚看到「已导入 10 个聊天」，
+      // 这些几年没动静的老会话第二天就被扫进 archive/ 找不到了。
+      if (chat.meta.importedAt && now - chat.meta.importedAt < 7 * DAY_MS) continue;
       if (now - chat.lastActiveAt < LIMITS.chatArchiveIdleDays * DAY_MS) continue;
       this._closeFd(chat);
       const target = path.join(this.dir, 'archive', chat.hash);
