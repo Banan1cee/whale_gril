@@ -362,13 +362,25 @@ class Store {
     return chat.messages.slice(-Math.max(0, Number(limit) || 0));
   }
 
-  /** 当前说话人的卡 + 这个 chat 的最近原文 + 摘要 + 相关事件 */
+  /**
+   * 当前说话人的卡 + 这个 chat 的最近原文 + 摘要 + 相关事件。
+   *
+   * tokenScale：校准后的「真实 token / 本地估算」倍数。只有调用方确认样本足够
+   * （calibration.trimScale 已做 n ≥ 10 与 0.05 量化）时才传非 1 值。
+   * 真实 token 比估算多（scale > 1）就按 D/scale 裁剪，别把 prompt 顶爆；
+   * 估算偏保守（scale < 1）则多给一点窗口。不能直接改 this.plan，否则不同模型互相污染。
+   */
   buildContext({
     key, uid = '', name = '', query = '', now = null, isGroup = false, currentSeq = 0,
-    mentionedNames = [], relationsEnabled = undefined,
+    mentionedNames = [], relationsEnabled = undefined, tokenScale = 1,
   } = {}) {
     const chat = this.chatStore.ensureChat(key);
     const at = Number(now) || this._now();
+    const factor = Number(tokenScale);
+    const relationsOn = relationsEnabled === undefined ? this.limits.relationsEnabled : relationsEnabled === true;
+    const plan = Number.isFinite(factor) && factor > 0 && factor !== 1
+      ? budgetPlan.planBudget(this.limits.dialogueBudget / factor, { relations: relationsOn })
+      : this.plan;
     let card = this.chatStore.getCard(chat, uid);
     if (!card) card = this.chatStore.ensurePerson(chat, uid, name);
     const last = chat.messages[chat.messages.length - 1];
@@ -376,10 +388,10 @@ class Store {
     const compressed = compression.compressSync(chat, {
       currentSeq: protectSeq,
       now: at,
-      hardTrigger: this.plan.recent,
-      recentLow: this.plan.recentLow,
-      compressChunk: this.plan.compressChunk,
-      summaryTokens: this.plan.summary,
+      hardTrigger: plan.recent,
+      recentLow: plan.recentLow,
+      compressChunk: plan.compressChunk,
+      summaryTokens: plan.summary,
     });
     if (compressed.chunks) {
       this.chatStore.saveSummary(chat);
@@ -387,8 +399,8 @@ class Store {
     }
     const recent = compression.recentForPrompt(chat, {
       currentSeq: protectSeq,
-      maxTokens: this.plan.recent,
-      maxCount: isGroup ? this.plan.groupRecentCount : this.plan.recentCount,
+      maxTokens: plan.recent,
+      maxCount: isGroup ? plan.groupRecentCount : plan.recentCount,
     });
     const recentUser = chat.messages
       .filter((m) => m.role === 'user' && m.seq !== protectSeq && m.text)
@@ -400,7 +412,7 @@ class Store {
       activeTopic: chat.meta.episode ? chat.meta.episode.activeTopic : '',
       now: at,
       uid,
-      topK: this.plan.caps.events,
+      topK: plan.caps.events,
     });
     const block = format.buildMemoryBlock({
       card,
@@ -408,8 +420,8 @@ class Store {
       summary: chat.summary.text,
       // 这个块里同时装了「人物卡 + 事件」和「摘要」，所以上限是两者之和；
       // 只给 memory 的话，摘要一长就会把卡的展示空间挤掉。
-      budget: this.plan.memory + this.plan.summary,
-      caps: this.plan.caps,
+      budget: plan.memory + plan.summary,
+      caps: plan.caps,
     });
     // 「这条消息提到了谁」：只做内部状态，不进任何界面；名字对不上人就整块不输出。
     const relationCtx = this._buildRelationsBlock(chat, { uid, mentionedNames, relationsEnabled });
@@ -428,10 +440,12 @@ class Store {
       summaryTokens: chat.summary.tokens,
       memoryTokens: estimateBudgetTokens(block),
       // 对话预算（不含 system）：system 只由上层测量，不参与这里的挤压
-      dialogueBudget: this.plan.dialogueBudget,
+      dialogueBudget: plan.dialogueBudget,
+      configuredDialogueBudget: this.plan.dialogueBudget,
+      tokenScale: factor > 0 ? factor : 1,
       hardTotalTokens: LIMITS.hardTotalTokens,
-      reserveTokens: this.plan.reserve,
-      plan: this.plan,
+      reserveTokens: plan.reserve,
+      plan,
       notes: activePreferenceTexts(card),
       compressed,
     };

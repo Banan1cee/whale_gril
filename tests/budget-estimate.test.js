@@ -3,7 +3,8 @@
 /**
  * 对话预算估算（/api/budget/estimate 的底层）：
  *   - system prompt 取私聊 / 群聊的中间数
- *   - 合计 = system + 对话预算
+ *   - maxInputTokens 是「预算上限」（system + dialogueBudget），给滑块预览用
+ *   - 真实单轮输入看 buildBudget().estimatedPromptTokens：system + 实际 turns
  *   - 价格按 DeepSeek 谷时（空闲时段）口径：输入未命中 1、命中 0.02、输出 4（元/百万 token）
  */
 
@@ -13,6 +14,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { estimate, dialogueBudget, PRICING } = require('../src/services/budget');
+const { buildBudget } = require('../src/memory/budget');
+const { estimatePrompt } = require('../src/memory/tokens');
 const { loadConfig } = require('../src/infra/config');
 const { LIMITS } = require('../src/memory/constants');
 const { startServer } = require('../server');
@@ -35,6 +38,22 @@ test('滑块预览：传 dialogueBudget 就按它算，不用先写 config', () 
   const r = estimate(defaults(), { dialogueBudget: 8000 });
   assert.equal(r.dialogueBudget, 8000);
   assert.equal(r.maxInputTokens, r.systemTokens + 8000);
+});
+
+test('真实输入估算：buildBudget 用 system + turns，不拿预算上限冒充', () => {
+  const system = '你是鲸鲸。'.repeat(30);
+  const turns = [
+    { role: 'user', content: '你好' },
+    { role: 'assistant', content: '在呢' },
+    { role: 'user', content: '今天吃什么' },
+  ];
+  const b = buildBudget(system, { dialogueBudget: 5500, turns });
+  assert.equal(b.estimatedPromptTokens, estimatePrompt(system, turns));
+  assert.equal(b.estimatedInputTokens, b.estimatedPromptTokens);
+  assert.ok(b.estimatedPromptTokens < b.budgetCeilingTokens);
+  assert.equal(b.dialogueBudget, 5500);
+  // 没有 turns 时只算 system，不能退回去加 5,500 预算
+  assert.equal(buildBudget(system).estimatedPromptTokens, estimatePrompt(system, []));
 });
 
 test('价格：首次全按未命中，稳定期按前缀缓存计费（命中 ≥70%）', () => {

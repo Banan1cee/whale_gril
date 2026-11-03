@@ -484,15 +484,17 @@ token 估算（`src/memory/tokens.js`，不引 tokenizer）：
 
 ```text
 systemTokens          = estimateTokens(system)
-dialogueBudget        = 5,500
-estimatedInputTokens  = systemTokens + dialogueBudget
+dialogueBudget        = 5,500（只给裁剪窗口用）
+estimatedPromptTokens = estimatePrompt(system, turns) = systemTokens + Σ messageTokens(turn)
 ```
 
 `systemTokens` 只测量，不参与 recent/memory 的挤压。只有
-`estimatedInputTokens > hardTotalTokens (64,000)` 才拒绝调用并明确报错，不静默截断。
+`estimatedPromptTokens > hardTotalTokens (64,000)` 才拒绝调用并明确报错，不静默截断。
+`estimatedInputTokens` 保留为兼容字段，语义同上；不再是 `systemTokens + dialogueBudget`。
 
-API 返回的 `usage.prompt_tokens / completion_tokens` 会记录并与估算对比；
-误差超过 15% 记 warning，用于校准。
+API 返回的 `usage.prompt_tokens / completion_tokens` 会与「校准后的真实估算」比较：
+按 provider|model 学 scale（Adam，前 3 个样本预热，scale ∈ [0.5, 2.0]），
+只有实际用量超出估算 >15% 才 warning；实际更少不告警。校准样本 ≥10 且量化到 0.05 后才参与裁剪。
 
 人设保存 / 导入时单独做一次精确校验：调用当前选中模型的官方 tokenizer
 （读取服务商返回的 `usage.prompt_tokens`），上限 = `64,000 - 5,500 = 58,500`。
@@ -749,7 +751,7 @@ card.chatId === source.chatId
 - 不每 20 条摘要；
 - 不把全部历史塞进 prompt；
 - 不做 30,000 token 触发；
-- 不做预算 UI / 滑块 / 预算接口（本轮只留内部状态字段 `systemTokens` / `dialogueBudget` / `estimatedInputTokens`）。
+- 不做预算 UI / 滑块 / 预算接口（本轮只留内部状态字段 `systemTokens` / `dialogueBudget` / `estimatedPromptTokens`）。
 
 ### 14.1 以后再做：预算展示（TODO，不在本轮实现）
 
@@ -758,7 +760,7 @@ card.chatId === source.chatId
 ```text
 人设占用（systemTokens）
 对话预算（dialogueBudget = 5,500）
-单轮合计（estimatedInputTokens）
+单轮合计（estimatedPromptTokens）
 预估成本（可选，按实际 usage 校准）
 ```
 

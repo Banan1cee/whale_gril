@@ -42,6 +42,24 @@
   事件、超很多时事件清空且摘要仍是整句、50 token 不抛异常且声明仍在、空卡返回空串、
   中文 + emoji + 换行混排不产生半个字符、减半只裁条数不切半行
 
+### 修复 · token 估算拿预算上限冒充真实输入，日志偏差 188% 却没人校准
+
+**现象：日志写「token 估算偏差 188.5%（估算 7036 / 实际 2489）」，看起来像估算器坏得很离谱，
+实际上 7036 是 system 估算 1436 + dialogueBudget 5600，而 2489 才是真实 prompt_tokens。**
+
+- `src/memory/tokens.js` 新增 `estimatePrompt(system, turns)`：按真正要发的消息逐条算，
+  不再拿对话预算上限冒充输入
+- `buildBudget()` 返回 `estimatedPromptTokens`（system + 实际 turns），硬上限判断改用它；
+  `dialogueBudget` 继续保留给裁剪窗口，`estimatedInputTokens` 只作为语义修正后的兼容字段
+- 新增 `src/memory/calibration.js`：按 provider|model 用 Adam 学估算倍数，前 3 个样本预热、
+  scale 限制 [0.5, 2.0]、单步 ≤0.05，异常 ratio / 过短 prompt 直接丢弃；
+  持久化 `data/calibration.json`（原子写、5 秒防抖、损坏静默回落 1.0）
+- `compareUsage` 改成「实际 vs 校准后的真估算」，只有实际用量超出 >15% 才告警，
+  文案改为「实际用量超出估算 X%」；实际更少不再叫「低估」
+- 裁剪窗口只有在样本 ≥10 且 scale 量化到 0.05 后才采用校准值，避免每轮抖动破坏前缀缓存
+- LLM 报 context_length / maximum context / too long 时，砍掉一半 turns 重试一次，
+  保留当前消息；仍失败再走现有降级，不再退化成只发当前一句
+- 测试：新增 `tests/token-calibration.test.js`，更新预算与 memory 预算用例
 
 ### 修复 · 图片与表情包识别：缓存重试、解密探针、表情包进识别链路、看图补 OpenCode 会话头
 
