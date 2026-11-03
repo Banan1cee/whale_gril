@@ -40,6 +40,8 @@ const FIELDS = {
   'deepseek.maxTokens': { type: 'int', min: 16, max: 32768 },
   'deepseek.frequencyPenalty': { type: 'float', min: -2, max: 2 },
   'deepseek.presencePenalty': { type: 'float', min: -2, max: 2 },
+  // 通义千问是否先「思考」再回答：默认 false（快）；难问题想让它想一会儿就设 true。
+  'deepseek.thinking': { type: 'bool' },
 
   // ---- 群聊 ----
   'group.requireAt': { type: 'bool' },
