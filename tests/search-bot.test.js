@@ -87,6 +87,19 @@ test('generic news keeps Toutiao, but topic-specific news searches the actual to
   assert.deepEqual(f.calls.map((x) => x.method), ['searchText']);
 });
 
+test('「今天的热点新闻」这种带修饰的句子也走实时热榜，不拿几天前的搜索结果冒充今天', async (t) => {
+  const f = fixture(t, { answer: '{"need":true,"query":"今天的热点新闻"}' });
+  await f.bot.decide(f.msg('今天的热点新闻'));
+  assert.deepEqual(f.calls.map((x) => x.method), ['hotNewsText']);
+});
+
+test('问「今天」的会变信息时，丢旧结果的阈值收紧到 2 天', async (t) => {
+  const f = fixture(t, { answer: '{"need":true,"query":"今天 显卡 价格","fresh":"strict"}' });
+  await f.bot.decide(f.msg('今天显卡多少钱'));
+  assert.equal(f.calls[0].method, 'searchText');
+  assert.equal(f.calls[0].args[1].maxAgeDays, 2);
+});
+
 test('malformed need falls back to rules rather than silently skipping search', async (t) => {
   const f = fixture(t, { answer: '{"query":"显卡行情","need":"maybe"}' });
   await f.bot.decide(f.msg('查一下显卡行情'));

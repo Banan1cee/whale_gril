@@ -613,6 +613,7 @@ class Bot {
         route = await searchRouter.route(this.llm, clean.text, {
           history: this.recentHeard({ msg, key }).filter((line) => line !== clean.text),
           timeoutMs: Math.min(2000, Math.max(1, webRemaining())),
+          now: this.now(),
         });
       } catch { route = { need: false, query: '', site: '', failed: true }; }
     }
@@ -663,6 +664,7 @@ class Bot {
         // 只有在问榜单/泛新闻时才取热榜；指定平台不等于要求该平台热搜。
         // 实测：「苹果现在出到几了」加 2026 后，新文章反而被官方首页挤掉，时效性交给 dropStaleResults。
         const wantsHotList = /(热搜|热榜|热点榜|排行榜|热门榜)/.test(clean.text)
+          || /(今天|今日|现在|刚刚|最新|最近|这两天)[^。！？!?\n]{0,8}(新闻|热点|大事|头条|发生了什么)/.test(clean.text)
           || /^(?:今天|今日|现在|最新)?(?:有)?(?:什么)?(?:新闻|热点|大事件|头条)(?:是什么|有哪些|发生了什么|[?？])?$/.test(clean.text)
           || /^(?:今天|今日|最近)?发生了什么[?？]?$/.test(clean.text);
         if (!webText && wantsHotList && webRemaining() > 0) {
@@ -678,9 +680,12 @@ class Bot {
         }
         if (!webText && webRemaining() > 0) {
           if (siteDomain) q = q + ' site:' + siteDomain;
-          // 时效由模型判：strict=90 天 / normal=365 天 / any=不限
-          const freshAge = route.failed ? undefined
-            : ({ strict: 90, normal: 365, any: null }[route.fresh] ?? 365);
+          // 时效由模型判（strict/normal/any），再按用户原话里的「今天/这周」收紧：
+          // 问今天的新闻时 90 天太松，会把四天前的稿子当今天的。
+          const freshAge = websearch.effectiveMaxAgeDays(
+            `${clean.text || ''} ${q}`,
+            route.failed ? undefined : route.fresh
+          );
           webText = await websearch.searchText(q || String(clean.text).slice(0, 100), {
             limit: 4,
             timeoutMs: webRemaining(),

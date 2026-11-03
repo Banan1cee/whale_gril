@@ -55,6 +55,18 @@ query 字段：写成「能直接粘进搜索引擎」的词。
 
 ${SCHEMA_HINT}`;
 
+const WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+
+/** 把「现在是什么时间」告诉路由器：不然它判「今天/最新」只能凭训练数据。 */
+function systemFor(now = new Date()) {
+  const p = (n) => String(n).padStart(2, '0');
+  const day = now instanceof Date && !Number.isNaN(now.getTime()) ? now : new Date();
+  const stamp = `${day.getFullYear()}-${p(day.getMonth() + 1)}-${p(day.getDate())} ${WEEKDAYS[day.getDay()]} ${p(day.getHours())}:${p(day.getMinutes())}`;
+  return `${SYSTEM}
+
+现在是 ${stamp}（北京时间）。判断「今天 / 最新 / 这周」时以这个时间为基准；检索词里不要自己加年份，除非用户原话提到了。`;
+}
+
 function parseRoute(raw) {
   const text = String(raw || '').trim();
   if (!text) return null;
@@ -83,7 +95,7 @@ function parseRoute(raw) {
 /**
  * @param {{ complete: Function }} llm
  * @param {string} text 用户这一句
- * @param {{history?: string[], timeoutMs?: number}} [opts]
+ * @param {{history?: string[], timeoutMs?: number, now?: Date}} [opts]
  * @returns {Promise<{need:boolean,query:string,site:string,failed?:boolean}>}
  */
 async function route(llm, text, opts = {}) {
@@ -98,7 +110,7 @@ async function route(llm, text, opts = {}) {
     const timeoutMs = Math.max(1, Number(opts.timeoutMs) || 2000);
     const raw = await Promise.race([
       Promise.resolve().then(() => llm.complete({
-        system: SYSTEM,
+        system: systemFor(opts.now),
         turns: [{ role: 'user', content: `最近的对话：\n${history}\n\n这句话：${said}` }],
         maxTokens: 160,
         signal: controller.signal,
@@ -120,4 +132,4 @@ async function route(llm, text, opts = {}) {
   }
 }
 
-module.exports = { route, parseRoute, SYSTEM };
+module.exports = { route, parseRoute, SYSTEM, systemFor };

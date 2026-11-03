@@ -3625,6 +3625,14 @@ def main():
                     dead_chats.add(username)
                     log("被移出群聊，停掉这个会话：", display_name(username))
                     return
+                # 视频号卡片：分享/打开时微信会拉起视频号窗口，UIA 的 Name/Exists
+                # 会在那之后卡住不返回（见 data/bridge-hang.log），接着看门狗
+                # 「发送卡住」强杀进程 → 重启 → 再卡。这类消息不接话，直接装死。
+                _low = content.lower()
+                if ("finderfeed" in _low or "<type>51</type>" in _low
+                        or ("视频号" in content and "<url>" in _low)):
+                    log("收到视频号卡片，装死（不识别不回）")
+                    return
                 # 链接卡片 / 分享卡片：从 XML 里把 url 和 title 抠出来，当成一句带链接的话
                 import re as _re
                 mu = _re.search(r"<url>(.*?)</url>", content, _re.S)
