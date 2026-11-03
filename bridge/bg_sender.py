@@ -684,7 +684,7 @@ def detect_char_mode(hwnd=0, log=None):
     if mode == "utf16":
         return mode
     try:
-        import win32process
+        # 只用窗口句柄，不需要 win32 模块：CI 上没装 pywin32 也要能跑到实测分支
         h = int(hwnd or 0) or find_hwnd()
     except Exception:
         h = 0
