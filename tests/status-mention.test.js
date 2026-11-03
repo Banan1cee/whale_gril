@@ -11,7 +11,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const { loadConfig } = require('../src/infra/config');
-const persona = require('../src/persona');
+const { assemblePrompt } = require('./support/prompt');
 
 function makeConfig() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-status-'));
@@ -31,8 +31,9 @@ const msg = (extra = {}) => ({
   ...extra,
 });
 
+// 心情/「此刻在干嘛」在尾部，时间和场景在 system：断言拼装后的全文
 function promptAt(config, date) {
-  return persona.buildSystem({ config, msg: msg(), profile: {}, notes: [], now: date });
+  return assemblePrompt({ config, msg: msg({ ts: date.getTime() }), profile: {}, notes: [], now: date }).prompt;
 }
 
 test('提示词里明确写了「别汇报状态」', () => {
@@ -57,7 +58,7 @@ test('「此刻在干嘛」按小时抽样，最多只占少数小时', () => {
   for (let h = 0; h < 24; h += 1) {
     const date = new Date(2026, 9, 26, h, 30, 0);
     const sys = promptAt(config, date);
-    if (sys.includes('你此刻大概')) {
+    if (sys.includes('你大概')) {
       shown += 1;
       assert.match(sys, /不要主动说出来/, '给了背景也必须要求她别说出来');
     } else {

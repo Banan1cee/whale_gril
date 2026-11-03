@@ -9,6 +9,7 @@ const { Bot } = require('../src/pipeline/chat');
 const { Store } = require('../src/memory/store');
 const { DEFAULT_CONFIG } = require('../src/infra/config');
 const web = require('../src/adapters/websearch');
+const { promptOf } = require('./support/prompt');
 
 function fixture(t, { answer = '{"need":false}', enabled = true, timeoutMs = 1000, city = '' } = {}) {
   const config = JSON.parse(JSON.stringify(DEFAULT_CONFIG));
@@ -51,7 +52,7 @@ test('site hint on a specific Bilibili question does not force a hot list', asyn
   assert.deepEqual(f.calls.map((x) => x.method), ['searchText']);
   assert.equal(f.calls[0].args[0], 'B站 三体动画 更新进度 site:bilibili.com');
   assert.match(decision.msg.webText, /TEST EVIDENCE/);
-  assert.match(decision.system, /TEST EVIDENCE/);
+  assert.match(promptOf(decision), /TEST EVIDENCE/);
 });
 
 test('Bilibili hot-list failure searches Bilibili, never substitutes Toutiao', async (t) => {
@@ -60,7 +61,7 @@ test('Bilibili hot-list failure searches Bilibili, never substitutes Toutiao', a
   const decision = await f.bot.decide(f.msg('B站的热搜是什么'));
   assert.deepEqual(f.calls.map((x) => x.method), ['bilibiliHotText', 'searchText']);
   assert.match(f.calls[1].args[0], /site:bilibili\.com/);
-  assert.match(decision.system, /TEST EVIDENCE searchText/);
+  assert.match(promptOf(decision), /TEST EVIDENCE searchText/);
 });
 
 test('throwing Weibo hot list still falls back to same-site web search', async (t) => {
@@ -75,7 +76,7 @@ test('successful named hot list is injected without cross-platform fallback', as
   const f = fixture(t, { answer: '{"need":true,"query":"微博热搜","site":"weibo"}' });
   const decision = await f.bot.decide(f.msg('微博热搜'));
   assert.deepEqual(f.calls.map((x) => x.method), ['weiboHotText']);
-  assert.match(decision.system, /TEST EVIDENCE weiboHotText/);
+  assert.match(promptOf(decision), /TEST EVIDENCE weiboHotText/);
 });
 
 test('generic news keeps Toutiao, but topic-specific news searches the actual topic', async (t) => {
@@ -115,20 +116,21 @@ test('failed or empty search is explicitly reported to the final persona, not fo
   const decision = await f.bot.decide(f.msg('查一下显卡行情'));
   assert.equal(decision.msg.webText, '');
   assert.equal(decision.msg.webSearchStatus, 'empty');
-  assert.match(decision.system, /本次查询失败或无有效资料/);
-  assert.doesNotMatch(decision.system, /【刚联网搜到的资料】/);
-  assert.doesNotMatch(decision.system, /我记的是旧的，你查一下现在到哪了/);
+  const seen = promptOf(decision);
+  assert.match(seen, /本次查询失败或无有效资料/);
+  assert.doesNotMatch(seen, /【刚联网搜到的资料】/);
+  assert.doesNotMatch(seen, /我记的是旧的，你查一下现在到哪了/);
 });
 
 for (const customPrompt of ['', '自定义人设测试']) {
   test(`web evidence prompt uses runtime date and distrusts cached snippets (${customPrompt ? 'custom' : 'default'})`, () => {
     const config = JSON.parse(JSON.stringify(DEFAULT_CONFIG));
     config.persona.customPrompt = customPrompt;
-    const system = require('../src/persona').buildSystem({
+    const system = require('./support/prompt').assemblePrompt({
       config, now: new Date('2031-05-06T08:00:00Z'),
       msg: { chatType: 'private', senderName: '测试', text: '最新产品是什么',
         webText: '测试摘要：预测产品 X；https://example.test/source', webSearchStatus: 'ok' },
-    });
+    }).prompt;
     assert.match(system, /2031年/);
     assert.doesNotMatch(system, /现在是 2026 年/);
     assert.match(system, /查询时间不等于网页发布时间/);
@@ -189,7 +191,7 @@ test('weather result goes through actual decide into the final persona prompt', 
   const decision = await f.bot.decide(f.msg('北京天气怎么样'));
   assert.deepEqual(f.calls.map((x) => x.method), ['weatherText']);
   assert.equal(f.calls[0].args[0], '北京');
-  assert.match(decision.system, /TEST EVIDENCE weatherText/);
+  assert.match(promptOf(decision), /TEST EVIDENCE weatherText/);
 });
 
 test('模型没给地名时，去掉天气词后交给 geocodeCity 解析', async (t) => {

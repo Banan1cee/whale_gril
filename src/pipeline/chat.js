@@ -251,8 +251,8 @@ class Bot {
     };
   }
 
-  buildTurns(msg, history, memoryBlock) {
-    return context.buildTurns(msg, history, memoryBlock);
+  buildTurns(msg, history, memoryBlock, tailBlock) {
+    return context.buildTurns(msg, history, memoryBlock, tailBlock);
   }
 
   /**
@@ -851,9 +851,12 @@ class Bot {
     msg.fightTarget = fightTarget;
     msg.fightOnMaster = fightOnMaster;
 
-    let system = persona.buildSystem({
+    // 提示词拆成两块：system 只放静态人设/规则/日期，尾部放这一轮会变的东西
+    // （心情、说话人、字数、@、梗、联网资料、动作账本……），前缀缓存才不会被每轮打断。
+    // features.staticSystem=false 时完全回到旧行为：所有内容都在 system，tail 为空串。
+    const promptParts = persona.buildPromptParts({
       config: this.config,
-      msg: { ...msg, senderName: displayName, chatTitle: msg.chatTitle || session.title, isMaster, atMe, addressedToBot: Boolean(atMe || msg.replyToBot), mentionedNames, groupParticipants, linkText, discussion, model: this.llm.model, provider: this.llm.providerLabel, groupStyleText, webText, fight, fightDirty, fightOnMaster },
+      msg: { ...msg, senderName: displayName, chatTitle: msg.chatTitle || session.title, isMaster, atMe, addressedToBot: Boolean(atMe || msg.replyToBot), mentionedNames, groupParticipants, linkText, discussion, model: this.llm.model, provider: this.llm.providerLabel, groupStyleText, webText, fight, fightDirty, fightOnMaster, voiceRequested, replyToName: msg.replyToName, ts: nowMs },
       profile,
       // 记忆不再进 system：人物卡/事件/摘要统一放最后一条 user 消息（mem.block）
       notes: [],
@@ -864,8 +867,11 @@ class Bot {
       events: this.store.events(key, 12),
       now,
     });
-    if (voiceRequested) system += '\n用户希望下一条以语音形式回复。直接生成你此刻要说的自然内容，发送层会把正文转成语音；不要说无法发语音，也不要只承诺稍后发送。';
-    const turns = this.buildTurns(msg, historyForTurns, [mem.block, mem.relationsBlock].filter(Boolean).join('\n\n'));
+    const system = promptParts.system;
+    const tail = promptParts.tail;
+    // 记忆块 = 人物卡/事件/摘要 + 关系卡（关系卡是 main 新加的，两段都挂最后一条 user 消息）
+    const memoryBlock = [mem.block, mem.relationsBlock].filter(Boolean).join('\n\n');
+    const turns = this.buildTurns({ ...msg, ts: nowMs }, historyForTurns, memoryBlock, tail);
 
     // 预算：system 只测量，不裁剪；dialogueBudget 默认 5,500，给裁剪窗口用。
     // 硬上限看**真实输入估算**（system + 实际 turns），不再拿 system + 预算上限冒充。
@@ -912,7 +918,7 @@ class Bot {
       if (first) {
         const combo = this.rng() < 0.6 ? persona.clapbackPick(['反问', '爹味'], this.rng) : '';
         const text = combo && combo !== first ? first + '，' + combo : first;
-        return { action: 'reply', key, msg, atMe, canned: text, reason: 'clapback', system, turns, budget: promptBudget };
+        return { action: 'reply', key, msg, atMe, canned: text, reason: 'clapback', system, tail, turns, budget: promptBudget };
       }
     }
 
@@ -924,9 +930,9 @@ class Bot {
         notes,
         rng: this.rng,
       });
-      return { action: 'reply', key, msg, atMe, system, turns, mock: true, text, reason: triggerResult.reason, budget: promptBudget };
+      return { action: 'reply', key, msg, atMe, system, tail, turns, mock: true, text, reason: triggerResult.reason, budget: promptBudget };
     }
-    return { action: 'reply', key, msg, atMe, system, turns, mock: false, reason: triggerResult.reason, budget: promptBudget };
+    return { action: 'reply', key, msg, atMe, system, tail, turns, mock: false, reason: triggerResult.reason, budget: promptBudget };
   }
 
   computeTrigger(args) {

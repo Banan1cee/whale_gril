@@ -117,10 +117,11 @@ test('没配城市时按 IP 猜，失败可恢复且成功缓存（离线 transp
  * 不再只拿正则看源码里有没有 msg.webText。
  */
 test('默认人设也要把联网资料塞进提示词', () => {
-  const persona = require('../src/persona');
+  const { assemblePrompt } = require('./support/prompt');
   const { DEFAULT_CONFIG } = config;
   const cfg = { ...DEFAULT_CONFIG, persona: { ...DEFAULT_CONFIG.persona, customPrompt: '' } };
-  const sys = persona.buildSystem({
+  // 联网资料是每轮会变的内容，现在挂在尾部：断言拼装后的全文
+  const sys = assemblePrompt({
     config: cfg,
     msg: {
       chatType: 'private',
@@ -129,7 +130,7 @@ test('默认人设也要把联网资料塞进提示词', () => {
       webText: '【北京 实时天气】\n现在 10.7°C（体感 10.3°C，阴）',
     },
     now: new Date('2026-10-26T02:05:00'),
-  });
+  }).prompt;
   assert.match(sys, /刚联网搜到的资料/, '要有资料块');
   assert.match(sys, /10\.7°C/, '资料原文要进提示词');
   assert.match(sys, /确实能联网/, '要明确告诉她能联网，别回「我连不了网」');

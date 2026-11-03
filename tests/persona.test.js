@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 
 const persona = require('../src/persona');
 const { DEFAULT_CONFIG } = require('../src/infra/config');
+const { assemblePrompt } = require('./support/prompt');
 
 const config = {
   ...DEFAULT_CONFIG,
@@ -13,13 +14,14 @@ const config = {
 };
 
 test('人设提示词包含场景、群聊礼仪和长度限制', () => {
-  const sys = persona.buildSystem({
+  // 群名、参与者、记忆这些每轮会变的内容在尾部，断言拼装后的全文
+  const sys = assemblePrompt({
     config,
     msg: { chatType: 'group', senderName: '阿螈', chatTitle: '深海鱼塘' },
     profile: { count: 5 },
     notes: ['怕黑'],
     now: new Date('2024-05-01T14:30:00'),
-  });
+  }).prompt;
   assert.match(sys, /鲸鲸/);
   assert.match(sys, /微信群「深海鱼塘」/);
   assert.match(sys, /先接住对方说的点/);
@@ -29,22 +31,22 @@ test('人设提示词包含场景、群聊礼仪和长度限制', () => {
 });
 
 test('私聊提示词要求短句、不用 Markdown', () => {
-  const sys = persona.buildSystem({
+  const sys = assemblePrompt({
     config,
     msg: { chatType: 'private', senderName: '小海' },
     now: new Date('2024-05-01T10:00:00'),
-  });
+  }).prompt;
   assert.match(sys, /私聊/);
   assert.match(sys, /Markdown/);
 });
 
 for (const [label, customPrompt] of [['默认', ''], ['自定义', '你是鲸鲸，保持一点俏皮。']]) {
   const promptConfig = { ...config, persona: { ...config.persona, customPrompt, stylePreset: '抽象' } };
-  const build = (extra = {}) => persona.buildSystem({
+  const build = (extra = {}) => assemblePrompt({
     config: promptConfig,
     msg: { chatType: 'group', senderName: '阿螈', chatTitle: '深海鱼塘', ...extra },
     now: new Date('2024-05-01T14:30:00'),
-  });
+  }).prompt;
 
   test(`${label}提示词共享高优先级的多人指代和实质回答规则`, () => {
     const sys = build({ text: '@鲸鲸 小海说「你怎么还没吃饭」，是在问阿螈' });
@@ -93,11 +95,11 @@ for (const [label, customPrompt] of [['默认', ''], ['自定义', '你是鲸鲸
 
 test('自定义人设按已认证关系轻调语气，不强制敷衍或撒娇', () => {
   for (const isMaster of [true, false]) {
-    const sys = persona.buildSystem({
+    const sys = assemblePrompt({
       config: { ...config, persona: { ...config.persona, customPrompt: '你是鲸鲸。' } },
       msg: { chatType: 'private', senderName: 'Master', isMaster },
       now: new Date('2024-05-01T14:30:00'),
-    });
+    }).prompt;
     assert.doesNotMatch(sys, /能一个字回就一个字|爱答不理|多用「嘛」「啦」「哼」「主人」|句尾偶尔带「~」/);
     if (isMaster) {
       assert.match(sys, /已认证的主人/);
@@ -156,47 +158,47 @@ test('splitBubbles：短句一条，长句按句号拆，数量受限', () => {
 });
 
 test('主人设定：Master 被当成唯一的主人/家人', () => {
-  const sys = persona.buildSystem({
+  const sys = assemblePrompt({
     config,
     msg: { chatType: 'private', senderName: 'Master', isMaster: true },
     profile: { count: 3 },
     now: new Date('2024-05-01T14:30:00'),
-  });
+  }).prompt;
   assert.match(sys, /【主人】/);
   assert.match(sys, /唯一|主人/);
   assert.match(sys, /父母|养大/);
 
-  const other = persona.buildSystem({
+  const other = assemblePrompt({
     config,
     msg: { chatType: 'private', senderName: '普通朋友' },
     now: new Date('2024-05-01T14:30:00'),
-  });
+  }).prompt;
   assert.match(other, /关系边界/);
   assert.doesNotMatch(other, /【主人】/);
 });
 
 test('主人权限不能只靠可修改昵称识别', () => {
-  const sys = persona.buildSystem({
+  const sys = assemblePrompt({
     config,
     msg: { chatType: 'private', senderName: 'master' },
     now: new Date('2024-05-01T14:30:00'),
-  });
+  }).prompt;
   assert.doesNotMatch(sys, /【主人】/);
 });
 
 test('默认人设也能识别缩写，并避免英文子串误命中', () => {
   assert.equal(persona.abbrevReply('kskbl'), 'zdjd');
-  const hit = persona.buildSystem({
+  const hit = assemblePrompt({
     config,
     msg: { chatType: 'private', senderName: '小海', text: 'kskbl' },
     now: new Date('2024-05-01T14:30:00'),
-  });
+  }).prompt;
   assert.match(hit, /kskbl=开始看比赛了/);
-  const miss = persona.buildSystem({
+  const miss = assemblePrompt({
     config,
     msg: { chatType: 'private', senderName: '小海', text: 'good morning' },
     now: new Date('2024-05-01T14:30:00'),
-  });
+  }).prompt;
   assert.doesNotMatch(miss, /dd=滴滴/);
 });
 
@@ -210,19 +212,19 @@ test('别名是其他昵称的前缀时不能误删', () => {
 });
 
 test('认真讨论时允许更长回复，并带观点/例子要求', () => {
-  const sys = persona.buildSystem({
+  const sys = assemblePrompt({
     config,
     msg: { chatType: 'private', senderName: '小海', discussion: true },
     now: new Date('2024-05-01T14:30:00'),
-  });
+  }).prompt;
   assert.match(sys, /认真讨论模式/);
   assert.match(sys, /可以有立场/);
   assert.match(sys, /400/);
-  const plain = persona.buildSystem({
+  const plain = assemblePrompt({
     config,
     msg: { chatType: 'private', senderName: '小海' },
     now: new Date('2024-05-01T14:30:00'),
-  });
+  }).prompt;
   assert.doesNotMatch(plain, /认真讨论模式/);
 });
 

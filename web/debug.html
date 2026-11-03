@@ -35,7 +35,9 @@
   .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:8px; }
   .row label { font-size:12.5px; color:var(--dim); display:flex; gap:6px; align-items:center; }
   textarea { width:100%; min-height:34px; resize:vertical; line-height:1.5; }
-  #promptOut { white-space:pre-wrap; word-break:break-word; font-size:12.5px; line-height:1.6; background:rgba(2,14,26,.65); border:1px solid var(--line); border-radius:12px; padding:12px; max-height:520px; overflow:auto; margin:10px 0 0; }
+  #promptOut, #tailOut { white-space:pre-wrap; word-break:break-word; font-size:12.5px; line-height:1.6; background:rgba(2,14,26,.65); border:1px solid var(--line); border-radius:12px; padding:12px; max-height:520px; overflow:auto; margin:10px 0 0; }
+  #tailOut { border-color:rgba(120,190,255,.45); }
+  .blockTag { display:inline-block; margin:10px 0 0; font-size:12px; color:var(--muted); }
   .sess { border:1px solid var(--line); border-radius:12px; padding:10px 12px; margin-bottom:10px; background:rgba(2,14,26,.4); }
   .sess .head { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
   .sess .head strong { font-size:13.5px; }
@@ -184,7 +186,11 @@
     </div>
     <div class="row"><textarea id="msgText">在吗</textarea></div>
     <div class="copybar"><button id="btnCopy">复制提示词</button><span class="muted" id="promptLen"></span></div>
+    <div class="blockTag">① system（静态块：人设 / 规则 / 群聊规则 / 硬性要求 / 日期行 —— 同一天内这里字节不变，才能命中前缀缓存）</div>
     <pre id="promptOut">（还没生成）</pre>
+    <div class="blockTag">② 尾部「本轮状态」（挂在最后一条 user 消息里，顺序：正文 → 记忆块 → 本轮状态）—— 这些块每轮都会变，所以不进 system：<br />
+      语气底子 / 本条说话者 / 字数上限 / 认真讨论 / @名单与引用与参与者 / 群风格 / 梗 / 缩写 / 联网资料 / 链接 / 语音 / FIGHT_STYLE 与靶子 / 动作账本 / 群聊里主人说话时的主人段 / 此刻在干嘛</div>
+    <pre id="tailOut">（还没生成）</pre>
   </div>
 
   <div class="card">
@@ -312,6 +318,7 @@ const META = {
   features: ['功能开关', '表情包总开关在页面顶部；其他功能也可在下方功能开关区调整'],
   'features.groupAddressGuard': ['群聊分清说话对象', ''],
   'features.fightQuoteCheck': ['还嘴前核对对方原话', ''],
+  'features.staticSystem': ['系统提示词静态化（前缀缓存）', 'system 只留人设/规则/日期，每轮会变的内容挪到最后一轮消息的「本轮状态」；关掉 = 完全回到旧行为'],
   'features.mediaCleanup': ['自动清理媒体缓存', ''],
   'features.memorySnapshot': ['自动备份记忆', ''],
   'features.relations': ['群聊关系加载（A 提到 B）', '群里提到另一个人时，把两人的关系和那个人的最近情况加载进提示词；只是内部状态，界面上看不到正文'],
@@ -1071,7 +1078,10 @@ async function makePrompt() {
   const d = await r.json();
   if (!d.ok) { $('promptTag').innerHTML = '<span class="bad">' + esc(d.error || '出错') + '</span>'; return; }
   $('promptOut').textContent = d.system;
-  $('promptLen').textContent = '共 ' + d.system.length + ' 字 · 链接段：' + (d.linkText ? '有' : '无');
+  $('tailOut').textContent = d.tail || '（本轮状态为空：功能开关 features.staticSystem 关掉时，这些内容全部留在 system 里）';
+  $('promptLen').textContent = 'system ' + d.system.length + ' 字 / ' + (d.systemTokens || 0) + ' token · 尾部 '
+    + (d.tail ? d.tail.length + ' 字 / ' + (d.tailTokens || 0) + ' token' : '无')
+    + ' · 链接段：' + (d.linkText ? '有' : '无');
   const why = !d.master ? '' : d.master.reason === 'wxid'
     ? '（按 wxid 认的）'
     : d.master.reason === 'nickname'
@@ -1107,7 +1117,8 @@ $('btnRevert').addEventListener('click', () => {
 });
 $('btnPrompt').addEventListener('click', makePrompt);
 $('btnCopy').addEventListener('click', async () => {
-  try { await navigator.clipboard.writeText($('promptOut').textContent); $('promptLen').textContent = '已复制'; }
+  const text = $('promptOut').textContent + '\n\n' + (($('tailOut') && $('tailOut').textContent) || '');
+  try { await navigator.clipboard.writeText(text); $('promptLen').textContent = '已复制（system + 尾部）'; }
   catch { $('promptLen').textContent = '复制失败，手动选中吧'; }
 });
 window.addEventListener('beforeunload', (e) => {
