@@ -23,6 +23,7 @@ const personaStore = require('./persona/store');
 const { StickerService } = require('./services/stickerService');
 const { ContactsCache } = require('./services/contacts');
 const { ReminderService } = require('./services/reminderService');
+const locationProbe = require('./services/location');
 
 const VERSION = require('../package.json').version;
 
@@ -57,7 +58,12 @@ function createRuntime({ root = path.resolve(__dirname, '..'), env = process.env
   // 模块子日志：info 行首带 [memory] / [llm] 这种模块名，warn/error 仍由 logger 自己抓 file:line。
   // 测试里传进来的 logger 是桩对象、没有 child，这里兜一下，别让日志把启动搞挂。
   const child = (name) => (logger && typeof logger.child === 'function' ? logger.child(name) : logger);
-  const store = new Store({ file: config.paths.storeFile, limits: config.memory, logger: child('memory') });
+  const store = new Store({
+    file: config.paths.storeFile,
+    // 关系卡份额（120 token）跟着 features.relations 走：关掉就并回 recent
+    limits: { ...(config.memory || {}), relationsEnabled: features.isOn(config, 'relations') },
+    logger: child('memory'),
+  });
   // 启动时先「忘」一遍：太久没被想起、又不重要的记忆沉到归档，别一直占着检索位
   try {
     const swept = store.sweep();
@@ -117,7 +123,14 @@ function createRuntime({ root = path.resolve(__dirname, '..'), env = process.env
     raw: Boolean(config.log && config.log.traceRaw !== false),
   });
   runtime.trace = trace;
-  runtime.bot = new Bot({ config, store, llm: runtime.llm, logger: child('pipeline'), trace });
+  runtime.bot = new Bot({ config, store, llm: runtime.llm, logger: child('pipeline'), trace, version: VERSION });
+  // 本机所在地：后台探一次（Windows 定位服务优先，挂 VPN 也准），之后定期刷新。
+  // 只放在内存里，给 <env> 块用；关掉 features.envContext 或 env.autoDetect=false 就完全不动。
+  try {
+    runtime.stopLocationProbe = locationProbe.startAutoProbe(config, { logger: child('env') });
+  } catch (err) {
+    logger.warn('所在地探测没起来（不影响聊天）：' + ((err && err.message) || err));
+  }
   // 表情包任务队列：内存态，重启不重放（避免把上一条没发出去的表情再补发一次）
   // store 用来记动作账：发了哪张、桥接确认没确认，下一轮提示词才看得见
   runtime.stickerService = new StickerService(config, { store, logger: child('sticker') });

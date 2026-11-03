@@ -12,7 +12,8 @@ const LIMITS = Object.freeze({
   //   recent ≈58% + memory 16.36% + summary 16.36% + reserve 9.09% + relations 2.18%
   // 改预算只需要改 dialogueBudget（启动器滑块），不要再直接改下面的分片值。
   dialogueBudget: 5500,
-  // 只有 system + dialogueBudget 超过这个数才拒绝（不再有 7,500 总预算 / 2,000 system 上限）
+  // 只有真实输入估算（system + 实际 turns）超过这个数才拒绝（不再有 7,500 总预算 / 2,000 system 上限）
+  // dialogueBudget 只是裁剪窗口的预算，不再拿来冒充 prompt_tokens
   // 2026-11 从 32,000 提到 64,000：32k 下 comfort 人设（1,800）没问题，但想写几万字设定的
   // 一保存就被顶回来；64k ≈ 10 万汉字人设空间，单轮最贵也就 ¥0.07（谷时、全未命中）。
   hardTotalTokens: 64000,
@@ -20,7 +21,7 @@ const LIMITS = Object.freeze({
   summaryTokens: 900,
   recentMaxTokens: 3200,
   // 关系卡（L1 关系边）的预算基线，@5,500 时占 2.18%。
-  // 关系功能未启用时这一份并回 recent；启用后由 budgetPlan 按比例换算。
+  // features.relations 默认开；关掉时这一份并回 recent，由 budgetPlan 按比例换算。
   relationsTokens: 120,
   recentLowTokens: 2400,
   compressChunkTokens: 800,

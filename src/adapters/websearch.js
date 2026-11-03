@@ -126,22 +126,83 @@ function parseBing(html) {
  * 模型看到旧文就答旧型号（把 iPhone 18 说成 16）。
  * 注意：**不要**简单给查询加年份——实测加了反而把「1 天前」的新结果挤掉。
  */
-const TIME_SENSITIVE_RE = /(最新|现在|今年|目前|当前|出到几|第几代|什么型号|哪个版本|多少钱|什么价|行情|发布会|刚出|新出)/;
+const TIME_SENSITIVE_RE = /(最新|现在|今年|目前|当前|今天|今日|刚刚|实时|这周|本周|最近几天|这两天|出到几|第几代|什么型号|哪个版本|多少钱|什么价|行情|发布会|刚出|新出)/;
 
-function parseSnippetAgeDays(snippet) {
-  const s = String(snippet || '');
-  const rel = s.match(/(\d+)\s*(分钟|小时|天|周)之前/);
+/**
+ * 从摘要里读「这条结果多久了」（天）。读不出返回 null。
+ *
+ * 现场问题：Bing 中文摘要除了「3 天之前」，还有「4 天前」「刚刚」「昨天」
+ * 「11月2日」（不带年份）这些写法。以前只认「X 天之前」和「YYYY年M月D日」，
+ * 其余一律当作「不知道多旧」放行 —— 问「今天有什么新闻」时会混进四天前的
+ * 旧闻，她照着说成「今天」。
+ */
+function parseSnippetAgeDays(snippet, nowMs = Date.now()) {
+  const s = String(snippet || '').replace(/&ensp;|&#8194;|&nbsp;/g, ' ').trim();
+  if (!s) return null;
+  const now = new Date(nowMs);
+  const dayMs = 86400000;
+
+  // 刚刚 / 刚才 / 今天 / 昨天 / 前天
+  if (/(刚刚|刚才)/.test(s)) return 0;
+  if (/(今天|今日)/.test(s)) return 0.5;
+  if (/(昨天|昨日)/.test(s)) return 1;
+  if (/(前天|前日)/.test(s)) return 2;
+
+  // 相对时间：「4 天之前」「3小时前」「2 周前」「1 个月前」
+  const rel = s.match(/(\d+)\s*(分钟|小时|天|周|个月|月|年)\s*(?:之)?前/);
   if (rel) {
     const n = Number(rel[1]);
-    const unit = { 分钟: 1 / 1440, 小时: 1 / 24, 天: 1, 周: 7 }[rel[2]] || 1;
+    const unit = { 分钟: 1 / 1440, 小时: 1 / 24, 天: 1, 周: 7, 个月: 30, 月: 30, 年: 365 }[rel[2]] || 1;
     return n * unit;
   }
-  const abs = s.match(/(20\d{2})年(\d{1,2})月(\d{1,2})日/);
-  if (abs) {
-    const t = new Date(Number(abs[1]), Number(abs[2]) - 1, Number(abs[3])).getTime();
-    if (!Number.isNaN(t)) return (Date.now() - t) / 86400000;
+
+  // 绝对时间：2026年11月2日 / 2026-11-02 / 2026/11/02
+  let t = NaN;
+  let m = s.match(/(20\d{2})\s*[年\-/]\s*(\d{1,2})\s*[月\-/]\s*(\d{1,2})/);
+  if (m) {
+    t = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])).getTime();
+  } else {
+    // 只有「11月2日」：按今年算；算出来在未来（比如现在是 1 月、文章写的是 12 月），
+    // 那就是去年的文章。
+    m = s.match(/(\d{1,2})\s*月\s*(\d{1,2})\s*日/);
+    if (m) {
+      const month = Number(m[1]);
+      const date = Number(m[2]);
+      if (month >= 1 && month <= 12 && date >= 1 && date <= 31) {
+        t = new Date(now.getFullYear(), month - 1, date).getTime();
+        if (!Number.isNaN(t) && t > now.getTime() + dayMs) {
+          t = new Date(now.getFullYear() - 1, month - 1, date).getTime();
+        }
+      }
+    }
   }
-  return null;
+  if (Number.isNaN(t)) return null;
+  return Math.max(0, (now.getTime() - t) / dayMs);
+}
+
+/**
+ * 「今天 / 这周」这类话要把时效收紧：默认 550 天、strict 90 天都太松，
+ * 问「今天有什么新闻」会把四天前的稿子当成今天的。
+ */
+function tightenFreshness(query, limit) {
+  const text = String(query || '');
+  if (/(今天|今日|刚刚|刚才|实时|现在|此刻)/.test(text)) {
+    return limit === undefined || limit === null ? 2 : Math.min(Number(limit), 2);
+  }
+  if (/(这周|本周|最近几天|这两天|近几天|本周内)/.test(text)) {
+    return limit === undefined || limit === null ? 7 : Math.min(Number(limit), 7);
+  }
+  return limit;
+}
+
+/**
+ * 最终用于丢旧结果的阈值（天）：null = 不限。
+ * routeFresh 是路由器判的 strict/normal/any；没判出来（undefined）时只按关键词。
+ */
+function effectiveMaxAgeDays(query, routeFresh) {
+  if (routeFresh === 'any') return null;
+  const base = routeFresh === 'strict' ? 90 : routeFresh === 'normal' ? 365 : undefined;
+  return tightenFreshness(query, base);
 }
 
 function isTimeSensitive(query) {
@@ -152,10 +213,11 @@ function dropStaleResults(query, results, { maxAgeDays } = {}) {
   // maxAgeDays = null / Infinity 表示「不限时效」（模型判的 any）
   if (maxAgeDays === null || maxAgeDays === Infinity) return results;
   const explicit = maxAgeDays !== undefined;
-  const limit = explicit ? Number(maxAgeDays) : 550;
+  let limit = explicit ? Number(maxAgeDays) : 550;
   if (!Number.isFinite(limit)) return results;
   // 没显式给预算时沿用旧口径：只有时效性问题才过滤
   if (!explicit && !TIME_SENSITIVE_RE.test(String(query || ''))) return results;
+  limit = tightenFreshness(query, limit);
   const fresh = [];
   for (const r of results) {
     const age = parseSnippetAgeDays(r.snippet || r.title || '');
@@ -487,6 +549,8 @@ module.exports = {
   dropStaleResults,
   isTimeSensitive,
   parseSnippetAgeDays,
+  tightenFreshness,
+  effectiveMaxAgeDays,
   search,
   searchText,
   parseBing,

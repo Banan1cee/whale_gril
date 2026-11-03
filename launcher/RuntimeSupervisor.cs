@@ -54,6 +54,20 @@ namespace WhaleLauncher
         public int StFailed;
         public long StLastMessageAt;
         public string StLastError = "";
+
+        // 本轮用量（/api/status 的 budget.lastUsage）：只有真模型调过才有数
+        public bool HasUsage;
+        public int UsPromptTokens;
+        public int UsCacheHitTokens;
+        public int UsCompletionTokens;
+        public double UsHitRate;
+        public int UsEstimatedTokens;
+        public double UsRatio;
+        public string UsModel = "";
+        // 只有 deepseek-flash / deepseek-v4.1-flash 有价目表；其它模型 HasCost=false，界面不显示金额
+        public bool UsHasCost;
+        public double UsCny;
+        public string UsBand = "";
     }
 
     /// <summary>内核（Node）与桥接（Python）的起停、日志、状态探测。界面只调用这里。</summary>
@@ -70,6 +84,11 @@ namespace WhaleLauncher
         private int _restartGeneration;
         private int _restartCount;
         private DateTime _bridgeStartedAt;
+        // 重启风暴刹车：不是「进程活了 60 秒就清零」，而是看最近 10 分钟重启了几次。
+        // 视频号/链接预览会让 UIA 卡住 → 看门狗 exit 7 → 3 秒重启，循环起来拦不住。
+        private readonly List<DateTime> _bridgeRestarts = new List<DateTime>();
+        private const int BridgeRestartCap = 5;
+        private static readonly TimeSpan BridgeRestartWindow = TimeSpan.FromMinutes(10);
         private Process _node;
         private Process _bridge;
         private readonly HttpClient _http = new HttpClient(new HttpClientHandler { UseProxy = false })
@@ -295,6 +314,17 @@ namespace WhaleLauncher
                     || File.Exists(Path.Combine(DataDir, "PAUSED"))) return;
                 if ((DateTime.UtcNow - _bridgeStartedAt).TotalSeconds >= 60) _restartCount = 0;
                 if (++_restartCount > 3) { _bridgeWanted = false; SayError("桥接连续异常退出，已停止自动重启，请查看诊断"); return; }
+                // 窗口计数：60 秒的「存活清零」会把「3 秒崩一次」也当成健康，
+                // 所以刹车只看最近 10 分钟重启次数，跟单次活了多久无关。
+                var nowUtc = DateTime.UtcNow;
+                _bridgeRestarts.RemoveAll((t) => nowUtc - t > BridgeRestartWindow);
+                if (_bridgeRestarts.Count >= BridgeRestartCap)
+                {
+                    _bridgeWanted = false;
+                    SayError("桥接 10 分钟内反复退出 " + _bridgeRestarts.Count + " 次，已停止自动重启（不是无限重启）。看「诊断」里的桥接日志，关掉视频号/链接预览窗口后再点启动。");
+                    return;
+                }
+                _bridgeRestarts.Add(nowUtc);
                 Emit("L", code == 7 ? "桥接请求重新连接，正在重启…" : "桥接异常退出，正在自动恢复…", 'w');
                 _bridge = null;
                 StartBridge();
@@ -303,6 +333,7 @@ namespace WhaleLauncher
 
         public async Task StartAllAsync()
         {
+            lock (_processLock) _bridgeRestarts.Clear();   // 用户手动启动 = 重新计数
             StartNode();
             if (await WaitForNodeAsync()) StartBridge();
         }
@@ -314,6 +345,7 @@ namespace WhaleLauncher
                 _bridgeWanted = false;
                 _restartGeneration++;
                 _restartCount = 0;
+                _bridgeRestarts.Clear();                       // 用户手动重启 = 重新计数
                 Kill(_bridge, "B", "桥接");
                 _bridge = null;
                 StartBridge();
@@ -463,6 +495,27 @@ namespace WhaleLauncher
                     s.HasKey = Bool(root, "hasKey");
                     s.Mock = Bool(root, "mock");
 
+                    // 本轮用量：命中 / 输入 / 输出 / 命中率 / 估算（没有就保持 HasUsage=false，界面显示「—」）
+                    if (root.TryGetProperty("budget", out var budget) && budget.ValueKind == JsonValueKind.Object
+                        && budget.TryGetProperty("lastUsage", out var usage) && usage.ValueKind == JsonValueKind.Object)
+                    {
+                        s.HasUsage = true;
+                        s.UsPromptTokens = (int)Long(usage, "promptTokens");
+                        s.UsCacheHitTokens = (int)Long(usage, "cacheHitTokens");
+                        s.UsCompletionTokens = (int)Long(usage, "completionTokens");
+                        s.UsHitRate = Dbl(usage, "hitRate");
+                        s.UsEstimatedTokens = (int)Long(usage, "estimatedPromptTokens");
+                        s.UsRatio = Dbl(usage, "ratio");
+                        if (usage.TryGetProperty("cost", out var cost) && cost.ValueKind == JsonValueKind.Object)
+                        {
+                            s.UsHasCost = cost.TryGetProperty("cny", out var cny) && cny.ValueKind == JsonValueKind.Number;
+                            if (s.UsHasCost) s.UsCny = cny.GetDouble();
+                            s.UsBand = Str(cost, "band");
+                            s.UsModel = Str(cost, "model");
+                        }
+                        if (string.IsNullOrEmpty(s.UsModel)) s.UsModel = s.Model;
+                    }
+
                     if (root.TryGetProperty("gateways", out var gws) && gws.ValueKind == JsonValueKind.Array && gws.GetArrayLength() > 0)
                     {
                         var gw = gws.EnumerateArray().FirstOrDefault(g => Str(g, "platform") == "wechat");
@@ -511,6 +564,13 @@ namespace WhaleLauncher
             if (!e.TryGetProperty(name, out var v)) return 0;
             if (v.ValueKind == JsonValueKind.Number && v.TryGetInt64(out var n)) return n;
             if (v.ValueKind == JsonValueKind.String && long.TryParse(v.GetString(), out var m)) return m;
+            return 0;
+        }
+
+        private static double Dbl(JsonElement e, string name)
+        {
+            if (!e.TryGetProperty(name, out var v)) return 0;
+            if (v.ValueKind == JsonValueKind.Number && v.TryGetDouble(out var n)) return n;
             return 0;
         }
 

@@ -27,7 +27,41 @@ const PRICING = Object.freeze({
   peak: { inputHit: 0.04, inputMiss: 2, output: 8 },
 });
 
+// 有公开价目表的模型：DeepSeek 官方 deepseek-flash，以及 OpenCode Go 那条线的 deepseek-v4.1-flash。
+// 其它模型一律不猜价（价格可能完全不一样），界面不显示金额。
+const PRICED_MODELS = Object.freeze(['deepseek-flash', 'deepseek-v4.1-flash']);
+
 const PER_MILLION = 1e6;
+
+/**
+ * 现在是不是高峰时段。
+ * 高峰 = 周一至周五 9:00-12:00、14:00-18:00（本地时间）；
+ * 其余时段（含午休、夜间、周末 / 节假日）都算谷时。
+ */
+function isPeakHour(now = new Date()) {
+  const d = now instanceof Date ? now : new Date(now);
+  if (Number.isNaN(d.getTime())) return false;
+  const day = d.getDay(); // 0 = 周日、6 = 周六
+  if (day === 0 || day === 6) return false;
+  const minutes = d.getHours() * 60 + d.getMinutes();
+  return (minutes >= 9 * 60 && minutes < 12 * 60) || (minutes >= 14 * 60 && minutes < 18 * 60);
+}
+
+/**
+ * 这个模型此刻的价格（按峰谷价）。
+ * 只认有公开价目表的模型（deepseek-flash / deepseek-v4.1-flash），其它返回 null，
+ * 界面不显示金额，不拿别家的价目表去猜。
+ * @param {string} provider 服务商标识（保留参数：价格按模型定，不按服务商）
+ * @param {string} model 模型名（例如 deepseek-flash / deepseek-v4.1-flash）
+ * @param {Date|number} [now] 计价时刻（默认现在；测试里传固定时间）
+ * @returns {{model:string, band:'idle'|'peak', price:{inputHit:number, inputMiss:number, output:number}}|null}
+ */
+function pricingFor(provider, model, now = new Date()) {
+  const m = String(model == null ? '' : model).trim().toLowerCase();
+  if (!PRICED_MODELS.includes(m)) return null;
+  const band = isPeakHour(now) ? 'peak' : 'idle';
+  return { model: m, band, price: PRICING[band] };
+}
 
 /** 当前生效的对话预算：config.memory.dialogueBudget 优先，否则 5,500 */
 function dialogueBudget(config) {
@@ -35,18 +69,21 @@ function dialogueBudget(config) {
   return Number.isFinite(v) && v > 0 ? v : LIMITS.dialogueBudget;
 }
 
-/** 按私聊 / 群聊各拼一份 system（system 里本来就带两边的字数与回复限制） */
+/** 按私聊 / 群聊各拼一份 system（静态块；每轮会变的「本轮状态」不计入，见下面 TAIL_REFRESH） */
 function systemVariants(config) {
   const now = new Date();
   const make = (msg) => {
     try {
-      return persona.buildSystem({
+      const parts = persona.buildPromptParts({
         config,
         msg,
         profile: { count: 1, notes: [] },
         notes: [],
         now,
       });
+      // 只算静态 system：尾部（本轮状态）挂在最后一条 user 消息里，每轮都变，
+      // 预算页面的「人设 / system」那一格放它只会让用户以为人设变大了。
+      return parts.system;
     } catch {
       return '';
     }
@@ -103,8 +140,9 @@ function estimate(config, { outputTokens = LIMITS.maxOutputNormal, dialogueBudge
   // ── 前缀缓存怎么算才不离谱 ──
   // 服务商缓存的是「前缀」：system 在最前面、历史只往后追加，所以稳定期命中的是
   //   人设 + 历史里除了最后两条以外的部分
-  // （上一轮的 user 消息里挂过记忆块、这一轮的又换了，那一段每轮都要重算）。
-  const TAIL_REFRESH = 120;   // 最后两条消息 ≈ 120 token
+  // （上一轮的 user 消息里挂过记忆块 + 本轮状态、这一轮的又换了，那一段每轮都要重算）。
+  // staticSystem 之后 system 是稳定的，但尾部「本轮状态」有 200~400 token，一起算进这部分。
+  const TAIL_REFRESH = 320;   // 最后两条消息（记忆块 + 本轮状态）≈ 320 token
   const promptTokens = systemTokens + plan.memory + plan.summary + plan.recent;   // 一轮真实输入（reserve 是余量，不算正文）
   const hitTokens = Math.min(promptTokens, systemTokens + Math.max(0, plan.recent - TAIL_REFRESH));
   const cache = {
@@ -159,7 +197,7 @@ function estimate(config, { outputTokens = LIMITS.maxOutputNormal, dialogueBudge
   };
 }
 
-module.exports = { estimate, dialogueBudget, systemVariants, costOf, PRICING };
+module.exports = { estimate, dialogueBudget, systemVariants, costOf, PRICING, pricingFor, isPeakHour };
 
 
 

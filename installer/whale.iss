@@ -77,8 +77,9 @@ Source: "..\resources\*"; DestDir: "{app}\resources"; Flags: ignoreversion recur
 Source: "..\examples\*"; DestDir: "{app}\examples"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "__pycache__\*,*.pyc"
 ; runtime：内置 node.exe + CPython + .NET 运行时安装包；wheelhouse 是构建缓存，不进包
 ; （它也是 CPython 标准库 python312.zip 所在目录，所以绝不能整体排除 *.zip）
+; 注意：pythonwin 目录里放着 win32ui.pyd / win32uiole.pyd，wechatauto 截图要用，绝不能整目录排除。
 Source: "..\runtime\*"; DestDir: "{app}\runtime"; Flags: ignoreversion recursesubdirs createallsubdirs; \
-    Excludes: "wheelhouse\*,.temp\*,.uv-cache\*,.built,__pycache__\*,pythonwin\*,win32comext\*,*.cat"
+    Excludes: "wheelhouse\*,.temp\*,.uv-cache\*,.built,__pycache__\*,*.cat"
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"

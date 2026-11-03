@@ -74,6 +74,12 @@ const FIELDS = {
   // 语义路由（每句话先问一次模型「要不要联网」）：不配时只在像问句/命中事实词时才问；
   // true 则每句都问（更准，每句多 ~2 秒）；false 则完全按关键词。
   'websearch.semanticRoute': { type: 'bool' },
+  // 环境块（提示词里的 <env>）：地点只到区，时区留空就用系统自己的。
+  // 太长的地址一定是把门牌粘进来了，直接拒掉，别等到拼提示词时才截断。
+  'env.location': { type: 'string', maxLen: 40 },
+  'env.timezone': { type: 'string', maxLen: 64 },
+  // 自动探测所在地（Windows 定位服务优先）；false = 只用手填和 websearch.city
+  'env.autoDetect': { type: 'bool' },
   // ---- 提醒（规则字段和 care 对齐，配置独立）----
   'reminder.enabled': { type: 'bool' },
   'reminder.maxPerDay': { type: 'int', min: 0, max: 200 },

@@ -122,6 +122,10 @@ class DeepSeekClient {
     this.sessionId = 'whale-girl-' + crypto.randomBytes(12).toString('hex');
     // 最近一次 API 返回的 usage，供 Bot 对比估算误差（只记计数）
     this.lastUsage = null;
+    // 最近若干次调用的 usage（只存数字）。一轮回复可能调多次模型（复读重写 / 降级重试），
+    // Bot 靠 seq 水位把这些调用累加起来算「本轮用量」，不用在每个调用点手工记账。
+    this.usageSeq = 0;
+    this.usageEvents = [];
     this.reload();
   }
 
@@ -166,6 +170,10 @@ class DeepSeekClient {
       totalTokens: Number(u.total_tokens) || (Number(u.prompt_tokens) || 0) + (Number(u.completion_tokens) || 0),
       at: Date.now(),
     };
+    this.usageSeq += 1;
+    this.usageEvents.push({ seq: this.usageSeq, ...this.lastUsage });
+    // 只留最近 64 次：够一轮里的重试，也不会把内存越攒越大
+    if (this.usageEvents.length > 64) this.usageEvents.splice(0, this.usageEvents.length - 64);
   }
 
   /**

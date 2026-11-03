@@ -181,7 +181,8 @@ test('buildBudget：分片来自 plan，且带 relationsTokens', () => {
   assert.equal(big.dialogueBudget, 20000);
   assert.equal(big.recentMaxTokens, 15500);
   assert.equal(big.memoryTokens, CEILINGS.memory);
-  assert.equal(big.estimatedInputTokens, big.systemTokens + 20000);
+  assert.equal(big.estimatedPromptTokens, big.systemTokens, '没有 turns 时真估算只有 system');
+  assert.equal(big.budgetCeilingTokens, big.systemTokens + 20000);
 });
 
 test('Store：调大对话预算后 recent 真的变多（旧代码这里是死代码）', () => {
@@ -273,8 +274,11 @@ test('填超过单轮硬上限：分片夹到 64,000，但该轮仍然拒绝', (
   assert.equal(p.total, 64000);
   assert.ok(p.warnings.includes('budget_above_hard_limit'));
 
-  const b = budget.buildBudget('人'.repeat(100), { dialogueBudget: 100000 });
-  assert.ok(b.estimatedInputTokens > 64000, '必须按 10 万算，才会正确报错');
+  const b = budget.buildBudget('人'.repeat(100), {
+    dialogueBudget: 100000,
+    turns: [{ role: 'user', content: '人'.repeat(100000) }],
+  });
+  assert.ok(b.estimatedPromptTokens > 64000, '真实 turns 估算超过 64,000 才拒绝');
   assert.throws(() => budget.assertWithinHardLimit(b), (err) => err.code === 'BUDGET_EXCEEDED');
 });
 

@@ -10,6 +10,34 @@ function storeSummary(runtime) {
 }
 
 /**
+ * 本轮用量：只回计数、命中率和价格，绝不带 API Key / 提示词 / 消息正文。
+ * 字段逐个白名单输出，以后 bot.lastUsage 里多挂了什么也不会顺着接口漏出去。
+ */
+function usageSnapshot(runtime) {
+  const u = runtime && runtime.bot && runtime.bot.lastUsage;
+  if (!u) return null;
+  const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+  const cost = u.cost && typeof u.cost === 'object'
+    ? {
+      cny: u.cost.cny == null ? null : num(u.cost.cny),
+      band: u.cost.band === 'peak' || u.cost.band === 'idle' ? u.cost.band : null,
+      model: u.cost.model == null ? null : String(u.cost.model),
+    }
+    : null;
+  return {
+    promptTokens: num(u.promptTokens),
+    cacheHitTokens: num(u.cacheHitTokens),
+    cacheMissTokens: num(u.cacheMissTokens),
+    completionTokens: num(u.completionTokens),
+    hitRate: num(u.hitRate),
+    estimatedPromptTokens: num(u.estimatedPromptTokens),
+    ratio: num(u.ratio),
+    cost,
+    at: num(u.at),
+  };
+}
+
+/**
  * 单轮预算（只给内部 status / 调试台计数；不接 UI、不提供预算接口）。
  * system 只测量，不参与裁剪。
  */
@@ -18,12 +46,17 @@ function budgetSnapshot(runtime) {
   return {
     systemTokens: b ? b.systemTokens : 0,
     dialogueBudget: b ? b.dialogueBudget : LIMITS.dialogueBudget,
-    estimatedInputTokens: b ? b.estimatedInputTokens : LIMITS.dialogueBudget,
+    // 真实输入估算（system + 实际 turns），不再是 system + 预算上限
+    estimatedPromptTokens: b ? (b.estimatedPromptTokens || b.estimatedInputTokens || 0) : 0,
+    estimatedInputTokens: b ? (b.estimatedPromptTokens || b.estimatedInputTokens || 0) : 0,
+    calibratedPromptTokens: b ? (b.calibratedPromptTokens || 0) : 0,
+    calibrationScale: b ? (b.calibrationScale || 1) : 1,
+    calibrationSamples: b ? (b.calibrationN || 0) : 0,
     hardTotalTokens: b ? b.hardTotalTokens : LIMITS.hardTotalTokens,
     memoryTokens: b ? b.memoryTokens : 0,
     summaryTokens: b ? b.summaryTokens : 0,
     recentTokens: b ? b.recentTokens : 0,
-    lastUsage: (runtime && runtime.bot && runtime.bot.lastUsage) || null,
+    lastUsage: usageSnapshot(runtime),
   };
 }
 
@@ -112,4 +145,4 @@ function replyChannelLabel(config) {
   return '本地桥接（要另开一个「启动微信桥接.bat」窗口，回复才发得出去）';
 }
 
-module.exports = { storeSummary, statusPayload, recentSenders, recentMessages, replyChannelLabel, budgetSnapshot };
+module.exports = { storeSummary, statusPayload, recentSenders, recentMessages, replyChannelLabel, budgetSnapshot, usageSnapshot };

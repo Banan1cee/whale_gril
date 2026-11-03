@@ -32,6 +32,20 @@ function formatChatTime(ts) {
   return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
 }
 
+/**
+ * 消息时间戳 [MM-DD HH:mm]：提示词里每条历史消息前面的那个标记。
+ * 必须确定性：同一个 ts，不管当「当前消息」还是当「历史消息」，渲染结果一样。
+ * 用本地时区手写补零，不走 toLocaleString（不同 ICU 版本格式会飘）。
+ */
+function formatStamp(ts) {
+  const t = Number(ts) || 0;
+  if (!t) return '';
+  const d = new Date(t);
+  if (Number.isNaN(d.getTime())) return '';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 /** 只留文字，用来比较「是不是把对方的话重复了一遍」 */
 function normalizeForCompare(s) {
   return String(s || '').replace(/[\s\p{P}\p{S}]/gu, '').toLowerCase();
@@ -48,6 +62,7 @@ module.exports = {
   sanitizeForModel,
   nameMatches,
   formatChatTime,
+  formatStamp,
   normalizeForCompare,
   clampInt,
 };

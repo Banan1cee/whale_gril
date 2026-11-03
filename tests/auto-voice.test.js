@@ -1,4 +1,5 @@
 'use strict';
+const { promptOf } = require('./support/prompt');
 const test=require('node:test');
 const assert=require('node:assert/strict');
 const fs=require('node:fs');
@@ -25,5 +26,5 @@ test('voice request reaches the normal group reply model without replacing the r
   const store=new Store({file:path.join(config.paths.dataDir,'store.json')});t.after(()=>store.close());
   const bot=new Bot({config,store,llm:{isMock:true,model:'mock',reload(){},describe(){return{}}},rng:()=>.99,mockChunkDelayMs:0});
   const decision=await bot.decide({platform:'wechat',chatId:'test@chatroom',chatType:'group',senderId:'test',senderName:'测试用户',text:'发一条语音听听'});
-  assert.equal(decision.action,'reply');assert.match(decision.system,/发送层会把正文转成语音/);
+  assert.equal(decision.action,'reply');assert.match(promptOf(decision),/发送层会把正文转成语音/);
 });

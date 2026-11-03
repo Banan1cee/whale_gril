@@ -2,8 +2,8 @@
 
 /**
  * token 估算 + 预算语义：
- *   estimatedInputTokens === systemTokens + 5,500
- *   system 只测量，不裁剪；超过 64,000 才报错
+ *   estimatedPromptTokens === system + 实际 turns（不再用 system + dialogueBudget）
+ *   dialogueBudget 保留给裁剪；system 只测量，不裁剪；真实估算超过 64,000 才报错
  *   recent 仍然是 3,200 硬上限，不受 system 变大影响
  */
 const test = require('node:test');
@@ -36,12 +36,18 @@ test('tokens：预算裁剪乘 1.08 安全系数；消息另有约 4 token 固�
   assert.ok(messageBudgetTokens(m) > messageTokens(m));
 });
 
-test('budget：estimatedInputTokens === systemTokens + 5,500', () => {
-  const b = budget.buildBudget('人'.repeat(1000));
+test('budget：estimatedPromptTokens = system + turns，dialogueBudget 仍保留', () => {
+  const turns = [
+    { role: 'user', content: '你好' },
+    { role: 'assistant', content: '在呢' },
+  ];
+  const b = budget.buildBudget('人'.repeat(1000), { turns });
   assert.equal(b.systemTokens, 650);
   assert.equal(b.dialogueBudget, 5500);
-  assert.equal(b.estimatedInputTokens, b.systemTokens + 5500);
-  assert.equal(b.estimatedInputTokens, 6150);
+  assert.equal(b.estimatedPromptTokens, 650 + turns.reduce((n, t) => n + messageTokens(t), 0));
+  assert.equal(b.estimatedInputTokens, b.estimatedPromptTokens);
+  assert.ok(b.estimatedPromptTokens < b.systemTokens + 5500);
+  assert.equal(b.budgetCeilingTokens, b.systemTokens + 5500);
   assert.equal(b.hardTotalTokens, 64000);
 });
 
@@ -49,7 +55,7 @@ test('budget：system 很大也只测量，不裁剪、不挤 recent', () => {
   const bigSystem = '人'.repeat(20000); // ≈13,000 token
   const b = budget.assertWithinHardLimit(budget.buildBudget(bigSystem));
   assert.equal(b.systemTokens, 13000);
-  assert.equal(b.estimatedInputTokens, 18500);
+  assert.equal(b.estimatedPromptTokens, 13000);
   assert.equal(b.recentMaxTokens, LIMITS.recentMaxTokens);
   assert.equal(b.recentMaxTokens, 3200);
   assert.equal(b.memoryTokens, 900);
@@ -59,16 +65,16 @@ test('budget：system 很大也只测量，不裁剪、不挤 recent', () => {
   assert.equal(estimateTokens(bigSystem), 13000);
 });
 
-test('budget：只有 system + 5,500 > 64,000 才报错', () => {
-  // 58,500 system token + 5,500 = 64,000，刚好不报错
+test('budget：只有真实估算 > 64,000 才报错', () => {
+  // 58,500 system token，没有 turns：真实估算就是 58,500，不报错
   const ok = budget.buildBudget('人'.repeat(90000));
   assert.equal(ok.systemTokens, 58500);
-  assert.equal(ok.estimatedInputTokens, 64000);
+  assert.equal(ok.estimatedPromptTokens, 58500);
   assert.doesNotThrow(() => budget.assertWithinHardLimit(ok));
 
   const tooBig = budget.buildBudget('人'.repeat(100000)); // 65,000 token
-  assert.equal(tooBig.estimatedInputTokens, 65000 + 5500);
-  assert.ok(tooBig.estimatedInputTokens > 64000);
+  assert.equal(tooBig.estimatedPromptTokens, 65000);
+  assert.ok(tooBig.estimatedPromptTokens > 64000);
   assert.throws(() => budget.assertWithinHardLimit(tooBig), (err) => {
     assert.equal(err.code, 'BUDGET_EXCEEDED');
     assert.match(err.message, /超过硬上限/);
@@ -76,14 +82,22 @@ test('budget：只有 system + 5,500 > 64,000 才报错', () => {
   });
 });
 
-test('compareUsage：误差 >15% 才告警', () => {
-  const b = { estimatedInputTokens: 7000 };
-  const ok = budget.compareUsage(b, { promptTokens: 7200 });
+test('compareUsage：只在实际用量超出估算 >15% 时告警', () => {
+  const b = { estimatedPromptTokens: 7000 };
+  const ok = budget.compareUsage(b, { promptTokens: 6500 });
   assert.equal(ok.warn, false);
+  assert.equal(ok.direction, 'under');
+  const edge = budget.compareUsage(b, { promptTokens: 7200 });
+  assert.equal(edge.warn, false);
   const bad = budget.compareUsage(b, { promptTokens: 10000 });
   assert.equal(bad.warn, true);
+  assert.equal(bad.direction, 'over');
   assert.ok(bad.errorRatio > 0.15);
   assert.equal(budget.compareUsage(b, null), null);
+  // 校准后的估算参与比较
+  const scaled = budget.compareUsage(b, { promptTokens: 6300 }, { scale: 1.2 });
+  assert.equal(scaled.estimatedPromptTokens, 8400);
+  assert.equal(scaled.warn, false);
 });
 
 test('memory 块预算仍是 900，且不随 system 变大而变', () => {

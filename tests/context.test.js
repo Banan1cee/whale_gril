@@ -1,4 +1,5 @@
 'use strict';
+const { promptOf } = require('./support/prompt');
 
 /**
  * 群聊上下文理解：多人事件流、@ 对象、指代和上下文容量。
@@ -94,7 +95,7 @@ test('同时 @鲸鲸 和另一个人时，记下另一个人作为提及对象',
   const decision = await bot.decide(group('@鲸鲸 @测试用户 他骂你', { atMe: true, senderId: 'u-a', senderName: '阿甲' }));
   assert.equal(decision.action, 'reply');
   assert.ok(decision.msg.mentionedNames.includes('测试用户'));
-  assert.match(decision.system, /测试用户/);
+  assert.match(promptOf(decision), /测试用户/);
   cleanup();
 });
 

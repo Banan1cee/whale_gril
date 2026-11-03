@@ -23,6 +23,7 @@ const { chatHash, personHash } = require('./hash');
 const { LIMITS, DAY_MS } = require('./constants');
 const { estimateTokens, messageTokens } = require('./tokens');
 const personCard = require('./personCard');
+const relations = require('./relations');
 
 const META_SAVE_DEBOUNCE_MS = 400;
 const MESSAGE_FSYNC_EVERY = 1;
@@ -173,6 +174,9 @@ class ChatStore {
         lastClosedEpisodeId: String(meta.lastClosedEpisodeId || ''),
         nextSeq: Math.max(1, Number(meta.nextSeq) || 1),
         checkpointSeq: Math.max(0, Number(meta.checkpointSeq) || 0),
+        // 关系边：旧 meta 没有这个字段 = []，不需要迁移；
+        // 读盘时按 chatId 过滤，别的群写进来的条目直接丢掉。
+        relations: relations.normalizeRelations(meta.relations, { chatId: String(meta.chatId) }),
         legacy: Boolean(meta.legacy),
       },
       messages: [],
@@ -291,6 +295,7 @@ class ChatStore {
         lastClosedEpisodeId: '',
         nextSeq: 1,
         checkpointSeq: 0,
+        relations: [],
         legacy: Boolean(meta.legacy),
       },
       messages: [],
@@ -487,6 +492,7 @@ class ChatStore {
         lastClosedEpisodeId: chat.meta.lastClosedEpisodeId || '',
         nextSeq: chat.meta.nextSeq,
         checkpointSeq: chat.meta.checkpointSeq,
+        relations: chat.meta.relations || [],
         legacy: chat.meta.legacy,
       });
       chat.dirtyMeta = false;

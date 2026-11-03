@@ -17,6 +17,7 @@
  *   chatTitle: '深海鱼塘',            // 可选，群名
  * }
  */
+const path = require('node:path');
 const persona = require('../persona');
 const features = require('../infra/features');
 const { matchMaster } = require('../core/master');
@@ -37,7 +38,24 @@ const { cannedReply, dismissReply } = require('./stages/canned');
 const reminderCore = require('../core/reminder');
 const stickers = require('../adapters/stickers');
 const voiceReply = require('../core/voiceReply');
+const envInfo = require('../services/envInfo');
 const { LIMITS } = require('../memory/constants');
+const tokenCalibration = require('../memory/calibration');
+const budgetPricing = require('../services/budget');
+
+/**
+ * 服务商报「上下文超长」时，不能把整段历史原样再发一次，也不该退化成只留当前一句。
+ * 这里只认明确的上下文错误，别把普通 400 内容审核也当成超长。
+ */
+function isContextLengthError(err) {
+  const text = [
+    err && err.message,
+    err && err.detail,
+    err && err.userMessage,
+    err && err.code,
+  ].filter(Boolean).join(' ');
+  return /context[_\s-]?length|maximum\s+context|context\s+(?:window|size).*(?:exceed|too\s+long)|too\s+many\s+tokens|(?:request|prompt|input|message|context)\s+(?:is\s+)?too\s+long|exceed(?:s|ed)?\s+(?:the\s+)?(?:maximum\s+)?context/i.test(text);
+}
 
 // 全局硬上限：所有会话加起来每分钟最多这么多条回复。
 // 单会话上限（group.maxRepliesPerMinute，5–30）防的是「一个群里爆刷」，
@@ -47,19 +65,25 @@ const memoryBudget = require('../memory/budget');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// 程序版本：环境块里要报给模型（问「你是什么版本」时不能瞎说）。
+// app.js 构造 Bot 时会显式传进来；测试里直接 new Bot 时用这个默认值。
+const VERSION = require('../../package.json').version;
 
 class Bot {
-  constructor({ config, store, llm, logger, trace = null, now = () => new Date(), rng = Math.random, mockChunkDelayMs = 12, linkReader = null }) {
+  constructor({ config, store, llm, logger, trace = null, now = () => new Date(), rng = Math.random, mockChunkDelayMs = 12, linkReader = null, calibration = null, version = VERSION }) {
     this.config = config;
     this.store = store;
     this.llm = llm;
     this.logger = logger;
+    // 程序版本：环境块里要报给模型（问「你是什么版本」时不能瞎说）
+    this.version = version;
     // 判定链落盘（src/core/trace.js）。测试/网页里可以不传，没有 trace 只是少一份证据。
     this.trace = trace;
     this.now = now;
     this.rng = rng;
     this.mockChunkDelayMs = mockChunkDelayMs;
     this.linkReader = linkReader || ((url) => links.describeLink(url, { timeoutMs: (config.links && config.links.timeoutMs) || 6000 }));
+    this.calibration = calibration || null;
     this.startedAt = Date.now();
     // handle() 的按会话串行队列：key → 上一条的收尾 promise（M21）
     this._handleChains = new Map();
@@ -67,6 +91,25 @@ class Bot {
     this.globalReplyTimes = [];
     this.lastBudget = null;
     this.lastUsage = null;
+  }
+
+  /** 按 provider|model 分别学习估算倍数；默认落在 data/calibration.json。 */
+  calibrationEngine() {
+    if (!this.calibration) {
+      const dataDir = (this.config && this.config.paths && this.config.paths.dataDir)
+        || path.join(process.cwd(), 'data');
+      this.calibration = tokenCalibration.createCalibration({
+        file: path.join(dataDir, 'calibration.json'),
+      });
+    }
+    return this.calibration;
+  }
+
+  modelContext() {
+    return {
+      provider: String((this.llm && this.llm.provider) || (this.config && this.config.provider) || ''),
+      model: String((this.llm && this.llm.model) || ''),
+    };
   }
 
   sessionKey(msg) {
@@ -215,8 +258,8 @@ class Bot {
     };
   }
 
-  buildTurns(msg, history, memoryBlock) {
-    return context.buildTurns(msg, history, memoryBlock);
+  buildTurns(msg, history, memoryBlock, tailBlock) {
+    return context.buildTurns(msg, history, memoryBlock, tailBlock);
   }
 
   /**
@@ -240,6 +283,11 @@ class Bot {
 
   async _decide(rawMsg) {
     const msg = this.normalize(rawMsg);
+    // normalize() 只保留固定字段，桥接状态（gateway 挂在消息上的 {online,uia,ffmpeg}）会丢；
+    // 这里补回来，供本轮状态里那句「桥接在线 / 离线」用。
+    if (rawMsg && rawMsg.bridgeStatus && typeof rawMsg.bridgeStatus === 'object') {
+      msg.bridgeStatus = rawMsg.bridgeStatus;
+    }
     // 网页/管理员动态改窗口后，存储限额也要跟上；不会恢复之前已被丢弃的记录。
     if (this.store.limits) this.store.limits.maxMessages = Math.min(800, Math.max(this.store.limits.maxMessages, Number(this.config.chat.historyTurns || 200) + 2, Number(this.config.chat.groupHistoryTurns || 150) + 2));
     const key = this.sessionKey(msg);
@@ -254,9 +302,11 @@ class Bot {
     msg.cleanText = clean.text;
     let atMe = msg.atMe || clean.atMe;
     const isGroup = msg.chatType === 'group';
+    // 群里：@ 名单 + 文本里出现的别名；私聊：只认桥接明确给的提及名单（不做别名猜测）。
+    // 关系块两种会话都用同一套逻辑（当前说话人 → 提到的第三人）。
     const mentionedNames = isGroup
       ? [...new Set([...(msg.mentionedNames || []), ...extractMentionNames(rawText, persona.aliasList(this.config))])].slice(0, 4)
-      : [];
+      : [...new Set(msg.mentionedNames || [])].slice(0, 4);
     msg.mentionedNames = mentionedNames;
     const voiceRequested = msg.platform === 'wechat' && voiceReply.enabled(this.config, isGroup) && voiceReply.requested(clean.text);
     if (voiceRequested && !mentionedNames.length) atMe = true;
@@ -625,6 +675,7 @@ class Bot {
         route = await searchRouter.route(this.llm, clean.text, {
           history: this.recentHeard({ msg, key }).filter((line) => line !== clean.text),
           timeoutMs: Math.min(2000, Math.max(1, webRemaining())),
+          now: this.now(),
         });
       } catch { route = { need: false, query: '', site: '', failed: true }; }
     }
@@ -675,6 +726,7 @@ class Bot {
         // 只有在问榜单/泛新闻时才取热榜；指定平台不等于要求该平台热搜。
         // 实测：「苹果现在出到几了」加 2026 后，新文章反而被官方首页挤掉，时效性交给 dropStaleResults。
         const wantsHotList = /(热搜|热榜|热点榜|排行榜|热门榜)/.test(clean.text)
+          || /(今天|今日|现在|刚刚|最新|最近|这两天)[^。！？!?\n]{0,8}(新闻|热点|大事|头条|发生了什么)/.test(clean.text)
           || /^(?:今天|今日|现在|最新)?(?:有)?(?:什么)?(?:新闻|热点|大事件|头条)(?:是什么|有哪些|发生了什么|[?？])?$/.test(clean.text)
           || /^(?:今天|今日|最近)?发生了什么[?？]?$/.test(clean.text);
         if (!webText && wantsHotList && webRemaining() > 0) {
@@ -690,9 +742,12 @@ class Bot {
         }
         if (!webText && webRemaining() > 0) {
           if (siteDomain) q = q + ' site:' + siteDomain;
-          // 时效由模型判：strict=90 天 / normal=365 天 / any=不限
-          const freshAge = route.failed ? undefined
-            : ({ strict: 90, normal: 365, any: null }[route.fresh] ?? 365);
+          // 时效由模型判（strict/normal/any），再按用户原话里的「今天/这周」收紧：
+          // 问今天的新闻时 90 天太松，会把四天前的稿子当今天的。
+          const freshAge = websearch.effectiveMaxAgeDays(
+            `${clean.text || ''} ${q}`,
+            route.failed ? undefined : route.fresh
+          );
           webText = await websearch.searchText(q || String(clean.text).slice(0, 100), {
             limit: 4,
             timeoutMs: webRemaining(),
@@ -730,6 +785,11 @@ class Bot {
 
     // 6) 组装提示词：只加载「当前 chat + 当前说话人」的卡，绝不跨聊天取。
     // 记忆块（人物卡 + 相关事件 + 摘要）放进最后一条 user 消息，进 system 会打断前缀缓存。
+    // 关系块（A 提到 B）挂在记忆块后面，同一个尾部位置；开关跟着 features.relations 走。
+    const relationsOn = features.isOn(this.config, 'relations');
+    // 校准样本够（n ≥ 10）才让 scale 参与裁剪；trimScale 已量化到 0.05，窗口不会每轮抖。
+    const modelInfo = this.modelContext();
+    const trimScale = this.calibrationEngine().trimScale(modelInfo);
     const mem = this.store.buildContext({
       key,
       uid: msg.senderId,
@@ -737,6 +797,9 @@ class Bot {
       query: clean.text,
       now: nowMs,
       isGroup,
+      mentionedNames,
+      relationsEnabled: relationsOn,
+      tokenScale: trimScale,
     });
     const notes = mem.notes || [];
     if (notes.length && msg.senderId) {
@@ -817,9 +880,18 @@ class Bot {
     msg.fightTarget = fightTarget;
     msg.fightOnMaster = fightOnMaster;
 
-    let system = persona.buildSystem({
+    // 这一轮的环境 / 桥接状态：
+    //   envBlock 是稳定信息（系统、时区、所在地），跟着静态块进 system，逐字节不变；
+    //   bridgeLine 每轮都可能变（掉线/恢复），塞进「本轮状态」的尾部，不打碎前缀缓存。
+    const envBlock = envInfo.systemBlock(this.config, this.version);
+    const turnState = { envBlock, bridgeLine: envInfo.bridgeLine(msg) };
+
+    // 提示词拆成两块：system 只放静态人设/规则/日期，尾部放这一轮会变的东西
+    // （心情、说话人、字数、@、梗、联网资料、动作账本……），前缀缓存才不会被每轮打断。
+    // features.staticSystem=false 时完全回到旧行为：所有内容都在 system，tail 为空串。
+    const promptParts = persona.buildPromptParts({
       config: this.config,
-      msg: { ...msg, senderName: displayName, chatTitle: msg.chatTitle || session.title, isMaster, atMe, addressedToBot: Boolean(atMe || msg.replyToBot), mentionedNames, groupParticipants, linkText, discussion, model: this.llm.model, provider: this.llm.providerLabel, groupStyleText, webText, fight, fightDirty, fightOnMaster },
+      msg: { ...msg, senderName: displayName, chatTitle: msg.chatTitle || session.title, isMaster, atMe, addressedToBot: Boolean(atMe || msg.replyToBot), mentionedNames, groupParticipants, linkText, discussion, groupStyleText, webText, fight, fightDirty, fightOnMaster, voiceRequested, replyToName: msg.replyToName, ts: nowMs },
       profile,
       // 记忆不再进 system：人物卡/事件/摘要统一放最后一条 user 消息（mem.block）
       notes: [],
@@ -829,17 +901,24 @@ class Bot {
       // 不塞进去她就永远不知道自己的副作用，只能编。
       events: this.store.events(key, 12),
       now,
+      envBlock,
     });
-    if (voiceRequested) system += '\n用户希望下一条以语音形式回复。直接生成你此刻要说的自然内容，发送层会把正文转成语音；不要说无法发语音，也不要只承诺稍后发送。';
-    const turns = this.buildTurns(msg, historyForTurns, mem.block);
+    const system = promptParts.system;
+    // 桥接状态接在本轮状态最后一行；旧行为路径（tail 为空）也照样带上
+    const tail = [promptParts.tail, turnState.bridgeLine].filter(Boolean).join('\n');
+    // 记忆块 = 人物卡/事件/摘要 + 关系卡（关系卡是 main 新加的，两段都挂最后一条 user 消息）
+    const memoryBlock = [mem.block, mem.relationsBlock].filter(Boolean).join('\n\n');
+    const turns = this.buildTurns({ ...msg, ts: nowMs }, historyForTurns, memoryBlock, tail);
 
-    // 预算：system 只测量，不裁剪；对话预算默认 5,500（memory+summary+recent+reserve），
-    // 启动器「高级模式 → 高级 → 对话预算」改的是 config.memory.dialogueBudget。
-    // 只有 system + dialogue 超过 64,000 才拒绝，且明确报错，不静默截断。
+    // 预算：system 只测量，不裁剪；dialogueBudget 默认 5,500，给裁剪窗口用。
+    // 硬上限看**真实输入估算**（system + 实际 turns），不再拿 system + 预算上限冒充。
     let promptBudget;
     try {
       promptBudget = memoryBudget.assertWithinHardLimit(memoryBudget.buildBudget(system, {
         dialogueBudget: this.config && this.config.memory && this.config.memory.dialogueBudget,
+        // 关系卡开着就从 recent 里切出 120 token，预算口径和 Store 的分片保持一致
+        relations: relationsOn,
+        turns,
       }));
     } catch (err) {
       this.logger && this.logger.error(
@@ -848,17 +927,24 @@ class Bot {
       return { action: 'ignore', reason: 'input_budget_exceeded', key, msg, atMe };
     }
     // 只把计数挂到 decision / Bot 上，供日志和内部 status 用；不打印记忆正文
+    const applied = this.calibrationEngine().apply(promptBudget.estimatedPromptTokens, modelInfo);
+    promptBudget.calibrationScale = applied.scale;
+    promptBudget.calibratedPromptTokens = applied.calibrated;
+    promptBudget.calibrationN = applied.n;
     this.lastBudget = {
       ...promptBudget,
       memoryTokens: mem.memoryTokens || 0,
       summaryTokens: mem.summaryTokens || 0,
       recentTokens: mem.recentTokens || 0,
+      relationsTokens: mem.relationsTokens || 0,
+      tokenScale: trimScale,
     };
     promptBudget = this.lastBudget;
     if (this.logger) {
       this.logger.debug(
         `记忆预算：system=${promptBudget.systemTokens} dialogue=${promptBudget.dialogueBudget} `
-        + `input=${promptBudget.estimatedInputTokens} recent=${promptBudget.recentTokens}`
+        + `input=${promptBudget.estimatedPromptTokens} calibrated=${promptBudget.calibratedPromptTokens} `
+        + `recent=${promptBudget.recentTokens}`
       );
     }
 
@@ -869,7 +955,7 @@ class Bot {
       if (first) {
         const combo = this.rng() < 0.6 ? persona.clapbackPick(['反问', '爹味'], this.rng) : '';
         const text = combo && combo !== first ? first + '，' + combo : first;
-        return { action: 'reply', key, msg, atMe, canned: text, reason: 'clapback', system, turns, budget: promptBudget };
+        return { action: 'reply', key, msg, atMe, canned: text, reason: 'clapback', system, tail, turns, turnState, budget: promptBudget };
       }
     }
 
@@ -881,9 +967,9 @@ class Bot {
         notes,
         rng: this.rng,
       });
-      return { action: 'reply', key, msg, atMe, system, turns, mock: true, text, reason: triggerResult.reason, budget: promptBudget };
+      return { action: 'reply', key, msg, atMe, system, tail, turns, mock: true, text, reason: triggerResult.reason, turnState, budget: promptBudget };
     }
-    return { action: 'reply', key, msg, atMe, system, turns, mock: false, reason: triggerResult.reason, budget: promptBudget };
+    return { action: 'reply', key, msg, atMe, system, tail, turns, mock: false, reason: triggerResult.reason, turnState, budget: promptBudget };
   }
 
   computeTrigger(args) {
@@ -1243,6 +1329,54 @@ class Bot {
   }
 
   /**
+   * 上下文超长时砍掉一半历史，只重试一次。
+   * 群聊的 buildTurns 把所有历史压进一条 user 消息，所以单条时按事件行砍一半；
+   * 无论哪条路径都保留最后一条（当前消息），不会退化成「只留当前一句」。
+   * @returns {boolean} 是否真的变短、可以重试
+   */
+  shrinkTurnsForContext(decision) {
+    if (!decision) return false;
+    const turns = Array.isArray(decision.turns) ? decision.turns : [];
+    if (!turns.length) return false;
+    let next = null;
+
+    if (turns.length > 1) {
+      const keep = Math.max(1, Math.ceil(turns.length / 2));
+      next = turns.slice(-keep);
+    } else {
+      // 群聊：一条 user 里塞了历史事件 + 当前消息 + 记忆块，按历史行砍一半
+      const only = turns[0] || {};
+      const content = String(only.content || '');
+      const splitAt = content.indexOf('【当前需要回应的消息】');
+      const historyAt = content.indexOf('【按时间排序的历史】');
+      if (splitAt > 0 && historyAt >= 0 && historyAt < splitAt) {
+        const head = content.slice(0, historyAt + '【按时间排序的历史】'.length);
+        const beforeCurrent = content.slice(historyAt + '【按时间排序的历史】'.length, splitAt);
+        const afterCurrent = content.slice(splitAt);
+        const lines = beforeCurrent.split('\n').filter((line) => line.trim());
+        if (lines.length > 2) {
+          const keep = Math.max(1, Math.ceil(lines.length / 2));
+          next = [{
+            ...only,
+            content: head + '\n' + lines.slice(-keep).join('\n') + '\n' + afterCurrent,
+          }];
+        }
+      }
+    }
+
+    if (!next || !next.length) return false;
+    if (JSON.stringify(next) === JSON.stringify(turns)) return false;
+    decision.turns = next;
+    // 重试前的预算也要按新 turns 重算，否则 compareUsage 还会拿旧窗口估算
+    decision.budget = memoryBudget.buildBudget(decision.system, {
+      dialogueBudget: this.config && this.config.memory && this.config.memory.dialogueBudget,
+      turns: next,
+    });
+    this.logger && this.logger.warn(`上下文超长，砍掉一半历史后重试（turns ${turns.length} → ${next.length}）`);
+    return true;
+  }
+
+  /**
    * 流式生成回复文本片段（含演示模式）。
    */
   async *generate(decision, { signal } = {}) {
@@ -1263,10 +1397,28 @@ class Bot {
       }
       return;
     }
-    for await (const piece of this.llm.stream({ system: decision.system, turns: decision.turns, signal })) {
-      yield piece;
+    let retried = false;
+    let sent = false;
+    // 本轮从哪个 usage 水位开始：流式重试会再调一次模型，结束时按水位累加
+    const usageMark = Number(this.llm && this.llm.usageSeq) || 0;
+    // 流式请求可能还没吐字就报 context_length；此时可以安全地换半窗重试。
+    // 已经吐过字就不能重试，否则用户会看到两段拼接的回复。
+    while (true) {
+      try {
+        for await (const piece of this.llm.stream({ system: decision.system, turns: decision.turns, signal })) {
+          sent = true;
+          yield piece;
+        }
+        break;
+      } catch (err) {
+        if (!sent && !retried && isContextLengthError(err) && this.shrinkTurnsForContext(decision)) {
+          retried = true;
+          continue;
+        }
+        throw err;
+      }
     }
-    this.compareUsage(decision.budget);
+    this.recordUsage(decision, this.usageSince(usageMark));
   }
 
   /** 偶尔在句尾补一个 emoji 或颜文字（由「颜文字用量」档位决定概率） */
@@ -1538,6 +1690,9 @@ class Bot {
       return { action: 'reply', reply: decision.text, bubbles, reason: 'command', commandType: decision.commandType };
     }
     let text = '';
+    // 本轮从哪个 usage 水位开始：复读重写 / 半窗 / 降级重试都会再调一次模型，
+    // 结束时按水位累加，只记最后一次会把前几次的钱漏掉。
+    const usageMark = Number(this.llm && this.llm.usageSeq) || 0;
     try {
       if (decision.canned) {
         text = decision.canned;
@@ -1574,13 +1729,22 @@ class Bot {
       const blocked = /敏感|不安全|安全|内容/.test(errText) && /400/.test(errText);
       this.logger && this.logger.error('生成回复失败：' + (err && err.message));
       let retried = null;
+      // 上下文超长：砍掉一半 turns 只重试一次，保留当前消息；不要退化成只发当前一句。
+      if (isContextLengthError(err) && this.shrinkTurnsForContext(decision)) {
+        try {
+          retried = await this.llm.complete({ system: decision.system, turns: decision.turns, signal });
+          this.logger && this.logger.warn('上下文超长，半窗重试成功');
+        } catch (err2) {
+          this.logger && this.logger.error('半窗重试仍失败：' + (err2 && err2.message));
+        }
+      }
       // 钥匙失效 / 额度用完（429）/ 模型名不可用（404）→ 切到存过 Key 的备用服务商再试一次。
       // 千问的 qwen-turbo 免费额度经常先耗尽，用户会以为「Key 不能用」，这里直接兜住。
       const canFallback =
         /401|invalid|api key|Unauthorized|密钥|令牌/i.test(errText) ||
         /\b429\b|rate.?limit|exceeded your current request limit/i.test(errText) ||
         (/\b404\b/.test(errText) && /model/i.test(errText));
-      if (canFallback && typeof this.llm.switchFallback === 'function') {
+      if (!retried && canFallback && typeof this.llm.switchFallback === 'function') {
         const switched = this.llm.switchFallback();
         if (switched) {
           try {
@@ -1612,7 +1776,7 @@ class Bot {
       }
     }
     text = String(text == null ? '' : text).trim();
-    this.compareUsage(decision.budget);
+    this.recordUsage(decision, this.usageSince(usageMark));
     const bubbles = this.finalize(decision, text);
     if (!bubbles.length) return { action: 'ignore', reason: 'empty_reply' };
     // 群里骂人时要真 @ 到对方：优先用靶子，其次看正文开头有没有 @名字
@@ -1632,29 +1796,123 @@ class Bot {
     };
   }
 
-  /** 用 API usage 校准 token 估算（只记计数；误差 >15% 记 warning） */
-  compareUsage(budget) {
-    if (!budget || budget._compared || !this.llm) return null;
-    const usage = this.llm.lastUsage;
-    if (!usage) return null;
-    budget._compared = true;
-    const cmp = memoryBudget.compareUsage(budget, usage);
-    if (!cmp) return null;
+  /**
+   * 一轮结束：把这一轮所有模型调用的 usage 换算成「本轮用量」写到 bot.lastUsage，并打一条 INFO。
+   * 复读重写 / 上下文半窗 / 降级重试都会再调一次模型，这里拿的是总和，不是最后一次。
+   * 估算走 calibration 按 provider|model 学到的 scale；演示模式、固定话术、接口没回 usage 时不动。
+   */
+  recordUsage(decision, acc) {
+    if (!acc || !acc.calls) return null;
+    const budget = decision && decision.budget;
+    const promptTokens = Math.max(0, Math.round(Number(acc.promptTokens) || 0));
+    const completionTokens = Math.max(0, Math.round(Number(acc.completionTokens) || 0));
+    // 命中不可能超过总输入：服务商给的数偶尔对不上，夹一下再算钱
+    const cacheHitTokens = Math.min(promptTokens, Math.max(0, Math.round(Number(acc.cacheHitTokens) || 0)));
+    const cacheMissTokens = Number(acc.cacheMissTokens) > 0
+      ? Math.max(0, Math.round(Number(acc.cacheMissTokens)))
+      : Math.max(0, promptTokens - cacheHitTokens);
+
+    const modelInfo = this.modelContext();
+    const calibration = this.calibrationEngine();
+    let scale = Number(budget && budget.calibrationScale);
+    if (!Number.isFinite(scale) || scale <= 0) {
+      const raw = Number(
+        budget && budget.estimatedPromptTokens != null ? budget.estimatedPromptTokens : (budget && budget.estimatedInputTokens),
+      ) || 0;
+      scale = calibration.apply(raw, modelInfo).scale;
+    }
+    const cmp = budget ? memoryBudget.compareUsage(budget, { promptTokens }, { scale }) : null;
+    // 先按旧 scale 比较，再把真实样本喂进去，下一轮用新 scale；顺序反过来会拿刚更新的值自证。
+    // 一轮调了多次模型时，总和和单轮估算对不上，喂给校准会学歪，只喂单次调用的轮次。
+    const observed = cmp && acc.calls === 1
+      ? calibration.observe({ rawEstimate: cmp.rawEstimatedPromptTokens, actual: cmp.actualPromptTokens, ...modelInfo })
+      : null;
+    const estimatedPromptTokens = cmp ? cmp.estimatedPromptTokens : 0;
+    // 偏差按「估算」做分母：估算 2610、实际 2489 → +4.6%（估算偏高）
+    const ratio = estimatedPromptTokens > 0 ? (estimatedPromptTokens - promptTokens) / estimatedPromptTokens : 0;
+    const at = Number(acc.at) || Date.now();
+    const provider = modelInfo.provider;
+    const model = modelInfo.model;
+    const pricing = budgetPricing.pricingFor(provider, model, new Date(at));
+    const cost = pricing
+      ? {
+        cny: budgetPricing.costOf(pricing.price, promptTokens, cacheHitTokens, completionTokens),
+        band: pricing.band,
+        model: pricing.model,
+      }
+      : { cny: null, band: null, model: model || null };
+
     this.lastUsage = {
-      promptTokens: cmp.actualPromptTokens,
-      cacheHitTokens: Number(usage.promptCacheHitTokens) || 0,
-      cacheMissTokens: Number(usage.promptCacheMissTokens) || 0,
-      completionTokens: Number(usage.completionTokens) || 0,
-      estimatedInputTokens: cmp.estimatedInputTokens,
-      errorRatio: cmp.errorRatio,
-      at: Date.now(),
+      promptTokens,
+      cacheHitTokens,
+      cacheMissTokens,
+      completionTokens,
+      hitRate: promptTokens > 0 ? cacheHitTokens / promptTokens : 0,
+      rawEstimatedPromptTokens: cmp ? cmp.rawEstimatedPromptTokens : 0,
+      estimatedPromptTokens,
+      estimatedInputTokens: estimatedPromptTokens,
+      calibrationScale: cmp ? cmp.calibrationScale : scale,
+      calibratedScale: observed && observed.scale,
+      ratio,
+      cost,
+      at,
     };
-    if (cmp.warn && this.logger) {
+    if (cmp && cmp.warn && this.logger) {
       this.logger.warn(
-        `token 估算偏差 ${(cmp.errorRatio * 100).toFixed(1)}%（估算 ${cmp.estimatedInputTokens} / 实际 ${cmp.actualPromptTokens}），已记录用于校准`
+        `实际用量超出估算 ${(cmp.errorRatio * 100).toFixed(1)}%`
+        + `（实际 ${cmp.actualPromptTokens} / 估算 ${cmp.estimatedPromptTokens}，scale ${cmp.calibrationScale.toFixed(2)}）`
       );
     }
+    if (this.logger) this.logger.info(this.describeUsage(this.lastUsage));
     return this.lastUsage;
+  }
+
+  /** 启动器「内核日志」里那一行：用量 · 命中 / 输入（命中率）/ 输出 · 估算（偏差）· 花费（有价目表才显示） */
+  describeUsage(u) {
+    const pct = (x) => (Number(x) * 100).toFixed(1) + '%';
+    const ratio = Number(u.ratio) || 0;
+    const sign = ratio >= 0 ? '+' : '';
+    // 只有 deepseek-flash / deepseek-v4.1-flash 有公开价目表；其它模型不显示金额
+    const price = u.cost && u.cost.cny != null
+      ? ` · ¥${Number(u.cost.cny).toFixed(5)}（${u.cost.band === 'peak' ? '高峰' : '谷时'} ${u.cost.model}）`
+      : '';
+    return `用量 · 命中 ${u.cacheHitTokens} / 输入 ${u.promptTokens}（${pct(u.hitRate)}）/ 输出 ${u.completionTokens}`
+      + ` · 估算 ${u.estimatedPromptTokens}（${sign}${(ratio * 100).toFixed(1)}%）${price}`;
+  }
+
+  /** 新一轮的 usage 累加器（只存计数，不碰正文） */
+  _newUsage() {
+    return {
+      calls: 0,
+      promptTokens: 0,
+      cacheHitTokens: 0,
+      cacheMissTokens: 0,
+      completionTokens: 0,
+      at: 0,
+    };
+  }
+
+  /** 把一次模型调用的 usage 累加进 acc */
+  _addUsage(acc, usage) {
+    if (!acc || !usage) return acc;
+    acc.calls += 1;
+    acc.promptTokens += Number(usage.promptTokens) || 0;
+    acc.cacheHitTokens += Number(usage.promptCacheHitTokens) || 0;
+    acc.cacheMissTokens += Number(usage.promptCacheMissTokens) || 0;
+    acc.completionTokens += Number(usage.completionTokens) || 0;
+    acc.at = Math.max(acc.at, Number(usage.at) || 0);
+    return acc;
+  }
+
+  /** 从 seq 水位之后的所有模型调用累加出这一轮的 usage */
+  usageSince(mark) {
+    const acc = this._newUsage();
+    const events = this.llm && Array.isArray(this.llm.usageEvents) ? this.llm.usageEvents : [];
+    const floor = Number(mark) || 0;
+    for (const usage of events) {
+      if (Number(usage.seq) > floor) this._addUsage(acc, usage);
+    }
+    return acc;
   }
 
   /** 切换 API Key 后调用 */
@@ -1672,5 +1930,5 @@ class Bot {
   }
 }
 
-module.exports = { Bot, extractCommand, COMMAND_HELP };
+module.exports = { Bot, extractCommand, COMMAND_HELP, isContextLengthError };
 
