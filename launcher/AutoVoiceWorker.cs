@@ -20,6 +20,7 @@ public sealed class AutoVoiceSettings
     public string Device { get; set; } = "";
     public string Instructions { get; set; } = "";
     public string RecordingHotkey { get; set; } = "Ctrl+Alt";
+    public double SynthTimeoutSec { get; set; } = 20;
     public static AutoVoiceSettings Load(string root) => JsonSerializer.Deserialize<AutoVoiceSettings>(File.ReadAllText(Path.Combine(root,"data","voice-send.json")));
     public static bool IsEnabled(string root) { try { return Load(root)?.Enabled == true; } catch { return false; } }
     public static void CancelJobs(string root)
@@ -48,6 +49,7 @@ public static class AutoVoiceWorker
     {
         if (!ValidPath(root,path)) return 2;
         bool recording=false; string audio=path+".wav";
+        var metrics=new BreezeSpeech.RequestMetrics();
         using var cancel=new CancellationTokenSource(TimeSpan.FromSeconds(200));
         using var monitor=new System.Threading.Timer(_=>{try{if(File.Exists(path+".cancel")||!AutoVoiceSettings.IsEnabled(root))cancel.Cancel();}catch(ObjectDisposedException){}},null,100,100);
         try
@@ -61,7 +63,8 @@ public static class AutoVoiceWorker
             if(string.IsNullOrWhiteSpace(settings.Device))throw new Exception("尚未选择虚拟声卡");
             var shortcut=RecordingShortcut.Parse(settings.RecordingHotkey);
             var key=BreezeSpeech.LoadKey(Path.Combine(root,"data","voice-send-breeze.key"));
-            await BreezeSpeech.Generate(key,settings.Model,settings.Voice,job.Text,settings.Instructions,audio,cancel.Token);
+            double seconds=double.IsFinite(settings.SynthTimeoutSec)?Math.Clamp(settings.SynthTimeoutSec,5,90):20;
+            await BreezeSpeech.Generate(key,settings.Model,settings.Voice,job.Text,settings.Instructions,audio,cancel.Token,metrics,TimeSpan.FromSeconds(seconds));
             File.WriteAllText(path+".ready","ready");
             var deadline=DateTime.UtcNow.AddSeconds(25);
             while(!File.Exists(path+".go")){cancel.Token.ThrowIfCancellationRequested();if(DateTime.UtcNow>deadline)throw new Exception("桥接没有确认目标会话");await Task.Delay(100,cancel.Token);}
@@ -74,12 +77,13 @@ public static class AutoVoiceWorker
             // From here on, failure is uncertain: never automatically send text again.
             recording=true;
             await VoiceSendEngine.Play(audio,settings.Device,target,cancel.Token,shortcut.Label);
-            File.WriteAllText(path+".result",JsonSerializer.Serialize(new {Status="sent_unconfirmed"}));
+            File.WriteAllText(path+".result",JsonSerializer.Serialize(new {Status="sent_unconfirmed",metrics.RequestMs,metrics.HeadersMs,metrics.HttpStatus}));
             return 0;
         }
         catch(Exception ex)
         {
-            File.WriteAllText(path+".result",JsonSerializer.Serialize(new {Status=recording?"uncertain":"failed",Error=ex.Message}));
+            string kind=ex is TimeoutException?"timeout":ex is System.Net.Http.HttpRequestException?(metrics.HttpStatus.HasValue?"http":"network"):"local";
+            File.WriteAllText(path+".result",JsonSerializer.Serialize(new {Status=recording?"uncertain":"failed",Error=ex.Message,ErrorKind=kind,metrics.RequestMs,metrics.HeadersMs,metrics.HttpStatus}));
             return recording?3:2;
         }
         finally { try { File.Delete(audio); } catch { } }
