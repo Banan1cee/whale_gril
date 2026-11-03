@@ -38,6 +38,7 @@ const { cannedReply, dismissReply } = require('./stages/canned');
 const reminderCore = require('../core/reminder');
 const stickers = require('../adapters/stickers');
 const voiceReply = require('../core/voiceReply');
+const envInfo = require('../services/envInfo');
 const { LIMITS } = require('../memory/constants');
 const tokenCalibration = require('../memory/calibration');
 
@@ -63,13 +64,18 @@ const memoryBudget = require('../memory/budget');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// 程序版本：环境块里要报给模型（问「你是什么版本」时不能瞎说）。
+// app.js 构造 Bot 时会显式传进来；测试里直接 new Bot 时用这个默认值。
+const VERSION = require('../../package.json').version;
 
 class Bot {
-  constructor({ config, store, llm, logger, trace = null, now = () => new Date(), rng = Math.random, mockChunkDelayMs = 12, linkReader = null, calibration = null }) {
+  constructor({ config, store, llm, logger, trace = null, now = () => new Date(), rng = Math.random, mockChunkDelayMs = 12, linkReader = null, calibration = null, version = VERSION }) {
     this.config = config;
     this.store = store;
     this.llm = llm;
     this.logger = logger;
+    // 程序版本：环境块里要报给模型（问「你是什么版本」时不能瞎说）
+    this.version = version;
     // 判定链落盘（src/core/trace.js）。测试/网页里可以不传，没有 trace 只是少一份证据。
     this.trace = trace;
     this.now = now;
@@ -276,6 +282,11 @@ class Bot {
 
   async _decide(rawMsg) {
     const msg = this.normalize(rawMsg);
+    // normalize() 只保留固定字段，桥接状态（gateway 挂在消息上的 {online,uia,ffmpeg}）会丢；
+    // 这里补回来，供本轮状态里那句「桥接在线 / 离线」用。
+    if (rawMsg && rawMsg.bridgeStatus && typeof rawMsg.bridgeStatus === 'object') {
+      msg.bridgeStatus = rawMsg.bridgeStatus;
+    }
     // 网页/管理员动态改窗口后，存储限额也要跟上；不会恢复之前已被丢弃的记录。
     if (this.store.limits) this.store.limits.maxMessages = Math.min(800, Math.max(this.store.limits.maxMessages, Number(this.config.chat.historyTurns || 200) + 2, Number(this.config.chat.groupHistoryTurns || 150) + 2));
     const key = this.sessionKey(msg);
@@ -851,6 +862,12 @@ class Bot {
     msg.fightTarget = fightTarget;
     msg.fightOnMaster = fightOnMaster;
 
+    // 这一轮的环境 / 桥接状态：
+    //   envBlock 是稳定信息（系统、时区、所在地），跟着静态块进 system，逐字节不变；
+    //   bridgeLine 每轮都可能变（掉线/恢复），塞进「本轮状态」的尾部，不打碎前缀缓存。
+    const envBlock = envInfo.systemBlock(this.config, this.version);
+    const turnState = { envBlock, bridgeLine: envInfo.bridgeLine(msg) };
+
     // 提示词拆成两块：system 只放静态人设/规则/日期，尾部放这一轮会变的东西
     // （心情、说话人、字数、@、梗、联网资料、动作账本……），前缀缓存才不会被每轮打断。
     // features.staticSystem=false 时完全回到旧行为：所有内容都在 system，tail 为空串。
@@ -866,9 +883,11 @@ class Bot {
       // 不塞进去她就永远不知道自己的副作用，只能编。
       events: this.store.events(key, 12),
       now,
+      envBlock,
     });
     const system = promptParts.system;
-    const tail = promptParts.tail;
+    // 桥接状态接在本轮状态最后一行；旧行为路径（tail 为空）也照样带上
+    const tail = [promptParts.tail, turnState.bridgeLine].filter(Boolean).join('\n');
     // 记忆块 = 人物卡/事件/摘要 + 关系卡（关系卡是 main 新加的，两段都挂最后一条 user 消息）
     const memoryBlock = [mem.block, mem.relationsBlock].filter(Boolean).join('\n\n');
     const turns = this.buildTurns({ ...msg, ts: nowMs }, historyForTurns, memoryBlock, tail);
@@ -918,7 +937,7 @@ class Bot {
       if (first) {
         const combo = this.rng() < 0.6 ? persona.clapbackPick(['反问', '爹味'], this.rng) : '';
         const text = combo && combo !== first ? first + '，' + combo : first;
-        return { action: 'reply', key, msg, atMe, canned: text, reason: 'clapback', system, tail, turns, budget: promptBudget };
+        return { action: 'reply', key, msg, atMe, canned: text, reason: 'clapback', system, tail, turns, turnState, budget: promptBudget };
       }
     }
 
@@ -930,9 +949,9 @@ class Bot {
         notes,
         rng: this.rng,
       });
-      return { action: 'reply', key, msg, atMe, system, tail, turns, mock: true, text, reason: triggerResult.reason, budget: promptBudget };
+      return { action: 'reply', key, msg, atMe, system, tail, turns, mock: true, text, reason: triggerResult.reason, turnState, budget: promptBudget };
     }
-    return { action: 'reply', key, msg, atMe, system, tail, turns, mock: false, reason: triggerResult.reason, budget: promptBudget };
+    return { action: 'reply', key, msg, atMe, system, tail, turns, mock: false, reason: triggerResult.reason, turnState, budget: promptBudget };
   }
 
   computeTrigger(args) {
