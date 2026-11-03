@@ -607,8 +607,20 @@ class Bot {
       && !OPINION_RE.test(clean.text || '');
     // 主判断交给模型（语义），关键词只在模型不可用时兜底：
     // 「小蓝鲸是什么梗」这种词库里没有的说法也会查，「你觉得呢」「在吗」不会被误触发。
-    let route = { need: false, query: '', site: '', failed: true };
-    if (webOn && clean.text) {
+    //
+    // 但语义路由本身也是一次模型调用（上限 2 秒），实测每一句都要等它 —— 包括
+    // 「hello」「我要去上课了」这种明显不用查的闲聊。所以先用本地判据挡一道。
+    const kwHit = searchPattern.test(clean.text || '');
+    const askShape = /[?？]|吗|呢|什么|怎么|多少|几[个号点]|谁|哪|为什么|如何|查|搜|最新|今天|现在|价格|天气/
+      .test(clean.text || '');
+    // semanticRoute=true  → 每句都问模型（旧行为，最准，每句多 ~2 秒）
+    // semanticRoute=false → 完全不问，只按关键词
+    // 不配（默认）        → 只有「像问句/命中事实词」才问模型
+    const routeMode = webCfg.semanticRoute;
+    const wantRoute = routeMode === true
+      || (routeMode !== false && (kwHit || looksLikeFactQuestion || askShape));
+    let route = { need: false, query: '', site: '', city: '', fresh: 'normal', failed: true };
+    if (webOn && clean.text && wantRoute) {
       try {
         route = await searchRouter.route(this.llm, clean.text, {
           history: this.recentHeard({ msg, key }).filter((line) => line !== clean.text),

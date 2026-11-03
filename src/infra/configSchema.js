@@ -69,6 +69,9 @@ const FIELDS = {
   'links.enabled': { type: 'bool' },
   'links.timeoutMs': { type: 'int', min: 1000, max: 60000 },
   'websearch.enabled': { type: 'bool' },
+  // 语义路由（每句话先问一次模型「要不要联网」）：不配时只在像问句/命中事实词时才问；
+  // true 则每句都问（更准，每句多 ~2 秒）；false 则完全按关键词。
+  'websearch.semanticRoute': { type: 'bool' },
   // ---- 提醒（规则字段和 care 对齐，配置独立）----
   'reminder.enabled': { type: 'bool' },
   'reminder.maxPerDay': { type: 'int', min: 0, max: 200 },

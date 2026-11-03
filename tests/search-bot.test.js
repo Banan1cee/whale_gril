@@ -10,9 +10,10 @@ const { Store } = require('../src/memory/store');
 const { DEFAULT_CONFIG } = require('../src/infra/config');
 const web = require('../src/adapters/websearch');
 
-function fixture(t, { answer = '{"need":false}', enabled = true, timeoutMs = 1000, city = '' } = {}) {
+function fixture(t, { answer = '{"need":false}', enabled = true, timeoutMs = 1000, city = '', semanticRoute = true } = {}) {
   const config = JSON.parse(JSON.stringify(DEFAULT_CONFIG));
-  config.websearch = { ...config.websearch, enabled, timeoutMs, city };
+  // semanticRoute 默认 true：这些用例测的是「路由本身」，不该被本地闸门拦掉
+  config.websearch = { ...config.websearch, enabled, timeoutMs, city, semanticRoute };
   config.links.enabled = false;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-search-'));
   const store = new Store({ file: path.join(dir, 'store.json'), limits: config.memory });
@@ -35,6 +36,16 @@ function fixture(t, { answer = '{"need":false}', enabled = true, timeoutMs = 100
   const msg = (text) => ({ platform: 'web', chatId: 'search-test', chatType: 'private', senderId: 'user', senderName: '小海', text });
   return { bot, store, calls, routed, msg };
 }
+
+test('闲聊不调路由（省掉每句 2 秒），问句才调', async (t) => {
+  const f = fixture(t);
+  delete f.bot.config.websearch.semanticRoute;   // 不配 = 按本地闸门判断
+  await f.bot.decide(f.msg('hello'));
+  await f.bot.decide(f.msg('我要去上课了'));
+  assert.equal(f.routed.length, 0, '纯闲聊不该触发语义路由');
+  await f.bot.decide(f.msg('这个多少钱'));
+  assert.equal(f.routed.length, 1, '问价格的问句要触发路由');
+});
 
 test('router receives previous conversation under the actual session key', async (t) => {
   const f = fixture(t);
