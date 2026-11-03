@@ -18,6 +18,7 @@
 - 删掉 `src/persona/index.js` 里写死型号的台词，换成「别报具体型号」：可以夸自己、岔开话题或俏皮糊弄，不确定就说不确定
 - 默认人设 system 不再读 `msg.model` / `msg.provider`；`src/pipeline/chat.js` 里对应的传参一并删掉（全仓已没有别的消费者）
 - 自定义人设（`customPrompt` 非空）分支本来就没有这行，补断言钉住，防止以后被加回来
+- 同步改掉【回答原则】里「问模型就报模型名」的反向指令：它在 system 里更靠后，等于给模型发了报型号的许可证，两条必须一致
 - 测试：新增 `tests/prompt-model-name.test.js`：随机型号不进 system、含「别报具体型号」、自定义分支同样不含、换模型前后 system 字节完全一致
 - legacy 快照（`tests/fixtures/prompt-legacy/`）同步改这一行，`features.staticSystem=false` 的逐字回滚仍然成立
 

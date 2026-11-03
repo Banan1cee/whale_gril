@@ -48,6 +48,9 @@ for (const staticSystem of [true, false]) {
     const sys = systemFor(makeConfig({ model: randomModel(), staticSystem }));
     assert.match(sys, /别报具体型号/, '被问模型时不能报型号');
     assert.doesNotMatch(sys, /我的模型是/, '旧的报型号模板必须删掉');
+    // 【回答原则】里不能再有「问模型就报模型名」这种和上面相反的指令
+    assert.doesNotMatch(sys, /问模型就报模型名/, '回答原则不能和「别报具体型号」自相矛盾');
+    assert.match(sys, /被问模型\/服务商\/版本时不报具体型号/);
   });
 }
 
@@ -58,6 +61,7 @@ test('自定义人设分支同样不含模型名（防止以后被加回来）',
     assert.ok(sys.startsWith('你是鲸鲸'), '自定义人设原文保留');
     assert.equal(sys.includes(model), false, '自定义人设也不能拼模型名');
     assert.doesNotMatch(sys, /我的模型是/);
+    assert.doesNotMatch(sys, /问模型就报模型名/, '共用的回答原则不能授权报型号');
   }
 });
 
