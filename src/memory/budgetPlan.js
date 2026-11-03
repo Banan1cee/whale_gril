@@ -10,7 +10,7 @@
  *   memory       16.36%           900     人物卡 + 相关事件
  *   summary      16.36%           900     L3 摘要
  *   reserve       9.09%           500     token 估算误差的安全余量
- *   relations     2.18%           120     关系卡（默认关闭；关闭时份额并回 recent）
+ *   relations     2.18%           120     关系卡（features.relations 默认开；关掉时份额并回 recent）
  *
  * 为什么不是纯比例：memory / summary 有**结构上限**，过了就只是重复同一批内容。
  *   - 人物卡一屏最多 12 traits + 20 preferences + 10 threads + 10 事件 ≈ 1,700 token

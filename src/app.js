@@ -57,7 +57,12 @@ function createRuntime({ root = path.resolve(__dirname, '..'), env = process.env
   // 模块子日志：info 行首带 [memory] / [llm] 这种模块名，warn/error 仍由 logger 自己抓 file:line。
   // 测试里传进来的 logger 是桩对象、没有 child，这里兜一下，别让日志把启动搞挂。
   const child = (name) => (logger && typeof logger.child === 'function' ? logger.child(name) : logger);
-  const store = new Store({ file: config.paths.storeFile, limits: config.memory, logger: child('memory') });
+  const store = new Store({
+    file: config.paths.storeFile,
+    // 关系卡份额（120 token）跟着 features.relations 走：关掉就并回 recent
+    limits: { ...(config.memory || {}), relationsEnabled: features.isOn(config, 'relations') },
+    logger: child('memory'),
+  });
   // 启动时先「忘」一遍：太久没被想起、又不重要的记忆沉到归档，别一直占着检索位
   try {
     const swept = store.sweep();

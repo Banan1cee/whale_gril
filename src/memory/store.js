@@ -18,6 +18,7 @@ const format = require('./format');
 const extractor = require('./extractor');
 const migrate = require('./migrate');
 const budgetPlan = require('./budgetPlan');
+const relations = require('./relations');
 const { LIMITS, DAY_MS } = require('./constants');
 const { estimateTokens, estimateBudgetTokens } = require('./tokens');
 
@@ -231,7 +232,11 @@ class Store {
     // 消息和去重 id 一起落盘：崩溃后重启不会把同一条再回一遍
     if (entry.msgId) this.markSeen(key, entry.msgId);
     episode.touchEpisode(chat, entry, { now: at });
-    if (role === 'user') this._onUserMessage(chat, entry);
+    if (role === 'user') {
+      this._onUserMessage(chat, entry);
+      // 关系边：规则即时（「我和小明是同事」这种），不调模型、不建卡
+      this._onRelationMention(chat, entry);
+    }
     // 直接关停/断电也不能把 episode 水位、seenIds、stats 丢在 400ms 防抖里：
     // 原文已经 fsync，这里同步写 meta（每轮 1 次，很小的文件）。
     this.chatStore.saveMeta(chat, { immediate: true });
@@ -310,6 +315,43 @@ class Store {
     }
   }
 
+  /**
+   * 规则即时关系边：只处理「说话人自己说出来的」关系（三句式，见 relations.fromMessage）。
+   * 目标名在本群最近 200 条里查得到 uid 才建边；查不到只保留 bName，不建卡、不编 uid。
+   * 跨群写入照常抛 MEMORY_CHAT_MISMATCH（隔离红线），其余失败只记日志、不影响聊天。
+   */
+  _onRelationMention(chat, entry) {
+    if (!entry || !entry.uid || !entry.text) return;
+    try {
+      const drafts = relations.fromMessage(entry.text, {
+        uid: entry.uid,
+        name: entry.name,
+        msgId: entry.id,
+        now: entry.ts,
+      });
+      if (!drafts.length) return;
+      chat.meta.relations = chat.meta.relations || [];
+      let touched = false;
+      for (const draft of drafts) {
+        const targetUid = relations.resolveName(chat, draft.bName);
+        if (!targetUid || String(targetUid) === String(entry.uid)) continue;
+        const edge = relations.upsert(chat.meta.relations, {
+          a: entry.uid,
+          b: targetUid,
+          text: draft.text,
+          confidence: draft.confidence,
+          source: { chatId: chat.chatId, messageIds: draft.source.messageIds },
+        }, { chatId: chat.chatId, now: entry.ts });
+        if (edge) touched = true;
+      }
+      // appendMessage 收尾会 immediate 写一次 meta，这里只标脏，不额外落盘
+      if (touched) this.chatStore.saveMeta(chat);
+    } catch (err) {
+      if (err && err.code === 'MEMORY_CHAT_MISMATCH') throw err;
+      if (this.logger) this.logger.warn('关系边抽取失败（不影响聊天）：' + ((err && err.message) || err));
+    }
+  }
+
   _track(promise) {
     this._background.add(promise);
     Promise.resolve(promise).catch(() => {}).then(() => this._background.delete(promise));
@@ -321,7 +363,10 @@ class Store {
   }
 
   /** 当前说话人的卡 + 这个 chat 的最近原文 + 摘要 + 相关事件 */
-  buildContext({ key, uid = '', name = '', query = '', now = null, isGroup = false, currentSeq = 0 } = {}) {
+  buildContext({
+    key, uid = '', name = '', query = '', now = null, isGroup = false, currentSeq = 0,
+    mentionedNames = [], relationsEnabled = undefined,
+  } = {}) {
     const chat = this.chatStore.ensureChat(key);
     const at = Number(now) || this._now();
     let card = this.chatStore.getCard(chat, uid);
@@ -366,11 +411,17 @@ class Store {
       budget: this.plan.memory + this.plan.summary,
       caps: this.plan.caps,
     });
+    // 「这条消息提到了谁」：只做内部状态，不进任何界面；名字对不上人就整块不输出。
+    const relationCtx = this._buildRelationsBlock(chat, { uid, mentionedNames, relationsEnabled });
     return {
       chatId: chat.chatId,
       card,
       events,
       block,
+      relationsBlock: relationCtx.block,
+      relationsTokens: relationCtx.tokens,
+      relations: relationCtx.edges,
+      mentions: relationCtx.mentions,
       summary: chat.summary.text,
       recent: recent.messages,
       recentTokens: recent.tokens,
@@ -383,6 +434,52 @@ class Store {
       plan: this.plan,
       notes: activePreferenceTexts(card),
       compressed,
+    };
+  }
+
+  /**
+   * 关系块：A 提到 B 时，把「A 和 B 的关系 + B 的卡 + B 最近说过的话」拼成 ≤200 token 的一小块。
+   * 全部来自本 chat 的系统记录；名字解析不到 uid 就整块跳过（不建卡、不编 uid）。
+   * 开关：显式传 relationsEnabled 优先，否则看 Store 构造时的 features.relations。
+   */
+  _buildRelationsBlock(chat, { uid = '', mentionedNames = [], relationsEnabled = undefined } = {}) {
+    const enabled = relationsEnabled === undefined ? this.limits.relationsEnabled === true : relationsEnabled === true;
+    const empty = { block: '', tokens: 0, edges: [], mentions: [] };
+    if (!enabled) return empty;
+    const names = [...new Set((Array.isArray(mentionedNames) ? mentionedNames : [])
+      .map((n) => String(n == null ? '' : n).trim())
+      .filter(Boolean))].slice(0, 3);
+    if (!names.length) return empty;
+
+    const entries = [];
+    for (const nm of names) {
+      const targetUid = relations.resolveName(chat, nm);
+      if (!targetUid || String(targetUid) === String(uid)) continue;
+      const edge = relations.find(chat.meta.relations, uid, targetUid);
+      const card = this.chatStore.getCard(chat, targetUid);
+      const recent = chat.messages
+        .filter((m) => m.role === 'user' && String(m.uid) === String(targetUid) && m.text)
+        .slice(-2)
+        .map((m) => m.text);
+      if (!edge && !card && !recent.length) continue;
+      const block = relations.renderMentionBlock({ name: nm, edge, card, recent });
+      if (!block) continue;
+      entries.push({ block, edge, mention: { name: nm, uid: targetUid, hasEdge: Boolean(edge) } });
+    }
+    if (!entries.length) return empty;
+
+    // 多个名字合并后仍守 200 token：先整块丢掉最后一个人，再在块内裁
+    let combined = entries.map((e) => e.block).join('\n\n');
+    while (entries.length > 1 && estimateBudgetTokens(combined) > relations.MAX_BLOCK_TOKENS) {
+      entries.pop();
+      combined = entries.map((e) => e.block).join('\n\n');
+    }
+    const block = relations.capBlockTokens(combined, relations.MAX_BLOCK_TOKENS);
+    return {
+      block,
+      tokens: estimateBudgetTokens(block),
+      edges: entries.map((e) => e.edge).filter(Boolean),
+      mentions: entries.map((e) => e.mention),
     };
   }
 

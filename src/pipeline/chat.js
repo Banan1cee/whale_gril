@@ -254,9 +254,11 @@ class Bot {
     msg.cleanText = clean.text;
     let atMe = msg.atMe || clean.atMe;
     const isGroup = msg.chatType === 'group';
+    // 群里：@ 名单 + 文本里出现的别名；私聊：只认桥接明确给的提及名单（不做别名猜测）。
+    // 关系块两种会话都用同一套逻辑（当前说话人 → 提到的第三人）。
     const mentionedNames = isGroup
       ? [...new Set([...(msg.mentionedNames || []), ...extractMentionNames(rawText, persona.aliasList(this.config))])].slice(0, 4)
-      : [];
+      : [...new Set(msg.mentionedNames || [])].slice(0, 4);
     msg.mentionedNames = mentionedNames;
     const voiceRequested = msg.platform === 'wechat' && voiceReply.enabled(this.config, isGroup) && voiceReply.requested(clean.text);
     if (voiceRequested && !mentionedNames.length) atMe = true;
@@ -718,6 +720,8 @@ class Bot {
 
     // 6) 组装提示词：只加载「当前 chat + 当前说话人」的卡，绝不跨聊天取。
     // 记忆块（人物卡 + 相关事件 + 摘要）放进最后一条 user 消息，进 system 会打断前缀缓存。
+    // 关系块（A 提到 B）挂在记忆块后面，同一个尾部位置；开关跟着 features.relations 走。
+    const relationsOn = features.isOn(this.config, 'relations');
     const mem = this.store.buildContext({
       key,
       uid: msg.senderId,
@@ -725,6 +729,8 @@ class Bot {
       query: clean.text,
       now: nowMs,
       isGroup,
+      mentionedNames,
+      relationsEnabled: relationsOn,
     });
     const notes = mem.notes || [];
     if (notes.length && msg.senderId) {
@@ -819,7 +825,7 @@ class Bot {
       now,
     });
     if (voiceRequested) system += '\n用户希望下一条以语音形式回复。直接生成你此刻要说的自然内容，发送层会把正文转成语音；不要说无法发语音，也不要只承诺稍后发送。';
-    const turns = this.buildTurns(msg, historyForTurns, mem.block);
+    const turns = this.buildTurns(msg, historyForTurns, [mem.block, mem.relationsBlock].filter(Boolean).join('\n\n'));
 
     // 预算：system 只测量，不裁剪；对话预算默认 5,500（memory+summary+recent+reserve），
     // 启动器「高级模式 → 高级 → 对话预算」改的是 config.memory.dialogueBudget。
@@ -828,6 +834,8 @@ class Bot {
     try {
       promptBudget = memoryBudget.assertWithinHardLimit(memoryBudget.buildBudget(system, {
         dialogueBudget: this.config && this.config.memory && this.config.memory.dialogueBudget,
+        // 关系卡开着就从 recent 里切出 120 token，预算口径和 Store 的分片保持一致
+        relations: relationsOn,
       }));
     } catch (err) {
       this.logger && this.logger.error(
@@ -841,6 +849,7 @@ class Bot {
       memoryTokens: mem.memoryTokens || 0,
       summaryTokens: mem.summaryTokens || 0,
       recentTokens: mem.recentTokens || 0,
+      relationsTokens: mem.relationsTokens || 0,
     };
     promptBudget = this.lastBudget;
     if (this.logger) {

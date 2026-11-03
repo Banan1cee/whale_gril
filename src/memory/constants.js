@@ -20,7 +20,7 @@ const LIMITS = Object.freeze({
   summaryTokens: 900,
   recentMaxTokens: 3200,
   // 关系卡（L1 关系边）的预算基线，@5,500 时占 2.18%。
-  // 关系功能未启用时这一份并回 recent；启用后由 budgetPlan 按比例换算。
+  // features.relations 默认开；关掉时这一份并回 recent，由 budgetPlan 按比例换算。
   relationsTokens: 120,
   recentLowTokens: 2400,
   compressChunkTokens: 800,
