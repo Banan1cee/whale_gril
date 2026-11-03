@@ -164,7 +164,8 @@ namespace WhaleLauncher
             {
                 var exeName = "";
                 try { exeName = Path.GetFileName(Environment.ProcessPath ?? ""); } catch { }
-                var args = "-NoProfile -ExecutionPolicy Bypass -File \"" + script + "\" -Yes";
+                // -Force：清单已经判定「该升级」，别让脚本自己再判一次「已是最新」而空转
+                var args = "-NoProfile -ExecutionPolicy Bypass -File \"" + script + "\" -Yes -Force";
                 if (!string.IsNullOrWhiteSpace(exeName)) args += " -ExeName \"" + exeName + "\"";
 
                 var psi = new ProcessStartInfo

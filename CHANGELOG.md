@@ -1,6 +1,6 @@
 # 更新记录
 
-## 4.0
+## 4.0.1
 
 ### 改进 · 演示模式台词不再点名模型
 
@@ -435,6 +435,10 @@ secrets 就能签，不用改代码。
   → 发前 + 落键前两次 guard。找不到唯一联系人就 fail closed，不发
 - 其他：`config.example.json` 清掉上述废弃键；`scripts/prepare-sticker-runtime.py` 增加
   `wechatauto/db.py` 补丁（密钥失败提示的元组解包崩溃），并已应用到便携运行时
+
+## 4.0.0
+
+首个 exe 安装包版本（内部构建，未公开发布）。exe 形态从这一版开始：`WhaleLauncher.exe` + Inno 安装包，内置 Node 与 CPython 3.12。之前的版本走 zip 解压 + 一键更新，不受影响。
 
 ## 未发布（同步上游 3.9 的模块化落点）
 
