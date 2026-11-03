@@ -27,6 +27,10 @@ const PRICING = Object.freeze({
   peak: { inputHit: 0.04, inputMiss: 2, output: 8 },
 });
 
+// 有公开价目表的模型：DeepSeek 官方 deepseek-flash，以及 OpenCode Go 那条线的 deepseek-v4.1-flash。
+// 其它模型一律不猜价（价格可能完全不一样），界面不显示金额。
+const PRICED_MODELS = Object.freeze(['deepseek-flash', 'deepseek-v4.1-flash']);
+
 const PER_MILLION = 1e6;
 
 /**
@@ -44,21 +48,19 @@ function isPeakHour(now = new Date()) {
 }
 
 /**
- * 这个服务商 / 模型此刻的价格。
- * 只有 DeepSeek 官方的 deepseek-flash 有公开价格；其它一律返回 null，
- * 让界面显示「—」，不拿别家的价目表去猜。
- * @param {string} provider 服务商标识（config.provider，例如 deepseek / zhipu / qwen）
- * @param {string} model 模型名（例如 deepseek-flash）
+ * 这个模型此刻的价格（按峰谷价）。
+ * 只认有公开价目表的模型（deepseek-flash / deepseek-v4.1-flash），其它返回 null，
+ * 界面不显示金额，不拿别家的价目表去猜。
+ * @param {string} provider 服务商标识（保留参数：价格按模型定，不按服务商）
+ * @param {string} model 模型名（例如 deepseek-flash / deepseek-v4.1-flash）
  * @param {Date|number} [now] 计价时刻（默认现在；测试里传固定时间）
  * @returns {{model:string, band:'idle'|'peak', price:{inputHit:number, inputMiss:number, output:number}}|null}
  */
 function pricingFor(provider, model, now = new Date()) {
-  const p = String(provider == null ? '' : provider).trim().toLowerCase();
   const m = String(model == null ? '' : model).trim().toLowerCase();
-  if (p !== 'deepseek') return null;
-  if (m !== PRICING.model) return null;
+  if (!PRICED_MODELS.includes(m)) return null;
   const band = isPeakHour(now) ? 'peak' : 'idle';
-  return { model: PRICING.model, band, price: PRICING[band] };
+  return { model: m, band, price: PRICING[band] };
 }
 
 /** 当前生效的对话预算：config.memory.dialogueBudget 优先，否则 5,500 */

@@ -1850,16 +1850,17 @@ class Bot {
     return this.lastUsage;
   }
 
-  /** 启动器「内核日志」里那一行：用量 · 命中 / 输入（命中率）/ 输出 · 估算（偏差）· 花费 */
+  /** 启动器「内核日志」里那一行：用量 · 命中 / 输入（命中率）/ 输出 · 估算（偏差）· 花费（有价目表才显示） */
   describeUsage(u) {
     const pct = (x) => (Number(x) * 100).toFixed(1) + '%';
     const ratio = Number(u.ratio) || 0;
     const sign = ratio >= 0 ? '+' : '';
+    // 只有 deepseek-flash / deepseek-v4.1-flash 有公开价目表；其它模型不显示金额
     const price = u.cost && u.cost.cny != null
-      ? `¥${Number(u.cost.cny).toFixed(5)}（${u.cost.band === 'peak' ? '高峰' : '谷时'} ${u.cost.model}）`
-      : '¥—（价格未知）';
+      ? ` · ¥${Number(u.cost.cny).toFixed(5)}（${u.cost.band === 'peak' ? '高峰' : '谷时'} ${u.cost.model}）`
+      : '';
     return `用量 · 命中 ${u.cacheHitTokens} / 输入 ${u.promptTokens}（${pct(u.hitRate)}）/ 输出 ${u.completionTokens}`
-      + ` · 估算 ${u.estimatedPromptTokens}（${sign}${(ratio * 100).toFixed(1)}%）· ${price}`;
+      + ` · 估算 ${u.estimatedPromptTokens}（${sign}${(ratio * 100).toFixed(1)}%）${price}`;
   }
 
   /** 新一轮的 usage 累加器（只存计数，不碰正文） */

@@ -92,7 +92,7 @@ namespace WhaleLauncher.Views
             if (s.StFailed > 0) UsageLine.Foreground = (Brush)FindResource("Warn");
             else UsageLine.Foreground = (Brush)FindResource("Text");
 
-            // 本轮用量：命中 / 输入 / 输出 / 命中率 / 花费（和内核日志里那行同一个口径）
+            // 本轮用量：命中 / 输入 / 输出 / 命中率 / 估算（和内核日志里那行同一个口径）
             RoundUsageLine.Text = FormatRoundUsage(s);
             RoundUsageLine.Foreground = (Brush)FindResource(s.HasUsage ? "Text" : "Dim");
         }
@@ -102,12 +102,16 @@ namespace WhaleLauncher.Views
         {
             if (!s.HasUsage) return "本轮用量   —（还没调用过真实模型；演示模式没有用量）";
             var rate = s.UsHitRate * 100.0;
-            var cost = s.UsHasCost
-                ? "¥" + s.UsCny.ToString("0.#####", CultureInfo.InvariantCulture)
-                  + "（" + (s.UsBand == "peak" ? "高峰" : "谷时") + "）"
-                : "¥—（价格未知）";
+            var ratio = s.UsRatio * 100.0;
+            var sign = ratio >= 0 ? "+" : "";
             var model = string.IsNullOrEmpty(s.UsModel) ? "" : " · " + s.UsModel;
-            return $"本轮用量   命中 {s.UsCacheHitTokens} / 输入 {s.UsPromptTokens}（{rate:0.0}%）/ 输出 {s.UsCompletionTokens}{model} · {cost}";
+            // 只有 deepseek-flash / deepseek-v4.1-flash 有价目表；其它模型不显示金额
+            var cost = s.UsHasCost
+                ? " · ¥" + s.UsCny.ToString("0.#####", CultureInfo.InvariantCulture)
+                  + "（" + (s.UsBand == "peak" ? "高峰" : "谷时") + "）"
+                : "";
+            return $"本轮用量   命中 {s.UsCacheHitTokens} / 输入 {s.UsPromptTokens}（{rate:0.0}%）/ 输出 {s.UsCompletionTokens}"
+                + $" · 估算 {s.UsEstimatedTokens}（{sign}{ratio:0.0}%）{model}{cost}";
         }
 
         private async Task RefreshCareAsync(Snapshot s)

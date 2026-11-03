@@ -74,10 +74,19 @@ test('pricingFor：谷时 / 高峰 / 未知服务商返回 null', () => {
   assert.equal(pricingFor('deepseek', 'deepseek-flash', new Date(2026, 10, 3, 14, 0)).band, 'peak');
   assert.equal(pricingFor('deepseek', 'deepseek-flash', new Date(2026, 10, 3, 18, 0)).band, 'idle');
 
-  // 未知服务商 / 未知模型：不猜价格
+  // 有价目表的两个模型：DeepSeek 官方 deepseek-flash、OpenCode Go 的 deepseek-v4.1-flash
+  const v41 = pricingFor('opencode', 'deepseek-v4.1-flash', peak);
+  assert.equal(v41.band, 'peak');
+  assert.equal(v41.model, 'deepseek-v4.1-flash');
+  assert.equal(v41.price.output, 8);
+  // 价格按模型定，不按服务商：同一模型换一家接入也照样能算
+  assert.equal(pricingFor('custom', 'deepseek-flash', peak).model, 'deepseek-flash');
+
+  // 其它模型：不猜价格
   assert.equal(pricingFor('zhipu', 'glm-4.7-flash', peak), null);
   assert.equal(pricingFor('qwen', 'qwen3.8-flash', peak), null);
   assert.equal(pricingFor('deepseek', 'deepseek-v4-pro', peak), null);
+  assert.equal(pricingFor('deepseek', 'deepseek-v4.1-pro', peak), null);
   assert.equal(pricingFor('', '', peak), null);
   assert.equal(pricingFor(null, null, peak), null);
 });
@@ -193,7 +202,7 @@ test('一轮调了两次模型（复读重写）：usage 累加，不是只取�
   // 内核日志里那一行
   const line = logger.lines.info.find((l) => l.startsWith('用量 · '));
   assert.ok(line, '必须打一条 INFO 用量日志');
-  assert.match(line, /^用量 · 命中 1400 \/ 输入 2000（70\.0%）\/ 输出 100 · 估算 \d+（[+-]?\d+\.\d%）· ¥[\d.]+（(谷时|高峰) deepseek-flash）$/);
+  assert.match(line, /^用量 · 命中 1400 \/ 输入 2000（70\.0%）\/ 输出 100 · 估算 \d+（[+-]?\d+\.\d%） · ¥[\d.]+（(谷时|高峰) deepseek-flash）$/);
   cleanup();
 });
 
