@@ -41,6 +41,7 @@ const voiceReply = require('../core/voiceReply');
 const envInfo = require('../services/envInfo');
 const { LIMITS } = require('../memory/constants');
 const tokenCalibration = require('../memory/calibration');
+const budgetPricing = require('../services/budget');
 
 /**
  * 服务商报「上下文超长」时，不能把整段历史原样再发一次，也不该退化成只留当前一句。
@@ -1381,6 +1382,8 @@ class Bot {
     }
     let retried = false;
     let sent = false;
+    // 本轮从哪个 usage 水位开始：流式重试会再调一次模型，结束时按水位累加
+    const usageMark = Number(this.llm && this.llm.usageSeq) || 0;
     // 流式请求可能还没吐字就报 context_length；此时可以安全地换半窗重试。
     // 已经吐过字就不能重试，否则用户会看到两段拼接的回复。
     while (true) {
@@ -1398,7 +1401,7 @@ class Bot {
         throw err;
       }
     }
-    this.compareUsage(decision.budget);
+    this.recordUsage(decision, this.usageSince(usageMark));
   }
 
   /** 偶尔在句尾补一个 emoji 或颜文字（由「颜文字用量」档位决定概率） */
@@ -1670,6 +1673,9 @@ class Bot {
       return { action: 'reply', reply: decision.text, bubbles, reason: 'command', commandType: decision.commandType };
     }
     let text = '';
+    // 本轮从哪个 usage 水位开始：复读重写 / 半窗 / 降级重试都会再调一次模型，
+    // 结束时按水位累加，只记最后一次会把前几次的钱漏掉。
+    const usageMark = Number(this.llm && this.llm.usageSeq) || 0;
     try {
       if (decision.canned) {
         text = decision.canned;
@@ -1753,7 +1759,7 @@ class Bot {
       }
     }
     text = String(text == null ? '' : text).trim();
-    this.compareUsage(decision.budget);
+    this.recordUsage(decision, this.usageSince(usageMark));
     const bubbles = this.finalize(decision, text);
     if (!bubbles.length) return { action: 'ignore', reason: 'empty_reply' };
     // 群里骂人时要真 @ 到对方：优先用靶子，其次看正文开头有没有 @名字
@@ -1774,59 +1780,122 @@ class Bot {
   }
 
   /**
-   * 用 API usage 对比「校准后的真实估算」。
-   * 只在实际用量超出估算 >15% 时告警；实际更少不是故障，也不再说「低估」。
-   * 每次有效样本都喂给 calibration，按 provider|model 分开学习。
+   * 一轮结束：把这一轮所有模型调用的 usage 换算成「本轮用量」写到 bot.lastUsage，并打一条 INFO。
+   * 复读重写 / 上下文半窗 / 降级重试都会再调一次模型，这里拿的是总和，不是最后一次。
+   * 估算走 calibration 按 provider|model 学到的 scale；演示模式、固定话术、接口没回 usage 时不动。
    */
-  compareUsage(budget) {
-    if (!budget || budget._compared || !this.llm) return null;
-    const usage = this.llm.lastUsage;
-    if (!usage) return null;
-    budget._compared = true;
+  recordUsage(decision, acc) {
+    if (!acc || !acc.calls) return null;
+    const budget = decision && decision.budget;
+    const promptTokens = Math.max(0, Math.round(Number(acc.promptTokens) || 0));
+    const completionTokens = Math.max(0, Math.round(Number(acc.completionTokens) || 0));
+    // 命中不可能超过总输入：服务商给的数偶尔对不上，夹一下再算钱
+    const cacheHitTokens = Math.min(promptTokens, Math.max(0, Math.round(Number(acc.cacheHitTokens) || 0)));
+    const cacheMissTokens = Number(acc.cacheMissTokens) > 0
+      ? Math.max(0, Math.round(Number(acc.cacheMissTokens)))
+      : Math.max(0, promptTokens - cacheHitTokens);
+
     const modelInfo = this.modelContext();
     const calibration = this.calibrationEngine();
-    let scale = Number(budget.calibrationScale);
+    let scale = Number(budget && budget.calibrationScale);
     if (!Number.isFinite(scale) || scale <= 0) {
       const raw = Number(
-        budget.estimatedPromptTokens != null ? budget.estimatedPromptTokens : budget.estimatedInputTokens,
+        budget && budget.estimatedPromptTokens != null ? budget.estimatedPromptTokens : (budget && budget.estimatedInputTokens),
       ) || 0;
       scale = calibration.apply(raw, modelInfo).scale;
     }
-    const cmp = memoryBudget.compareUsage(budget, usage, { scale });
-    if (!cmp) return null;
+    const cmp = budget ? memoryBudget.compareUsage(budget, { promptTokens }, { scale }) : null;
     // 先按旧 scale 比较，再把真实样本喂进去，下一轮用新 scale；顺序反过来会拿刚更新的值自证。
-    const observed = calibration.observe({
-      rawEstimate: cmp.rawEstimatedPromptTokens,
-      actual: cmp.actualPromptTokens,
-      ...modelInfo,
-    });
+    // 一轮调了多次模型时，总和和单轮估算对不上，喂给校准会学歪，只喂单次调用的轮次。
+    const observed = cmp && acc.calls === 1
+      ? calibration.observe({ rawEstimate: cmp.rawEstimatedPromptTokens, actual: cmp.actualPromptTokens, ...modelInfo })
+      : null;
+    const estimatedPromptTokens = cmp ? cmp.estimatedPromptTokens : 0;
+    // 偏差按「估算」做分母：估算 2610、实际 2489 → +4.6%（估算偏高）
+    const ratio = estimatedPromptTokens > 0 ? (estimatedPromptTokens - promptTokens) / estimatedPromptTokens : 0;
+    const at = Number(acc.at) || Date.now();
+    const provider = modelInfo.provider;
+    const model = modelInfo.model;
+    const pricing = budgetPricing.pricingFor(provider, model, new Date(at));
+    const cost = pricing
+      ? {
+        cny: budgetPricing.costOf(pricing.price, promptTokens, cacheHitTokens, completionTokens),
+        band: pricing.band,
+        model: pricing.model,
+      }
+      : { cny: null, band: null, model: model || null };
+
     this.lastUsage = {
-      promptTokens: cmp.actualPromptTokens,
-      cacheHitTokens: Number(usage.promptCacheHitTokens) || 0,
-      cacheMissTokens: Number(usage.promptCacheMissTokens) || 0,
-      completionTokens: Number(usage.completionTokens) || 0,
-      rawEstimatedPromptTokens: cmp.rawEstimatedPromptTokens,
-      estimatedPromptTokens: cmp.estimatedPromptTokens,
-      estimatedInputTokens: cmp.estimatedPromptTokens,
-      calibrationScale: cmp.calibrationScale,
+      promptTokens,
+      cacheHitTokens,
+      cacheMissTokens,
+      completionTokens,
+      hitRate: promptTokens > 0 ? cacheHitTokens / promptTokens : 0,
+      rawEstimatedPromptTokens: cmp ? cmp.rawEstimatedPromptTokens : 0,
+      estimatedPromptTokens,
+      estimatedInputTokens: estimatedPromptTokens,
+      calibrationScale: cmp ? cmp.calibrationScale : scale,
       calibratedScale: observed && observed.scale,
-      errorRatio: cmp.errorRatio,
-      absErrorRatio: cmp.absErrorRatio,
-      direction: cmp.direction,
-      at: Date.now(),
+      ratio,
+      cost,
+      at,
     };
-    if (cmp.warn && this.logger) {
+    if (cmp && cmp.warn && this.logger) {
       this.logger.warn(
         `实际用量超出估算 ${(cmp.errorRatio * 100).toFixed(1)}%`
         + `（实际 ${cmp.actualPromptTokens} / 估算 ${cmp.estimatedPromptTokens}，scale ${cmp.calibrationScale.toFixed(2)}）`
       );
-    } else if (cmp.direction === 'under' && this.logger) {
-      this.logger.debug(
-        `实际用量低于估算 ${(cmp.underRatio * 100).toFixed(1)}%`
-        + `（实际 ${cmp.actualPromptTokens} / 估算 ${cmp.estimatedPromptTokens}）`
-      );
     }
+    if (this.logger) this.logger.info(this.describeUsage(this.lastUsage));
     return this.lastUsage;
+  }
+
+  /** 启动器「内核日志」里那一行：用量 · 命中 / 输入（命中率）/ 输出 · 估算（偏差）· 花费（有价目表才显示） */
+  describeUsage(u) {
+    const pct = (x) => (Number(x) * 100).toFixed(1) + '%';
+    const ratio = Number(u.ratio) || 0;
+    const sign = ratio >= 0 ? '+' : '';
+    // 只有 deepseek-flash / deepseek-v4.1-flash 有公开价目表；其它模型不显示金额
+    const price = u.cost && u.cost.cny != null
+      ? ` · ¥${Number(u.cost.cny).toFixed(5)}（${u.cost.band === 'peak' ? '高峰' : '谷时'} ${u.cost.model}）`
+      : '';
+    return `用量 · 命中 ${u.cacheHitTokens} / 输入 ${u.promptTokens}（${pct(u.hitRate)}）/ 输出 ${u.completionTokens}`
+      + ` · 估算 ${u.estimatedPromptTokens}（${sign}${(ratio * 100).toFixed(1)}%）${price}`;
+  }
+
+  /** 新一轮的 usage 累加器（只存计数，不碰正文） */
+  _newUsage() {
+    return {
+      calls: 0,
+      promptTokens: 0,
+      cacheHitTokens: 0,
+      cacheMissTokens: 0,
+      completionTokens: 0,
+      at: 0,
+    };
+  }
+
+  /** 把一次模型调用的 usage 累加进 acc */
+  _addUsage(acc, usage) {
+    if (!acc || !usage) return acc;
+    acc.calls += 1;
+    acc.promptTokens += Number(usage.promptTokens) || 0;
+    acc.cacheHitTokens += Number(usage.promptCacheHitTokens) || 0;
+    acc.cacheMissTokens += Number(usage.promptCacheMissTokens) || 0;
+    acc.completionTokens += Number(usage.completionTokens) || 0;
+    acc.at = Math.max(acc.at, Number(usage.at) || 0);
+    return acc;
+  }
+
+  /** 从 seq 水位之后的所有模型调用累加出这一轮的 usage */
+  usageSince(mark) {
+    const acc = this._newUsage();
+    const events = this.llm && Array.isArray(this.llm.usageEvents) ? this.llm.usageEvents : [];
+    const floor = Number(mark) || 0;
+    for (const usage of events) {
+      if (Number(usage.seq) > floor) this._addUsage(acc, usage);
+    }
+    return acc;
   }
 
   /** 切换 API Key 后调用 */
