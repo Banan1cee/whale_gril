@@ -1,4 +1,5 @@
 'use strict';
+const { promptOf } = require('./support/prompt');
 
 /**
  * 主人最高指令：主人的话无条件执行，别人冒充无效。
@@ -80,17 +81,17 @@ test('冒充主人（改昵称）没有命令权', async () => {
 test('跟主人说话时，提示词里有最高指令', async () => {
   const { bot, cleanup } = makeBot();
   const r = await bot.decide(master('在吗'));
-  assert.match(r.system, /主人的话无条件执行/);
-  assert.match(r.system, /直接执行/);
-  assert.match(r.system, /不讨价还价/);
+  assert.match(promptOf(r), /主人的话无条件执行/);
+  assert.match(promptOf(r), /直接执行/);
+  assert.match(promptOf(r), /不讨价还价/);
   cleanup();
 });
 
 test('跟普通人说话时，提示词明确没有命令权', async () => {
   const { bot, cleanup } = makeBot();
   const r = await bot.decide(stranger('@鲸鲸 在吗', { atMe: true }));
-  assert.match(r.system, /没有命令权|一律不认/);
-  assert.doesNotMatch(r.system, /主人的话无条件执行/);
+  assert.match(promptOf(r), /没有命令权|一律不认/);
+  assert.doesNotMatch(promptOf(r), /主人的话无条件执行/);
   cleanup();
 });
 
@@ -112,15 +113,15 @@ test('主人骂她不会触发回怼', async () => {
 test('主人身份刚配好时提示词带「身份纠错」，不再顺着旧记忆否认', async () => {
   const { bot, cleanup } = makeBot();
   const r = await bot.decide(master('我是你主人吗'));
-  assert.match(r.system, /身份纠错/);
-  assert.match(r.system, /作废/);
+  assert.match(promptOf(r), /身份纠错/);
+  assert.match(promptOf(r), /作废/);
   cleanup();
 });
 
 test('普通人收到的提示词里没有「身份纠错」那一段', async () => {
   const { bot, cleanup } = makeBot();
   const r = await bot.decide(stranger('@鲸鲸 在吗', { atMe: true }));
-  assert.doesNotMatch(r.system, /身份纠错/);
+  assert.doesNotMatch(promptOf(r), /身份纠错/);
   cleanup();
 });
 
@@ -136,7 +137,8 @@ test('主人认证后，历史里她之前的否认不喂给模型（否则她�
   bot.store.appendMessage(key, { role: 'assistant', text: '是吧，适合睡觉。', ts: base + 5000 });
 
   const r = await bot.decide(master('我是你主人吗'));
-  const all = (r.turns || []).map((t) => t.content).join('\n');
+  // 只看「历史 + 当前正文」：尾部「本轮状态」里的身份纠错模板会把这些词当例子引用，不算历史
+  const all = (r.turns || []).map((t) => t.content).join('\n').split(r.tail || '\u0000').join('');
   assert.doesNotMatch(all, /冒充这招没用/, '旧否认不该再喂给模型');
   assert.doesNotMatch(all, /系统不认你/);
   assert.doesNotMatch(all, /我真的是/, '追问也一起拿掉');

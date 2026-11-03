@@ -2,6 +2,186 @@
 
 ## 4.0
 
+### 改进 · 演示模式台词不再点名模型
+
+**现象：没配 Key 的演示模式里，「你是谁 / 你是不是 AI」的内置台词会回「本鲸是 DeepSeek 养的」「DeepSeek 大模型驱动」。**
+演示模式本来就不该暴露后端用的是谁家的模型。
+
+- `src/persona/index.js` 的 `MOCK_RULES` 里两条台词改成不点名的说法（「AI 驱动的鲸鱼娘」「养在深海里的鲸鱼娘」）
+- 测试：`tests/prompt-model-name.test.js` 断言 `mockReply` 的输出不含 `DeepSeek`
+
+### 改进 · 默认人设不再报模型型号（system 不再随模型变化）
+
+**现象：被问「你是什么模型 / 什么版本」时，默认人设直接回「我的模型是 <当前配置的型号>」。**
+这等于把部署配置报给对方；而且这行把 `msg.model` 拼进 system，换模型/换服务商 system 就变一次，前缀缓存跟着全部作废。
+
+- 删掉 `src/persona/index.js` 里写死型号的台词，换成「就当被问体重，打个哈哈带过去，别编版本号」
+- 不用「别报/不报型号」这种否定式规则：实测模型会把规则念出来当开头（「不报型号，…」）；
+  改成行为描述后 10/10 不再念规则、0/10 泄露型号或厂商
+- 默认人设 system 不再读 `msg.model` / `msg.provider`；`src/pipeline/chat.js` 里对应的传参一并删掉（全仓已没有别的消费者）
+- 自定义人设（`customPrompt` 非空）分支本来就没有这行，补断言钉住，防止以后被加回来
+- 同步改掉【回答原则】里「问模型就报模型名」的反向指令：它在 system 里更靠后，等于给模型发了报型号的许可证，两条必须一致
+- 测试：新增 `tests/prompt-model-name.test.js`：随机型号不进 system、被问型号时打哈哈、不再出现「不报型号」式措辞、自定义分支同样不含、换模型前后 system 字节完全一致
+- legacy 快照（`tests/fixtures/prompt-legacy/`）同步改这两行，`features.staticSystem=false` 的逐字回滚仍然成立
+
+### 新增 · 启动器「状态」页显示本轮用量
+
+**本轮用量原来只打在日志里，exe 里看不到。**
+
+- 「状态」页在「本次运行」下面新增一行：
+  `本轮用量   命中 1234 / 输入 2489（49.6%）/ 输出 87 · 估算 2610（+4.6%） · deepseek-flash · ¥0.00042（谷时）`；
+  没调用过真实模型（演示模式）时显示「—」，不猜
+- 启动器从 `/api/status` 的 `budget.lastUsage` 读这几个数，和内核日志里那行同一个口径
+
+### 修复 · 「主动与提醒」页没有滚动条，内容一多就顶出窗口
+
+**现象：这一页把提醒规则、主动搭话、提醒列表堆在一屏里，窗口一小就顶出去；鼠标滚轮完全没反应，下面的白名单 / 黑名单和列表都够不着。**
+
+- 根因：整页没有 ScrollViewer，Grid 的第二行是 Auto 高度，内容多高它就多高，超出的部分直接被裁掉
+- 现在标题、刷新按钮和底部状态行固定，中间的规则卡 + 提醒列表整体滚动
+- 提醒列表不再自己套一层 ScrollViewer（嵌套滚动会让滚轮打架），空列表给 180 的最小高度，空状态文字还能看见
+
+### 新增 · 本轮用量：每轮命中 / 输入 / 输出 / 命中率 / 估算
+
+**以前 usage 只记了 prompt / cacheHit / completion 三个数，界面上看不到，也不知道这一轮花了多少钱。**
+
+- 每轮回复结束写 `bot.lastUsage`：命中输入、输入、输出、命中率、本轮估算与偏差、花费、计价时段、时间；
+  复读重写 / 上下文半窗 / 降级重试一轮调了多次模型时按轮累加（客户端记 usage 水位），取总和而不是最后一次
+- 估算沿用 token 校准（`provider|model` 的 scale）；一轮调了多次模型时总和和单轮估算对不上，不喂校准样本，免得学歪
+- 价格只对 `deepseek-flash` 和 `deepseek-v4.1-flash` 计价（谷时输入命中 0.02 / 未命中 1 / 输出 4 元每百万 token，
+  高峰翻倍；高峰 = 周一至周五 9:00-12:00、14:00-18:00）；其它模型不算价、界面不显示金额
+- `/api/status` 的 `budget.lastUsage` 带全部新字段，按白名单输出，不泄露 API Key、不带提示词或消息正文
+- 内核日志每轮多一行 INFO：`用量 · 命中 1234 / 输入 2489（49.6%）/ 输出 87 · 估算 2610（+4.6%） · ¥0.00042（谷时 deepseek-flash）`
+
+### 新增 · 环境信息注入（提示词里的 `<env>` 块）
+
+**以前问她「你用的什么系统」「你那边几点了」「你电脑卡不卡」「你在哪」，她只能按训练数据猜，
+或者干脆说「我不太清楚」。**
+
+- 新增 `src/core/env.js`：`snapshot()` 采一次机器信息（系统名与版本、架构、CPU 核数、
+  内存、时区、Node 版本）后进程内缓存，字段里没有任何时间类数据；`formatBlock()` 拼成 `<env>` 文本
+- 新增 `src/services/envInfo.js`：`systemBlock(config, version)` 合并快照 + 地点 + 程序版本，
+  按配置记忆化（同一配置下逐字节一致，不打断前缀缓存）；`bridgeLine(msg)` 把「桥接在线 /
+  UIA 可用 / ffmpeg 是否找到」拼成一行
+- 挂在 `buildBlocks()` 的静态段（紧挨时间规则）：整段 system 仍然逐字节稳定；
+  旧行为路径 `buildLegacySystem` 也认这个块，关掉 `features.staticSystem` 不会丢
+- 地点解析顺序：手填 `config.env.location`（可到区）→ `config.websearch.city`（城市级）→
+  **自动探测**（`src/services/location.js`，`env.autoDetect` 默认开）→ 都没有就不写这一行
+- 所在地自动探测**先系统、后 IP**：优先 Windows 定位服务（`Windows.Devices.Geolocation`，
+  Wi-Fi / GPS 定位，不吃公网 IP，**挂 VPN 也取本机位置**）→ 坐标交给 `api.bigdatacloud.net`
+  换成地名 → 系统定位被关掉 / 没权限 / 拿不到时才退回 `ipinfo.io` 按出口 IP 猜城市
+- **自动探测只到市，不报区县**（实测定位落点会偏到隔壁区，说错区比只说市更糟）；
+  `<env>` 括注写明来源与精度（「系统定位，精度约 50 公里，只到市」/「按网络出口 IP 推算，
+  挂了 VPN 时可能不符」），模型据此知道该说得多确定，被追问区 / 街道就说不知道
+- 桥接状态每轮都可能变，所以不进静态 system，改放「本轮状态」尾部
+- 开关注册 `features.envContext`（默认开）：关掉 = system 里没有 `<env>` 块，回到旧行为
+- `config.json` 新增 `env: { location, timezone, autoDetect }`；`config.env` 同时保留进程环境变量视图
+  （原来 config.json 里的 env 段会被 process.env 整个盖掉）
+- 隐私：环境信息只在本机拼装、只给模型看，不发给维护者、不写日志、不落盘；地点最多到区、
+  自动探测只到市，主机名、用户名、家目录、安装路径、经纬度不进提示词（`PRIVACY.md` 已写明）
+
+### 改进 · system 静态化 + 日期/时间分层（前缀缓存命中）
+
+**现象：DeepSeek 的前缀缓存基本不命中。** system 里塞了时间（每分钟）、心情（每小时）、
+说话人、@名单、字数上限、群风格、梗、联网资料、动作账本，群里换个人说话 system 就变一次，
+私聊每分钟也变一次；缓存要求「完整匹配一个缓存前缀单元」，改一个字符后面全部重算。
+
+- `src/persona/index.js` 拆成「块 + 位置」：`buildBlocks()` 产出 static / dynamic 两组文本，
+  `buildSystem()` 只返回 static，`buildTurnState()` 把 dynamic 拼成尾部，`buildPromptParts()` 一次给两块
+- system 只留：人设卡、核心性格、怎么说话/别这样说/示例、抽象模式、风格设置、情绪/主动/立场开关、
+  硬性要求、对话理解规则（去掉参与者/提及/是否请求回应三行）、表情包能力、群聊场景规则（不含人名）、
+  私聊时的主人段、时间怎么看，最后一行「今天是 YYYY年M月D日 周X」
+- 尾部（最后一条 user 消息里，顺序：正文 → 记忆块 → 本轮状态）：语气底子、本条说话者、字数上限、
+  认真讨论、@名单/引用/参与者、群风格、梗、缩写、联网资料、链接、语音后缀、FIGHT_STYLE 与靶子、
+  动作账本、群聊里主人说话时的主人段、此刻在干嘛
+- 历史消息前加 `[MM-DD HH:mm]` 时间戳（`src/core/context.js`），只在首条 / 间隔 ≥5 分钟 / 跨天时输出；
+  当前这条永远带。同一个 `ts` 当「当前」和当「历史」渲染结果完全一致
+- 开关 `features.staticSystem`（默认开）：关掉 = 完全回到旧行为（`buildLegacySystem`，逐字兼容，
+  用 `tests/fixtures/prompt-legacy` 的快照钉住），用来回滚
+- `/api/debug/prompt` 增加 `tail` / `turns` / `systemTokens` / `tailTokens`，调试台「提示词预览」
+  分区展示 system 和尾部，并标注哪些块在尾部
+- 测试：新增 `tests/prompt-layout.test.js`（system 字节稳定、日期跨天、时间戳节流、
+  当前/历史时间戳一致、三段顺序、legacy 逐字回归）；`prompt-runtime-date` / `persona` /
+  `status-mention` / `sticker-capability` / `owner-name` / `action-events` / `weather` / `search-bot`
+  统一走 `tests/support/prompt.js` 的 `assemblePrompt()` / `promptOf()`
+- 预算估算跟着调整：system 只算静态块，缓存「每轮重算区」从 120 token 提到 320（记忆块 + 本轮状态）
+- 新增 `scripts/measure-cache-hit.js`：私聊/群聊各 3 轮，用真实接口打印 `prompt_cache_hit_tokens`
+  的改造前后对比（没配 Key 时只打印用法，不发请求）
+
+### 新增 · 群聊关系加载：A 提到 B 时，把「两人的关系 + B 的情况」带进提示词
+
+**以前群里 A 说「我和小明是同事」，模型只看到这一句：不知道小明是谁、两人什么关系；
+等小明再说话时，也只按小明自己的卡加载。**
+
+- 关系边存在 `chat.meta.relations`（每个群独立，旧 meta 没有这个字段 = 空，不需要迁移）：
+  `{ id, a, b, text ≤40 字, confidence, source:{chatId,messageIds}, createdAt, updatedAt }`，
+  `a` / `b` 按字典序排好，同一个 pair 只留一条；上限 200 条，按 `updatedAt` 淘汰最旧的
+- 两条生产路径：① 规则即时——「我和 X 是同事」「X 是我朋友」「我朋友叫 X」三句式，
+  「我朋友说…」这类转述不误判；② episode 关闭时由模型抽 `relations`，
+  `a` / `b` 必须都是本段发言人，否则整条丢掉
+- 名字 → uid 只查本群最近 200 条消息：查不到就只保留名字，不建卡、不编 uid；
+  多人同名取最近发言的那个
+- 消费：`buildContext` 收到 `mentionedNames` 时输出 ≤200 token 的一小块
+  （关系 + 那个人的卡最多 3 条 + 最近 2 句、各 40 字），挂在最后一条 user 消息的尾部；
+  没有关系边就只给卡和最近发言；名字对不上任何人整块不输出
+- 新增开关 `features.relations`（默认开，调试台自动出现）：关掉不再注入关系块
+- 预算：启用已有的 `relations` 份额（120 token，关掉并回 recent），块内硬上限 200 token
+- 新增 `tests/relations.test.js` 19 条：三句式、合并、200 条淘汰、同名解析、渲染与 token 上限、
+  跨群隔离、开关、episode 过滤、敏感词脱敏
+
+### 修复 · 记忆块超预算时不再裁掉结尾声明和半句摘要
+
+**现象：记忆一多，`buildMemoryBlock` 拼出来的块就开始「断头断尾」——结尾那句
+「这些只来自当前这个聊天；别提别的聊天里的事，被问到就说‘这个我不清楚’」整句消失，
+摘要被切成半句甚至半截 JSON，人物卡的事件标题也被压成 16 字。**
+
+- 根因：超预算先整体减半，还超就 `block.slice(0, limit)` 按字符硬裁。结尾声明是拼在
+  正文之后的，硬裁只作用于正文，但正文按「token 数当字符数」粗裁，最先断的正是摘要尾部；
+  声明不参与判断，所以「只在这个聊天里说话」这条硬约束会被静默削弱
+- 现在按段组织：`【这个聊天里的 TA】/【相关事件】/【这段之前聊过】`，结尾声明独立成一段、
+  永远保留在最后、不参与任何裁剪
+- 超预算按固定顺序丢：相关事件从最旧的一条删 → 摘要从尾部按整句删（按 。！？； 和换行切，
+  不切半句）→ 人物卡条数反复减半 → 最后才按字符硬裁，而且按码点裁，emoji 不会被切成半个
+- 预算口径仍是 `estimateBudgetTokens`（结尾声明一起计入，因为声明也占 prompt），
+  调用方签名、`budget` / `caps` 参数都没变
+- 测试：新增 `tests/memory-format.test.js` 7 条，钉住三段顺序与声明位置、只超一点只丢最旧
+  事件、超很多时事件清空且摘要仍是整句、50 token 不抛异常且声明仍在、空卡返回空串、
+  中文 + emoji + 换行混排不产生半个字符、减半只裁条数不切半行
+
+### 修复 · token 估算拿预算上限冒充真实输入，日志偏差 188% 却没人校准
+
+**现象：日志写「token 估算偏差 188.5%（估算 7036 / 实际 2489）」，看起来像估算器坏得很离谱，
+实际上 7036 是 system 估算 1436 + dialogueBudget 5600，而 2489 才是真实 prompt_tokens。**
+
+- `src/memory/tokens.js` 新增 `estimatePrompt(system, turns)`：按真正要发的消息逐条算，
+  不再拿对话预算上限冒充输入
+- `buildBudget()` 返回 `estimatedPromptTokens`（system + 实际 turns），硬上限判断改用它；
+  `dialogueBudget` 继续保留给裁剪窗口，`estimatedInputTokens` 只作为语义修正后的兼容字段
+- 新增 `src/memory/calibration.js`：按 provider|model 用 Adam 学估算倍数，前 3 个样本预热、
+  scale 限制 [0.5, 2.0]、单步 ≤0.05，异常 ratio / 过短 prompt 直接丢弃；
+  持久化 `data/calibration.json`（原子写、5 秒防抖、损坏静默回落 1.0）
+- `compareUsage` 改成「实际 vs 校准后的真估算」，只有实际用量超出 >15% 才告警，
+  文案改为「实际用量超出估算 X%」；实际更少不再叫「低估」
+- 裁剪窗口只有在样本 ≥10 且 scale 量化到 0.05 后才采用校准值，避免每轮抖动破坏前缀缓存
+- LLM 报 context_length / maximum context / too long 时，砍掉一半 turns 重试一次，
+  保留当前消息；仍失败再走现有降级，不再退化成只发当前一句
+- 测试：新增 `tests/token-calibration.test.js`，更新预算与 memory 预算用例
+
+### 修复 · 图片 / 表情 / 语音识别失败后「为什么不回」查不到
+
+**现象：临时的图片下载失败、表情包缓存解不开、语音转写报错时，她都不回话（这是对的），
+但 `data/bridge.log` 里没有会话、发送者和消息 id，事后只能猜是哪条消息、为什么失败。**
+
+- `on_message_inner` 的三条失败分支（图片 / 表情 / 语音）在静默 `return` 前补一条 `log_error`：
+  会话、发送者、消息类型、消息 id、失败原因（异常类型，或「空描述」）一次写全
+- 节流走现成的 `log_throttled`，key 带消息 id（`media-fail:<会话>:<分片>:<本地id>:<类型>`）：
+  同一条消息反复失败只记一次，别的消息照常各记一条，不会因为节流被吞
+- `describe_image` / `describe_emoji` / `transcribe_voice` 在异常被吞掉时把异常类型写回消息，
+  失败原因不再是「空」；识别成功的路径与图片 / 表情预处理逻辑一律没动，仍然不回话
+- 加测试：`tests/test_received_media.py` 6 条（图片 / 表情 / 语音失败都调 `log_error` 且不回复、
+  识别成功不产生 error 日志、同一条消息重复失败只记一次、异常类型带回日志）；
+  `tests/bridge-recovery.test.js` 一条钉住三条链路都先记日志再 return、key 带消息 id、写 error 级
+
 ### 修复 · 图片与表情包识别：缓存重试、解密探针、表情包进识别链路、看图补 OpenCode 会话头
 
 **现象：私聊文字正常，图片却「取不到本地文件」；表情包发过来完全没反应。**

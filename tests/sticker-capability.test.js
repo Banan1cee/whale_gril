@@ -8,6 +8,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { buildSystem } = require('../src/persona');
 const { DEFAULT_CONFIG } = require('../src/infra/config');
+const { assemblePrompt } = require('./support/prompt');
 
 function build(customPrompt, enabled, ...platformArg) {
   const platform = platformArg.length ? platformArg[0] : 'wechat';
@@ -20,11 +21,11 @@ function build(customPrompt, enabled, ...platformArg) {
     persona: { ...DEFAULT_CONFIG.persona, name: '审计测试角色', customPrompt },
     chat: { ...DEFAULT_CONFIG.chat },
   };
-  return buildSystem({
+  return assemblePrompt({
     config,
     msg: { platform, chatType: 'private', senderName: '测试朋友', text: '发个表情包' },
     now: new Date('2026-01-01T12:00:00Z'),
-  });
+  }).prompt;
 }
 
 for (const [label, customPrompt] of [['默认', ''], ['自定义', '你是审计测试角色，保持原有身份。']]) {
@@ -81,11 +82,11 @@ test('图库有图时，提示词里带上分类名和张数', () => {
       persona: { ...DEFAULT_CONFIG.persona, name: '审计测试角色', customPrompt: '' },
       chat: { ...DEFAULT_CONFIG.chat },
     };
-    const prompt = buildSystem({
+    const prompt = assemblePrompt({
       config,
       msg: { platform: 'wechat', chatType: 'private', senderName: '测试朋友', text: '发个表情包' },
       now: new Date('2026-01-01T12:00:00Z'),
-    });
+    }).prompt;
     assert.match(prompt, /炸毛\(2张\)/);
     assert.doesNotMatch(prompt, /图库现在是空的/);
   } finally {

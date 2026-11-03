@@ -247,6 +247,8 @@ namespace WhaleLauncher.Views
         }
 
         private DateTime _lastAccounts = DateTime.MinValue;
+        private bool _autoScanTried;
+        private bool _scanning;
 
         private void UpdatePerm(Snapshot s)
         {
@@ -304,6 +306,14 @@ namespace WhaleLauncher.Views
                 }
             }
             catch { /* 内核没起或还没扫到账号 */ }
+
+            // 第一次打开这一页、又还没有账号缓存（data/accounts.json）时自动扫一次：
+            // 否则双开用户只能看到一张「当前在用」的兜底卡，找不到另一个号。
+            if (cards.Count == 0 && s.BrOnline && !_autoScanTried)
+            {
+                _autoScanTried = true;
+                _ = ScanAccountsAsync();
+            }
 
             if (cards.Count == 0 && s.BrOnline)
             {
@@ -389,8 +399,42 @@ namespace WhaleLauncher.Views
         private void OnRefreshAccounts(object sender, RoutedEventArgs e)
         {
             _lastAccounts = DateTime.MinValue;
-            _ = RefreshAsync();
-            _sup.Say("刷新微信账号列表");
+            _ = ScanAccountsAsync();
+        }
+
+        /// <summary>
+        /// 真正让桥接扫一遍账号目录（开库读昵称，慢，最多 30 秒），再刷新界面。
+        /// 以前这里只重新 GET 缓存，账号缓存没生成时点多少次都只有一张兜底卡。
+        /// </summary>
+        private async Task ScanAccountsAsync()
+        {
+            if (_scanning) return;
+            _scanning = true;
+            _sup.Say("刷新微信账号列表（开库读昵称，最多 30 秒）…");
+            try
+            {
+                // 用独立的 HttpClient：页面这个 4 秒超时，扫描要十几秒
+                using var scan = new HttpClient(new HttpClientHandler { UseProxy = false })
+                {
+                    Timeout = TimeSpan.FromSeconds(45)
+                };
+                using var res = await scan.PostAsync(
+                    _sup.Url + "/api/wechat/accounts/refresh",
+                    new StringContent("{}", Encoding.UTF8, "application/json"));
+                var body = await res.Content.ReadAsStringAsync();
+                if (!body.Contains("\"refreshed\":true"))
+                    _sup.Say("扫描账号没成功：" + body);
+            }
+            catch (Exception ex)
+            {
+                _sup.Say("扫描账号失败：" + ex.Message);
+            }
+            finally
+            {
+                _scanning = false;
+                _lastAccounts = DateTime.MinValue;
+            }
+            await RefreshAsync();
         }
 
         private void OnRestartBridge(object sender, RoutedEventArgs e) => _sup.RestartBridge();

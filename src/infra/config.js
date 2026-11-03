@@ -159,6 +159,14 @@ const DEFAULT_CONFIG = {
   // 联网：问天气/新闻这类实时问题时现搜。city 用来把「今天天气怎么样」补成「上海 天气」，
   // 搜到的结果准得多；留空就按对方原话搜（也能用，但经常搜到别的城市）。
   websearch: { enabled: true, city: '', timeoutMs: 8000 },
+  // 环境：拼进提示词 <env> 块的稳定信息（开关在 features.envContext）。
+  // location 是给人填的，可以精确到区（「厦门市思明区」）；留空就交给自动探测，
+  // 探测也拿不到才退回 websearch.city（只有城市级），都没有就整行不写。
+  // **不要填街道门牌**——拼装时会按区截断，但一开始就别填。
+  // autoDetect：自动探测本机所在地。优先 Windows 定位服务（不吃公网 IP，挂 VPN 也是本机位置），
+  // 只到市（区县容易错，要区就手填）；拿不到才退回出口 IP（会写明「按出口 IP」）。
+  // 不想联网/不想起子进程就设 false。timezone 留空 = 用系统自己的时区。
+  env: { location: '', timezone: '', autoDetect: true },
   // 提醒：规则和 care 同语义（每天上限 / 刚聊过先跳过），配置独立、界面独立。
   // 提醒不设时间段：它是用户指定的准点事件，卡时间窗只会让提醒发不出去。
   reminder: { enabled: true, maxPerDay: 0, quietAfterMinutes: 0 },
@@ -178,10 +186,16 @@ const DEFAULT_CONFIG = {
   // 图片理解：默认智谱 GLM-4V-Flash（免费）
   features: {
     stickers: false,
+    // 系统提示词静态化（前缀缓存）：关掉 = 回到「每轮都塞时间/心情/说话人」的旧行为
+    staticSystem: true,
+    // 环境信息注入（系统 / 时区 / 所在地）：关掉 = system 里没有 <env> 块
+    envContext: true,
     groupAddressGuard: true,
     fightQuoteCheck: true,
     mediaCleanup: true,
     memorySnapshot: true,
+    // 群聊关系加载（A 提到 B）：默认开，可在调试台关
+    relations: true,
   },
 
   storage: {
@@ -404,6 +418,13 @@ function loadConfig({ root = projectRoot(), env = process.env } = {}) {
   if (env.DEEPSEEK_MODEL) cfg.deepseek.model = env.DEEPSEEK_MODEL;
   if (env.DEEPSEEK_BASE_URL) cfg.deepseek.baseUrl = env.DEEPSEEK_BASE_URL;
   if (env.LLM_PROVIDER) cfg.provider = env.LLM_PROVIDER;
+  // config.env 一直是「进程环境变量」的视图（vision.js 读 ZHIPU_API_KEY、Key 兜底读 DEEPSEEK_API_KEY），
+  // 而 config.json 的 env 段放的是环境块要用的 location / timezone / autoDetect。以前这里直接把
+  // process.env 顶上去，config.json 里写的 env 段被整个盖掉 —— 填了地点也不生效。
+  // 现在用原型链合起来：环境变量从原型读（不复制整份，Windows 上的大小写不敏感查表也照样有效），
+  // config.json 的值是自己的键，序列化配置时不会把整份环境变量带出去。
+  const fileEnv = cfg.env && typeof cfg.env === 'object' && !Array.isArray(cfg.env) ? { ...cfg.env } : {};
+  const mergedEnv = Object.assign(Object.create(env || null), fileEnv);
   return {
     ...cfg,
     root,
@@ -416,7 +437,7 @@ function loadConfig({ root = projectRoot(), env = process.env } = {}) {
       logFile: path.join(root, 'data', 'whale.log'),
       webDir: path.join(root, 'web'),
     },
-    env,
+    env: mergedEnv,
     configExists,
   };
 }

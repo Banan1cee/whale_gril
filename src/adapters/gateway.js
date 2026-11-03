@@ -144,6 +144,21 @@ class Gateway {
     return { ok: true, online: true, serverTime: now };
   }
 
+  /**
+   * 桥接当前的可用状态：在线 / UIA 能不能用 / ffmpeg 找没找到。
+   * 复用心跳里已有的字段，不另存一份，免得网页显示和提示词里的说法对不上。
+   * 20 秒一次心跳，45 秒没动静就算掉线（和 status() 同一口径）。
+   */
+  bridgeStatus() {
+    const ageSec = this.bridge.lastSeen ? Math.round((Date.now() - this.bridge.lastSeen) / 1000) : null;
+    const online = ageSec !== null && ageSec <= 45;
+    return {
+      online,
+      uia: online ? this.bridge.uia : null,
+      ffmpeg: online ? this.bridge.ffmpeg : null,
+    };
+  }
+
   verifyToken(req, body) {
     const expected = String(this.options.inboundToken || '');
     if (!expected) return true; // 没设置 token 就不校验（只建议本机测试时这样）
@@ -161,6 +176,9 @@ class Gateway {
       // 桥接来取消息也算一次心跳（它一定是活着的）
       this.bridge.lastSeen = Date.now();
     }
+    // 桥接状态跟着这一条消息走：管线的提示词尾部据此说「现在能不能发出去」，
+    // 不用模型自己猜，也不会把「桥接离线」当成「消息已发出」。
+    msg.bridgeStatus = this.bridgeStatus();
     this.stats.received += 1;
     this.stats.lastMessageAt = Date.now();
     if (msg.noReply) return { ok: true, skipped: 'no_reply_flag' };

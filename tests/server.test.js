@@ -340,7 +340,8 @@ test('调试台：提示词预览能区分主人 / 普通人 / 群聊', async ()
 
   const byWxid = await (await post({ senderName: '随便改的昵称', senderId: 'wxid_test_master', chatType: 'group', chatTitle: '深海鱼塘', text: '在吗' })).json();
   assert.equal(byWxid.isMaster, true);
-  assert.match(byWxid.system, /微信群「深海鱼塘」/);
+  // 群名在尾部（每轮会变），调试台返回拼装后的 prompt
+  assert.match(byWxid.prompt, /微信群「深海鱼塘」/);
   } finally { await app.close(); }
 });
 

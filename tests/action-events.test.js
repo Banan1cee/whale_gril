@@ -9,7 +9,7 @@ const path = require('node:path');
 
 const { Store } = require('../src/memory/store');
 const { Bot } = require('../src/pipeline/chat');
-const { buildSystem } = require('../src/persona');
+const { assemblePrompt } = require('./support/prompt');
 const { DEFAULT_CONFIG, loadConfig } = require('../src/infra/config');
 const events = require('../src/core/events');
 const { StickerService } = require('../src/services/stickerService');
@@ -109,13 +109,13 @@ test('提示词里如实写出做过什么，并说明没回执不许编', () =>
 
 test('没有记录时提示词里不出现这一节', () => {
   const config = makeConfig();
-  const base = buildSystem({ config, msg: { platform: 'web', chatType: 'private', text: '在吗' } });
+  const base = assemblePrompt({ config, msg: { platform: 'web', chatType: 'private', text: '在吗' } }).prompt;
   assert.doesNotMatch(base, /【最近做过的事/);
-  const withEvents = buildSystem({
+  const withEvents = assemblePrompt({
     config,
     msg: { platform: 'web', chatType: 'private', text: '在吗' },
     events: [{ ts: Date.now(), type: 'sticker', detail: '开心/wave.gif', status: 'confirmed' }],
-  });
+  }).prompt;
   assert.match(withEvents, /【最近做过的事/);
   assert.match(withEvents, /开心\/wave\.gif/);
 });
@@ -123,11 +123,11 @@ test('没有记录时提示词里不出现这一节', () => {
 test('自定义人设也要看得见自己做过的动作', () => {
   const config = makeConfig();
   config.persona.customPrompt = '你是审计测试角色，保持原有身份。';
-  const prompt = buildSystem({
+  const prompt = assemblePrompt({
     config,
     msg: { platform: 'wechat', chatType: 'private', text: '发个图' },
     events: [{ ts: Date.now(), type: 'sticker', detail: '炸毛/wave.gif', status: 'unconfirmed' }],
-  });
+  }).prompt;
   assert.ok(prompt.startsWith('你是审计测试角色'));
   assert.match(prompt, /【最近做过的事/);
   assert.match(prompt, /桥接没回执/);

@@ -1,4 +1,5 @@
 'use strict';
+const { promptOf } = require('./support/prompt');
 
 /**
  * 有人骂主人：她要能看出来，并且知道骂的是谁。
@@ -49,7 +50,7 @@ test('主人说「有人骂我」，她能揪出刚才骂人的那个', async ()
   assert.ok(r.msg.fightTarget, '要找出骂人的是谁');
   assert.equal(r.msg.fightTarget.name, '测试群友');
   assert.match(r.msg.fightTarget.text, /臭机器人/);
-  assert.match(r.system, /测试群友/, '提示词里要写上靶子');
+  assert.match(promptOf(r), /测试群友/, '提示词里要写上靶子');
   cleanup();
 });
 

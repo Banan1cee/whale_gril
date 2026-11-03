@@ -69,6 +69,12 @@ const FIELDS = {
   'links.enabled': { type: 'bool' },
   'links.timeoutMs': { type: 'int', min: 1000, max: 60000 },
   'websearch.enabled': { type: 'bool' },
+  // 环境块（提示词里的 <env>）：地点只到区，时区留空就用系统自己的。
+  // 太长的地址一定是把门牌粘进来了，直接拒掉，别等到拼提示词时才截断。
+  'env.location': { type: 'string', maxLen: 40 },
+  'env.timezone': { type: 'string', maxLen: 64 },
+  // 自动探测所在地（Windows 定位服务优先）；false = 只用手填和 websearch.city
+  'env.autoDetect': { type: 'bool' },
   // ---- 提醒（规则字段和 care 对齐，配置独立）----
   'reminder.enabled': { type: 'bool' },
   'reminder.maxPerDay': { type: 'int', min: 0, max: 200 },

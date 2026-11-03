@@ -20,6 +20,13 @@ const REGISTRY = [
     experimental: true,
   },
   {
+    key: 'envContext',
+    path: 'features.envContext',
+    label: '环境信息注入（系统 / 时区 / 所在地）',
+    desc: '把本机的系统、架构、时区、所在地拼成 <env> 块放进 system，问「你用的什么系统 / 你那边几点 / 电脑卡不卡」时不用瞎猜。关掉 = system 里没有 <env> 块，回到旧行为。',
+    default: true,
+  },
+  {
     key: 'groupAddressGuard',
     path: 'features.groupAddressGuard',
     label: '群里先分清「你」在说谁',
@@ -34,6 +41,13 @@ const REGISTRY = [
     default: true,
   },
   {
+    key: 'staticSystem',
+    path: 'features.staticSystem',
+    label: '系统提示词静态化（前缀缓存）',
+    desc: 'system 只留人设/规则/日期，时间、心情、说话人、@、字数、梗、联网资料、动作账本全部挪到最后一轮消息的「本轮状态」。关掉 = 完全回到旧行为（system 里什么都塞）。',
+    default: true,
+  },
+  {
     key: 'mediaCleanup',
     path: 'features.mediaCleanup',
     label: '启动时清理媒体缓存',
@@ -45,6 +59,13 @@ const REGISTRY = [
     path: 'features.memorySnapshot',
     label: '自动记忆快照',
     desc: '启动和每 30 分钟备份一次记忆到 data/backups（最多 20 份）。关掉=只保留手动备份。',
+    default: true,
+  },
+  {
+    key: 'relations',
+    path: 'features.relations',
+    label: '群聊关系加载（A 提到 B）',
+    desc: '群里有人提到另一个人时，把「两人的关系 + 那个人的卡 + 最近说过的话」加载进提示词。只是给模型看的内部状态，网页/启动器上看不到正文。关掉=不加载关系块（已记录的关系边保留，重新打开还能用）。',
     default: true,
   },
   {

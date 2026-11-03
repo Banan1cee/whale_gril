@@ -36,11 +36,32 @@ function estimateBudgetTokens(text, factor = LIMITS.estimateSafety) {
   return Math.ceil(estimateTokens(text) * (Number(factor) || 1));
 }
 
-/** 一条消息进 prompt 的估算（含角色/名字的固定开销） */
+/**
+ * 一条消息进 prompt 的估算（含角色/名字的固定开销）。
+ * 记忆里的消息用 text，真正发给模型的 turns 用 content；两个字段都要认，
+ * 否则 estimatePrompt 会把每条消息只算成 4 token 的壳子。
+ */
 function messageTokens(message) {
   if (!message) return 0;
-  const body = estimateTokens(message.text);
+  const text = message.text != null ? message.text : message.content;
+  const body = estimateTokens(text);
   return body + 4 + estimateTokens(message.name || '');
+}
+
+/**
+ * 一轮真实 prompt 的估算：system + 每条 turn。
+ * 这是 buildBudget / compareUsage 的唯一口径，不再拿 dialogueBudget（预算上限）冒充实际输入。
+ */
+function estimatePrompt(system, turns) {
+  let total = estimateTokens(system);
+  for (const turn of turns || []) {
+    if (!turn) continue;
+    // buildPayload 会跳过空 content 的消息；估算也要跳过，否则对不上真实拼装结果
+    const text = turn.text != null ? turn.text : turn.content;
+    if (!text) continue;
+    total += messageTokens(turn);
+  }
+  return total;
 }
 
 /** 预算裁剪用：消息估算 × 安全系数 */
@@ -60,6 +81,7 @@ module.exports = {
   estimateBudgetTokens,
   messageTokens,
   messageBudgetTokens,
+  estimatePrompt,
   sumTokens,
   CJK_RE,
 };

@@ -1,4 +1,5 @@
 'use strict';
+const { promptOf } = require('./support/prompt');
 
 /**
  * 回怼火力：贴吧老哥档。既要有攻击力，也不能越底线。
@@ -62,8 +63,8 @@ test('真人模型模式下不再念台词库，交给模型现编', async () =>
   const r = await bot.decide(groupMsg('@鲸鲸 你个废物', { atMe: true }));
   assert.equal(r.action, 'reply');
   assert.notEqual(r.reason, 'clapback', '不该直接念库里的句子');
-  assert.match(r.system, /第二条人格：贴吧老哥/);
-  assert.match(r.system, /最大档/);
+  assert.match(promptOf(r), /第二条人格：贴吧老哥/);
+  assert.match(promptOf(r), /最大档/);
   cleanup();
 });
 
@@ -82,7 +83,7 @@ test('骂主人 = 开战，而且提示词里加码', async () => {
   const r = await bot.decide(groupMsg('@鲸鲸 你主人就是个废物', { atMe: true }));
   assert.equal(r.msg.fight, true);
   assert.equal(r.msg.fightOnMaster, true);
-  assert.match(r.system, /往死里骂/);
+  assert.match(promptOf(r), /往死里骂/);
   cleanup();
 });
 
@@ -92,7 +93,7 @@ test('骂废物这种会被判成开战，走最大火力', async () => {
   for (const word of ['废物', '垃圾', '菜狗', '蠢货']) {
     const r = await bot.decide(groupMsg('@鲸鲸 你个' + word, { atMe: true }));
     assert.equal(r.msg.fight, true, word + ' 应该触发开战');
-    assert.match(r.system, /直接开到最大档/, word + ' 应该给最大火力提示');
+    assert.match(promptOf(r), /直接开到最大档/, word + ' 应该给最大火力提示');
   }
   cleanup();
 });
@@ -173,9 +174,9 @@ test('对喷时提示词里带贴吧火力档和示例', async () => {
   const { bot, cleanup } = makeBot({ rng: () => 0.99 });
   const r = await bot.decide(groupMsg('@鲸鲸 傻逼东西', { atMe: true }));
   assert.equal(r.action, 'reply');
-  assert.match(r.system, /贴吧老哥/);
-  assert.match(r.system, /急了/);
-  assert.match(r.system, /底线/);
+  assert.match(promptOf(r), /贴吧老哥/);
+  assert.match(promptOf(r), /急了/);
+  assert.match(promptOf(r), /底线/);
   cleanup();
 });
 

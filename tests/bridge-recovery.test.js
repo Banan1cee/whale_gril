@@ -66,6 +66,18 @@ test('被标成「图片」的表情包也要走表情包链路，不能当图�
     '表情包分支必须排在图片识别之前');
   assert.doesNotMatch(body, /收到表情包（被标成图片），装死/, '不再装死');
 });
+test('识别失败不回话，但日志要能定位到具体消息（会话 / 发送者 / 类型 / id / 原因）', () => {
+  // 以前失败只有一个 return，内部日志没有消息 id，用户问「这条为什么没回」只能猜。
+  const fn = bridge.slice(bridge.indexOf('def on_message_inner'));
+  const body = fn.slice(0, fn.indexOf('\n    def ', 10));
+  for (const kind of ['图片', '表情', '语音']) {
+    assert.match(body, new RegExp(`media_failed\\("${kind}"\\)`), `${kind}失败要先记日志再 return`);
+  }
+  assert.match(body, /media-fail:%s:%s" % \(msg_id, kind\)/, '节流 key 要带消息 id，别把别的消息一起吞掉');
+  assert.match(body, /emit=log_error/, '识别失败要写 error 级日志');
+  assert.match(body, /会话=%s 发送者=%s 类型=%s 消息id=%s 原因=%s/, '一行里要能读全会话 / 发送者 / 类型 / id / 原因');
+});
+
 test('UIA 彻底不行时有键盘兜底通道（Ctrl+F 搜索会话 → 粘贴 → 回车，并回读确认）', () => {
   assert.match(bridge, /def keyboard_send/);
   assert.match(bridge, /VK_CONTROL/, '要用 Ctrl+F 搜索会话');
