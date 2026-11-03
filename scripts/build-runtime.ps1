@@ -215,6 +215,9 @@ foreach ($p in @('pip', 'setuptools', 'wheel', 'pkg_resources', '_distutils_hack
   $full = Join-Path $sitePackages $p
   if (Test-Path $full) { Remove-Item $full -Recurse -Force -ErrorAction SilentlyContinue }
 }
+# setuptools 的 .pth 会指向已删的 _distutils_hack：留着它 Python 每次启动都打一段 traceback
+Get-ChildItem $sitePackages -Filter 'distutils-precedence.pth' -ErrorAction SilentlyContinue |
+  Remove-Item -Force -ErrorAction SilentlyContinue
 Get-ChildItem $pythonDir -Recurse -Directory -Filter '__pycache__' -ErrorAction SilentlyContinue |
   Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 # 只删健康的 tests 目录（numpy\testing 这种给业务代码用的名字不在此列）
