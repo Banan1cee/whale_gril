@@ -161,13 +161,26 @@ class DeepSeekClient {
   _recordUsage(json) {
     const u = json && json.usage;
     if (!u) return;
+    const promptTokens = Number(u.prompt_tokens) || 0;
+    // 缓存命中字段各家不一样：
+    //   DeepSeek 原生 → prompt_cache_hit_tokens
+    //   OpenAI 兼容 / OpenCode Go → prompt_tokens_details.cached_tokens
+    //   OpenCode Go 账单 → opencode.tokens.cache_read
+    // 以前只读第一种，用 OpenCode 时界面/日志一直显示「命中 0」，其实前缀缓存是命中的。
+    const opencodeTokens = u.opencode && u.opencode.tokens;
+    const details = u.prompt_tokens_details || {};
+    const rawHit = Number(opencodeTokens && opencodeTokens.cache_read)
+      || Number(details.cached_tokens)
+      || Number(u.prompt_cache_hit_tokens)
+      || 0;
+    const hit = Math.min(promptTokens, Math.max(0, Number.isFinite(rawHit) ? rawHit : 0));
+    const miss = Number(u.prompt_cache_miss_tokens) || Math.max(0, promptTokens - hit);
     this.lastUsage = {
-      promptTokens: Number(u.prompt_tokens) || 0,
-      // 支持前缀缓存的服务商会给出这两项（DeepSeek: prompt_cache_hit_tokens）
-      promptCacheHitTokens: Number(u.prompt_cache_hit_tokens) || 0,
-      promptCacheMissTokens: Number(u.prompt_cache_miss_tokens) || 0,
+      promptTokens,
+      promptCacheHitTokens: hit,
+      promptCacheMissTokens: miss,
       completionTokens: Number(u.completion_tokens) || 0,
-      totalTokens: Number(u.total_tokens) || (Number(u.prompt_tokens) || 0) + (Number(u.completion_tokens) || 0),
+      totalTokens: Number(u.total_tokens) || promptTokens + (Number(u.completion_tokens) || 0),
       at: Date.now(),
     };
     this.usageSeq += 1;

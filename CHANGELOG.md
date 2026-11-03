@@ -25,6 +25,18 @@
 - 测试：`tests/memory-migration.test.js` 补「已有 chat 合并 / journal 二次迁移 / 摘要覆盖线被打断 /
   dry-run 不写盘」4 条。
 
+### 改进 · 表情包：节奏提示、索要兜底、真实缓存命中
+
+**现象：她几乎不主动发表情包；明确说“发个表情包”时偶尔只嘴上答应、不真发；OpenCode Go 的缓存命中一直显示 0。**
+
+- 只改 system 里的能力说明，实测自发率 0–7%；尾部每轮硬提示 83%，2/3 轮次硬提示约 61%
+- 新增 `sticker.demandChance`（默认 0.7）：只决定这一轮要不要在尾部提醒“带一张”，最终发不发仍由模型判断；实测总发起率约 50–60%
+- 明确索要时模型没写 `[[sticker:分类]]`：按原话分类名 → FOLDERS 家族 → 有图默认分类补一张，不再假回执
+- 严肃窗口按说话人存：15 分钟 / 连续 4 条普通消息 / “没事了”“哈哈”提前解除；只关闭提醒，不禁止模型自己发
+- 自定义分类不加元数据，按名字理解；文档写明“名字起得越具体越好用”
+- `_recordUsage` 兼容 `opencode.tokens.cache_read` / `prompt_tokens_details.cached_tokens`，修掉日志里假的“命中 0”
+- 测试：`tests/sticker-demand.test.js` 6 条，`tests/sticker-capability.test.js` 增加四分类三有图、尾部提示不碰 system 两条
+
 ### 改进 · 演示模式台词不再点名模型
 
 **现象：没配 Key 的演示模式里，「你是谁 / 你是不是 AI」的内置台词会回「本鲸是 DeepSeek 养的」「DeepSeek 大模型驱动」。**
