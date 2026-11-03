@@ -10,7 +10,7 @@ public static class VoiceSendGuide
     public const string KeyUrl="https://breezeblue.ai/zh/app/developer/api-keys";
     public static Border Create(Action goToDriver)
     {
-        var card=new Border{Padding=new Thickness(18),Margin=new Thickness(0,12,0,4)};
+        var card=new Border{Padding=new Thickness(16,12,16,12),Margin=new Thickness(0,0,0,12)};
         card.SetResourceReference(FrameworkElement.StyleProperty,"Card");
         var layout=new StackPanel();card.Child=layout;
         var toggle=new Button{Content="首次使用 · 展开完整教程 ▾",HorizontalAlignment=HorizontalAlignment.Left};

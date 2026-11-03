@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -37,13 +38,15 @@ static class ExperimentalVoiceChecks
                 var root=Path.Combine(directory,"ui");Directory.CreateDirectory(root);
                 using var supervisor=new RuntimeSupervisor(root);
                 var page=new VoiceSendPage(supervisor);
-                var stack=(StackPanel)((ScrollViewer)page.Content).Content;
-                var toggle=(CheckBox)stack.Children[1];var panel=(StackPanel)stack.Children[2];
+                var scroll=All<ScrollViewer>(page).Single(s=>s.Content is StackPanel);
+                var body=(StackPanel)scroll.Content;
+                var panel=(StackPanel)body.Children[1];
+                var toggle=All<CheckBox>(body.Children[0]).First(c=>c.Content?.ToString()?.Contains("实验性")==true);
                 Check(toggle.Content.ToString().Contains("实验性"));Check(toggle.IsChecked==false);
                 Check(panel.Visibility==Visibility.Collapsed);
-                Check(panel.Children.OfType<ComboBox>().Any(c=>c.IsEditable&&c.Text=="Ctrl+Alt"));
-                Check(panel.Children.OfType<Button>().Any(b=>b.Content.ToString()=="测试 API Key 连接"));
-                Check(panel.Children.OfType<Button>().Any(b=>b.Content.ToString()=="发送测试语音到文件传输助手"));
+                Check(All<ComboBox>(panel).Any(c=>c.IsEditable&&c.Text=="Ctrl+Alt"));
+                Check(All<Button>(panel).Any(b=>b.Content.ToString()=="测试 API Key 连接"));
+                Check(All<Button>(panel).Any(b=>b.Content.ToString()=="发送测试语音到文件传输助手"));
                 toggle.IsChecked=true;
                 Check(AutoVoiceSettings.IsEnabled(root));Check(panel.Visibility==Visibility.Visible);
                 string jobs=Path.Combine(root,"data","voice-send-jobs");Directory.CreateDirectory(jobs);
@@ -59,4 +62,16 @@ static class ExperimentalVoiceChecks
         if(error!=null)throw error;
         Console.WriteLine("PASS "+count+" experimental gate, actual UI visibility and custom shortcut checks.");
     }
+
+    // 页面改成卡片分组后控件不再是最外层子节点，这里按逻辑树递归找。
+    static IEnumerable<DependencyObject> Descendants(DependencyObject root)
+    {
+        foreach(var child in LogicalTreeHelper.GetChildren(root))
+        {
+            if(child is not DependencyObject node)continue;
+            yield return node;
+            foreach(var nested in Descendants(node))yield return nested;
+        }
+    }
+    static IEnumerable<T> All<T>(DependencyObject root) where T:DependencyObject => Descendants(root).OfType<T>();
 }
