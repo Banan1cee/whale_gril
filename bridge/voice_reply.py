@@ -71,9 +71,9 @@ def deliver(root, text, hwnd, prepare, log, allow_foreground=None, cancelled=Non
         process = subprocess.Popen([os.path.join(root, "WhaleLauncher.exe"), "--voice-reply-job", path],
                                    cwd=root, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         # 合成阶段等多久。以前写死 125 秒：语音接口一卡，这条回复就陪它等两分钟，
-        # 用户看到的是「发消息特别慢」。现在默认 20 秒（可用 voice-send.json 的
+        # 用户看到的是「发消息特别慢」。现在默认 85 秒（可用 voice-send.json 的
         # SynthTimeoutSec 调），超时就取消 worker、回退发原始文字。
-        synth_timeout = _clamp(settings(root).get("SynthTimeoutSec"), 20.0, 5.0, 180.0)
+        synth_timeout = _clamp(settings(root).get("SynthTimeoutSec"), 85.0, 5.0, 180.0)
         started = time.monotonic()
         deadline = started + synth_timeout
         while process.poll() is None and not os.path.exists(path + ".ready"):
