@@ -48,6 +48,14 @@ def requested(text):
     text = str(text or "")
     return len(text) <= 500 and not NEGATIVE.search(text) and bool(REQUEST.search(text))
 
+def settings(root):
+    try:
+        with open(os.path.join(root, "data", "voice-send.json"), encoding="utf-8-sig") as f:
+            value = json.load(f)
+        return value if isinstance(value, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
 def choose(config, incoming, is_group, rng):
     if config.get("Enabled") is not True:
         return False
