@@ -157,6 +157,14 @@ test('设置页去掉侧栏和标题，单列铺开，模型/高级模式/外观
   assert.ok(!titles.includes('语音'), '语音已并进模型卡，不该再占 Specs 分组');
 });
 
+test('「思考」开关在模型卡的语音页里，默认关，标签带减速提示', () => {
+  const code = readLauncher('Views/SettingsPage.xaml.cs');
+  assert.match(code, /Path = "deepseek\.thinking"/, '缺少思考开关');
+  assert.match(code, /思考（打开后会减慢说话速度）/, '标签要带括号说明');
+  // 默认必须是关：DEFAULT_CONFIG 里 thinking=false
+  const config = read('src/infra/config.js');
+  assert.match(config, /thinking: false/, '默认值应为 false');
+});
 test('诊断页内置 UIA 自检与数据维护，不用再开 bat', () => {
   const xaml = readLauncher('Views/DiagPage.xaml');
   const code = readLauncher('Views/DiagPage.xaml.cs');

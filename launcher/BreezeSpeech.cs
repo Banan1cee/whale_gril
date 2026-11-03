@@ -64,7 +64,10 @@ public static class BreezeSpeech
         return request;
     }
 
-    static HttpClient Client() => new(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromSeconds(90) };
+    // UseProxy = false：这台机器的 HTTP_PROXY 指向本地 Clash（127.0.0.1:7897），
+    // .NET 的 HttpClient 会读环境变量走代理 —— 实测同一条合成请求：
+    // 走代理 6 分钟没回来，直连 41 秒拿到 wav。语音接口是国内服务，不需要代理。
+    static HttpClient Client() => new(new HttpClientHandler { AllowAutoRedirect = false, UseProxy = false }) { Timeout = TimeSpan.FromSeconds(90) };
 
     public sealed record KeyCheck(bool Available, string Message);
 

@@ -234,6 +234,9 @@ def _parse_bg_send(wechat_cfg):
         "unhide": _as_bool(raw.get("unhideWindow", True), True),
         # WM_CHAR 的编码语义：auto = 按微信版本自动（4.2+ 用 UTF-16 码元）
         "charMode": str(raw.get("charMode") or "auto").lower(),
+        # 后台通道的固定等待（秒）：缺省用 bg_sender.TIMING 的线上实测值，
+        # 这里只透传用户覆盖的那部分，让「想快一点」不用改代码。
+        "timing": raw.get("timing") if isinstance(raw.get("timing"), dict) else {},
     }
 
 
@@ -2542,6 +2545,10 @@ def main():
         hwnd = _bg_hwnd()
         if not hwnd:
             return False
+        try:
+            bg_sender.configure(BG_SEND)
+        except Exception:                        # noqa: BLE001
+            pass
         if chat_username:
             keys = aliases_for(chat_username, chat_display_name) or [chat_display_name]
         else:

@@ -40,6 +40,8 @@ const FIELDS = {
   'deepseek.maxTokens': { type: 'int', min: 16, max: 32768 },
   'deepseek.frequencyPenalty': { type: 'float', min: -2, max: 2 },
   'deepseek.presencePenalty': { type: 'float', min: -2, max: 2 },
+  // 通义千问是否先「思考」再回答：默认 false（快）；难问题想让它想一会儿就设 true。
+  'deepseek.thinking': { type: 'bool' },
 
   // ---- 群聊 ----
   'group.requireAt': { type: 'bool' },
@@ -69,6 +71,9 @@ const FIELDS = {
   'links.enabled': { type: 'bool' },
   'links.timeoutMs': { type: 'int', min: 1000, max: 60000 },
   'websearch.enabled': { type: 'bool' },
+  // 语义路由（每句话先问一次模型「要不要联网」）：不配时只在像问句/命中事实词时才问；
+  // true 则每句都问（更准，每句多 ~2 秒）；false 则完全按关键词。
+  'websearch.semanticRoute': { type: 'bool' },
   // 环境块（提示词里的 <env>）：地点只到区，时区留空就用系统自己的。
   // 太长的地址一定是把门牌粘进来了，直接拒掉，别等到拼提示词时才截断。
   'env.location': { type: 'string', maxLen: 40 },
@@ -91,6 +96,18 @@ const FIELDS = {
   'wechat.accountGuard': { type: 'bool' },
   'wechat.bgSend.enabled': { type: 'bool' },
   'wechat.bgSend.charGapMs': { type: 'int', min: 20, max: 80 },
+  // 后台通道的固定等待（秒，见 bridge/bg_sender.py 的 TIMING）：默认值线上实测过，
+  // 放出来是为了「想快一点」不用改代码；0 也合法（=完全不等）。
+  'wechat.bgSend.timing.gatePulse': { type: 'float', min: 0, max: 3 },
+  'wechat.bgSend.timing.unhide': { type: 'float', min: 0, max: 3 },
+  'wechat.bgSend.timing.spiSettle': { type: 'float', min: 0, max: 3 },
+  'wechat.bgSend.timing.gateWait': { type: 'float', min: 0, max: 3 },
+  'wechat.bgSend.timing.focusGap': { type: 'float', min: 0, max: 3 },
+  'wechat.bgSend.timing.clickSettle': { type: 'float', min: 0, max: 3 },
+  'wechat.bgSend.timing.pollSwitch': { type: 'float', min: 0, max: 3 },
+  'wechat.bgSend.timing.sendEnabled': { type: 'float', min: 0, max: 3 },
+  'wechat.bgSend.timing.afterClick': { type: 'float', min: 0, max: 3 },
+  'wechat.bgSend.timing.verifyPoll': { type: 'float', min: 0, max: 3 },
   // 后台通道 WM_CHAR 的编码语义：4.1 及以前按 GBK 字节、4.2+ 按 UTF-16 码元。
   // auto = 按版本自动；版本识别不出来时可以在「微信桥接」页手动钉死。
   'wechat.bgSend.charMode': { type: 'enum', values: ['auto', 'utf16', 'gbk'] },

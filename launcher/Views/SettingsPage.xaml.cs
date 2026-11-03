@@ -1406,6 +1406,11 @@ namespace WhaleLauncher.Views
             voicePanel.Children.Add(TwoCol(
                 BuildField(new FieldSpec { Path = "voice.timeoutMs", Label = "识别超时(ms)", Kind = "num", Min = 1000, Max = 300000 }, true),
                 BuildField(new FieldSpec { Path = "voice.maxSeconds", Label = "最长语音(秒)", Kind = "num", Min = 1, Max = 600 }, true)));
+            // 通义千问这类「会思考」的模型：关掉直接出字（快），打开先想一遍（慢但稳）。
+            // 默认关（config 里不写 deepseek.thinking 就是关）；标签列给宽一点，括号说明要放得下。
+            voicePanel.Children.Add(BuildField(
+                new FieldSpec { Path = "deepseek.thinking", Label = "思考（打开后会减慢说话速度）", Kind = "bool" },
+                false, 260));
 
             _loadModel = (set, provs) =>
             {

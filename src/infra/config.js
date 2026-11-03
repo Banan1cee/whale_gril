@@ -137,6 +137,9 @@ const DEFAULT_CONFIG = {
     presencePenalty: 0,
     maxTokens: 700,
     timeoutMs: 45000,
+    // 通义千问这类模型：false = 关掉「思考」直接出字（快，默认）；
+    // true = 先想一遍再回答（慢 1~3 秒，难问题更稳）。启动器「模型 → 语音」页有开关。
+    thinking: false,
   },
   persona: {
     name: '鲸鲸',

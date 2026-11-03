@@ -146,6 +146,9 @@ class DeepSeekClient {
     this.presencePenalty = Number(ds.presencePenalty) || 0;
     this.maxTokens = ds.maxTokens || 700;
     this.timeoutMs = ds.timeoutMs || 45000;
+    // 通义千问默认会先「思考」一遍再回答：同一句闲聊实测 2.1s → 关掉思考 1.3s。
+    // 想在难问题上保留思考就把 config 的 deepseek.thinking 设成 true。
+    this.thinking = ds.thinking === true;
     return this;
   }
 
@@ -263,6 +266,12 @@ class DeepSeekClient {
     // 惩罚项会逼模型避开常用词，是「乱说话」的元凶之一；跑飞重试时一律不带
     if (!safe && this.frequencyPenalty) payload.frequency_penalty = this.frequencyPenalty;
     if (!safe && this.presencePenalty) payload.presence_penalty = this.presencePenalty;
+    // 通义千问（DashScope 兼容模式）默认会先「思考」再给答案，普通闲聊白等一秒多。
+    // 实测同一句话：默认 2.1s / enable_thinking=false 1.3s。默认关；
+    // 想让它在难问题上继续思考，把 config 的 deepseek.thinking 设成 true。
+    if (this.provider === 'qwen' && /dashscope/i.test(this.baseUrl || '')) {
+      payload.enable_thinking = this.thinking === true;
+    }
     // DeepSeek 流式默认不回 usage；显式要一下，用来校准 token 估算。
     // 其它兼容服务不认这个字段，别硬塞。
     if (stream && this.provider === 'deepseek') payload.stream_options = { include_usage: true };
