@@ -97,7 +97,14 @@ const BINARY_RULES = [
       return !BINARY_PATH_ALLOWLIST.some((prefix) => rest.startsWith(prefix));
     },
   },
-  { name: '源码托管链接（二进制）', re: /raw\.githubusercontent\.com/gi },
+  {
+    // 启动器内置的强制更新清单地址指向本仓库自己（公开），不算泄露；
+    // 只放行这一条精确前缀，其它 raw 链接照报。
+    name: '源码托管链接（二进制）',
+    re: /raw\.githubusercontent\.com\/[A-Za-z0-9._-]+\//gi,
+    keep: (m, index, text) =>
+      !text.slice(index).toLowerCase().startsWith('raw.githubusercontent.com/banan1cee/whale_gril/'),
+  },
 ];
 
 function scanText(text, file = '', rules = textRules()) {
