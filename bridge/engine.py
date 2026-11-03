@@ -764,6 +764,65 @@ def list_accounts_cli():
     return 0
 
 
+def write_accounts_cache(db_dir, account="", nick="", probe_others=True, deadline_sec=8):
+    """桥接自己补写 data/accounts.json（启动器「微信桥接」页的账号卡从这读）。
+
+    为什么要写：用户删掉 data/ 之后缓存就没了，而旧版启动器的「刷新账号」按钮
+    只重新读缓存、不会再扫一次，双开用户就只剩桥接上报的那一张兜底卡。
+    这里在启动时补一份：dbDir + 所有账号目录，当前号的昵称已知，其它号尽力开库读。
+
+    只做只读扫描，失败一律吞掉（不能因为列账号失败影响收消息）。
+    """
+    try:
+        if not db_dir:
+            return False
+        names = find_account_dirs(db_dir)
+        if not names:
+            return False
+        wechat_db = None
+        if probe_others:
+            try:
+                from wechatauto import WeChatDB as wechat_db  # noqa: F401
+            except Exception:
+                wechat_db = None
+        deadline = time.time() + max(1, deadline_sec)
+        rows = []
+        for n in names:
+            item = {"account": n, "wxid": account_wxid(n), "nick": "", "lastActive": 0}
+            if n == account:
+                item["nick"] = nick or ""
+            newest = 0.0
+            try:
+                for root, _dirs, files in os.walk(os.path.join(db_dir, n, "db_storage")):
+                    for f in files:
+                        if f.endswith(".db") and not f.endswith(("-wal", "-shm")):
+                            newest = max(newest, os.path.getmtime(os.path.join(root, f)))
+            except Exception:
+                pass
+            item["lastActive"] = int(newest * 1000)
+            if not item["nick"] and wechat_db is not None and time.time() < deadline:
+                try:
+                    probe = wechat_db(db_dir=db_dir, account=n)
+                    if probe.account == n:
+                        info = probe.get_self_info() or {}
+                        item["nick"] = str(info.get("nick_name") or info.get("remark") or "").strip()
+                except Exception:
+                    pass
+            rows.append(item)
+        rows.sort(key=lambda x: -x["lastActive"])
+        payload = {"dbDir": db_dir, "generatedAt": int(time.time() * 1000), "accounts": rows}
+        path = os.path.join(ROOT, "data", "accounts.json")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        log("账号缓存已补写：%d 个号（%s）"
+            % (len(rows), "、".join((r["nick"] or r["account"]) for r in rows)))
+        return True
+    except Exception as e:                        # noqa: BLE001
+        log("账号缓存补写失败（不影响收发）：", repr(e))
+        return False
+
+
 # （原先这里还有一份 SYSTEM_SENDER_NAMES 的重复定义，已删除（M10）：两处快照时机不同、
 #   互相覆盖，ignoreSenders 的热更新会打摆子。名单只在上面定义一次。）
 _SYSTEM_TEXT_RE = __import__("re").compile(r"<a\s+href=|weixin://|&lt;a\s+href=", __import__("re").I)
@@ -1487,6 +1546,27 @@ def main():
         log("（这台机器有 %d 个账号目录：%s）" % (len(acct_dirs), "、".join(acct_dirs)))
     log("数据库目录：", db.db_dir)
 
+    # 账号卡缓存：data/accounts.json 被删或内容为空时自己补一份。
+    # 旧版启动器「刷新账号」只重读缓存、不会真扫，补不上这个文件双开就只看到当前号。
+    def _heal_accounts_cache():
+        try:
+            path = os.path.join(ROOT, "data", "accounts.json")
+            stale = True
+            if os.path.exists(path):
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        old = json.load(f)
+                    stale = not (str(old.get("dbDir") or "").strip() and old.get("accounts"))
+                except Exception:
+                    stale = True
+            if stale:
+                write_accounts_cache(db.db_dir or db_dir, db.account, _self_nick)
+        except Exception as e:                    # noqa: BLE001
+            log("账号缓存检查失败（不影响收发）：", repr(e))
+
+    threading.Thread(target=_heal_accounts_cache, daemon=True,
+                     name="accounts-cache").start()
+
     sessions = {}
     try:
         for s in db.get_sessions(limit=800):
@@ -1643,23 +1723,32 @@ def main():
             hwnds = []
         # 只认「PID 里真的加载了 Weixin.dll」的窗口：微信更新/重启后旧句柄会被
         # 回收，拿它去热激活只会得到「未找到 Weixin.dll」然后无限重试。
-        good = 0
-        if uia_boot is not None:
+        #
+        # 注意（双开回归，2026-11-03）：这里**不能**用 uia_boot.pick_window()
+        # 的结果把候选窗口砍成一个。pick_window() 永远只返回分数最高的那一个
+        # （通常就是面积最大的大号），以前拿它的 hwnd 当过滤器，结果双开机器
+        # 也只剩 1 个候选 → 日志「本机只登了一个号」→ 账号反查形同虚设，
+        # 回复就直接从大号发出去了。校验 DLL 要逐个窗口做。
+        pinned = int(ACCOUNT.get("hwnd") or 0) if ACCOUNT.get("verified") else 0
+        if pinned:
+            # 已锁定的窗口还活着就只认它；死了就清掉，交给下面按账号重新认，
+            # 绝不能顺手改成 pick_window() 挑的另一个号。
             try:
-                _w = uia_boot.pick_window(int(ACCOUNT.get("hwnd") or 0))
-                if _w:
-                    good = int(_w["hwnd"])
-                    if int(ACCOUNT.get("hwnd") or 0) != good:
-                        ACCOUNT["hwnd"] = good
-                        log("微信主窗已重新定位：hwnd=%s pid=%s" % (good, _w.get("pid")))
+                _ppid = int(win32process.GetWindowThreadProcessId(pinned)[1] or 0)
+                if not (win32gui.IsWindow(pinned) and _ppid
+                        and probe._weixin_dll_module(_ppid)):
+                    log("账号窗口：锁定的 hwnd=%s 已失效，重新认窗口" % pinned)
+                    ACCOUNT.update(hwnd=0, verified=False)
+                    pinned = 0
             except Exception:                     # noqa: BLE001
-                good = 0
+                ACCOUNT.update(hwnd=0, verified=False)
+                pinned = 0
         for h in hwnds:
             h = int(h)
             try:
                 cls = win32gui.GetClassName(h) or ""
                 title = (win32gui.GetWindowText(h) or "").strip()
-                if good and h != good:
+                if pinned and h != pinned:
                     continue
             except Exception:                     # noqa: BLE001
                 cls, title = "", ""
@@ -1670,6 +1759,13 @@ def main():
             # 以前把它们当主窗统计，日志会出现「本机有 2 个微信主窗」的假多开。
             if title != "微信":
                 continue
+            try:
+                _cpid = int(win32process.GetWindowThreadProcessId(h)[1] or 0)
+                if _cpid and not probe._weixin_dll_module(_cpid):
+                    # 没有 Weixin.dll 的窗口（登录壳/辅助进程）热激活必失败，跳过
+                    continue
+            except Exception:                     # noqa: BLE001
+                pass
             try:
                 probe._hot_activate_accessibility(h)
             except Exception:                     # noqa: BLE001
@@ -1767,8 +1863,11 @@ def main():
             return False
         if len(cands) == 1:
             h, _c, _rows = cands[0]
-            ACCOUNT.update(hwnd=h, verified=True, label="hwnd=%s" % h,
-                           why="本机只登了一个号")
+            # 只有「真的只扫到一个主窗」才说只登了一个号；已锁定窗口后复查也会
+            # 只剩一个候选，别把那种情况也写成「本机只登了一个号」误导排查。
+            why = ("已锁定窗口" if int(ACCOUNT.get("hwnd") or 0) == h
+                   else "本机只登了一个号")
+            ACCOUNT.update(hwnd=h, verified=True, label="hwnd=%s" % h, why=why)
             m = _compat_mod()
             if m is not None:
                 try:
@@ -4174,7 +4273,10 @@ def main():
         _UIA_READY.update({"ts": now, "ok": bool(res.get("ok")), "msg": msg, "res": res})
         if res.get("ok"):
             h = int(res.get("hwnd") or 0)
-            if h and h != prefer:
+            # 只在「账号窗口已经确认过」时才把预热挑中的窗口写进 ACCOUNT：
+            # 否则双开时 uia_boot 会按面积挑大号，这里一写就变成「已锁定」，
+            # 账号反查再也不会跑，回复从大号发出去。
+            if h and h != prefer and ACCOUNT.get("verified"):
                 ACCOUNT["hwnd"] = h
             log("发送通道预热：" + msg)
         else:
