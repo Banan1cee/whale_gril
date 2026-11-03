@@ -7,6 +7,7 @@ import sys
 import tempfile
 import types
 import unittest
+import uuid
 from unittest.mock import Mock
 
 try:
@@ -123,6 +124,101 @@ class ReceivedMediaTests(unittest.TestCase):
         encrypted = cipher.update(raw + bytes([padding]) * padding) + cipher.finalize()
         content = '<emoji md5="' + hashlib.md5(raw).hexdigest() + '" aeskey="' + key.hex() + '" encrypturl="https://wxapp.tc.qq.com/a"/>'
         self.assertIsNotNone(emoji_vision.load_preview(self.root, content, allow_network=True, fetch=lambda u: encrypted))
+
+
+class MediaFailureLogTests(unittest.TestCase):
+    """识别失败照旧不回话，但日志要能回答「这条消息她为什么没回」。
+
+    以前的失败路径只有一个 return：内部日志没有消息 id，事后只能猜。
+    """
+
+    def env(self, stubs):
+        # log_throttled 用真身跑：节流行为本身就是这次要验证的东西
+        clock = types.SimpleNamespace(now=1_700_000_000.0)
+        clock.time = lambda: clock.now
+        env = dict(
+            me='self',
+            time=clock,
+            _THROTTLE_LOG={},
+            log=Mock(),
+            log_error=Mock(),
+            display_name=lambda chat: '好友',
+            db=types.SimpleNamespace(get_nickname=lambda sender: '张三'),
+            LOCAL_HTTP=types.SimpleNamespace(post=Mock()),   # 真连微信/服务端的替身
+        )
+        env.update(stubs)
+        env['log_throttled'] = nested('log_throttled', env)
+        env['on_message_inner'] = nested('on_message_inner', env)
+        return env
+
+    def message(self, mtype, **changes):
+        msg = dict(username='peer', sender_username='friend', type=mtype, content='',
+                   local_id=7, shard='shard1', create_time=200.)
+        msg.update(changes)
+        return msg
+
+    def error_line(self, env):
+        env['log_error'].assert_called_once()
+        return env['log_error'].call_args.args[0]
+
+    def test_image_failure_logs_error_and_sends_nothing(self):
+        env = self.env({'describe_image': Mock(return_value='')})
+        msg = self.message('图片')
+        env['on_message_inner'](msg, None)
+        env['describe_image'].assert_called_once_with(msg)
+        line = self.error_line(env)
+        for piece in ('会话=好友', '发送者=张三', '类型=图片', '消息id=peer:shard1:7', '空描述'):
+            self.assertIn(piece, line)
+        env['LOCAL_HTTP'].post.assert_not_called()
+
+    def test_emoji_failure_logs_error_and_sends_nothing(self):
+        env = self.env({'describe_emoji': Mock(return_value='')})
+        msg = self.message('表情', content='<emoji md5="deadbeef"/>')
+        env['on_message_inner'](msg, None)
+        env['describe_emoji'].assert_called_once_with(msg)
+        line = self.error_line(env)
+        self.assertIn('类型=表情', line)
+        self.assertIn('消息id=peer:shard1:7', line)
+        env['LOCAL_HTTP'].post.assert_not_called()
+
+    def test_voice_failure_logs_error_and_sends_nothing(self):
+        env = self.env({'transcribe_voice': Mock(return_value='')})
+        msg = self.message('语音')
+        env['on_message_inner'](msg, None)
+        line = self.error_line(env)
+        self.assertIn('类型=语音', line)
+        self.assertIn('消息id=peer:shard1:7', line)
+        env['LOCAL_HTTP'].post.assert_not_called()
+
+    def test_success_keeps_error_log_silent(self):
+        env = self.env({'describe_image': Mock(return_value='一张蓝色图片')})
+        # 名单不匹配让函数在「识别成功之后」提前返回，不碰真正的发送链路
+        env['ONLY_CHATS'] = ['不在名单里的会话']
+        env['on_message_inner'](self.message('图片'), None)
+        env['log_error'].assert_not_called()
+        self.assertFalse([k for k in env['_THROTTLE_LOG'] if k.startswith('media-fail')])
+
+    def test_same_message_is_throttled_to_one_error_line(self):
+        env = self.env({'describe_image': Mock(return_value='')})
+        msg = self.message('图片')
+        env['on_message_inner'](msg, None)
+        env['on_message_inner'](msg, None)
+        env['log_error'].assert_called_once()
+        keys = [k for k in env['_THROTTLE_LOG'] if k.startswith('media-fail')]
+        self.assertEqual(len(keys), 1)
+        self.assertIn('peer:shard1:7', keys[0], '节流 key 要带消息 id，别把别的消息一起吞掉')
+
+    def test_exception_type_is_carried_into_the_error_line(self):
+        # 落盘路径不存在 → getsize 抛 FileNotFoundError，异常类型要能带回消息上
+        missing = str(ROOT / ('missing-image-%s.png' % uuid.uuid4().hex))
+        env = dict(os=os, time=types.SimpleNamespace(sleep=lambda *_: None),
+                   bot_url='http://localhost/webhook/wechat', log=Mock(), log_throttled=Mock(),
+                   _get_media=lambda: types.SimpleNamespace(download_image=lambda *a, **k: missing),
+                   LOCAL_HTTP=types.SimpleNamespace(post=Mock()))
+        msg = {'username': 'peer', 'local_id': 7, 'shard': 'shard1'}
+        self.assertEqual(nested('describe_image', env)(msg), '')
+        self.assertEqual(msg.get('_media_fail'), 'FileNotFoundError')
+        env['LOCAL_HTTP'].post.assert_not_called()
 
 
 if __name__ == '__main__':
