@@ -396,7 +396,7 @@ _THROTTLE_LOG = {}
 CONN_STATE = {"ok": None}
 
 
-def log_throttled(key, *args, ttl=600):
+def log_throttled(key, *args, ttl=600, emit=None):
     now = time.time()
     last = _THROTTLE_LOG.get(key) or 0
     if now - last < ttl:
@@ -406,7 +406,9 @@ def log_throttled(key, *args, ttl=600):
     if skipped:
         log(f"（上面这类日志还有 {skipped} 条被折叠了）")
     _THROTTLE_LOG[key] = now
-    log(*args)
+    # 默认还是 info；识别失败这类「这次真的没成」的调用方传 emit=log_error。
+    # 折叠计数只留这一份实现，别让每个调用方自己再写一遍节流。
+    (emit or log)(*args)
 
 
 
@@ -3495,6 +3497,9 @@ def main():
             log("图片识别：", text[:80])
             return text
         except Exception as e:
+            # 把异常类型挂回消息上：调用方要拿它写「这条为什么没回」的 error 日志
+            if isinstance(msg, dict):
+                msg["_media_fail"] = type(e).__name__
             log_throttled("img-exc:" + type(e).__name__, "图片识别失败：", repr(e))
             return ""
 
@@ -3529,6 +3534,8 @@ def main():
             log("表情包识别（%d帧）：" % frames, text[:80])
             return text
         except Exception as exc:
+            if isinstance(msg, dict):
+                msg["_media_fail"] = type(exc).__name__
             log("表情包识别异常：", type(exc).__name__)
             return ""
 
@@ -3587,11 +3594,41 @@ def main():
             log("语音识别（%.1fs）：%s" % (seconds, text[:60] or "（空）"))
             return text
         except Exception as e:
+            if isinstance(msg, dict):
+                msg["_media_fail"] = type(e).__name__
             log_throttled("voice-fail:" + type(e).__name__, "语音识别失败：", repr(e))
             return ""
 
 
     def on_message_inner(msg, listener):
+        def media_failed(kind):
+            """识别失败照旧不回话，但补一条能把「哪条、谁的、为什么没回」对上的 error 日志。
+
+            以前失败只在识别函数里留零散日志（连消息 id 都没有），事后完全没法回答
+            「这条消息她为什么没回」。节流 key 带消息 id：同一条反复失败只记一次，
+            别的消息照常各记一条，不会被节流误吞。
+            """
+            msg_id = "%s:%s:%s" % (username, msg.get("shard") or "", msg.get("local_id"))
+            try:
+                chat = display_name(username)
+            except Exception:                      # noqa: BLE001
+                chat = username
+            sender = msg.get("sender_username") or ""
+            try:
+                who = db.get_nickname(sender) or ""
+            except Exception:                      # noqa: BLE001
+                who = ""
+            if not who:
+                who = "群友" if username.endswith("@chatroom") else "微信好友"
+            # 识别函数把异常吞掉时会把类型写回 _media_fail；没异常就是识别结果为空
+            reason = msg.pop("_media_fail", None) or "空描述（识别结果为空）"
+            log_throttled(
+                "media-fail:%s:%s" % (msg_id, kind),
+                "识别失败（这条不回话）：会话=%s 发送者=%s 类型=%s 消息id=%s 原因=%s"
+                % (chat, who, kind, msg_id, reason),
+                emit=log_error,
+            )
+
         try:
             username = msg.get("username") or ""
             if not username:
@@ -3607,17 +3644,20 @@ def main():
             if is_emoji:
                 desc = describe_emoji(msg)
                 if not desc:
+                    media_failed("表情")
                     return
                 content = "（对方发了一个表情包，画面是：%s）" % desc
             elif mtype == "图片":
                 desc = describe_image(msg)
                 if not desc:
+                    media_failed("图片")
                     return
                 content = "（对方发了一张图片，图里是：%s）" % desc
             if mtype == "语音":
                 said = transcribe_voice(msg)
                 if not said:
                     log("语音没识别出内容，先不说话")
+                    media_failed("语音")
                     return
                 content = "（对方发了一条语音，说的是：%s）" % said
             if mtype not in ("文本", "语音", "图片", "表情", "动画表情"):
