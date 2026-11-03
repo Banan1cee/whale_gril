@@ -20,6 +20,13 @@ const REGISTRY = [
     experimental: true,
   },
   {
+    key: 'envContext',
+    path: 'features.envContext',
+    label: '环境信息注入（系统 / 时区 / 所在地）',
+    desc: '把本机的系统、架构、时区、所在地拼成 <env> 块放进 system，问「你用的什么系统 / 你那边几点 / 电脑卡不卡」时不用瞎猜。关掉 = system 里没有 <env> 块，回到旧行为。',
+    default: true,
+  },
+  {
     key: 'groupAddressGuard',
     path: 'features.groupAddressGuard',
     label: '群里先分清「你」在说谁',

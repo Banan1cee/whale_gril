@@ -9,6 +9,10 @@ const links = require('../adapters/links');
 const context = require('../core/context');
 const { estimateTokens } = require('../memory/tokens');
 const { recentSenders, budgetSnapshot } = require('./status');
+const envInfo = require('./envInfo');
+
+// 程序版本：调试台的 system 预览要跟真实发出去的一致，环境块里也有版本号
+const VERSION = require('../../package.json').version;
 
 function debugState(runtime) {
   const { config, llm, gateways, store } = runtime;
@@ -143,12 +147,14 @@ async function debugPrompt(runtime, body) {
   const msg = { platform: 'wechat', chatType, senderName, chatTitle, isMaster, linkText, text, ts: now.getTime() };
   // system 只放静态块；每轮会变的东西（说话人、时间、字数、梗、链接、联网…）在 tail 里，
   // 真发请求时 tail 挂在最后一条 user 消息后面。这里两块分开返回，方便对照。
+  // 环境块也按真实配置拼一份带进来，调试台看到的 system 跟实际发出的才是同一份。
   const parts = persona.buildPromptParts({
     config,
     msg,
     profile: { count: 1, notes: [] },
     notes: [],
     now,
+    envBlock: envInfo.systemBlock(config, VERSION),
   });
   const turns = context.buildTurns({ ...msg, cleanText: text }, [], '', parts.tail);
   const prompt = parts.system + '\n\n' + turns.map((t) => t.content).join('\n\n');

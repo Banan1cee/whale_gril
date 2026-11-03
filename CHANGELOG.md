@@ -2,6 +2,33 @@
 
 ## 4.0
 
+### 新增 · 环境信息注入（提示词里的 `<env>` 块）
+
+**以前问她「你用的什么系统」「你那边几点了」「你电脑卡不卡」「你在哪」，她只能按训练数据猜，
+或者干脆说「我不太清楚」。**
+
+- 新增 `src/core/env.js`：`snapshot()` 采一次机器信息（系统名与版本、架构、CPU 核数、
+  内存、时区、Node 版本）后进程内缓存，字段里没有任何时间类数据；`formatBlock()` 拼成 `<env>` 文本
+- 新增 `src/services/envInfo.js`：`systemBlock(config, version)` 合并快照 + 地点 + 程序版本，
+  按配置记忆化（同一配置下逐字节一致，不打断前缀缓存）；`bridgeLine(msg)` 把「桥接在线 /
+  UIA 可用 / ffmpeg 是否找到」拼成一行
+- 挂在 `buildBlocks()` 的静态段（紧挨时间规则）：整段 system 仍然逐字节稳定；
+  旧行为路径 `buildLegacySystem` 也认这个块，关掉 `features.staticSystem` 不会丢
+- 地点解析顺序：手填 `config.env.location`（可到区）→ `config.websearch.city`（城市级）→
+  **自动探测**（`src/services/location.js`，`env.autoDetect` 默认开）→ 都没有就不写这一行
+- 所在地自动探测**先系统、后 IP**：优先 Windows 定位服务（`Windows.Devices.Geolocation`，
+  Wi-Fi / GPS 定位，不吃公网 IP，**挂 VPN 也取本机位置**）→ 坐标交给 `api.bigdatacloud.net`
+  换成地名 → 系统定位被关掉 / 没权限 / 拿不到时才退回 `ipinfo.io` 按出口 IP 猜城市
+- **自动探测只到市，不报区县**（实测定位落点会偏到隔壁区，说错区比只说市更糟）；
+  `<env>` 括注写明来源与精度（「系统定位，精度约 50 公里，只到市」/「按网络出口 IP 推算，
+  挂了 VPN 时可能不符」），模型据此知道该说得多确定，被追问区 / 街道就说不知道
+- 桥接状态每轮都可能变，所以不进静态 system，改放「本轮状态」尾部
+- 开关注册 `features.envContext`（默认开）：关掉 = system 里没有 `<env>` 块，回到旧行为
+- `config.json` 新增 `env: { location, timezone, autoDetect }`；`config.env` 同时保留进程环境变量视图
+  （原来 config.json 里的 env 段会被 process.env 整个盖掉）
+- 隐私：环境信息只在本机拼装、只给模型看，不发给维护者、不写日志、不落盘；地点最多到区、
+  自动探测只到市，主机名、用户名、家目录、安装路径、经纬度不进提示词（`PRIVACY.md` 已写明）
+
 ### 改进 · system 静态化 + 日期/时间分层（前缀缓存命中）
 
 **现象：DeepSeek 的前缀缓存基本不命中。** system 里塞了时间（每分钟）、心情（每小时）、
