@@ -874,7 +874,7 @@ class Bot {
     // features.staticSystem=false 时完全回到旧行为：所有内容都在 system，tail 为空串。
     const promptParts = persona.buildPromptParts({
       config: this.config,
-      msg: { ...msg, senderName: displayName, chatTitle: msg.chatTitle || session.title, isMaster, atMe, addressedToBot: Boolean(atMe || msg.replyToBot), mentionedNames, groupParticipants, linkText, discussion, model: this.llm.model, provider: this.llm.providerLabel, groupStyleText, webText, fight, fightDirty, fightOnMaster, voiceRequested, replyToName: msg.replyToName, ts: nowMs },
+      msg: { ...msg, senderName: displayName, chatTitle: msg.chatTitle || session.title, isMaster, atMe, addressedToBot: Boolean(atMe || msg.replyToBot), mentionedNames, groupParticipants, linkText, discussion, groupStyleText, webText, fight, fightDirty, fightOnMaster, voiceRequested, replyToName: msg.replyToName, ts: nowMs },
       profile,
       // 记忆不再进 system：人物卡/事件/摘要统一放最后一条 user 消息（mem.block）
       notes: [],
