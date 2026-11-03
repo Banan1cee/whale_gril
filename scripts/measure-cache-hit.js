@@ -99,12 +99,12 @@ function postJson(urlString, payload, headers, timeoutMs = 60000) {
 }
 
 function cachedTokens(usage = {}) {
-  const n = Number(
-    usage.prompt_cache_hit_tokens
-    ?? (usage.prompt_tokens_details && usage.prompt_tokens_details.cached_tokens)
-    ?? (usage.opencode && usage.opencode.tokens && usage.opencode.tokens.cache_read)
-    ?? 0
-  );
+  // 取第一个 >0 的字段：OpenCode Go 账单 > OpenAI 兼容 cached_tokens > DeepSeek 原生。
+  // 不能用 ?? 链：有些服务商会把 prompt_cache_hit_tokens 显式填 0，会把后面的字段短路掉。
+  const n = Number(usage.opencode && usage.opencode.tokens && usage.opencode.tokens.cache_read)
+    || Number(usage.prompt_tokens_details && usage.prompt_tokens_details.cached_tokens)
+    || Number(usage.prompt_cache_hit_tokens)
+    || 0;
   return Number.isFinite(n) && n > 0 ? n : 0;
 }
 

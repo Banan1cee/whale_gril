@@ -354,12 +354,31 @@ function choose(pool, rng = Math.random, recent = []) {
 }
 // 分类由模型在回复里决定（[[sticker:分类]]），这里只负责把名字认成 key、取一张图。
 // 同一个会话同时只会存在一个待发任务，避免连发刷屏。
-const WANT_RE = /(发|来|甩|扔|给|丢|整|弄|上)(一?个|一?张|一?只|点)?\s*(表情包?|动图|贴纸|梗图|meme)/i;
+const WANT_RE = /(发|来|甩|扔|给|丢|整|弄|上)(一?个|一?张|一?只|点)?\s*(表情包?|动图|贴纸|梗图|meme|图)/i;
+// 「用表情包告诉我你现在什么心情」这类没有“发/来”的索要
+const USE_RE = /(用|拿|靠)[^，。！？!?\n]{0,8}(表情包?|动图|贴纸|梗图|meme)/i;
+// 「表情包来一个」这种倒装
+const REVERSE_RE = /(表情包?|动图|贴纸|梗图|meme)\s*(来|发|整|甩|扔)(一?个|一?张|点)?/i;
 const WANT_BARE_RE = /^\s*(表情包|表情)(呗|吧|啊|呀|嘛|啦)?[！!？?~～。]*\s*$/;
+const NEGATIVE_RE = /(不要|别|不用|不想|不会|不能|不许|不准|停止)[^，。！？!?]{0,12}(发|来|给|整|弄|甩|扔|上|用|拿).{0,6}(表情|动图|贴纸|梗图|meme|图)/i;
 function isStickerRequest(value) {
   const text = String(value ?? '').trim();
-  if (/(不要|别|不用|不想|不会|不能|不许|不准|停止)[^，。！？!?]{0,12}(发|来|给|整|弄|甩|扔|上).{0,6}(表情|动图|贴纸|梗图|meme)/i.test(text)) return false;
-  return WANT_RE.test(text) || WANT_BARE_RE.test(text);
+  if (NEGATIVE_RE.test(text)) return false;
+  return WANT_RE.test(text) || WANT_BARE_RE.test(text) || USE_RE.test(text) || REVERSE_RE.test(text);
+}
+
+// 严肃场景：只收明显的坏消息/求助，不收「好累/压力」这种日常词，
+// 否则一半闲聊都会被判严肃，表情包频率直接掉下去。
+const SERIOUS_RE = /(失恋|分手|离婚|生病|住院|医院|去世|被裁|裁员|失业|崩溃|焦虑|抑郁|委屈|想哭|撑不住|难受|头疼|头痛|疼痛|疼|求助|怎么办|出事|吵架|被骂|挨骂|欺负|伤心|难过|不开心|emo)/i;
+const LIVELY_RE = /(没事了|好多了|我好了|想通了|谢谢你|谢谢啦|哈哈|笑死|开心了|好耶|太好了|解决了)/i;
+const SERIOUS_WINDOW_MS = 15 * 60 * 1000;
+const SERIOUS_TURNS = 4;
+
+function isSeriousText(value) {
+  return SERIOUS_RE.test(String(value ?? ''));
+}
+function isLivelyText(value) {
+  return LIVELY_RE.test(String(value ?? ''));
 }
 /** 模型给的分类名 → 内部 key（cute / angry / other / x:标签）；认不出返回 '' */
 function categoryFromName(config, value) {
@@ -433,6 +452,61 @@ function promptCategories(config, root) {
     out.push({ key, label, count: categoryImages(dir, key).length });
   }
   return out;
+}
+
+function isUsableCategory(config, value) {
+  const key = categoryFromName(config, value);
+  if (!key) return false;
+  const dir = stickerDir(config, config.root);
+  return categoryImages(dir, key).length > 0;
+}
+
+/** 这个分类名属于哪一类老名字（撒娇→cute、嫌弃→angry、其他→happy） */
+function familyKey(value) {
+  const raw = String(value == null ? '' : value).trim().replace(/^x:/, '');
+  if (!raw) return '';
+  if (LABEL_TO_KEY[raw]) return LABEL_TO_KEY[raw];
+  for (const [key, names] of Object.entries(FOLDERS)) {
+    if (names.includes(raw)) return key;
+  }
+  return '';
+}
+
+/** 优先开心，其次傲娇/炸毛，再其次第一个有图的自定义分类；都没有返回 '' */
+function defaultCategory(config) {
+  const dir = stickerDir(config, config.root);
+  for (const key of ['happy', 'cute', 'angry']) {
+    if (categoryImages(dir, key).length) return key;
+  }
+  for (const cat of readExtraCategories(config, config.root)) {
+    const key = extraKey(cleanCategoryLabel(cat && cat.label));
+    if (key && categoryImages(dir, key).length) return key;
+  }
+  return '';
+}
+
+/** 空分类/写错名字 → 家族映射到有图的分类；实在没有就退回默认分类 */
+function resolveUsableCategory(config, value) {
+  const direct = categoryFromName(config, value);
+  if (direct && isUsableCategory(config, direct)) return direct;
+  const fam = familyKey(value);
+  if (fam && isUsableCategory(config, fam)) return fam;
+  return defaultCategory(config);
+}
+
+/** 从一句用户原话里找分类名（“发个阴阳怪气”）；只认有图的分类 */
+function categoryInText(config, value) {
+  const text = String(value == null ? '' : value);
+  const usable = promptCategories(config, config.root)
+    .filter((c) => c.count > 0)
+    .sort((a, b) => b.label.length - a.label.length);
+  for (const c of usable) {
+    if (c.label && text.includes(c.label)) return c.key;
+  }
+  for (const [label, key] of Object.entries(LABEL_TO_KEY)) {
+    if (label && text.includes(label) && isUsableCategory(config, key)) return key;
+  }
+  return '';
 }
 
 /** 内置分类的文件夹是硬编码的：被删掉就补回来（只补缺失的，不动已有内容） */
@@ -546,4 +620,6 @@ function upload(config, root, emotion, files) {
 }
 module.exports = { EMOTIONS, EMOTION_LABELS, EXTRA_PREFIX, cleanCategoryLabel, extraKey, hasCategory, readExtraCategories, writeExtraCategories, categoryFile, normalizeEmotion, categoryFromName, resolveCategory, SYNONYMS, promptCategories, GENERIC, EXTS, MAX_FILE_BYTES, MAX_UPLOAD_BYTES, MAX_UPLOAD_FILES,
   hasEmotion, resolveImage, safeDirectory, migrateLegacy, ensureBuiltinDirs, stickerDir, regularFile, listImages, categoryImages, imagesFor, anyImages, isOn,
-  invalidateScan, clearScanCache, choose, pick, isStickerRequest, imageType, upload };
+  invalidateScan, clearScanCache, choose, pick, isStickerRequest, imageType, upload,
+  isSeriousText, isLivelyText, SERIOUS_WINDOW_MS, SERIOUS_TURNS,
+  isUsableCategory, defaultCategory, resolveUsableCategory, categoryInText };

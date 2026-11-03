@@ -38,7 +38,9 @@ for (const [label, customPrompt] of [['默认', ''], ['自定义', '你是审计
       // 分类由模型决定：必须教它怎么写标记
       assert.match(prompt, /\[\[sticker:分类名\]\]/);
       assert.match(prompt, /一条回复最多写一个标记/);
-      assert.match(prompt, /想发的时候/);
+      assert.match(prompt, /想发就在整段回复的最末尾/);
+      assert.match(prompt, /自定义分类按名字理解/);
+      assert.match(prompt, /对方在难过、求助、说正事时别发/);
       assert.doesNotMatch(prompt, /是否发送由程序按开关、图库、概率和安全校验决定/);
       assert.doesNotMatch(prompt, /不要输出控制标签/);
       // 现在不靠「一律不许提」堵嘴，而是让它按【最近做过的事】里的真实记录说
@@ -89,6 +91,61 @@ test('图库有图时，提示词里带上分类名和张数', () => {
     }).prompt;
     assert.match(prompt, /炸毛\(2张\)/);
     assert.doesNotMatch(prompt, /图库现在是空的/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 80 });
+  }
+});
+
+test('四分类只有三个有图：只把有图的三个给模型，自定义分类按名字出现', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-cap-four-'));
+  try {
+    for (const [dir, file] of [['傲娇', 'a.gif'], ['炸毛', 'b.gif'], ['开心', 'c.gif']]) {
+      fs.mkdirSync(path.join(root, 'data/stickers', dir), { recursive: true });
+      fs.writeFileSync(path.join(root, 'data/stickers', dir, file), 'x');
+    }
+    fs.mkdirSync(path.join(root, 'data/stickers/阴阳怪气'), { recursive: true }); // 空分类
+    fs.writeFileSync(path.join(root, 'data/sticker-categories.json'),
+      JSON.stringify([{ label: '阴阳怪气', chance: 0.25 }]), 'utf8');
+    const config = {
+      ...DEFAULT_CONFIG,
+      root,
+      features: { ...DEFAULT_CONFIG.features, stickers: true },
+      persona: { ...DEFAULT_CONFIG.persona, name: '审计测试角色', customPrompt: '' },
+      chat: { ...DEFAULT_CONFIG.chat },
+    };
+    const prompt = assemblePrompt({
+      config,
+      msg: { platform: 'wechat', chatType: 'private', senderName: '测试朋友', text: '在吗' },
+      now: new Date('2026-01-01T12:00:00Z'),
+    }).prompt;
+    assert.match(prompt, /傲娇\(1张\)/);
+    assert.match(prompt, /炸毛\(1张\)/);
+    assert.match(prompt, /开心\(1张\)/);
+    assert.doesNotMatch(prompt, /阴阳怪气/, '没图的分类不能出现在提示词的可用分类里');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 80 });
+  }
+});
+
+test('stickerDemand 只加在尾部，system 一个字节都不变', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-cap-demand-'));
+  try {
+    fs.mkdirSync(path.join(root, 'data/stickers/开心'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'data/stickers/开心/a.gif'), 'x');
+    const base = {
+      ...DEFAULT_CONFIG,
+      root,
+      features: { ...DEFAULT_CONFIG.features, stickers: true },
+      persona: { ...DEFAULT_CONFIG.persona, name: '审计测试角色', customPrompt: '' },
+      chat: { ...DEFAULT_CONFIG.chat },
+    };
+    const msg = { platform: 'wechat', chatType: 'private', senderName: '测试朋友', text: '在吗' };
+    const off = assemblePrompt({ config: base, msg, now: new Date('2026-01-01T12:00:00Z') });
+    const on = assemblePrompt({ config: base, msg: { ...msg, stickerDemand: true }, now: new Date('2026-01-01T12:00:00Z') });
+    assert.equal(on.system, off.system, '尾部提示不能改 system');
+    assert.doesNotMatch(off.tail, /这条带一张/);
+    assert.match(on.tail, /这条带一张/);
+    assert.match(on.tail, /\[\[sticker:分类名\]\]/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 80 });
   }

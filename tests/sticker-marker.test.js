@@ -101,17 +101,27 @@ test('只有标记没有正文：不发空消息，但分类已经记下', () =>
 });
 
 test('stickerFor：有分类才交给服务，没分类一律不发', () => {
-  const seen = [];
-  const ctx = {
-    config: { features: { stickers: true } },
-    stickerService: { plan: (msg, category) => { seen.push(category); return { category }; } },
-  };
-  assert.deepEqual(
-    Bot.prototype.stickerFor.call(ctx, { msg: { platform: 'wechat' }, stickerCategory: '傲娇' }),
-    { category: '傲娇' }
-  );
-  assert.equal(Bot.prototype.stickerFor.call(ctx, { msg: { platform: 'wechat' } }), null);
-  assert.deepEqual(seen, ['傲娇'], '没有标记时不该调用服务');
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-marker-'));
+  try {
+    fs.mkdirSync(path.join(root, 'data/stickers/傲娇'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'data/stickers/傲娇/a.gif'), 'x');
+    const seen = [];
+    const ctx = {
+      config: { root, features: { stickers: true }, sticker: { dir: 'data/stickers' } },
+      stickerService: { plan: (msg, category) => { seen.push(category); return { category }; } },
+    };
+    assert.deepEqual(
+      Bot.prototype.stickerFor.call(ctx, { msg: { platform: 'wechat', chatId: 'c1' }, stickerCategory: '傲娇' }),
+      { category: 'cute' }
+    );
+    assert.equal(Bot.prototype.stickerFor.call(ctx, { msg: { platform: 'wechat', chatId: 'c1' } }), null);
+    assert.deepEqual(seen, ['cute'], '没有标记时不该调用服务');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 80 });
+  }
 });
 
 test('stickerFor：总开关关着就直接返回 null', () => {

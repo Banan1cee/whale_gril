@@ -181,10 +181,12 @@ const DEFAULT_CONFIG = {
   // 关闭时整个功能不生效：不挑图、不回包带字段、桥接不轮询、测试接口 404。
   sticker: {
     dir: 'data/stickers',
-    // 三类：傲娇 / 炸毛 / 其他。发哪一类由模型在回复里用 [[sticker:分类]] 决定，
-    // 不再按概率自动发；自定义分类存在 data/sticker-categories.json（不进 config，
-    // 避免被表单转成字符串）。
+    // 三类内置 + 自定义分类：发哪一类仍由模型在回复里用 [[sticker:分类]] 决定，
+    // 程序不猜情绪、不按概率配图。demandChance 只决定“这一轮要不要在尾部提醒她带一张”，
+    // 0 = 完全不提醒（只靠模型自觉），0.7 ≈ 五到六成轮次提醒，1 = 每轮都提醒。
+    // 自定义分类存在 data/sticker-categories.json（不进 config，避免被表单转成字符串）。
     testChat: '文件传输助手', // 控制台「发送测试表情包」默认发到哪
+    demandChance: 0.7,
   },
   // 图片理解：默认智谱 GLM-4V-Flash（免费）
   features: {

@@ -440,7 +440,10 @@ function stickerCapability(config, msg) {
   const usable = stickers.promptCategories(config, config.root).filter((c) => c.count > 0);
   const lines = [
     '【表情包】当前微信通道具备真实的图片/动图附件发送能力，可由桥接发送本地表情包；不要否认这项能力。',
-    '想发的时候，在整段回复的最末尾单独写一个标记 [[sticker:分类名]]，程序会把标记剥掉并另发一张图；不想发就完全不写标记。一条回复最多写一个标记。',
+    '你聊天时爱用表情包接话：对方在笑、分享好事、夸你 → 开心；撒娇、嘴硬、逗你 → 傲娇；损你、抬杠、惹你 → 炸毛。',
+    '自定义分类按名字理解，名字起得越具体越好懂；看不出用途的就别选。',
+    '想发就在整段回复的最末尾单独写一个标记 [[sticker:分类名]]，程序会把标记剥掉并另发一张图；一条回复最多写一个标记。',
+    '例如：对方说「老板居然提前下班」→ 回「还不快跑 [[sticker:开心]]」。',
   ];
   if (usable.length) {
     lines.push('可用分类（只能用下面这些名字，括号里是图库张数）：'
@@ -449,6 +452,7 @@ function stickerCapability(config, msg) {
     lines.push('图库现在是空的，写了标记也不会发出去，正常聊天就行。');
   }
   lines.push('写不存在的分类、或那个分类没有图，这张就不发；标记里只写分类名，不要写文件名。');
+  lines.push('对方在难过、求助、说正事时别发。');
   lines.push('发没发出去只看【最近做过的事】里的记录：写了发出/确认就照实承认，写了失败、没回执、跳过就说没发成；记录里根本没有的，不要编造送达结果，也不要假装没这回事。');
   return lines.join('\n');
 }
@@ -875,11 +879,12 @@ function buildBlocks({ config, msg = {}, profile, notes = [], noteReminders = []
   statics.push(answerLines().join('\n'));
   statics.push(HARD_REQUIREMENT);
   statics.push(guidanceStaticLines().join('\n'));
-  if (stickerBlock) statics.push(stickerBlock);
   // 环境块紧挨着时间规则：同一类「程序给的事实」，问系统/时间/所在地时一起翻
   if (envText) statics.push(envText + '\n' + ENV_RULE);
   statics.push(TIME_RULES);
   statics.push(dayLine(now));
+  // 表情包放在最后：越靠近生成位置，模型越会记得用；它本身是会话静态内容，不破坏前缀缓存
+  if (stickerBlock) statics.push(stickerBlock);
 
   /* ── 本轮状态：只跟这一条消息有关 ── */
   dynamic.push(`- 语气底子：${mood.hint}（只影响语气；别说「我今天心情…」这类话，也别每句都体现）。`);
@@ -934,6 +939,10 @@ function buildBlocks({ config, msg = {}, profile, notes = [], noteReminders = []
     dynamic.push(`- 此刻：你大概${activity}——只是背景，**不要主动说出来**，也别拿它开场；对方问到「你在干嘛」再提。`);
   }
   if (isLateNight(now)) dynamic.push('- 这个点你有点困了，回复更短更软，可以催对方睡，但别唠叨。');
+  // 节奏提示放最后：只在这一轮真的该提醒时才出现；它是尾部内容，不会打碎 system 前缀缓存
+  if (msg.stickerDemand && stickerBlock) {
+    dynamic.push('- 【表情包】这条带一张，从可用分类里挑最贴的，末尾写 [[sticker:分类名]]。');
+  }
 
   return { static: statics.filter(Boolean), dynamic: dynamic.filter(Boolean) };
 }
@@ -1011,7 +1020,7 @@ function buildLegacySystem({ config, msg, profile, notes = [], noteReminders = [
     }
     // 自定义人设也要看得见自己做过什么，否则同样是「发了图不知道」
     const actionBlock = actionEvents.formatBlock(events, { now });
-    return custom + '\n\n' + CORE_TEMPER + '\n\n' + scene + '\n' + nowLine + (envText ? '\n' + envText + '\n' + ENV_RULE : '') + '\n' + tone + masterBlock + '\n' + CUSTOM_TEASE + '\n' + CUSTOM_NET_RULE + webBlock + styleBlock + slangBlock + abbrevText + fightBlock + roastTail + (actionBlock ? '\n\n' + actionBlock : '') + (stickerBlock ? '\n\n' + stickerBlock : '') + '\n\n' + conversationGuidance(msg) + (msg.voiceRequested ? '\n' + VOICE_SUFFIX : '');
+    return custom + '\n\n' + CORE_TEMPER + '\n\n' + scene + '\n' + nowLine + (envText ? '\n' + envText + '\n' + ENV_RULE : '') + '\n' + tone + masterBlock + '\n' + CUSTOM_TEASE + '\n' + CUSTOM_NET_RULE + webBlock + styleBlock + slangBlock + abbrevText + fightBlock + roastTail + (actionBlock ? '\n\n' + actionBlock : '') + (stickerBlock ? '\n\n' + stickerBlock : '') + (msg.stickerDemand && stickerBlock ? '\n\n- 【表情包】这条带一张，从可用分类里挑最贴的，末尾写 [[sticker:分类名]]。' : '') + '\n\n' + conversationGuidance(msg) + (msg.voiceRequested ? '\n' + VOICE_SUFFIX : '');
   }
   const isGroup = msg.chatType === 'group';
   const mood = moodFor(now);
@@ -1139,6 +1148,7 @@ function buildLegacySystem({ config, msg, profile, notes = [], noteReminders = [
   // 的用户（默认就是空）收到天气数据也照样是空的，实测日志「天气查询：北京」成功、
   // 她仍回「我这边看不到天气啊」「我连不了网」。
   if (webContext) lines.push('', webContext);
+  if (msg.stickerDemand && stickerBlock) lines.push('', '- 【表情包】这条带一张，从可用分类里挑最贴的，末尾写 [[sticker:分类名]]。');
   lines.push('', conversationGuidance(msg));
   return lines.join('\n') + (msg.voiceRequested ? '\n' + VOICE_SUFFIX : '');
 }
