@@ -16,6 +16,9 @@
         "deploy": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/deploy.ps1",
         "release": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-release.ps1",
         "bump": "node scripts/bump-version.js",
+        "brake": "node scripts/manifest-policy.js --force false",
+        "unbrake": "node scripts/manifest-policy.js --force null",
+        "force-now": "node scripts/manifest-policy.js --force true",
         "ci": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/ci-local.ps1"
     },
     "engines": {
