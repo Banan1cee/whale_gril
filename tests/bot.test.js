@@ -103,17 +103,17 @@ test('重复消息 id 会被去重', async () => {
   cleanup();
 });
 
-test('闭麦 / 开麦 命令生效', async () => {
+test('主人群聊闭麦 / 开麦命令生效', async () => {
   const { bot, cleanup } = makeBot();
-  const mute = await bot.decide(groupMsg('@鲸鲸 闭麦 1', { atMe: true }));
+  const mute = await bot.decide(groupMsg('@鲸鲸 闭麦 1', { atMe: true, senderId: 'wxid_test_master', senderName: 'Master' }));
   assert.equal(mute.action, 'command');
   assert.equal(mute.commandType, 'mute');
-  const during = await bot.decide(groupMsg('@鲸鲸 在吗', { atMe: true }));
+  const during = await bot.decide(groupMsg('@鲸鲸 在吗', { atMe: true, senderId: 'wxid_test_master', senderName: 'Master' }));
   assert.equal(during.action, 'ignore');
   assert.equal(during.reason, 'muted');
-  const unmute = await bot.decide(groupMsg('@鲸鲸 开麦', { atMe: true }));
+  const unmute = await bot.decide(groupMsg('@鲸鲸 开麦', { atMe: true, senderId: 'wxid_test_master', senderName: 'Master' }));
   assert.equal(unmute.commandType, 'unmute');
-  const after = await bot.decide(groupMsg('@鲸鲸 在吗', { atMe: true }));
+  const after = await bot.decide(groupMsg('@鲸鲸 在吗', { atMe: true, senderId: 'wxid_test_master', senderName: 'Master' }));
   assert.equal(after.action, 'reply');
   cleanup();
 });
