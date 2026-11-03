@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.IO.Compression;
 using System.Net.Http;
@@ -90,6 +91,23 @@ namespace WhaleLauncher.Views
                 : "本次运行   内核没起，还没有数";
             if (s.StFailed > 0) UsageLine.Foreground = (Brush)FindResource("Warn");
             else UsageLine.Foreground = (Brush)FindResource("Text");
+
+            // 本轮用量：命中 / 输入 / 输出 / 命中率 / 花费（和内核日志里那行同一个口径）
+            RoundUsageLine.Text = FormatRoundUsage(s);
+            RoundUsageLine.Foreground = (Brush)FindResource(s.HasUsage ? "Text" : "Dim");
+        }
+
+        /// <summary>本轮用量一行。没调过真模型（演示模式 / 还没聊过）就显示「—」，不猜。</summary>
+        private static string FormatRoundUsage(Snapshot s)
+        {
+            if (!s.HasUsage) return "本轮用量   —（还没调用过真实模型；演示模式没有用量）";
+            var rate = s.UsHitRate * 100.0;
+            var cost = s.UsHasCost
+                ? "¥" + s.UsCny.ToString("0.#####", CultureInfo.InvariantCulture)
+                  + "（" + (s.UsBand == "peak" ? "高峰" : "谷时") + "）"
+                : "¥—（价格未知）";
+            var model = string.IsNullOrEmpty(s.UsModel) ? "" : " · " + s.UsModel;
+            return $"本轮用量   命中 {s.UsCacheHitTokens} / 输入 {s.UsPromptTokens}（{rate:0.0}%）/ 输出 {s.UsCompletionTokens}{model} · {cost}";
         }
 
         private async Task RefreshCareAsync(Snapshot s)
