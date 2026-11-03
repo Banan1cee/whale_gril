@@ -76,6 +76,117 @@ def test_gbk_still_available():
     assert skipped == []
 
 
+# ---- 2026-11-03：版本号不可信，auto 模式要实测 WM_CHAR 语义 ----
+def test_detect_uses_sniff_for_old_version_and_caches():
+    """4.1 版本号只给「候选 GBK」，真值要靠实测：测得 utf16 就用 utf16，并缓存。"""
+    saved = (bg_sender._detect_char_mode_by_version, bg_sender.sniff_char_mode,
+             bg_sender.find_hwnd)
+    calls = []
+    try:
+        bg_sender._detect_char_mode_by_version = lambda hwnd=0: 'gbk'
+        bg_sender.sniff_char_mode = lambda h, log=None: (calls.append(h), 'utf16')[1]
+        bg_sender.find_hwnd = lambda: 0
+        bg_sender._DETECTED_MODES.clear()
+        assert bg_sender.detect_char_mode(123456) == 'utf16'
+        assert calls == [123456]
+        # 同一窗口第二次直接命中缓存，不再探测
+        bg_sender.sniff_char_mode = lambda h, log=None: 'gbk'
+        assert bg_sender.detect_char_mode(123456) == 'utf16'
+    finally:
+        (bg_sender._detect_char_mode_by_version, bg_sender.sniff_char_mode,
+         bg_sender.find_hwnd) = saved
+        bg_sender._DETECTED_MODES.clear()
+
+
+def test_detect_without_hwnd_does_not_touch_wechat():
+    """hwnd=0 的离线调用（单测/CLI）绝不能去嗅真实微信窗口。"""
+    saved = (bg_sender._detect_char_mode_by_version, bg_sender.sniff_char_mode)
+    hit = []
+    try:
+        bg_sender._detect_char_mode_by_version = lambda hwnd=0: 'gbk'
+        bg_sender.sniff_char_mode = lambda h, log=None: hit.append(h) or 'utf16'
+        bg_sender._DETECTED_MODES.clear()
+        assert bg_sender.detect_char_mode(0) == 'gbk'
+        assert hit == []
+    finally:
+        (bg_sender._detect_char_mode_by_version, bg_sender.sniff_char_mode) = saved
+        bg_sender._DETECTED_MODES.clear()
+
+
+def _fake_wechat(mode_that_works):
+    """造一个假输入框：只有 mode_that_works 打出来是「鲸」，另一种是乱码。"""
+    state = {'text': ''}
+
+    class FakeSender:
+        def __init__(self, hwnd):
+            self.hwnd = hwnd
+
+        def type_text(self, text, char_gap=0.04, strip_unencodable=True, mode='gbk'):
+            state['text'] = text if mode == mode_that_works else '¾¨'
+            return True, []
+
+        def _post(self, *a):
+            return True
+
+        def end_input(self):
+            pass
+
+    class FakeEdit:
+        def GetValuePattern(self):
+            class _VP:
+                def SetValue(_self, v):
+                    state['text'] = ''
+            return _VP()
+
+    def fake_read_ui(hwnd):
+        return {'edit': FakeEdit(), 'value': state['text'], 'nodes': [1] * 170}
+
+    return state, FakeSender, fake_read_ui
+
+
+def test_sniff_prefers_utf16_when_this_build_uses_utf16():
+    saved = (bg_sender.read_ui, bg_sender.WeChatSender, bg_sender.time.sleep)
+    _state, sender, read_ui = _fake_wechat('utf16')
+    try:
+        bg_sender.read_ui = read_ui
+        bg_sender.WeChatSender = sender
+        bg_sender.time.sleep = lambda s: None
+        assert bg_sender.sniff_char_mode(4242) == 'utf16'
+        # 探测完输入框必须是空的
+        assert bg_sender.read_ui(4242)['value'] == ''
+        assert bg_sender._DETECT_DIRTY == []
+    finally:
+        (bg_sender.read_ui, bg_sender.WeChatSender, bg_sender.time.sleep) = saved
+        bg_sender._DETECT_DIRTY.clear()
+
+
+def test_sniff_falls_back_to_gbk_on_old_build():
+    saved = (bg_sender.read_ui, bg_sender.WeChatSender, bg_sender.time.sleep)
+    _state, sender, read_ui = _fake_wechat('gbk')
+    try:
+        bg_sender.read_ui = read_ui
+        bg_sender.WeChatSender = sender
+        bg_sender.time.sleep = lambda s: None
+        assert bg_sender.sniff_char_mode(4243) == 'gbk'
+        assert bg_sender.read_ui(4243)['value'] == ''
+    finally:
+        (bg_sender.read_ui, bg_sender.WeChatSender, bg_sender.time.sleep) = saved
+        bg_sender._DETECT_DIRTY.clear()
+
+
+def test_sniff_refuses_when_composer_has_draft():
+    saved = (bg_sender.read_ui, bg_sender.WeChatSender, bg_sender.time.sleep)
+    _state, sender, read_ui = _fake_wechat('utf16')
+    try:
+        bg_sender.read_ui = lambda hwnd: {'edit': object(), 'value': '草稿', 'nodes': [1] * 170}
+        bg_sender.WeChatSender = sender
+        bg_sender.time.sleep = lambda s: None
+        assert bg_sender.sniff_char_mode(4244) == ''   # 有草稿 → 不探测、不清空
+    finally:
+        (bg_sender.read_ui, bg_sender.WeChatSender, bg_sender.time.sleep) = saved
+        bg_sender._DETECT_DIRTY.clear()
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith('test_') and callable(v)]
     for t in tests:

@@ -1643,23 +1643,32 @@ def main():
             hwnds = []
         # 只认「PID 里真的加载了 Weixin.dll」的窗口：微信更新/重启后旧句柄会被
         # 回收，拿它去热激活只会得到「未找到 Weixin.dll」然后无限重试。
-        good = 0
-        if uia_boot is not None:
+        #
+        # 注意（双开回归，2026-11-03）：这里**不能**用 uia_boot.pick_window()
+        # 的结果把候选窗口砍成一个。pick_window() 永远只返回分数最高的那一个
+        # （通常就是面积最大的大号），以前拿它的 hwnd 当过滤器，结果双开机器
+        # 也只剩 1 个候选 → 日志「本机只登了一个号」→ 账号反查形同虚设，
+        # 回复就直接从大号发出去了。校验 DLL 要逐个窗口做。
+        pinned = int(ACCOUNT.get("hwnd") or 0) if ACCOUNT.get("verified") else 0
+        if pinned:
+            # 已锁定的窗口还活着就只认它；死了就清掉，交给下面按账号重新认，
+            # 绝不能顺手改成 pick_window() 挑的另一个号。
             try:
-                _w = uia_boot.pick_window(int(ACCOUNT.get("hwnd") or 0))
-                if _w:
-                    good = int(_w["hwnd"])
-                    if int(ACCOUNT.get("hwnd") or 0) != good:
-                        ACCOUNT["hwnd"] = good
-                        log("微信主窗已重新定位：hwnd=%s pid=%s" % (good, _w.get("pid")))
+                _ppid = int(win32process.GetWindowThreadProcessId(pinned)[1] or 0)
+                if not (win32gui.IsWindow(pinned) and _ppid
+                        and probe._weixin_dll_module(_ppid)):
+                    log("账号窗口：锁定的 hwnd=%s 已失效，重新认窗口" % pinned)
+                    ACCOUNT.update(hwnd=0, verified=False)
+                    pinned = 0
             except Exception:                     # noqa: BLE001
-                good = 0
+                ACCOUNT.update(hwnd=0, verified=False)
+                pinned = 0
         for h in hwnds:
             h = int(h)
             try:
                 cls = win32gui.GetClassName(h) or ""
                 title = (win32gui.GetWindowText(h) or "").strip()
-                if good and h != good:
+                if pinned and h != pinned:
                     continue
             except Exception:                     # noqa: BLE001
                 cls, title = "", ""
@@ -1670,6 +1679,13 @@ def main():
             # 以前把它们当主窗统计，日志会出现「本机有 2 个微信主窗」的假多开。
             if title != "微信":
                 continue
+            try:
+                _cpid = int(win32process.GetWindowThreadProcessId(h)[1] or 0)
+                if _cpid and not probe._weixin_dll_module(_cpid):
+                    # 没有 Weixin.dll 的窗口（登录壳/辅助进程）热激活必失败，跳过
+                    continue
+            except Exception:                     # noqa: BLE001
+                pass
             try:
                 probe._hot_activate_accessibility(h)
             except Exception:                     # noqa: BLE001
@@ -1767,8 +1783,11 @@ def main():
             return False
         if len(cands) == 1:
             h, _c, _rows = cands[0]
-            ACCOUNT.update(hwnd=h, verified=True, label="hwnd=%s" % h,
-                           why="本机只登了一个号")
+            # 只有「真的只扫到一个主窗」才说只登了一个号；已锁定窗口后复查也会
+            # 只剩一个候选，别把那种情况也写成「本机只登了一个号」误导排查。
+            why = ("已锁定窗口" if int(ACCOUNT.get("hwnd") or 0) == h
+                   else "本机只登了一个号")
+            ACCOUNT.update(hwnd=h, verified=True, label="hwnd=%s" % h, why=why)
             m = _compat_mod()
             if m is not None:
                 try:
@@ -4174,7 +4193,10 @@ def main():
         _UIA_READY.update({"ts": now, "ok": bool(res.get("ok")), "msg": msg, "res": res})
         if res.get("ok"):
             h = int(res.get("hwnd") or 0)
-            if h and h != prefer:
+            # 只在「账号窗口已经确认过」时才把预热挑中的窗口写进 ACCOUNT：
+            # 否则双开时 uia_boot 会按面积挑大号，这里一写就变成「已锁定」，
+            # 账号反查再也不会跑，回复从大号发出去。
+            if h and h != prefer and ACCOUNT.get("verified"):
                 ACCOUNT["hwnd"] = h
             log("发送通道预热：" + msg)
         else:

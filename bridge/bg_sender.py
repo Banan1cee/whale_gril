@@ -529,7 +529,7 @@ def _mode_from_versions(candidates):
     return ""
 
 
-def detect_char_mode(hwnd=0):
+def _detect_char_mode_by_version(hwnd=0):
     """按微信版本决定用哪种编码：4.2+ 用 UTF-16 码元，老版本仍然用 GBK 字节。
 
     版本号不一定在 exe 所在目录（4.2 的启动器在 Weixin\\Weixin.exe，
@@ -589,6 +589,118 @@ def detect_char_mode(hwnd=0):
                 return "utf16"
     except Exception:
         return "gbk"
+    return "gbk"
+
+
+# 自动探测的结果缓存：窗口句柄 -> "gbk" / "utf16"（同一个窗口只测一次）
+_DETECTED_MODES = {}
+# 探测收尾没把输入框清干净时置真，send() 看到就按 input_dirty 返回，不再往脏框里打字
+_DETECT_DIRTY = []
+
+
+def _composer_value(hwnd):
+    try:
+        return read_ui(hwnd).get("value")
+    except Exception:
+        return None
+
+
+def _clear_composer(hwnd, edit=None):
+    """清空输入框（只用于编码探测后的收尾），返回 True = 回读确认已空。"""
+    # 1) UIA ValuePattern.SetValue('')：Qt 输入框实测可用（2026-11-03 微信 4.1.15.56）
+    try:
+        ctrl = edit
+        if ctrl is None:
+            ctrl = read_ui(hwnd).get("edit")
+        if ctrl is not None:
+            ctrl.GetValuePattern().SetValue("")
+    except Exception:
+        pass
+    time.sleep(0.25)
+    if _is_blank(_composer_value(hwnd)):
+        return True
+    # 2) 退格兜底：WM_KEYDOWN/WM_KEYUP 的 VK_BACK（WM_CHAR 8 有些输入控件不认）
+    try:
+        s = WeChatSender(hwnd)
+        s._post(WM_SETFOCUS, 0, 0)
+        time.sleep(0.08)
+        for _ in range(40):
+            s._post(0x0100, 0x08, 1)          # WM_KEYDOWN VK_BACK
+            s._post(0x0101, 0x08, 1)          # WM_KEYUP
+            time.sleep(0.02)
+        s.end_input()
+    except Exception:
+        pass
+    time.sleep(0.4)
+    return _is_blank(_composer_value(hwnd))
+
+
+def sniff_char_mode(hwnd, log=None):
+    """实测这台微信的 WM_CHAR 语义，返回 "gbk" / "utf16" / ""（测不出来）。
+
+    为什么不能只看版本号：同一个版本目录（4.1.15.56）腾讯也能通过热更新换掉
+    聊天输入控件。文档写的「4.1 及以前 = GBK 字节」在这台机器上已经不成立：
+    按 GBK 发「鲸」实际显示成「¾¨」，按 UTF-16 码元发才对。所以 auto 模式真的
+    打一个字、读回来看，再按结果选。
+
+    只在输入框为空时做；做完用 UIA 清空并回读确认。清不干净就置 _DETECT_DIRTY，
+    让 send() 直接返回 input_dirty，绝不往脏输入框里继续打字。
+    """
+    log = log or _noop
+    try:
+        info = read_ui(hwnd)
+        if info.get("edit") is None or not _is_blank(info.get("value")):
+            return ""
+        sender = WeChatSender(hwnd)
+        for mode in ("utf16", "gbk"):
+            sender.type_text("鲸", char_gap=0.05, strip_unencodable=False, mode=mode)
+            time.sleep(0.55)
+            got = _composer_value(hwnd) or ""
+            if not _clear_composer(hwnd, info.get("edit")):
+                _DETECT_DIRTY.append(1)
+                log("后台通道：编码探测后没能清空输入框，已停止探测（请检查草稿）")
+                return ""
+            if got.strip() == "鲸":
+                log("后台通道：编码实测 → %s（这台微信 WM_CHAR 收%s）"
+                    % (mode, "UTF-16 码元" if mode == "utf16" else "GBK 字节"))
+                return mode
+        return ""
+    except Exception as e:                      # noqa: BLE001
+        try:
+            _clear_composer(hwnd)
+        except Exception:
+            pass
+        log("后台通道：编码探测失败（%r），按版本号兜底" % (e,))
+        return ""
+
+
+def detect_char_mode(hwnd=0, log=None):
+    """auto 模式用：版本号给不出定论时，实测一次这台微信到底收哪种编码。
+
+    4.2+ 直接 UTF-16（新语义）；其余版本（4.1/4.0/认不出）先按版本号得到候选，
+    再真的打一个「鲸」读回来验证，选出正确的那个并缓存。
+    """
+    mode = _detect_char_mode_by_version(hwnd)
+    if mode == "utf16":
+        return mode
+    try:
+        import win32process
+        h = int(hwnd or 0) or find_hwnd()
+    except Exception:
+        h = 0
+    if not h:
+        return mode
+    if h in _DETECTED_MODES:
+        return _DETECTED_MODES[h]
+    # 只对调用方明确传入的窗口做实测：hwnd=0 时 find_hwnd() 可能摸到别的微信窗口，
+    # 单元测试/离线脚本不该去动真实输入框。
+    if not int(hwnd or 0):
+        return mode
+    sniffed = sniff_char_mode(h, log=log)
+    if sniffed:
+        _DETECTED_MODES[h] = sniffed
+        return sniffed
+    _DETECTED_MODES[h] = "gbk"
     return "gbk"
 
 
@@ -1014,13 +1126,17 @@ def send(text, chat=None, hwnd=0, log=None, char_gap=0.04,
 
             mode = char_mode
             if mode in (None, "", "auto"):
-                mode = detect_char_mode(hwnd)
+                mode = detect_char_mode(hwnd, log=log)
+                if _DETECT_DIRTY:
+                    # 探测完输入框没清干净：宁可这条不发，也不能把「鲸」拼进正文
+                    _DETECT_DIRTY.clear()
+                    return False, "input_dirty"
             if mode not in _MODE_LOGGED:
                 _MODE_LOGGED.add(mode)
                 log("后台通道：打字编码 = %s（%s）" % (
                     mode,
-                    "UTF-16 码元，微信 4.2+" if mode == "utf16"
-                    else "GBK 字节，微信 4.1 及以前；4.2 上中文会变乱码，请检查版本探测"))
+                    "UTF-16 码元（新版本 WM_CHAR 语义）" if mode == "utf16"
+                    else "GBK 字节（老版本 WM_CHAR 语义）；若中文变乱码，把编码改成 UTF-16"))
             # 从这里开始往输入框投字：之后的失败返回一律改带 input_dirty（新增枚举，
             # 向后兼容），声明「草稿可能残留」（M2），免得调用方在脏草稿上接着打字、
             # 拼出双份或拼接脏消息。
