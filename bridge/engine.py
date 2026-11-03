@@ -3254,35 +3254,33 @@ def main():
         nonlocal gui
         if not group_is_alive(username) or not account_send_allowed("自动语音"):
             return False
-        with send_lock:
-            if cancelled is not None and cancelled():
-                if outcome is not None:
-                    outcome.update(Status="failed", Error="语音测试已取消")
-                return False
-            if not sticker_quarantine_allows(username, who):
-                return False
-            hwnd = int(ACCOUNT.get("hwnd") or 0)
-            if not hwnd:
-                return False
-            def prepare():
-                nonlocal gui
-                if not account_send_allowed("自动语音发送前") or int(ACCOUNT.get("hwnd") or 0) != hwnd:
+        if cancelled is not None and cancelled():
+            if outcome is not None:
+                outcome.update(Status="failed", Error="语音测试已取消")
+            return False
+        hwnd = int(ACCOUNT.get("hwnd") or 0)
+        if not hwnd:
+            return False
+        def prepare():
+            nonlocal gui
+            if (not group_is_alive(username) or not sticker_quarantine_allows(username, who)
+                    or not account_send_allowed("自动语音发送前")) or int(ACCOUNT.get("hwnd") or 0) != hwnd:
+                return ""
+            with gui_lock:
+                if gui is None:
+                    gui = WeChatGUI()
+                bind_gui_window(gui)
+                u = gui._get_uia()
+                if u is None:
                     return ""
-                with gui_lock:
-                    if gui is None:
-                        gui = WeChatGUI()
-                    bind_gui_window(gui)
-                    u = gui._get_uia()
-                    if u is None:
-                        return ""
-                    keys = aliases_for(username, who)
-                    if u.current_chat() not in keys and not u.open_chat(keys):
-                        return ""
-                    current = str(u.current_chat() or "")
-                    if current not in keys:
-                        return ""
-                    return current
-            return voice_reply.deliver(ROOT, text, hwnd, prepare, log, cancelled=cancelled, outcome=outcome)
+                keys = aliases_for(username, who)
+                if u.current_chat() not in keys and not u.open_chat(keys):
+                    return ""
+                current = str(u.current_chat() or "")
+                if current not in keys:
+                    return ""
+                return current
+        return voice_reply.deliver(ROOT, text, hwnd, prepare, log, cancelled=cancelled, outcome=outcome, send_lock=send_lock)
 
     def send_text(text, chat_display_name, chat_username="", force=False, quote_text=None):
         # force 仅为兼容旧调用方保留：3.9 起没有「离开/游戏排队」了，它不再改变发送行为。

@@ -17,6 +17,7 @@ public sealed class VoiceSendPage : UserControl
     readonly CheckBox experimental=new(){Content="启用语音发送（实验性）",IsChecked=false,Margin=new Thickness(0,12,0,10)};
     readonly StackPanel panel=new(){Visibility=Visibility.Collapsed};
     readonly TextBox probability=new(){Text="25"},model=new(),voice=new(),instructions=new(),search=new();
+    readonly TextBox synthTimeout=new(){Text="20",Width=140,HorizontalAlignment=HorizontalAlignment.Left};
     readonly ComboBox shortcut=new(){IsEditable=true,Text="Ctrl+Alt"},devices=new(),models=new(),voices=new();
     readonly PasswordBox key=new();
     readonly CheckBox groups=new(){Content="群聊",IsChecked=true},privates=new(){Content="私聊",IsChecked=true};
@@ -46,6 +47,8 @@ public sealed class VoiceSendPage : UserControl
         Heading("回复方式");
         Add("随机语音概率（0～100%，0 表示只响应明确要求）",probability);
         probability.Width=140;probability.HorizontalAlignment=HorizontalAlignment.Left;
+        Add("语音合成最长等待（5～90 秒，推荐 20 秒）",synthTimeout);
+        panel.Children.Add(Note("合成超时会取消本次请求并改发原始文字；连续两次接口异常后暂停语音 5 分钟，再自动尝试。合成期间其他会话仍可发文字。已经开始录音的消息不会重复补发文字。"));
         var scopes=new WrapPanel{Margin=new Thickness(0,12,0,2)};
         groups.Margin=new Thickness(0,0,24,0);scopes.Children.Add(groups);scopes.Children.Add(privates);panel.Children.Add(scopes);
         shortcut.ItemsSource=new[]{"Ctrl+Tab","Ctrl+Alt","Alt+=","Ctrl+Shift+F11","F11"};
@@ -212,6 +215,7 @@ public sealed class VoiceSendPage : UserControl
             saved=File.Exists(file)?AutoVoiceSettings.Load(root):new AutoVoiceSettings();
             experimental.IsChecked=saved.Enabled;panel.Visibility=saved.Enabled?Visibility.Visible:Visibility.Collapsed;
             groups.IsChecked=saved.Groups;privates.IsChecked=saved.Private;probability.Text=saved.Probability.ToString(CultureInfo.InvariantCulture);
+            synthTimeout.Text=saved.SynthTimeoutSec.ToString(CultureInfo.InvariantCulture);
             model.Text=saved.Model;voice.Text=saved.Voice;instructions.Text=saved.Instructions;shortcut.Text=saved.RecordingHotkey;
             BindChoices(models,null,model,false);BindChoices(voices,null,voice,true);
             if(saved.Enabled){RefreshDevices();devices.SelectedItem=devices.Items.Cast<Device>().FirstOrDefault(d=>d.Id==saved.Device);}
@@ -223,10 +227,12 @@ public sealed class VoiceSendPage : UserControl
     {
         if(experimental.IsChecked!=true)throw new Exception("请先打开实验开关");
         if(!double.TryParse(probability.Text,NumberStyles.Float,CultureInfo.InvariantCulture,out var chance)||!double.IsFinite(chance)||chance<0||chance>100)throw new Exception("概率须为 0～100");
+        if(!double.TryParse(synthTimeout.Text,NumberStyles.Float,CultureInfo.InvariantCulture,out var seconds)||!double.IsFinite(seconds)||seconds<5||seconds>90)throw new Exception("语音合成最长等待须为 5～90 秒");
         var hotkey=RecordingShortcut.Parse(shortcut.Text);
         if(devices.SelectedItem is not Device d||string.IsNullOrWhiteSpace(voice.Text))throw new Exception("请选择虚拟声卡和音色");
         BreezeSpeech.SaveKey(keyFile,key.Password);if(string.IsNullOrWhiteSpace(BreezeSpeech.LoadKey(keyFile)))throw new Exception("请配置 BreezeBlue Key");
         var value=new AutoVoiceSettings{Enabled=true,Probability=chance,Groups=groups.IsChecked==true,Private=privates.IsChecked==true,Model=model.Text.Trim(),Voice=voice.Text.Trim(),Instructions=instructions.Text.Trim(),Device=d.Id,RecordingHotkey=hotkey.Label};
+        value.SynthTimeoutSec=seconds;
         Write(value);saved=value;shortcut.Text=hotkey.Label;
         status.Text="已保存，微信录音快捷键："+hotkey.Label+"。关闭实验开关立即停止后续语音任务。";
     }

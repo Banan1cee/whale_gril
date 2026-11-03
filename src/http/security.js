@@ -50,7 +50,7 @@ function isLoopbackRequest(req) {
 
 /** 远程写操作：必须显式打开 allowRemote，并且带一个非默认的 x-bot-token */
 function remoteAuthorized(req, runtime) {
-  const allow = Boolean(runtime.config.server && runtime.config.server.allowRemote);
+  const allow = runtime.config.server && runtime.config.server.allowRemote === true;
   if (!allow) return false;
   const token = String(
     (runtime.config.gateway && runtime.config.gateway.wechat && runtime.config.gateway.wechat.inboundToken) || ''
@@ -72,7 +72,13 @@ function checkRequest(runtime, req, { pathname, method }) {
   // 以前没这道：任何网页都能 POST 到 127.0.0.1:8787 改设置（实测 text/plain 也能过，不需要预检）。
   const reqOrigin = String(req.headers.origin || '');
   if (reqOrigin) {
-    const sameOrigin = /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/i.test(reqOrigin);
+    let sameOrigin = false;
+    try {
+      const origin = new URL(reqOrigin);
+      const target = new URL(`${req.socket && req.socket.encrypted ? 'https' : 'http'}://${req.headers.host}`);
+      sameOrigin = /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/i.test(reqOrigin)
+        && origin.origin === target.origin;
+    } catch { /* malformed/missing origin or Host fails closed */ }
     const isWrite = method !== 'GET' && method !== 'HEAD';
     if (!sameOrigin && isWrite) {
       logger.warn(`拒绝跨站请求：${method} ${pathname} Origin=${reqOrigin}`);
