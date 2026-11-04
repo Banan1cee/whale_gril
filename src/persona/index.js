@@ -1473,6 +1473,7 @@ module.exports = {
   isLateNight,
   dayLine,
   buildBlocks,
+  stickerCapability,   // setter 供测试断言「空分类不进提示词」
   buildTurnState,
   buildPromptParts,
   buildSystem,

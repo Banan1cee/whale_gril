@@ -670,7 +670,7 @@ function writeIgnored(config, root, labels) {
  *   - 只看一级子目录，不递归；
  *   - 排除内置三类和所有旧别名（通用/其他/撒娇/cute/happy/嫌弃/meh/敷衍/bored…）；
  *   - 目录要过 safeScanDir（拒链接 / 目录联接 / 非目录）；
- *   - 目录里至少有一张能用的图才算分类，空目录不登记（防「新建文件夹」污染提示词）；
+ *   - 空目录也登记（建了文件夹就该在页签里出现），但 0 张的分类不会进提示词；
  *   - 名字走 cleanCategoryLabel（去非法字符、截 20 字），和已登记的重名按「已存在」处理。
  */
 function discoverCategories(config, root) {
@@ -688,7 +688,7 @@ function discoverCategories(config, root) {
     if (!label || reserved.has(label) || ignored.has(label) || found.includes(label)) continue;
     const full = path.join(dir, ent.name);
     if (!safeScanDir(full, dir)) continue;
-    if (!listImages(full, { root: dir, recursive: false }).length) continue;   // 空目录不登记
+    // 空目录也登记：用户建了文件夹就该看见页签（提示词那边会过滤掉 0 张的分类，见 promptCategories）
     found.push(label);
   }
   return found;
@@ -826,6 +826,8 @@ function promptCategories(config, root) {
     const label = cleanCategoryLabel(cat && cat.label);
     const key = extraKey(label);
     if (!key) continue;
+    // 这里**不过滤**空分类：页签、resolveCategory 都要能看见用户刚建的文件夹。
+    // 真正给模型看的清单在 src/persona/index.js 里，那边已经 .filter(c => c.count > 0)。
     out.push({ key, label, count: categoryImages(dir, key).length });
   }
   return out;

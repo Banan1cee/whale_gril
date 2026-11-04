@@ -95,14 +95,31 @@ test('文件夹被删掉 → 该分类自动取消登记（不留空页签）', 
   assert.deepEqual(stickers.syncDiscoveredCategories(cfg, root).added, ['恼怒']);
 });
 
-test('空目录、内置分类、旧别名都不登记', (t) => {
+test('空目录也登记（页签要看得见），内置分类和旧别名不登记', (t) => {
   const { root, dir, cfg, put } = fixture(t);
   fs.mkdirSync(path.join(dir, '空文件夹'), { recursive: true });
   put('通用/a.gif'); put('其他/a.gif'); put('撒娇/a.gif'); put('happy/a.gif');
   put('开心/a.gif'); put('傲娇/b.gif');
   put('猫猫/a.gif');
   const { added } = stickers.syncDiscoveredCategories(cfg, root);
-  assert.deepEqual(added, ['猫猫'], '只有真正有图的自建目录才登记');
+  assert.deepEqual(added.sort(), ['猫猫', '空文件夹'].sort(), '自建目录都登记，内置/旧别名不算');
+});
+
+test('空目录：页签里有，promptCategories 里有，但真正给模型的清单里没有', (t) => {
+  const { root, dir, cfg, put } = fixture(t);
+  fs.mkdirSync(path.join(dir, '空文件夹'), { recursive: true });
+  put('猫猫/a.gif');
+  const service = new StickerService(cfg);
+  const status = service.status();
+  assert.ok(status.emotions.some((e) => e.label === '空文件夹'), '页签里要出现');
+  // promptCategories 是「全部候选」，不过滤，resolveCategory 靠它认名字
+  assert.ok(stickers.promptCategories(cfg, root).some((c) => c.label === '空文件夹'));
+  // 真正拼进系统提示词的是 persona.stickerCapability，它在那边才过滤 count>0
+  const { stickerCapability } = require('../src/persona/index');
+  const withFeatures = { ...cfg, features: { ...cfg.features, stickers: true }, sticker: cfg.sticker };
+  const block = stickerCapability(withFeatures, { platform: 'wechat' }) || '';
+  assert.ok(!block.includes('空文件夹'), '0 张的分类不该进提示词：' + block.slice(0, 200));
+  assert.ok(block.includes('猫猫'), '有图的分类要进提示词');
 });
 
 test('忽略列表里的目录不再登记（防手滑/临时目录污染提示词）', (t) => {
