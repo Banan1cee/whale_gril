@@ -696,30 +696,46 @@ namespace WhaleLauncher.Views
                 StatusText.Text = "打不开：" + Api.FriendlyError(res.Error.Length > 0 ? res.Error : "找不到这个文件夹");
                 return;
             }
+            // 三级兜底：ShellExecute → explorer.exe 命令行 → 至少把路径给用户手动开。
+            // （有些环境——比如被沙箱/作业对象限制的父进程——会挡掉 ShellExecute，
+            //   这时错误是「拒绝访问」，能开就开，开不了要能看见路径。）
+            var ok = TryOpen(target, mode == "select");
+            StatusText.Text = ok
+                ? (mode == "select" ? "已在资源管理器里定位这张图：" + Path.GetFileName(target) : "已打开：" + target)
+                : "打不开资源管理器，路径已复制到剪贴板，可手动粘贴到地址栏：" + target;
+        }
+
+        private bool TryOpen(string target, bool select)
+        {
             try
             {
-                ProcessStartInfo psi;
-                if (mode == "select" && File.Exists(target))
+                if (select && File.Exists(target))
                 {
-                    psi = new ProcessStartInfo("explorer.exe") { UseShellExecute = true };
+                    var psi = new ProcessStartInfo("explorer.exe") { UseShellExecute = true };
                     psi.ArgumentList.Add("/select," + target);
+                    using var p1 = Process.Start(psi);
+                    return true;
                 }
-                else
-                {
-                    // 直接交给 shell：目录关联由资源管理器处理，不自己拼 explorer 命令行
-                    psi = new ProcessStartInfo(target) { UseShellExecute = true };
-                }
-                using var proc = Process.Start(psi);
-                StatusText.Text = mode == "select"
-                    ? "已在资源管理器里定位这张图：" + Path.GetFileName(target)
-                    : "已打开：" + target;
+                // 首选：交给 shell 处理目录关联（不自己拼 explorer 命令行）
+                using var p2 = Process.Start(new ProcessStartInfo(target) { UseShellExecute = true });
+                return true;
             }
-            catch (Exception ex)
+            catch
             {
-                StatusText.Text = "无法打开资源管理器：" + ex.Message;
+                try
+                {
+                    var psi = new ProcessStartInfo("explorer.exe") { UseShellExecute = true };
+                    psi.ArgumentList.Add(target);
+                    using var p3 = Process.Start(psi);
+                    return true;
+                }
+                catch
+                {
+                    try { Clipboard.SetText(target); } catch { /* 剪贴板被占用就算了 */ }
+                    return false;
+                }
             }
-        }
-        private string LocalPath(string emotion, string name)
+        }        private string LocalPath(string emotion, string name)
         {
             if (string.IsNullOrEmpty(_libraryDir)) return null;
             if (string.IsNullOrEmpty(emotion)) return _libraryDir;
