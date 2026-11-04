@@ -39,6 +39,10 @@ class BridgeUserFlows(unittest.TestCase):
             rate_guard=lambda *a: True, send_at=lambda *a: False,
             send_text=lambda text, *a, **k: sent.append(text) or send_ok,
             STICKER_TEST_ON=True, claim_and_send_sticker=lambda *a, **k: stickers.append(a))
+        # 0eba2cb 之后 on_message_inner 会调用模块级 fix_garbled；单函数抽取要把它一起带上
+        env['fix_garbled'] = function('fix_garbled', env)
+        # 0eba2cb 之后 on_message_inner 会调用模块级 fix_garbled；单函数抽取要把它一起带上
+        env['fix_garbled'] = function('fix_garbled', env)
         return env, clock, sent, stickers, logs
 
     def message(self, **changes):
@@ -58,6 +62,28 @@ class BridgeUserFlows(unittest.TestCase):
         function('on_message_inner', env)(msg, None)
         self.assertEqual(sent, ['回答'])
 
+    def test_garbled_gbk_text_is_restored_before_sending(self):
+        # 0eba2cb：微信有的版本把正文按 GBK 存、却被当 Latin-1 读出来，
+        # 用户看到的是「ÏÂÎçºÃÑ½」。修好以后正常文本原样返回，乱码还原成中文。
+        env, _, sent, _, _ = self.env()
+        fix = function('fix_garbled', env)
+        raw = '下午好呀'.encode('gbk').decode('latin-1')
+        self.assertEqual(fix(raw), '下午好呀')
+        self.assertEqual(fix('正常的中文'), '正常的中文')
+        self.assertEqual(fix(''), '')
+        self.assertEqual(fix(None), None)
+        self.assertEqual(fix('hello world'), 'hello world')
+    def test_garbled_gbk_text_is_restored_before_sending(self):
+        # 0eba2cb：微信有的版本把正文按 GBK 存、却被当 Latin-1 读出来，
+        # 用户看到的是「ÏÂÎçºÃÑ½」。修好以后正常文本原样返回，乱码还原成中文。
+        env, _, sent, _, _ = self.env()
+        fix = function('fix_garbled', env)
+        raw = '下午好呀'.encode('gbk').decode('latin-1')
+        self.assertEqual(fix(raw), '下午好呀')
+        self.assertEqual(fix('正常的中文'), '正常的中文')
+        self.assertEqual(fix(''), '')
+        self.assertEqual(fix(None), None)
+        self.assertEqual(fix('hello world'), 'hello world')
     def test_truly_old_message_is_rejected_before_image_work(self):
         env, _, sent, _, _ = self.env()
         recognized = []
