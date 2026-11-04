@@ -98,7 +98,7 @@ class PolicyTests(unittest.TestCase):
 
 class LatencyTests(unittest.TestCase):
     def test_timeout_validation(self):
-        for value, expected in [(None,20), ('bad',20), (float('nan'),20), (0,5), (180,90), (12,12)]:
+        for value, expected in [(None,85), ('bad',85), (float('nan'),85), (0,5), (180,90), (12,12)]:
             self.assertEqual(v.synth_timeout({'SynthTimeoutSec':value}),expected)
 
     def test_engine_acquires_lock_only_after_synthesis(self):
@@ -156,7 +156,7 @@ class LatencyTests(unittest.TestCase):
                 for _ in range(2):
                     outcome={}
                     self.assertFalse(v.deliver(root,'测试',1,lambda:self.fail('must not prepare'),lambda *a:None,outcome=outcome))
-                    self.assertIn('20s',outcome['Error'])
+                    self.assertIn('85s',outcome['Error'])
                 self.assertFalse(v.deliver(root,'测试',1,lambda:None,lambda *a:None))
                 self.assertEqual(len(paths),2)
                 clock[0]+=301

@@ -100,12 +100,12 @@ test('默认后台发送，发完把窗口状态还原（电脑可以正常用�
   assert.match(bridge, /def force_send_foreground/, '抢前台要单独抽出来，只在兜底时用');
   assert.match(bridge, /def snapshot_win_state/, '发送前要记下窗口状态');
   assert.match(bridge, /def restore_win_state/, '发完要还原');
-  assert.match(bridge, /if BACKGROUND_SEND:/, '要走后台分支');
   assert.match(bridge, /后台发送没成功，把微信拉到前台再试一次/, '失败才抢前台，并说明原因');
   assert.match(bridge, /def install_quiet_uia/, '要让引擎别自己恢复窗口抢前台');
   // 顺序：先记状态 → 试后台 → 失败才抢前台 → finally 里还原
-  const win = bridge.slice(bridge.indexOf('def with_window_on_top'));
+  const win = bridge.slice(bridge.indexOf('def with_window_on_top')).replace(/\r\n/g, '\n');
   const body = win.slice(0, win.indexOf('\n    def ') > 0 ? win.indexOf('\n    def ') : win.length);
+  assert.match(body, /if restore_after:/, '表情包关闭且配置允许时走后台分支');
   assert.ok(body.indexOf('snapshot_win_state()') < body.indexOf('force_send_foreground(fn)'),
     '必须先记状态，再尝试发送');
   assert.match(body, /finally:\s*\n(\s+.*\n)*?\s+restore_win_state\(snap\)/, '还原要放在 finally，失败也要还回去');

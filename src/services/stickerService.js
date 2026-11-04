@@ -182,8 +182,10 @@ class StickerService {
       jobs: [...this.jobs.values()].filter(j => ACTIVE.has(j.status) && (!id || j.id === id))
         .map(({ id, status, generation }) => ({ id, status, generation })) };
   }
-  status() {
+  status(queueOnly = false) {
     this.requireEnabled();
+    const queue = this.queueStatus();
+    if (queueOnly) return { ok: true, ...queue };
     const dir = stickers.stickerDir(this.config, this.config.root);
     const list = (key, label, extra) => {
       const items = stickers.categoryImages(dir, key).map((file) => ({
@@ -200,8 +202,10 @@ class StickerService {
       emotions.push(list(key, label, true));
     }
     return { ok: true, enabled: true, generation: this.generation, dir, migration: this.migration,
-      testChat: this.config.sticker?.testChat || '文件传输助手', emotions,
-      pending: [...this.jobs.values()].filter((j) => ACTIVE.has(j.status)).length,
+      testChat: this.config.sticker?.testChat || '文件传输助手', emotions, ...queue };
+  }
+  queueStatus() {
+    return { pending: [...this.jobs.values()].filter((j) => ACTIVE.has(j.status)).length,
       jobs: [...this.jobs.values()].filter((j) => ACTIVE.has(j.status))
         .concat([...this.jobs.values()].filter((j) => !ACTIVE.has(j.status)).slice(-20).reverse())
         .map(({ id, status, error, chat, emotion, path: file }) =>

@@ -47,6 +47,7 @@ class FakeDesktop:
     def __init__(self):
         self.in_foreground = True
         self.has_focus = True
+        self.focus = Mock()
         self.input_value = ''
         self.clipboard_valid = True
 
@@ -272,6 +273,27 @@ class TransportTest(unittest.TestCase):
         self.assertEqual(self.send()['status'], 'failed')
         self.assertEqual(self.keys, [])
 
+    def test_focuses_verified_empty_input_before_paste(self):
+        self.desktop.has_focus = False
+        self.desktop.focus.side_effect = lambda control: setattr(self.desktop, 'has_focus', True)
+        self.assertEqual(self.send()['status'], 'confirmed')
+        self.desktop.focus.assert_called_once_with(self.control)
+        self.assertEqual(self.keys, [0x56, 0x0D])
+
+    def test_focusing_does_not_authorize_pasting_into_another_chat(self):
+        self.desktop.has_focus = False
+        self.desktop.focus.side_effect = lambda control: setattr(self.uia, 'current_chat', lambda: 'Wrong chat')
+        self.assertEqual(self.send()['status'], 'failed')
+        self.gui.copy_files_to_clipboard.assert_not_called()
+        self.assertEqual(self.keys, [])
+
+    def test_no_focus_change_when_input_contains_a_draft(self):
+        self.desktop.has_focus = False
+        self.desktop.input_value = 'private draft'
+        self.assertEqual(self.send()['status'], 'failed')
+        self.desktop.focus.assert_not_called()
+        self.assertEqual(self.keys, [])
+
     def test_whitespace_only_input_counts_as_empty(self):
         # 现场真凶：微信输入框「空」时 UIA 读到的是 '\n'，旧代码按 != '' 判断，
         # 于是永远认为「有草稿」，私聊一张也发不出去。
@@ -400,6 +422,20 @@ class TransportTest(unittest.TestCase):
         self.assertEqual(self.send(image_check=reject)['status'], 'failed')
         self.assertEqual(self.keys, [])
 
+    def test_image_format_mismatch_reports_reason_and_never_pastes(self):
+        image = Mock(format='WEBP')
+        image_context = Mock()
+        image_context.__enter__ = Mock(return_value=image)
+        image_context.__exit__ = Mock(return_value=False)
+        pil = SimpleNamespace(Image=SimpleNamespace(open=Mock(return_value=image_context),
+                                                     DecompressionBombError=RuntimeError))
+        with patch.dict(sys.modules, {'PIL': pil}):
+            outcome = self.send(image_check=None)
+        self.assertEqual(outcome['status'], 'failed')
+        self.assertIn('图片内容与扩展名不匹配', outcome['error'])
+        self.gui.copy_files_to_clipboard.assert_not_called()
+        self.assertEqual(self.keys, [])
+
     def test_exact_target_aliases_and_ambiguous_names(self):
         self.assertEqual(transport.resolve_target(self.db, 'Peer'), ('peer', frozenset({'peer', 'Peer'})))
         self.db.contacts.append({'username': 'other', 'nick_name': 'Peer', 'remark': ''})
@@ -455,6 +491,25 @@ def _referenced_names(definitions):
 
 
 class BridgeContractTest(unittest.TestCase):
+    def test_sticker_switch_forces_foreground_even_with_background_configured(self):
+        action = Mock(return_value=True)
+        foreground = Mock(return_value=False)
+        restore = Mock()
+        scope = bridge_functions({'with_window_on_top'}, {
+            'STICKER_TEST_ON': True, 'BACKGROUND_SEND': True,
+            'force_send_foreground': foreground,
+            'snapshot_win_state': lambda: 'snapshot', 'restore_win_state': restore,
+        })
+        self.assertFalse(scope['with_window_on_top'](action))
+        action.assert_not_called()
+        foreground.assert_called_once_with(action, require_foreground=True)
+        restore.assert_called_once_with('snapshot')
+        scope['STICKER_TEST_ON'] = False
+        foreground.reset_mock()
+        self.assertTrue(scope['with_window_on_top'](action))
+        action.assert_called_once()
+        foreground.assert_not_called()
+
     def setUp(self):
         self.cfg = {'features': {'stickers': True}, 'wechat': {}}
         self.http = SimpleNamespace(get=Mock(), post=Mock())

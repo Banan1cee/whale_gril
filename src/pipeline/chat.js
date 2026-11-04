@@ -1887,13 +1887,13 @@ class Bot {
    * 非流式的完整处理，给微信/抖音网关用。
    * @returns {{action: string, reply?: string, bubbles?: string[], reason: string, commandType?: string}}
    */
-  async handle(rawMsg, { signal } = {}) {
+  async handle(rawMsg, { signal, localWechat = false } = {}) {
     // M21：同一会话串行、不同会话并发。
     // 网关会并发调 handle，而 decide() 里多处 await 之间读改写共享 state，
     // 同会话两条消息并发处理会互相覆盖计数、双回复（CHANGELOG 的并发漏拦即此类）。
     const chainKey = this.sessionKey(this.normalize(rawMsg));
     const prev = this._handleChains.get(chainKey) || Promise.resolve();
-    const run = prev.then(() => this._handleOnce(rawMsg, { signal }));
+    const run = prev.then(() => this._handleOnce(rawMsg, { signal, localWechat }));
     // 链尾留在表里给后来者排队；跑完（成功或失败）把自己清掉，别把 Map 越攒越大
     const guard = run.then(() => null, () => null);
     this._handleChains.set(chainKey, guard);
@@ -1925,7 +1925,7 @@ class Bot {
   }
 
   /** handle 的实际处理体，由 handle() 按会话串行调用（不同会话仍然并发） */
-  async _handleOnce(rawMsg, { signal } = {}) {
+  async _handleOnce(rawMsg, { signal, localWechat } = {}) {
     let decision;
     try {
       decision = await this.decide(rawMsg);
@@ -1940,6 +1940,17 @@ class Bot {
     if (decision.action === 'command') {
       const bubbles = this.finalize(decision, decision.text);
       return { action: 'reply', reply: decision.text, bubbles, reason: 'command', commandType: decision.commandType };
+    }
+    // 私聊的直接请求由程序处理，避免模型漏写标记或误报已送达。
+    const msg = decision.msg;
+    const stickerRequest = localWechat && msg?.platform === 'wechat' && msg.chatType === 'private'
+      && stickers.isOn(this.config)
+      && /^(?:请|麻烦)?\s*(?:给我|帮我)?\s*(?:发(?:给我)?|来|甩|丢)\s*(?:一?[个张]|点)?\s*(?:(傲娇|炸毛|开心)(?:的)?\s*)?(?:表情包|表情|动图|贴纸|梗图)(?:吧|呗|嘛|呀|啊|吗)?[\s。！!？?~～]*$/.exec(String(msg.text || '').trim());
+    if (stickerRequest) {
+      const sticker = this.stickerFor({ msg, stickerCategory: stickerRequest[1] });
+      const reply = sticker ? '给你挑了一张' : '这次没能排上表情包，可能没图或上一张还在发送';
+      const bubbles = this.finalize(decision, reply);
+      return { action: 'reply', reply, bubbles, reason: 'sticker_request', ...(sticker ? { sticker } : {}) };
     }
     let text = '';
     // 本轮从哪个 usage 水位开始：复读重写 / 半窗 / 降级重试都会再调一次模型，

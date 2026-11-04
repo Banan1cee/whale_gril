@@ -2188,14 +2188,19 @@ def main():
         except Exception as e:
             log_window_problem("调整微信窗口失败（继续发送）", e)
 
-    def force_send_foreground(fn):
+    def force_send_foreground(fn, *, require_foreground=False):
         """把微信拉到前台再发送（真正的兜底路径）。
 
         注意：实测下来大多数时候**不需要**这条路 —— 微信最小化、被别的窗口挡住、
         甚至前台是全屏程序时，UIA 都能正常发送（见 docs/接入微信.md 的实测数据）。
         所以它只作为「后台发送失败后」的第二次尝试。
         """
-        hwnd = int(ACCOUNT.get("hwnd") or 0) or find_weixin_hwnd()
+        hwnd = int(ACCOUNT.get("hwnd") or 0)
+        if not hwnd:
+            if require_foreground:
+                log("表情包前台模式：找不到已选微信窗口，本次未发送")
+                return False
+            hwnd = find_weixin_hwnd()
         was_topmost = False
         touched = False
         try:
@@ -2232,6 +2237,9 @@ def main():
                         log_window_problem("窗口置顶失败（继续发送）", e)
                     win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
                     time.sleep(0.2)
+            if require_foreground and win32gui.GetForegroundWindow() != hwnd:
+                log("表情包前台模式：微信未进入前台，本次未发送")
+                return False
             return fn()
         finally:
             try:
@@ -2257,9 +2265,13 @@ def main():
         """
         # SEND_STATE 由 send_text / send_at 的临界区上下文统一置位和清零（M7）：
         # 这里不写它，OCR 兜底的僵尸线程跑进来也污染不了看门狗状态（H2）。
-        snap = snapshot_win_state() if BACKGROUND_SEND else None
+        force_front = STICKER_TEST_ON
+        restore_after = BACKGROUND_SEND
+        snap = snapshot_win_state() if restore_after else None
         try:
-            if BACKGROUND_SEND:
+            if force_front:
+                return force_send_foreground(fn, require_foreground=True)
+            if restore_after:
                 try:
                     if fn():
                         return True
@@ -2272,7 +2284,7 @@ def main():
                 return force_send_foreground(fn)
             return force_send_foreground(fn)
         finally:
-            if BACKGROUND_SEND:
+            if restore_after:
                 restore_win_state(snap)
 
     def force_foreground(hwnd):
@@ -2649,7 +2661,7 @@ def main():
             u = UIA_CACHE["u"]
         if u is None:
             return False
-        if BACKGROUND_SEND:
+        if BACKGROUND_SEND and not STICKER_TEST_ON:
             # 后台模式：禁止引擎自己恢复窗口/抢前台（真正的抢前台只在兜底那一步做）
             install_quiet_uia(u)
         keys = aliases_for(username, who) if username else [who]
@@ -3305,7 +3317,7 @@ def main():
             #    失败才往下走会动窗口的旧通道。
             t_start = time.time()
             allow_mark_dead = True
-            if BG_SEND.get("enabled", True):
+            if not STICKER_TEST_ON and BG_SEND.get("enabled", True):
                 SEND_STATE["start"] = time.time()   # 进通道前刷新心跳（H3）
                 try:
                     if bg_send(text, chat_display_name, chat_username):
@@ -3949,6 +3961,13 @@ def main():
             if not rate_guard(username):
                 log("这一分钟回太多了，先停一下：", target)
                 return
+            # 明确要求发表情包：直接走附件通道，免去语音合成和后台文字发送。
+            if data.get("stickerOnly") is True:
+                sticker = data.get("sticker")
+                if STICKER_TEST_ON and isinstance(sticker, dict):
+                    claim_and_send_sticker(sticker, expected_chat=target, expected_username=username)
+                return
+
             log("回复", ("群" if is_group else "私聊"), target, "→", nickname, "：", (bubbles[0] or "")[:40])
 
             first = True

@@ -2,8 +2,8 @@
 
 There is deliberately no navigation, visibility/foreground manipulation, OCR,
 retry, or dependency on WeChatGUI.send_image. The operator must already have
-opened the unique target in the pinned foreground main window and focused its
-empty input. Missing UIA evidence means no Enter, not a guessed send.
+opened the unique target in the pinned foreground main window. The transport
+may focus its verified empty input once. Missing UIA evidence means no Enter.
 """
 import hashlib
 import json
@@ -83,12 +83,23 @@ def read_enabled_config(config_path):
         return None
 
 
+class StickerImageError(ValueError):
+    """A file rejection safe to display without revealing its path."""
+
+
 def _verify_image(path, expected):
     from PIL import Image
-    with Image.open(path) as image:
-        if image.format != expected or image.width * image.height > 16000000:
-            raise ValueError('unsupported image')
-        image.verify()
+    try:
+        with Image.open(path) as image:
+            if image.format != expected:
+                raise StickerImageError('图片内容与扩展名不匹配。请用图片工具另存为 PNG 或 GIF，再放回分类文件夹。')
+            if image.width * image.height > 16000000:
+                raise StickerImageError('图片像素过多，请缩小尺寸后再试。')
+            image.verify()
+    except Image.DecompressionBombError as exc:
+        raise StickerImageError('图片像素过多，请缩小尺寸后再试。') from exc
+    except (OSError, SyntaxError) as exc:
+        raise StickerImageError('无法读取图片内容，请重新导出图片后再试。') from exc
 
 
 def validate_path(path, root, image_check=None):
@@ -125,7 +136,7 @@ def validate_path(path, root, image_check=None):
     info = os.stat(real_file)
     extension = os.path.splitext(real_file)[1].lower()
     if not stat.S_ISREG(info.st_mode) or not 0 < info.st_size <= MAX_BYTES or extension not in IMAGE_TYPES:
-        raise ValueError('sticker must be an approved image of at most 4 MiB')
+        raise ValueError('sticker must be an approved image of at most 64 MiB')
     (image_check or _verify_image)(real_file, IMAGE_TYPES[extension])
     with open(real_file, 'rb') as stream:
         digest = hashlib.sha256(stream.read(MAX_BYTES + 1)).hexdigest()
@@ -305,6 +316,9 @@ class WindowsDesktop:
                     and control.GetRuntimeId() and control.GetRuntimeId() == focused.GetRuntimeId()
                     and focused.GetTopLevelControl().NativeWindowHandle == hwnd)
 
+    def focus(self, control):
+        control.SetFocus()
+
     def value(self, control):
         pattern = control.GetValuePattern()
         if pattern is None:
@@ -398,7 +412,7 @@ def guarded_send(gui, uia, hwnd, aliases, path, root, db, username, gate,
         baseline = watermark(db, username)
         approved, fingerprint = validate_path(path, root, image_check)
 
-        def guard():
+        def guard(*, require_focus=True):
             # Potentially blocking HTTP/DB work precedes immediate window/title/focus reads.
             if not gate() or not activity_allowed() or not account_valid() or db_identity(db) != identity:
                 return None
@@ -412,7 +426,7 @@ def guarded_send(gui, uia, hwnd, aliases, path, root, db, username, gate,
                     or not _alias_match(_input_title(getattr(control, 'Name', '')), aliases)):
                 return None
             aid = str(getattr(control, 'AutomationId', '') or '')
-            if 'chat_input_field' not in aid.split('.') or not desktop.focused(control, hwnd):
+            if 'chat_input_field' not in aid.split('.') or (require_focus and not desktop.focused(control, hwnd)):
                 return None
             return control
 
@@ -454,7 +468,7 @@ def guarded_send(gui, uia, hwnd, aliases, path, root, db, username, gate,
             except Exception as exc:                       # noqa: BLE001
                 return 'guard read failed: %r' % (exc,)
 
-        control = guard()
+        control = guard(require_focus=False)
         if control is None:
             problem = guard_problem() or 'unknown guard state'
             return result('failed', 'cannot send yet: ' + problem)
@@ -464,7 +478,7 @@ def guarded_send(gui, uia, hwnd, aliases, path, root, db, username, gate,
             if _is_blank(desktop.value(control)):
                 break
             sleep(0.2)
-            control = guard()
+            control = guard(require_focus=False)
             if control is None:
                 return result('cancelled', 'send gates changed while waiting for an empty input')
         else:
@@ -472,8 +486,22 @@ def guarded_send(gui, uia, hwnd, aliases, path, root, db, username, gate,
         # Validation can take time. Repeat guards before changing the clipboard/pasting.
         if validate_path(approved, root, image_check)[1] != fingerprint:
             return result('failed', 'sticker file changed before paste')
-        if guard() is None:
-            return result('cancelled', 'send gates changed before paste')
+        # 后台文字发送可能留下焦点在会话列表。只给已核验的空输入框设置一次焦点，
+        # 并重新读取账号、会话、控件和真实键盘焦点，再允许粘贴。
+        control = guard(require_focus=False)
+        if control is None:
+            return result('cancelled', 'before paste: ' + (guard_problem() or 'send gates changed'))
+        if not desktop.focused(control, hwnd):
+            if not _is_blank(desktop.value(control)):
+                return result('cancelled', 'target or draft changed before focusing the chat input')
+            desktop.focus(control)
+            if guard() is None:
+                return result('failed', 'cannot send yet: ' + (guard_problem() or 'chat input focus could not be verified'))
+        control = guard()
+        if control is None:
+            return result('cancelled', 'before paste: ' + (guard_problem() or 'send gates changed'))
+        if not _is_blank(desktop.value(control)):
+            return result('cancelled', 'input acquired a draft before paste')
         if not gui.copy_files_to_clipboard([approved]):
             return result('failed', 'unable to prepare attachment clipboard')
         control = guard()
@@ -509,8 +537,10 @@ def guarded_send(gui, uia, hwnd, aliases, path, root, db, username, gate,
         if outcome['status'] != 'confirmed':
             outcome.update(draft_may_remain=True, draft_observed=draft_observed)
         return outcome
-    except Exception:
+    except Exception as exc:
         if touched or attempted_enter:
             return result('unconfirmed', 'attachment action is uncertain; a draft may remain; do not retry',
                           draft_may_remain=True, draft_observed=draft_observed)
+        if isinstance(exc, StickerImageError):
+            return result('failed', str(exc))
         return result('failed', 'sticker safety checks or transport are unavailable')
