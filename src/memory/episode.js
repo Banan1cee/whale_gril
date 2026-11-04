@@ -14,6 +14,7 @@ const compression = require('./compression');
 const retrieval = require('./retrieval');
 const relations = require('./relations');
 const { personHash } = require('./hash');
+const { describeError } = require('../infra/errors');
 
 const TOPIC_SHIFT_RE = /(换个话题|换话题|不说这个|不聊这个|聊点别的|说点别的|跳过这个话题|别聊了|算了不聊)/;
 
@@ -139,7 +140,7 @@ async function closeEpisode({ chat, chatStore, llm = null, logger = null, now = 
         }, { chatId: chat.chatId, now });
         if (edge) writtenRelations += 1;
       } catch (err) {
-        if (logger) logger.warn('关系边写入失败：' + ((err && err.message) || err));
+        if (logger) logger.warn('关系边写入失败：' + describeError(err));
       }
     }
 
@@ -257,7 +258,7 @@ function rotateIfNeeded({ chat, text = '', now = Date.now(), chatStore, llm = nu
   chatStore.saveSummary(chat);
   const promise = enqueue(chat, () => closeEpisode({ chat, chatStore, llm, logger, now, reason, episode: snapshot }))
     .catch((err) => {
-      if (logger) logger.warn('episode 关闭失败（不影响聊天）：' + ((err && err.message) || err));
+      if (logger) logger.warn('episode 关闭失败（不影响聊天）：' + describeError(err));
       return null;
     });
   episodeStart(chat, { now });
@@ -272,7 +273,7 @@ function closeIdleEpisodes({ chat, chatStore, llm = null, logger = null, now = D
   const snapshot = { ...ep };
   return enqueue(chat, () => closeEpisode({ chat, chatStore, llm, logger, now, reason: 'idle', episode: snapshot }))
     .catch((err) => {
-      if (logger) logger.warn('补写 episode 失败：' + ((err && err.message) || err));
+      if (logger) logger.warn('补写 episode 失败：' + describeError(err));
       return null;
     });
 }

@@ -674,7 +674,7 @@ card.chatId === source.chatId
 | `mmrLambda` | 0.7 | 去重强度 |
 | `maxOutputNormal` | 100 | 普通回复输出上限 |
 | `maxOutputDiscussion` | 400 | 认真讨论输出上限 |
-| `thinking` | false | 聊天默认关闭 |
+| `thinking` | false | 聊天默认关闭；开思考时预算抬到 `chatThinkingTokens`（2,000），关不掉思考的模型按 `thinkingMaxTokens`（5,000） |
 
 ---
 

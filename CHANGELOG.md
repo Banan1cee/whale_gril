@@ -1,5 +1,29 @@
 # 更新记录
 
+## 未发布
+
+### 修复 · 思考 token 吃满预算导致「空泡泡」（episode 抽取 / 主回复）
+
+**现象：episode 抽取稳定退回规则兜底，日志只剩「咕噜…这次只吐出了个空泡泡」；关掉 episode 后主回复偶发整条空。**
+
+- 根因：思考模型把 `max_tokens`（被夹到 700）全用在 reasoning 上，`finish_reason=length`、`content` 为空。
+- 新增思考能力表 `thinkingPlan(provider, model)`：deepseek / qwen / glm / glm-5.3 / 混元 / kimi / minimax / mimo / step / gpt-5·O 系 / claude / gemini 各用实测有效的关/开写法。
+- 预算分档：关思考 `min(want,700)`；开思考聊天 `min(max(want,2000),6000)`；后台任务（episode 抽取传 1200）不吃 700 夹取；关不干净的模型按 `thinkingMaxTokens`（5000）。
+- 空响应阶梯：思考吃满 → 切关思考 + 原预算重试；关不掉 → 加大预算；仍空才抛，`detail` 带 `finish/usage/reasoning_tokens`。
+- 自校准 + 自适应降级：思考占比 >70% 或空响应撞长度 → 该模型天花板 ×1.5（封顶 8000）；400/422 参数被拒按候选表换写法，生效档位写 `data/thinking-caps.json`。
+- 思考隔离：新增 `pickText`（content 数组拼接）与 `stripThinking`（剥 ` thinking`/`<thinking>`/`<reasoning>`/开头 `Thinking:`），reasoning 只诊断、永不进正文。
+- 日志：`episode 抽取失败（code=… detail=…）`；`parseEpisode` 返回 null 时 warn「不是可解析 JSON（长度 N，疑似截断）」。
+- 设置：网页「深度思考」开关 + `deepseek.thinking/chatThinkingTokens/thinkingMaxTokens`。
+
+### 改进 · 记忆窗口改成「索引行常驻 + 详情按需展开」
+
+**现象：一条 400 字记忆吃掉 44% 窗口，别人的事被挤掉；`hardCut` 还会把最后一条切成半句。**
+
+- 每条事件固定一行索引（`[日期] 标题：首句`，≤60 字）；`_score`/`importance ≥ 0.8` 才额外展开详情（最多 2 条、每条 ≤200 字）。
+- 单条配额 = 记忆预算 25%，超了只留索引不展开；挤占顺序：低 importance 索引 → 详情 → 中 importance → 高 importance。
+- 硬裁前先整条丢（人物卡从最不重要的一条开始，各留 1 条），`importance ≥ 0.8` 的索引行不参与丢弃。
+- 兜底：单轮输入超硬上限先丢记忆块/关系块重算；`appendMessage`/`checkpoint` 写库失败只报 error，回复照常发出。
+
 ## 4.0.1
 
 ### 改进 · 表情包频率进启动器 + 必发模式

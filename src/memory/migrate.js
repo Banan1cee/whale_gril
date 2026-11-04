@@ -16,6 +16,7 @@ const path = require('node:path');
 const personCard = require('./personCard');
 const compression = require('./compression');
 const { writeJsonAtomic } = require('./chatStore');
+const { describeError } = require('../infra/errors');
 
 const LEGACY_SOURCES = ['memory.json', 'store.json'];
 
@@ -409,7 +410,7 @@ function migrateSessions({ chatStore, sessions, sourceName = 'legacy', now = Dat
       report.plan.push(result);
     } catch (err) {
       report.skipped += 1;
-      if (logger) logger.warn(`迁移旧记忆失败（${key}）：${(err && err.message) || err}`);
+      if (logger) logger.warn(`迁移旧记忆失败（${key}）：${describeError(err)}`);
     }
   }
   return report;

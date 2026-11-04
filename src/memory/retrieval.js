@@ -9,6 +9,10 @@
 const { LIMITS, DAY_MS } = require('./constants');
 const personCard = require('./personCard');
 
+// 详情展开阈值：相关度够高（_score 的 relevance 分量）或 importance ≥ 0.8
+const EXPAND_RELEVANCE = 0.45;
+const EXPAND_IMPORTANCE = 0.8;
+
 function tokens(value) {
   const s = String(value || '').toLowerCase();
   const out = new Set();
@@ -128,7 +132,13 @@ function selectEvents(card, { query = '', recentTexts = [], activeTopic = '', no
     }
     picked.push(pool.splice(bestIdx, 1)[0]);
   }
-  return picked.map((x) => ({ ...x.event, _score: Number(x.score.toFixed(4)) }));
+  // 详情展开的双阈值：真相关，或重要到必须记住。
+  // 记忆窗口改成「索引行常驻 + 详情按需展开」后，format 靠这个标记决定要不要渲染详情段。
+  return picked.map((x) => ({
+    ...x.event,
+    _score: Number(x.score.toFixed(4)),
+    expand: x.relevance >= EXPAND_RELEVANCE || (Number(x.event.importance) || 0) >= EXPAND_IMPORTANCE,
+  }));
 }
 
 /** episode 话题切换用：当前消息和最近几条的重合度 */

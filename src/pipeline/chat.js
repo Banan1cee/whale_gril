@@ -25,6 +25,7 @@ const links = require('../adapters/links');
 const websearch = require('../adapters/websearch');
 const searchRouter = require('../adapters/searchRouter');
 const { LlmError } = require('../llm/client');
+const { describeError } = require('../infra/errors');
 const { saveSettings } = require('../infra/config');
 const personaStore = require('../persona/store');
 const { sanitizeForModel, nameMatches, clampInt } = require('../core/text');
@@ -317,6 +318,49 @@ class Bot {
   }
 
   /**
+   * 记忆拉取失败时的兜底上下文：整块放弃记忆（人物卡 / 事件 / 摘要 / 关系），
+   * 只带这个会话最近的原文继续回复。
+   *
+   * 记忆读不出来是「少了一点了解」，不是「不能说话」；宁可回得普通一点，
+   * 也不能让整条消息静默丢掉。原文也读不出来时返回空 recent，至少还能回当前这条。
+   */
+  recentOnlyContext(key, { isGroup = false } = {}) {
+    const chat = (this.config && this.config.chat) || {};
+    const configured = Number(isGroup ? chat.groupHistoryTurns : chat.historyTurns) || 20;
+    const cap = Math.max(4, Math.min(200, configured));
+    let recent = [];
+    try {
+      recent = (this.store.messages(key, cap) || []).filter((m) => m && m.text && !m.error);
+    } catch { /* 连原文都读不出来就只回当前这条 */ }
+    // 记忆块没了，历史再灌满也没意义，还容易把单轮预算顶爆：只留最近 6,000 字
+    const kept = [];
+    let chars = 0;
+    for (let i = recent.length - 1; i >= 0; i -= 1) {
+      const len = String(recent[i].text || '').length;
+      if (kept.length && chars + len > 6000) break;
+      kept.unshift(recent[i]);
+      chars += len;
+    }
+    return {
+      chatId: key,
+      card: null,
+      events: [],
+      block: '',
+      relationsBlock: '',
+      relations: [],
+      mentions: [],
+      summary: '',
+      recent: kept,
+      recentTokens: 0,
+      summaryTokens: 0,
+      memoryTokens: 0,
+      relationsTokens: 0,
+      notes: [],
+      memoryFailed: true,
+    };
+  }
+
+  /**
    * 判断并准备好这次回复（不调用模型）。返回 decision。
    */
   async decide(rawMsg) {
@@ -435,23 +479,39 @@ class Bot {
     const hasText = Boolean(clean.text);
     let appended = null;
     if (hasText && !msg.recycled) {
-      appended = this.store.appendMessage(key, {
-        role: 'user',
-        name: msg.senderName,
-        uid: msg.senderId,
-        text: clean.text,
-        ts: nowMs,
-        msgId: msg.msgId,
-        addressedToBot: msg.addressedToBot,
-        mentionedNames,
-        inferredTargetNames: msg.inferredTargetNames || [],
-        replyToName: msg.replyToName,
-        replyToUserId: msg.replyToUserId,
-      });
+      // 落库失败不能拖死这一轮：记忆/原文是加分项，回复本身要继续。
+      // 以前这里没兜底，磁盘满 / 文件被占用时整条消息直接变成「不回话」。
+      try {
+        appended = this.store.appendMessage(key, {
+          role: 'user',
+          name: msg.senderName,
+          uid: msg.senderId,
+          text: clean.text,
+          ts: nowMs,
+          msgId: msg.msgId,
+          addressedToBot: msg.addressedToBot,
+          mentionedNames,
+          inferredTargetNames: msg.inferredTargetNames || [],
+          replyToName: msg.replyToName,
+          replyToUserId: msg.replyToUserId,
+        });
+      } catch (err) {
+        if (this.logger) this.logger.error('写入用户消息失败（继续回复）：' + describeError(err));
+      }
     }
-    const profile = this.store.profile(key, msg.senderId, msg.senderName);
+    // 人物卡也是记忆：读不出来就用空卡顶上（昵称退回微信昵称），别让整条消息陪葬。
+    // 以前这里没兜底，记忆目录一坏（文件损坏 / 权限 / 迁移中）就直接抛到 _handleOnce。
+    let profile = null;
+    try {
+      profile = this.store.profile(key, msg.senderId, msg.senderName);
+    } catch (err) {
+      if (this.logger) this.logger.error('读取人物卡失败（按空卡继续回复）：' + describeError(err));
+      profile = { uid: msg.senderId, name: msg.senderName, nickname: '', notes: [], count: 0 };
+    }
     // 群里用微信昵称区分说话人，避免用户改 profile.nickname 造成冒名；私聊仍沿用自报昵称。
-    const displayName = isGroup ? (msg.senderName || profile.nickname) : (profile.nickname || msg.senderName);
+    const displayName = isGroup
+      ? (msg.senderName || profile.nickname || '')
+      : (profile.nickname || msg.senderName || '');
     // 自述 / 纠正 / 手动记住的抽取在 Store.appendMessage 里同步完成：
     // 只写「当前 chat + 当前说话人」的卡，跨 chat 写入会直接抛错。
     // 回填的旧问题（recycled）在上面的 appendMessage 处整体跳过，不会重复抽事实。
@@ -844,20 +904,39 @@ class Bot {
     // 校准样本够（n ≥ 10）才让 scale 参与裁剪；trimScale 已量化到 0.05，窗口不会每轮抖。
     const modelInfo = this.modelContext();
     const trimScale = this.calibrationEngine().trimScale(modelInfo);
-    const mem = this.store.buildContext({
-      key,
-      uid: msg.senderId,
-      name: displayName,
-      query: clean.text,
-      now: nowMs,
-      isGroup,
-      mentionedNames,
-      relationsEnabled: relationsOn,
-      tokenScale: trimScale,
-    });
+    // 记忆（人物卡 / 事件 / 摘要 / 关系）是加分项，不是回复的前提：
+    // buildContext 抛错（记忆文件坏了 / 磁盘满 / 正在迁移）时整块放弃，
+    // 只带本会话最近的原文继续回复 —— 以前这里没兜底，异常会一路抛到
+    // _handleOnce，最后变成「这条不回话」。失败本身仍然要报 error。
+    let mem;
+    try {
+      mem = this.store.buildContext({
+        key,
+        uid: msg.senderId,
+        name: displayName,
+        query: clean.text,
+        now: nowMs,
+        isGroup,
+        mentionedNames,
+        relationsEnabled: relationsOn,
+        tokenScale: trimScale,
+      });
+      this._memoryErrorLogged = false;
+    } catch (err) {
+      if (this.logger) {
+        // 第一次带完整堆栈（能定位到具体模块），之后同一进程内只留一行 code/detail，别每条消息刷一遍
+        const info = describeError(err);
+        const detail = this._memoryErrorLogged ? info : `${info}\n${(err && err.stack) || ''}`;
+        this.logger.error('拉取记忆失败（本轮放弃记忆块，只用 recent 消息回复）：' + detail);
+      }
+      this._memoryErrorLogged = true;
+      mem = this.recentOnlyContext(key, { isGroup });
+    }
     const notes = mem.notes || [];
     if (notes.length && msg.senderId) {
-      this.store.touchNotes(key, msg.senderId, notes, nowMs);
+      try {
+        this.store.touchNotes(key, msg.senderId, notes, nowMs);
+      } catch { /* 「提过几次」没记上不影响这轮回复 */ }
     }
     // mem.recent 已经按 3,200 token 预算裁过；刚写入的当前消息先去掉，由 buildTurns 统一拼一次
     const history = mem.recent || [];
@@ -951,6 +1030,9 @@ class Bot {
     const envBlock = envInfo.systemBlock(this.config, this.version);
     const turnState = { envBlock, bridgeLine: envInfo.bridgeLine(msg) };
 
+    // 动作账本也是记忆的一部分：读不出来就不带，别把整条回复拖死
+    let recentEvents = [];
+    try { recentEvents = this.store.events(key, 12) || []; } catch { recentEvents = []; }
     // 提示词拆成两块：system 只放静态人设/规则/日期，尾部放这一轮会变的东西
     // （心情、说话人、字数、@、梗、联网资料、动作账本……），前缀缓存才不会被每轮打断。
     // features.staticSystem=false 时完全回到旧行为：所有内容都在 system，tail 为空串。
@@ -964,7 +1046,7 @@ class Bot {
       sessionSummary: '',
       // 外部动作账本：她做过什么（发表情包、交给桥接、读链接、联网），
       // 不塞进去她就永远不知道自己的副作用，只能编。
-      events: this.store.events(key, 12),
+      events: recentEvents,
       now,
       envBlock,
     });
@@ -978,18 +1060,45 @@ class Bot {
     // 预算：system 只测量，不裁剪；dialogueBudget 默认 5,500，给裁剪窗口用。
     // 硬上限看**真实输入估算**（system + 实际 turns），不再拿 system + 预算上限冒充。
     let promptBudget;
+    const buildBudgetFor = (turnsToUse, withRelations) => memoryBudget.buildBudget(system, {
+      dialogueBudget: this.config && this.config.memory && this.config.memory.dialogueBudget,
+      // 关系卡开着就从 recent 里切出 120 token，预算口径和 Store 的分片保持一致
+      relations: withRelations,
+      turns: turnsToUse,
+    });
     try {
-      promptBudget = memoryBudget.assertWithinHardLimit(memoryBudget.buildBudget(system, {
-        dialogueBudget: this.config && this.config.memory && this.config.memory.dialogueBudget,
-        // 关系卡开着就从 recent 里切出 120 token，预算口径和 Store 的分片保持一致
-        relations: relationsOn,
-        turns,
-      }));
+      promptBudget = memoryBudget.assertWithinHardLimit(buildBudgetFor(turns, relationsOn));
     } catch (err) {
-      this.logger && this.logger.error(
-        `单轮输入超硬上限，拒绝调用模型：system≈${err.budget ? err.budget.systemTokens : '?'} token`
-      );
-      return { action: 'ignore', reason: 'input_budget_exceeded', key, msg, atMe };
+      // 超硬上限以前直接 ignore（只有一行 error 日志，用户看到的是「她突然不回话」）。
+      // 现在先丢掉记忆块 + 关系块（用 recentOnlyContext）重算一次，仍超才拒绝。
+      let retried = null;
+      if (!mem.memoryFailed) {
+        try {
+          const plain = this.recentOnlyContext(key, { isGroup });
+          const recent = plain.recent || [];
+          const curSeq = appended && appended.seq;
+          const plainHistory = (curSeq && recent.length && recent[recent.length - 1].seq === curSeq)
+            ? recent.slice(0, -1)
+            : recent;
+          const plainTurns = this.buildTurns({ ...msg, ts: nowMs }, plainHistory, '', tail);
+          retried = memoryBudget.assertWithinHardLimit(buildBudgetFor(plainTurns, false));
+          // decision.turns 引用的就是这个数组：原地换成「没有记忆块」的版本
+          turns.length = 0;
+          turns.push(...plainTurns);
+          mem = { ...plain, memoryTokens: 0 };
+        } catch {
+          retried = null;
+        }
+      }
+      if (!retried) {
+        this.logger && this.logger.error(
+          `单轮输入超硬上限，拒绝调用模型：system≈${err.budget ? err.budget.systemTokens : '?'} token`
+          + `（${describeError(err)}）`
+        );
+        return { action: 'ignore', reason: 'input_budget_exceeded', key, msg, atMe };
+      }
+      promptBudget = retried;
+      this.logger && this.logger.warn('单轮输入超硬上限，已丢掉记忆块/关系块重算预算后继续');
     }
     // 只把计数挂到 decision / Bot 上，供日志和内部 status 用；不打印记忆正文
     const applied = this.calibrationEngine().apply(promptBudget.estimatedPromptTokens, modelInfo);
@@ -1721,15 +1830,24 @@ class Bot {
     // 记一笔全局回复时间（跨会话共用），_decide 的全局闸门读它
     this.globalReplyTimes.push(this.now().getTime());
     if (this.globalReplyTimes.length > 600) this.globalReplyTimes = this.globalReplyTimes.slice(-300);
-    this.store.appendMessage(decision.key, {
-      role: 'assistant',
-      name: this.config.persona.name,
-      text,
-      ts: this.now().getTime(),
-      error,
-    });
+    // 写库失败照常返回 bubbles：话已经生成了，不能因为落库失败把回复丢了
+    try {
+      this.store.appendMessage(decision.key, {
+        role: 'assistant',
+        name: this.config.persona.name,
+        text,
+        ts: this.now().getTime(),
+        error,
+      });
+    } catch (err) {
+      this.logger && this.logger.error('写入回复失败（照常发送）：' + describeError(err));
+    }
     // 每轮一个 checkpoint：重启后能知道停在哪、episode 有没有关
-    this.store.checkpoint(decision.key);
+    try {
+      this.store.checkpoint(decision.key);
+    } catch (err) {
+      this.logger && this.logger.error('写 checkpoint 失败（照常发送）：' + describeError(err));
+    }
     const isGroup = msg.chatType === 'group';
     // 命令路径以前在这里直接 return [text]，刚剥出来的 foundEmoji（🫧 这种）直接丢了（M28）
     if (decision.action === 'command') return foundEmoji ? [text, foundEmoji] : [text];
@@ -1808,7 +1926,7 @@ class Bot {
       });
       return text;
     } catch (err) {
-      this.logger && this.logger.warn('读取链接失败：' + (err && err.message));
+      this.logger && this.logger.warn('读取链接失败：' + describeError(err));
       this.store.appendEvent(key, { type: 'link', detail: url.slice(0, 120), status: 'failed' });
       return `对方发了一个链接（${url}），但读取失败。`;
     }
@@ -1820,7 +1938,8 @@ class Bot {
     try {
       decision = await this.decide(rawMsg);
     } catch (err) {
-      this.logger && this.logger.error('处理消息出错：' + (err && err.stack ? err.stack : err));
+      // 结构证据 + 堆栈：光看 stack 只能知道哪一行，不知道是配额、磁盘还是网络
+      this.logger && this.logger.error('处理消息出错：' + describeError(err) + '\n' + ((err && err.stack) || ''));
       return { action: 'ignore', reason: 'error' };
     }
     if (decision.action === 'ignore') {
@@ -1880,7 +1999,10 @@ class Bot {
       // （errText 以前叫 rawMsg，把 handle 的入参 rawMsg 遮蔽了（L12），改个名）
       const errText = String((err && err.message) || '');
       const blocked = /敏感|不安全|安全|内容/.test(errText) && /400/.test(errText);
-      this.logger && this.logger.error('生成回复失败：' + (err && err.message));
+      // 带上模型和结构证据：光一句「生成回复失败」分不清是额度、超长、审核还是空响应
+      this.logger && this.logger.error(
+        `生成回复失败 [${(this.llm && this.llm.provider) || '?'}|${(this.llm && this.llm.model) || '?'}]：${describeError(err)}`
+      );
       let retried = null;
       // 上下文超长：砍掉一半 turns 只重试一次，保留当前消息；不要退化成只发当前一句。
       if (isContextLengthError(err) && this.shrinkTurnsForContext(decision)) {
@@ -1888,7 +2010,7 @@ class Bot {
           retried = await this.llm.complete({ system: decision.system, turns: decision.turns, signal });
           this.logger && this.logger.warn('上下文超长，半窗重试成功');
         } catch (err2) {
-          this.logger && this.logger.error('半窗重试仍失败：' + (err2 && err2.message));
+          this.logger && this.logger.error('半窗重试仍失败：' + describeError(err2));
         }
       }
       // 钥匙失效 / 额度用完（429）/ 模型名不可用（404）→ 切到存过 Key 的备用服务商再试一次。
@@ -1904,7 +2026,7 @@ class Bot {
             retried = await this.llm.complete({ system: decision.system, turns: decision.turns, signal });
             this.logger && this.logger.warn(`已切到备用服务商 ${switched.label} 并重试成功`);
           } catch (err2) {
-            this.logger && this.logger.error('备用服务商也失败了：' + (err2 && err2.message));
+            this.logger && this.logger.error('备用服务商也失败了：' + describeError(err2));
           }
         }
       }
@@ -1915,7 +2037,7 @@ class Bot {
           retried = await this.llm.complete({ system: sys, turns: cur ? [{ role: 'user', content: cur }] : [], signal });
           this.logger && this.logger.warn('内容审核拦截，已丢掉历史用精简上下文重试成功');
         } catch (err2) {
-          this.logger && this.logger.error('精简重试仍失败：' + (err2 && err2.message));
+          this.logger && this.logger.error('精简重试仍失败：' + describeError(err2));
         }
       }
       if (retried) {

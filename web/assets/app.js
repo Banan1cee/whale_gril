@@ -596,6 +596,8 @@ async function openSettings() {
     $('model').value = data.model || '';
     fillProviderFields(sel.value, { keepValues: true });
     $('mockMode').checked = Boolean(data.mock);
+    // 深度思考：服务端回显哪个就用哪个（默认关：思考 token 计入 max_tokens，开了又慢又贵）
+    if ($('thinkingMode')) $('thinkingMode').checked = Boolean(data.thinking);
     // 顺序很重要：先按服务端给的状态放好开关，再按「地址是不是本机/内网」纠一遍，
     // 否则本地接口会被残留的演示模式挡住（保存后一次请求都不发）
     applyKeyExpectation(providerMeta()[sel.value]);
@@ -792,6 +794,7 @@ function settingsPayload() {
     baseUrl: $('baseUrl').value.trim(),
     model: $('model').value.trim(),
     mock: $('mockMode').checked,
+    thinking: $('thinkingMode') ? $('thinkingMode').checked : false,
     temperature: Number($('temperature').value),
     userName: $('userName').value.trim(),
     group: {
