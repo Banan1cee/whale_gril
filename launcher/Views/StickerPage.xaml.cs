@@ -10,22 +10,48 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 
 namespace WhaleLauncher.Views
 {
     public partial class StickerPage : UserControl, IRefreshable
     {
+        // 格子 120px + DPI 余量。160 时单张解码量比 132 多 47%，肉眼分不出。
+        private const int ThumbWidth = 132;
+        private const int DecodeConcurrency = 4;   // 同时解码 4 张，别再串行排队
+        private const int ThumbCacheMax = 800;     // 缩略图内存缓存上限（每张约 70-100 KB）
+
+        private sealed class CellVm
+        {
+            public string Id = "";
+            public string Name = "";
+            public string Path = "";
+            public long Version;
+        }
+
+        private sealed class EmotionVm
+        {
+            public string Key = "";
+            public string Label = "";
+            public bool Extra;
+            public List<CellVm> Items = new();
+        }
+
         private readonly RuntimeSupervisor _sup;
-        private readonly List<(string Key, string Label)> _emotions = new List<(string, string)>();
+        private readonly List<EmotionVm> _emotions = new();
         private string _current = "";
         private bool _loading;
         private bool _loaded;
         private readonly SemaphoreSlim _refreshLock = new(1);
+        private bool _refreshPending;          // 上一轮还没跑完时点的刷新，跑完补一次
         private ApiResult _inventory = new();
         private DateTime _nextRefresh;
         private CancellationTokenSource _preview = new();
-        private string _librarySignature = "";
+        private string _renderedSignature = "";
         private bool _currentIsExtra;
+        // 缩略图缓存：键是「id|mtime」，切页签/刷新时不再重复解码
+        private readonly Dictionary<string, BitmapImage> _thumbs = new();
+
         // 计时探针：WHALE_PROBE=1 才写 launcher.log，默认完全不产生额外日志
         private static readonly bool ProbeOn =
             string.Equals(Environment.GetEnvironmentVariable("WHALE_PROBE"), "1", StringComparison.Ordinal);
@@ -45,9 +71,14 @@ namespace WhaleLauncher.Views
 
         public async Task RefreshAsync()
         {
-            // 探针：这两条早退就是「点页签没反应」的候选原因，量一下到底吞了多少次
             if (DateTime.UtcNow < _nextRefresh) { Probe("RefreshAsync 被 5 秒节流跳过"); return; }
-            if (_refreshLock.CurrentCount == 0) { Probe("RefreshAsync 上一轮还没跑完，本次跳过"); return; }
+            if (_refreshLock.CurrentCount == 0)
+            {
+                // 以前这里是静默 return —— 用户点「刷新」没反应就是这个。改成记账，跑完补一次。
+                _refreshPending = true;
+                Probe("RefreshAsync 上一轮还没跑完，已记为待补跑");
+                return;
+            }
             await LoadAsync();
         }
 
@@ -60,61 +91,150 @@ namespace WhaleLauncher.Views
                 await LoadCoreAsync();
             }
             finally { _refreshLock.Release(); }
+            if (_refreshPending)
+            {
+                _refreshPending = false;
+                _nextRefresh = DateTime.MinValue;   // 补跑一次不受 5 秒节流限制
+                _ = LoadAsync();
+            }
         }
+
+        /* ── 取数：在线走 HTTP（一次拿全），离线退回本地子进程 ─────────────── */
 
         private async Task LoadCoreAsync()
         {
             var tLoad = Stopwatch.StartNew();
             var online = _sup.NodeRunning;
             ChkEnabled.IsEnabled = TxtDir.IsEnabled = online;
-            var tInv = Stopwatch.StartNew();
-            var res = await StickerLibrary.Call(_sup.BaseDir, "inventory");
-            tInv.Stop();
-            if (!res.Ok)
+
+            var view = new ViewData();
+            var tFetch = Stopwatch.StartNew();
+            var status = online ? await Api.Get(_sup.Url, "/api/stickers/status") : new ApiResult();
+            tFetch.Stop();
+
+            if (online && status.Ok && status.Prop("emotions").ValueKind == JsonValueKind.Array)
             {
-                StatusText.Text = "无法读取图库：" + res.Error;
-                Probe($"LoadCore 失败 inventory={tInv.ElapsedMilliseconds}ms err={res.Error}");
-                return;
+                view.Online = true;
+                view.Enabled = status.Bool("enabled");
+                view.Dir = status.Str("dir");
+                view.ConfiguredDir = status.Str("configuredDir");
+                view.TestChat = status.Str("testChat");
+                view.Pending = status.Long("pending");
+                var m = status.Prop("maintenance");
+                if (m.ValueKind == JsonValueKind.Object)
+                {
+                    view.MaintPhase = Str(m, "phase");
+                    view.MaintDone = (int)Num(m, "done");
+                    view.MaintTotal = (int)Num(m, "total");
+                }
+                view.Emotions = ParseEmotions(status.Prop("emotions"));
+            }
+            else
+            {
+                // 内核没起来：用本地扫描兜底，至少能看图和打开文件夹
+                var res = await StickerLibrary.Call(_sup.BaseDir, "inventory");
+                if (!res.Ok)
+                {
+                    StatusText.Text = "无法读取图库：" + res.Error;
+                    Probe($"LoadCore 失败 inventory={tFetch.ElapsedMilliseconds}ms err={res.Error}");
+                    return;
+                }
+                _inventory = res;
+                view.Online = false;
+                view.Enabled = res.Bool("enabled");
+                view.Dir = res.Str("dir");
+                view.ConfiguredDir = res.Str("configuredDir");
+                view.TestChat = res.Str("testChat");
+                view.Emotions = ParseEmotions(res.Prop("emotions"));
             }
 
-            _inventory = res;
             _loading = true;
-            ChkEnabled.IsChecked = res.Bool("enabled");
+            ChkEnabled.IsChecked = view.Enabled;
             _loading = false;
 
+            // 分类集合没变就不重排页签（重排会把用户正在点的按钮换掉）
+            var keys = string.Join(",", view.Emotions.Select((e) => e.Key));
+            var oldKeys = string.Join(",", _emotions.Select((e) => e.Key));
             _emotions.Clear();
-            var arr = res.Prop("emotions");
-            if (arr.ValueKind == JsonValueKind.Array)
-            {
-                foreach (var e in arr.EnumerateArray())
-                    _emotions.Add((S(e, "key"), S(e, "label")));
-            }
-            if (_current.Length == 0 || !_emotions.Any(x => x.Key == _current))
+            _emotions.AddRange(view.Emotions);
+            if (_current.Length == 0 || !_emotions.Any((x) => x.Key == _current))
                 _current = _emotions.Count > 0 ? _emotions[0].Key : "";
+            if (keys != oldKeys) BuildTabs();
+            else HighlightTabs();
 
-            var signature = _current + ":" + res.Prop("emotions").GetRawText();
-            if (!_loaded || signature != _librarySignature)
+            DirHint.Text = "目录：" + view.Dir;
+            if (string.IsNullOrWhiteSpace(TxtTestChat.Text)) TxtTestChat.Text = view.TestChat;
+            if (!TxtDir.IsKeyboardFocusWithin) TxtDir.Text = view.ConfiguredDir;
+
+            // 内容签名：张数 + 每张 id/版本。没变就什么都不做（以前每次都整表重建）
+            var signature = _current + "|" + string.Join(",", CurrentItems().Select((i) => i.Id + "@" + i.Version));
+            var total = _emotions.Sum((e) => e.Items.Count);
+            if (!_loaded || signature != _renderedSignature)
             {
-                BuildTabs();
-                RenderGrid(res);
-                _librarySignature = signature;
+                _renderedSignature = signature;
+                RenderGridInBackground();   // 不 await：取数路径不被几百张缩略图拖住
             }
-            DirHint.Text = "目录：" + res.Str("dir");
-            if (string.IsNullOrWhiteSpace(TxtTestChat.Text)) TxtTestChat.Text = res.Str("testChat");
 
-            if (!TxtDir.IsKeyboardFocusWithin) TxtDir.Text = res.Str("configuredDir");
-            if (!_loaded) StatusText.Text = "选一个分类，打开文件夹，把图片拖进去即可。";
+            QueueInfo.Text = !view.Online ? "内核未启动" : !view.Enabled ? "发送已关闭"
+                : view.Pending > 0 ? $"排队中 {view.Pending} 张" : "队列空";
+            if (!view.Online) StatusText.Text = "内核未运行：这里显示的是本地目录内容，启动后才能真的发送。";
+            else if (view.MaintPhase == "running" || view.MaintPhase == "pending")
+                StatusText.Text = $"正在整理旧图 {view.MaintDone}/{Math.Max(view.MaintDone, view.MaintTotal)}…";
+            else StatusText.Text = $"就绪 · 共 {total} 张";
+            RenderJobs(status.Prop("jobs"));
             _loaded = true;
-            var tQueue = Stopwatch.StartNew();
-            var queue = online && res.Bool("enabled")
-                ? await Api.Get(_sup.Url, "/api/stickers/status?queueOnly=1")
-                : new ApiResult();
-            tQueue.Stop();
-            var pending = queue.Long("pending");
-            QueueInfo.Text = !online ? "内核未启动" : !res.Bool("enabled") ? "发送已关闭"
-                : !queue.Ok ? "暂时无法读取发送队列" : pending > 0 ? $"排队中 {pending} 张" : "队列空";
-            RenderJobs(queue);
-            Probe($"LoadCore 完成 inventory={tInv.ElapsedMilliseconds}ms 队列接口={tQueue.ElapsedMilliseconds}ms 总计={tLoad.ElapsedMilliseconds}ms 分类数={_emotions.Count} 在线={online}");
+            Probe($"LoadCore 完成 在线={view.Online} 取数={tFetch.ElapsedMilliseconds}ms 总计={tLoad.ElapsedMilliseconds}ms 分类={_emotions.Count} 张数={total}");
+        }
+
+        private sealed class ViewData
+        {
+            public bool Online;
+            public bool Enabled;
+            public string Dir = "";
+            public string ConfiguredDir = "";
+            public string TestChat = "";
+            public long Pending;
+            public string MaintPhase = "";
+            public int MaintDone;
+            public int MaintTotal;
+            public List<EmotionVm> Emotions = new();
+        }
+
+        private static List<EmotionVm> ParseEmotions(JsonElement arr)
+        {
+            var list = new List<EmotionVm>();
+            if (arr.ValueKind != JsonValueKind.Array) return list;
+            foreach (var e in arr.EnumerateArray())
+            {
+                var vm = new EmotionVm
+                {
+                    Key = Str(e, "key"),
+                    Label = Str(e, "label"),
+                    Extra = Bool(e, "extra"),
+                };
+                var items = e.ValueKind == JsonValueKind.Object && e.TryGetProperty("items", out var it) ? it : default;
+                if (items.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var i in items.EnumerateArray())
+                    {
+                        vm.Items.Add(new CellVm
+                        {
+                            Id = Str(i, "id"),
+                            Name = Str(i, "name"),
+                            Path = Str(i, "path"),
+                            Version = (long)Num(i, "version"),
+                        });
+                    }
+                }
+                list.Add(vm);
+            }
+            return list;
+        }
+
+        private List<CellVm> CurrentItems()
+        {
+            var emotion = _emotions.FirstOrDefault((e) => e.Key == _current);
+            return emotion?.Items ?? new List<CellVm>();
         }
 
         private async void OnSaveStickerSettings(object sender, RoutedEventArgs e)
@@ -129,84 +249,168 @@ namespace WhaleLauncher.Views
                 : "保存失败：" + (res.Error.Length > 0 ? res.Error : res.Raw);
         }
 
+        /* ── 页签 ──────────────────────────────────────────────── */
+
         private void BuildTabs()
         {
             Tabs.Children.Clear();
             _currentIsExtra = _current.StartsWith("x:");
-            BtnDelCat.Visibility = _currentIsExtra ? Visibility.Visible : Visibility.Collapsed;
-            foreach (var (key, label) in _emotions)
+            if (BtnDelCat != null) BtnDelCat.Visibility = _currentIsExtra ? Visibility.Visible : Visibility.Collapsed;
+            foreach (var emotion in _emotions)
             {
+                var key = emotion.Key;
                 var btn = new Button
                 {
-                    Content = label,
+                    Content = emotion.Label,
                     Height = 28,
                     Padding = new Thickness(14, 0, 14, 0),
                     Margin = new Thickness(0, 0, 6, 0),
                     Style = (Style)FindResource(key == _current ? "Primary" : "Ghost"),
                     Tag = key
                 };
-                btn.Click += (s, e) =>
-                {
-                    _current = (string)((Button)s).Tag;
-                    BuildTabs();
-                    RenderGrid(_inventory);
-                    _librarySignature = _current + ":" + _inventory.Prop("emotions").GetRawText();
-                };
+                btn.Click += (s, e) => OnTabClick(key);
                 Tabs.Children.Add(btn);
             }
         }
 
-        private async void RenderGrid(ApiResult res)
+        /// <summary>只改高亮，不重建按钮（重建会把正在按的那颗按钮换掉）。</summary>
+        private void HighlightTabs()
+        {
+            if (Tabs.Children.Count != _emotions.Count) { BuildTabs(); return; }
+            for (var i = 0; i < Tabs.Children.Count; i++)
+            {
+                if (Tabs.Children[i] is Button btn && btn.Tag is string key)
+                    btn.Style = (Style)FindResource(key == _current ? "Primary" : "Ghost");
+            }
+            _currentIsExtra = _current.StartsWith("x:");
+            if (BtnDelCat != null) BtnDelCat.Visibility = _currentIsExtra ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        /// <summary>
+        /// 点页签：先立刻高亮 + 用手上已有的数据上骨架（不等待任何 IO），
+        /// 再去后台取一次最新数据。以前点下去要等一整个 inventory（630ms）才有反应。
+        /// </summary>
+        private void OnTabClick(string key)
+        {
+            var t0 = Stopwatch.StartNew();
+            _current = key;
+            HighlightTabs();
+            _renderedSignature = _current + "|" + string.Join(",", CurrentItems().Select((i) => i.Id + "@" + i.Version));
+            RenderGridInBackground();   // 骨架先上屏，解码在后台补；点击本身不等图
+            Probe($"页签 {key} 点击返回 {t0.ElapsedMilliseconds}ms 张数={CurrentItems().Count} 缓存={_thumbs.Count}");
+            _nextRefresh = DateTime.MinValue;          // 让后台刷新立刻补上最新数据
+            _ = RefreshAsync();
+        }
+
+        /* ── 网格 ──────────────────────────────────────────────── */
+
+        /// <summary>后台渲染；异常只记一行，不许把界面搞崩（async void 抛异常会直接闪退）。</summary>
+        private void RenderGridInBackground()
+        {
+            _ = RenderGridAsync().ContinueWith(
+                (t) => Probe("RenderGrid 异常：" + (t.Exception?.GetBaseException().Message ?? "")),
+                TaskContinuationOptions.OnlyOnFaulted);
+        }
+
+        private async Task RenderGridAsync()
         {
             var tGrid = Stopwatch.StartNew();
-            long firstCellMs = -1, uiMs = 0;
-            var added = 0;
             _preview.Cancel();
             _preview.Dispose();
             _preview = new CancellationTokenSource();
             var token = _preview.Token;
-            GridHost.Children.Clear();
-            var emotion = res.Prop("emotions");
-            if (emotion.ValueKind != JsonValueKind.Array) return;
-            var selected = _current;
-            var category = emotion.EnumerateArray().FirstOrDefault(e => S(e, "key") == selected);
-            var items = category.ValueKind == JsonValueKind.Object && category.TryGetProperty("items", out var list)
-                ? list : default;
-            EmptyHint.Text = "这个分类还是空的。点「打开分类文件夹」，把 GIF / PNG / JPG / WebP 拖进去。";
-            EmptyHint.Visibility = items.ValueKind == JsonValueKind.Array && items.GetArrayLength() > 0
-                ? Visibility.Collapsed : Visibility.Visible;
-            if (items.ValueKind != JsonValueKind.Array) return;
 
-            foreach (var item in items.EnumerateArray())
+            var selected = _current;
+            var items = CurrentItems();
+            GridHost.Children.Clear();
+            EmptyHint.Text = "这个分类还是空的。点「打开分类文件夹」，把 GIF / PNG / JPG / WebP 拖进去。";
+            EmptyHint.Visibility = items.Count > 0 ? Visibility.Collapsed : Visibility.Visible;
+            if (items.Count == 0) return;
+
+            // 骨架和解码流水线：每上屏 24 个骨架就把这几个的解码排进去，
+            // 首图不必等 200 个骨架全部建完（以前首图 = 整个骨架循环 + 一次解码）。
+            var sem = new SemaphoreSlim(DecodeConcurrency);
+            var cells = new List<(Image Img, CellVm Item)>(items.Count);
+            var pending = new List<Task>(items.Count);
+            var done = 0;
+            long firstAt = -1;
+            var hit = 0;
+
+            async Task LoadCellAsync((Image Img, CellVm Item) c)
             {
-                var path = S(item, "path");
-                var bitmap = await Task.Run(() => ReadThumbnail(path, token));
-                if (token.IsCancellationRequested)
+                var acquired = false;
+                try
                 {
-                    Probe($"RenderGrid 分类={selected} 被取消 已上屏={added}/{items.GetArrayLength()} 用时={tGrid.ElapsedMilliseconds}ms");
-                    return;
+                    await sem.WaitAsync(token).ConfigureAwait(true);
+                    acquired = true;
+                    if (token.IsCancellationRequested) return;
+                    var cached = ThumbFor(c.Item);
+                    BitmapImage bmp;
+                    if (cached != null) { bmp = cached; Interlocked.Increment(ref hit); }
+                    else
+                    {
+                        bmp = await Task.Run(() => ReadThumbnail(c.Item.Path, token), token);
+                        if (bmp != null) RememberThumb(c.Item, bmp);
+                    }
+                    if (token.IsCancellationRequested || bmp == null) return;
+                    c.Img.Source = bmp;
+                    c.Img.Visibility = Visibility.Visible;
+                    var n = Interlocked.Increment(ref done);
+                    if (firstAt < 0) firstAt = tGrid.ElapsedMilliseconds;
+                    if (n % 24 == 0 && !token.IsCancellationRequested)
+                        StatusText.Text = $"正在加载缩略图 {n}/{cells.Count}";
                 }
-                var tUi = Stopwatch.StartNew();
-                GridHost.Children.Add(BuildCell(selected, S(item, "id"), bitmap));
-                tUi.Stop();
-                uiMs += tUi.ElapsedMilliseconds;
-                added++;
-                if (firstCellMs < 0) firstCellMs = tGrid.ElapsedMilliseconds;
+                catch (OperationCanceledException) { /* 切页签取消：正常路径，不许让它把进程干掉 */ }
+                catch (Exception ex) { Probe("缩略图解码失败：" + ex.GetType().Name); }
+                finally { if (acquired) sem.Release(); }
             }
-            // 探针：首图 = 用户眼里「点下去有没有反应」，uiMs = 真正卡住 UI 线程的部分
-            Probe($"RenderGrid 分类={selected} 张数={added} 首图={firstCellMs}ms UI阻塞={uiMs}ms 总计={tGrid.ElapsedMilliseconds}ms");
+
+            StatusText.Text = $"正在加载缩略图 0/{items.Count}";
+            for (var i = 0; i < items.Count; i++)
+            {
+                var (cell, img) = BuildSkeleton(items[i]);
+                GridHost.Children.Add(cell);
+                cells.Add((img, items[i]));
+                pending.Add(LoadCellAsync(cells[cells.Count - 1]));
+                if ((i + 1) % 24 == 0)
+                {
+                    if (i + 1 == 24) Probe($"RenderGrid 骨架 分类={selected} 首屏={tGrid.ElapsedMilliseconds}ms");
+                    await Dispatcher.Yield(DispatcherPriority.Background);
+                }
+            }
+            await Task.WhenAll(pending);
+            if (token.IsCancellationRequested)
+            {
+                Probe($"RenderGrid 分类={selected} 被取消 已上屏={done}/{cells.Count} 用时={tGrid.ElapsedMilliseconds}ms");
+                return;
+            }
+            StatusText.Text = $"刚换到「{_emotions.FirstOrDefault((e) => e.Key == selected)?.Label}」· {cells.Count} 张";
+            Probe($"RenderGrid 填满 分类={selected} 张数={cells.Count} 首图={firstAt}ms 缓存命中={hit} 总计={tGrid.ElapsedMilliseconds}ms");
+        }
+
+        private BitmapImage ThumbFor(CellVm item)
+        {
+            var key = item.Id + "|" + item.Version;
+            return _thumbs.TryGetValue(key, out var bmp) ? bmp : null;
+        }
+
+        private void RememberThumb(CellVm item, BitmapImage bmp)
+        {
+            // 简单上限：超过就整块丢掉，宁可重解码也不要慢慢吃掉几百 MB
+            if (_thumbs.Count >= ThumbCacheMax) _thumbs.Clear();
+            _thumbs[item.Id + "|" + item.Version] = bmp;
         }
 
         private static BitmapImage ReadThumbnail(string path, CancellationToken token)
         {
-            if (token.IsCancellationRequested) return null;
+            if (token.IsCancellationRequested || string.IsNullOrEmpty(path)) return null;
             try
             {
                 using var stream = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
                 var image = new BitmapImage();
                 image.BeginInit();
                 image.CacheOption = BitmapCacheOption.OnLoad;
-                image.DecodePixelWidth = 160;
+                image.DecodePixelWidth = ThumbWidth;
                 image.StreamSource = stream;
                 image.EndInit();
                 image.Freeze();
@@ -215,22 +419,18 @@ namespace WhaleLauncher.Views
             catch (Exception) { return null; }
         }
 
-        private FrameworkElement BuildCell(string category, string name, BitmapImage bitmap)
+        /// <summary>骨架格子：尺寸和正式格子一样，图片槽先空着（图加载完只赋 Source）。</summary>
+        private (Border Cell, Image Img) BuildSkeleton(CellVm item)
         {
             var border = new Border
             {
                 Width = 120, Height = 120, Margin = new Thickness(0, 0, 10, 10),
-                CornerRadius = new CornerRadius(8), ClipToBounds = true, ToolTip = name
+                CornerRadius = new CornerRadius(8), ClipToBounds = true, ToolTip = item.Name
             };
             border.SetResourceReference(Border.BackgroundProperty, "Surface3");
             var grid = new Grid();
-            if (bitmap != null) grid.Children.Add(new Image { Source = bitmap, Stretch = Stretch.UniformToFill });
-            else grid.Children.Add(new TextBlock
-            {
-                Text = "无法预览", Foreground = (Brush)FindResource("Muted"),
-                HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center
-            });
-
+            var image = new Image { Stretch = Stretch.UniformToFill, Visibility = Visibility.Collapsed };
+            grid.Children.Add(image);
             var del = new Button
             {
                 Content = "删",
@@ -242,7 +442,7 @@ namespace WhaleLauncher.Views
                 Margin = new Thickness(0, 4, 4, 0),
                 Style = (Style)FindResource("Ghost"),
                 Opacity = 0.85,
-                Tag = name
+                Tag = item.Id
             };
             del.Click += async (s, e) =>
             {
@@ -251,29 +451,30 @@ namespace WhaleLauncher.Views
                 var confirm = MessageBox.Show($"删掉这张？\n\n{n}", "表情包", MessageBoxButton.OKCancel, MessageBoxImage.Question);
                 if (confirm != MessageBoxResult.OK) return;
                 var r = await Api.Post(_sup.Url, "/api/stickers/delete",
-                    $"{{\"emotion\":\"{Api.Esc(category)}\",\"name\":\"{Api.Esc(n)}\"}}");
+                    $"{{\"emotion\":\"{Api.Esc(_current)}\",\"name\":\"{Api.Esc(n)}\"}}");
                 StatusText.Text = r.Ok ? "已删除 " + n : "删除失败：" + (r.Error.Length > 0 ? r.Error : r.Raw);
-                if (r.Ok) await LoadAsync();
+                if (r.Ok)
+                {
+                    _renderedSignature = "";   // 强制下次重建
+                    await LoadAsync();
+                }
             };
             grid.Children.Add(del);
-
             border.Child = grid;
-            return border;
+            return (border, image);
         }
 
-
-        private void RenderJobs(ApiResult res)
+        private void RenderJobs(JsonElement arr)
         {
             JobsHost.Children.Clear();
-            var arr = res.Prop("jobs");
             if (arr.ValueKind != JsonValueKind.Array) return;
             var shown = 0;
             foreach (var j in arr.EnumerateArray())
             {
-                var status = S(j, "status");
-                var chat = S(j, "chat");
-                var file = S(j, "filename");
-                var err = FriendlyError(S(j, "error"));
+                var status = Str(j, "status");
+                var chat = Str(j, "chat");
+                var file = Str(j, "filename");
+                var err = FriendlyError(Str(j, "error"));
                 var when = status switch
                 {
                     "confirmed" => "已确认送达",
@@ -322,6 +523,8 @@ namespace WhaleLauncher.Views
             {
                 TxtNewCat.Text = "";
                 _current = "x:" + label;
+                _loaded = false;
+                _nextRefresh = DateTime.MinValue;
                 await LoadAsync();
             }
         }
@@ -340,6 +543,8 @@ namespace WhaleLauncher.Views
             if (res.Ok)
             {
                 _current = "";
+                _loaded = false;
+                _nextRefresh = DateTime.MinValue;
                 await LoadAsync();
             }
         }
@@ -352,6 +557,7 @@ namespace WhaleLauncher.Views
             var res = await Api.Post(_sup.Url, "/api/features", $"{{\"key\":\"stickers\",\"value\":{(on ? "true" : "false")}}}");
             StatusText.Text = res.Ok ? $"表情包已{(on ? "开启" : "关闭")}" : "保存失败：" + (res.Error.Length > 0 ? res.Error : res.Raw);
             _loaded = false;
+            _nextRefresh = DateTime.MinValue;
             await LoadAsync();
         }
 
@@ -400,6 +606,8 @@ namespace WhaleLauncher.Views
         private async void OnReload(object sender, RoutedEventArgs e)
         {
             _loaded = false;
+            _renderedSignature = "";
+            _nextRefresh = DateTime.MinValue;
             await LoadAsync();
         }
 
@@ -414,7 +622,20 @@ namespace WhaleLauncher.Views
             _ => error
         };
 
-        private static string S(JsonElement e, string n)
+        private static string Str(JsonElement e, string n)
             => e.ValueKind == JsonValueKind.Object && e.TryGetProperty(n, out var v) && v.ValueKind == JsonValueKind.String ? (v.GetString() ?? "") : "";
+
+        private static bool Bool(JsonElement e, string n)
+            => e.ValueKind == JsonValueKind.Object && e.TryGetProperty(n, out var v) && v.ValueKind == JsonValueKind.True;
+
+        private static double Num(JsonElement e, string n)
+        {
+            if (e.ValueKind != JsonValueKind.Object || !e.TryGetProperty(n, out var v)) return 0;
+            if (v.ValueKind == JsonValueKind.Number && v.TryGetDouble(out var d)) return d;
+            if (v.ValueKind == JsonValueKind.String && double.TryParse(v.GetString(), out var s)) return s;
+            return 0;
+        }
+
+        private static string S(JsonElement e, string n) => Str(e, n);
     }
 }

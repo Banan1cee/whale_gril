@@ -336,6 +336,43 @@ async function categoryImagesAsync(dir, emotion) {
     `分类(异步) ${key} 目录=${dir} 张数=${out.length} 耗时=${probe.ms(cost)}ms`);
   return out;
 }
+
+/**
+ * 分类下的图 + 版本（mtime），给 UI 做缩略图缓存键用。
+ * 异步版：每 32 张一批 stat，批间让出事件循环。
+ */
+async function categoryItemsAsync(dir, emotion) {
+  const files = await categoryImagesAsync(dir, emotion);
+  const out = [];
+  for (let i = 0; i < files.length; i += 32) {
+    const batch = files.slice(i, i + 32);
+    const stats = await Promise.all(batch.map((file) => fsp.stat(file).catch(() => null)));
+    batch.forEach((file, index) => {
+      out.push({
+        name: path.basename(file),
+        id: path.relative(dir, file).split(path.sep).join('/'),
+        path: file,
+        version: stats[index] ? Math.round(stats[index].mtimeMs) : 0,
+      });
+    });
+    if (i + 32 < files.length) await new Promise((resolve) => setImmediate(resolve));
+  }
+  return out;
+}
+
+/** 同步版：只给测试/老调用方用 */
+function categoryItems(dir, emotion) {
+  return categoryImages(dir, emotion).map((file) => {
+    let version = 0;
+    try { version = Math.round(fs.statSync(file).mtimeMs); } catch { /* 读不到就当 0 */ }
+    return {
+      name: path.basename(file),
+      id: path.relative(dir, file).split(path.sep).join('/'),
+      path: file,
+      version,
+    };
+  });
+}
 function anyImages(dir) { return [...new Set(Object.keys(EMOTIONS).flatMap((key) => categoryImages(dir, key)))]; }
 function resolveImage(dir, emotion, id) {
   if (typeof id !== 'string' || !id || /[\\:\x00-\x1f]/.test(id)) return '';
@@ -845,7 +882,7 @@ function upload(config, root, emotion, files) {
   return uploaded;
 }
 module.exports = { EMOTIONS, EMOTION_LABELS, EXTRA_PREFIX, cleanCategoryLabel, extraKey, hasCategory, readExtraCategories, writeExtraCategories, categoryFile, normalizeEmotion, categoryFromName, resolveCategory, SYNONYMS, promptCategories, GENERIC, EXTS, MAX_FILE_BYTES, MAX_UPLOAD_BYTES, MAX_UPLOAD_FILES,
-  hasEmotion, resolveImage, safeDirectory, migrateLegacy, migrateLegacyAsync, ensureBuiltinDirs, stickerDir, regularFile, listImages, listImagesAsync, categoryImages, categoryImagesAsync, imagesFor, anyImages, isOn,
+  hasEmotion, resolveImage, safeDirectory, migrateLegacy, migrateLegacyAsync, ensureBuiltinDirs, stickerDir, regularFile, listImages, listImagesAsync, categoryImages, categoryImagesAsync, categoryItems, categoryItemsAsync, imagesFor, anyImages, isOn,
   invalidateScan, clearScanCache, choose, pick, isStickerRequest, imageType, upload,
   isSeriousText, isLivelyText, SERIOUS_WINDOW_MS, SERIOUS_TURNS,
   isUsableCategory, defaultCategory, resolveUsableCategory, categoryInText, setProbeLogger };

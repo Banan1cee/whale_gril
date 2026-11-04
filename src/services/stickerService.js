@@ -290,9 +290,9 @@ class StickerService {
     // 用户手滑删了「开心」文件夹：读状态时顺手补回来（只 stat / mkdir，不扫库）
     this.restoreBuiltinDirs();
     const list = (key, label, extra) => {
-      const items = stickers.categoryImages(dir, key).map((file) => ({
-        name: path.basename(file), id: path.relative(dir, file).split(path.sep).join('/'),
-      }));
+      // items 带上 path / version：启动器直接用 HTTP 就能画缩略图，
+      // 不用再为每次刷新 spawn 一个 node 子进程（实测 630ms/次）
+      const items = stickers.categoryItems(dir, key);
       return { key, label, extra: Boolean(extra), files: items.map((item) => item.name), items,
         count: items.length };
     };
@@ -332,9 +332,7 @@ class StickerService {
     }
     this.restoreBuiltinDirs();
     const build = async (key, label, extra) => {
-      const items = (await stickers.categoryImagesAsync(dir, key)).map((file) => ({
-        name: path.basename(file), id: path.relative(dir, file).split(path.sep).join('/'),
-      }));
+      const items = await stickers.categoryItemsAsync(dir, key);
       return { key, label, extra: Boolean(extra), files: items.map((item) => item.name), items,
         count: items.length };
     };
@@ -357,6 +355,7 @@ class StickerService {
 
   _statusPayload(dir, emotions, queue) {
     return { ok: true, enabled: true, generation: this.generation, dir, migration: this.migration,
+      configuredDir: this.config.sticker?.dir || '',
       maintenance: { ...this.maintenance, errors: this.maintenance.errors.slice(0, 5) },
       testChat: this.config.sticker?.testChat || '文件传输助手', emotions, ...queue };
   }
