@@ -17,8 +17,10 @@ function tmpRoot() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-demand-'));
   fs.mkdirSync(path.join(root, 'data/stickers/开心'), { recursive: true });
   fs.mkdirSync(path.join(root, 'data/stickers/傲娇'), { recursive: true });
+  fs.mkdirSync(path.join(root, 'data/stickers/炸毛'), { recursive: true });
   fs.writeFileSync(path.join(root, 'data/stickers/开心/a.png'), 'x');
   fs.writeFileSync(path.join(root, 'data/stickers/傲娇/b.png'), 'x');
+  fs.writeFileSync(path.join(root, 'data/stickers/炸毛/c.png'), 'x');
   return root;
 }
 function cleanup(root) {
@@ -133,6 +135,48 @@ test('stickerFor：明确索要但模型没写标记时会补分类；空分类�
     }), { emotion: 'happy' }, '空分类/写错名字映射到有图的默认分类');
     assert.equal(call({ msg: { platform: 'wechat', chatId: 'c1', text: '在吗' } }), null, '没标记也没索要就不发');
     assert.deepEqual(seen, ['happy', 'x:撒娇', 'happy']);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('ensureSend：命中提醒且开必发时，模型没写标记也按语气补一张；没命中不补', () => {
+  const root = tmpRoot();
+  try {
+    const makeCtx = (ensure) => {
+      const seen = [];
+      return {
+        seen,
+        ctx: {
+          config: {
+            root,
+            features: { stickers: true },
+            sticker: { dir: 'data/stickers', demandChance: 0.7, ensureSend: ensure },
+          },
+          stickerService: { plan: (msg, category) => { seen.push(category); return { emotion: category }; } },
+          logger: null,
+        },
+      };
+    };
+    const on = makeCtx(true);
+    assert.deepEqual(Bot.prototype.stickerFor.call(on.ctx, {
+      msg: { platform: 'wechat', chatId: 'c1', text: '气死我了' },
+      stickerDemand: true,
+    }, '别气了'), { emotion: 'angry' }, '生气语气补炸毛');
+    assert.deepEqual(Bot.prototype.stickerFor.call(on.ctx, {
+      msg: { platform: 'wechat', chatId: 'c1', text: '在吗' },
+      stickerDemand: true,
+    }, '在呢'), { emotion: 'happy' }, '没明显语气补默认开心');
+    assert.equal(Bot.prototype.stickerFor.call(on.ctx, {
+      msg: { platform: 'wechat', chatId: 'c1', text: '在吗' },
+      stickerDemand: false,
+    }, '在呢'), null, '没命中提醒不补');
+
+    const off = makeCtx(false);
+    assert.equal(Bot.prototype.stickerFor.call(off.ctx, {
+      msg: { platform: 'wechat', chatId: 'c1', text: '在吗' },
+      stickerDemand: true,
+    }, '在呢'), null, '没开必发不补');
   } finally {
     cleanup(root);
   }

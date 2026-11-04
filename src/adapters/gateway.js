@@ -225,8 +225,14 @@ class Gateway {
     // 表情包（实验性）：总闸关着返回 null，桥接就看不到这个字段
     let sticker = null;
     try {
-      if (localWechat && result.reason !== 'sticker_request' && typeof this.bot.stickerFor === 'function') {
-        sticker = this.bot.stickerFor({ msg, stickerCategory: result.stickerCategory }, result.reply);
+      if (localWechat && result.reason !== 'sticker_request' && result.reason !== 'command'
+          && typeof this.bot.stickerFor === 'function') {
+        sticker = this.bot.stickerFor({
+          msg,
+          stickerCategory: result.stickerCategory,
+          stickerDemand: Boolean(result.stickerDemand),
+          error: Boolean(result.error),
+        }, result.reply);
       }
     } catch (err) {
       this.logger && this.logger.warn && this.logger.warn('挑表情包失败：' + (err && err.message ? err.message : err));

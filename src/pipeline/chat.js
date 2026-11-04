@@ -1509,6 +1509,7 @@ class Bot {
    */
   stickerFor(decision, text) {
     if (!stickers.isOn(this.config) || !this.stickerService) return null;
+    if (decision && decision.error) return null;
     const msg = (decision && decision.msg) || {};
     if (msg.platform !== 'wechat' || !msg.chatId) return null;
     let category = decision && decision.stickerCategory;
@@ -1521,11 +1522,17 @@ class Bot {
     if (category && !stickers.isUsableCategory(this.config, category)) {
       category = stickers.resolveUsableCategory(this.config, category);
     }
-    // 用户明确要，但模型没写标记：按原话分类名兜底
+    // 用户明确要，或这一轮命中提醒且开了“必发”：模型没写标记也补一张。
+    // 必发只在命中提醒的轮次生效；严肃/求助轮次 demand 本来就是 false。
     if (!category) {
       const userText = String(msg.cleanText || msg.text || '');
-      if (stickers.isStickerRequest(userText)) {
-        category = stickers.categoryInText(this.config, userText) || stickers.defaultCategory(this.config);
+      const rawEnsure = this.config.sticker && this.config.sticker.ensureSend;
+      const ensure = rawEnsure === true || rawEnsure === 1 || /^(1|true|on|yes)$/i.test(String(rawEnsure || ''));
+      const demanded = Boolean(decision && decision.stickerDemand);
+      if (stickers.isStickerRequest(userText) || (ensure && demanded)) {
+        category = stickers.categoryInText(this.config, userText)
+          || (ensure && demanded ? stickers.moodCategory(this.config, userText + '\n' + String(text || '')) : '')
+          || stickers.defaultCategory(this.config);
       }
     }
     if (!category) return null;
@@ -1939,6 +1946,8 @@ class Bot {
       mock: decision.mock,
       // 表情包分类由模型写在正文里的标记决定，这里带出去给网关排队
       ...(decision.stickerCategory ? { stickerCategory: decision.stickerCategory } : {}),
+      // 这一轮是否命中“提醒带一张”；网关用它决定 ensureSend 要不要补图
+      ...(decision.msg && decision.msg.stickerDemand ? { stickerDemand: true } : {}),
     };
   }
 
