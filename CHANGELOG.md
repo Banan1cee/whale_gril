@@ -24,6 +24,15 @@
 - 硬裁前先整条丢（人物卡从最不重要的一条开始，各留 1 条），`importance ≥ 0.8` 的索引行不参与丢弃。
 - 兜底：单轮输入超硬上限先丢记忆块/关系块重算；`appendMessage`/`checkpoint` 写库失败只报 error，回复照常发出。
 
+### 改进 · 启动器设置页加「深度思考」开关
+
+**以前启动器「聊天」页没有这个开关；「语音」页签下那个 `deepseek.thinking` 还会被网页保存的 `settings.thinking` 盖掉，在 exe 里改了也不生效。**
+
+- 「设置 → 模型 → 聊天」采样区新增「深度思考」勾选，和网页设置共用 `data/settings.json` 的 `thinking`
+- 移除「语音」页签里旧的「思考（打开后会减慢说话速度）」配置项，避免两个开关互相打架
+- EXE 重新发布：`WhaleLauncher.exe` / `launcher/publish/WhaleLauncher.exe`
+- 新增 `AGENTS.md`：写明「说 UI 默认改 EXE，不是 WebUI」，省得每次口头交代
+
 ## 4.0.1
 
 ### 改进 · 表情包频率进启动器 + 必发模式

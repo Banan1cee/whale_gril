@@ -1062,6 +1062,10 @@ namespace WhaleLauncher.Views
             var model = new ComboBox { Height = 28, IsEditable = true, MinWidth = 320, HorizontalAlignment = HorizontalAlignment.Left };
             var key = new PasswordBox();
             var mock = new CheckBox();
+            // 深度思考：和网页设置共用 data/settings.json 的 thinking（保存走 ModelRequest）。
+            // 只在这里声明，Click 处理器等 AutoSaveChatAsync 定义好之后再挂（否则编译器会报
+            // 「未赋值的局部变量」——那个函数捕获了后面才声明的控件）。
+            var thinking = new CheckBox { VerticalAlignment = VerticalAlignment.Center };
             var chatResult = new TextBlock { Style = (Style)FindResource("Small"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 0) };
 
             // 看图：和聊天页一样的「服务商 + 模型」两个下拉。
@@ -1340,6 +1344,18 @@ namespace WhaleLauncher.Views
             chatPanel.Children.Add(TwoCol(
                 BuildField(new FieldSpec { Path = "deepseek.timeoutMs", Label = "请求超时(ms)", Kind = "num", Min = 1000, Max = 600000 }, true),
                 null));
+            // 深度思考：和网页设置共用 data/settings.json 的 thinking，走 /api/settings 保存。
+            // 以前这里是「语音」页签里的 deepseek.thinking：网页一保存 settings.thinking 就把它盖掉，
+            // 在 exe 里改了也不生效。现在它属于聊天设置，位置和网页一致。
+            thinking.Click += async (s, e) =>
+            {
+                if (_loading) return;
+                await AutoSaveChatAsync();
+            };
+            chatPanel.Children.Add(Row(
+                "深度思考", thinking,
+                "打开后会先想再答：更慢、更贵（思考 token 计入输出预算）",
+                false, ModelLabel));
 
             var chatButtons = new WrapPanel { Margin = new Thickness(0, 6, 0, 0) };
             var save = new Button { Content = "保存", Style = (Style)FindResource("Primary") };
@@ -1378,6 +1394,7 @@ namespace WhaleLauncher.Views
                     + "\"visionModel\":\"" + Api.Esc(VisionValue()) + "\","
                     + (VisionIsCustom() ? "\"visionBaseUrl\":\"" + Api.Esc(visionUrl.Text.Trim()) + "\"," : "")
                     + "\"mock\":" + (mock.IsChecked == true ? "true" : "false")
+                    + ",\"thinking\":" + (thinking.IsChecked == true ? "true" : "false")
                     + (key.Password.Length > 0 ? ",\"apiKey\":\"" + Api.Esc(key.Password.Trim()) + "\"" : "")
                     + "}";
             }
@@ -1532,11 +1549,7 @@ namespace WhaleLauncher.Views
             voicePanel.Children.Add(TwoCol(
                 BuildField(new FieldSpec { Path = "voice.timeoutMs", Label = "识别超时(ms)", Kind = "num", Min = 1000, Max = 300000 }, true),
                 BuildField(new FieldSpec { Path = "voice.maxSeconds", Label = "最长语音(秒)", Kind = "num", Min = 1, Max = 600 }, true)));
-            // 通义千问这类「会思考」的模型：关掉直接出字（快），打开先想一遍（慢但稳）。
-            // 默认关（config 里不写 deepseek.thinking 就是关）；标签列给宽一点，括号说明要放得下。
-            voicePanel.Children.Add(BuildField(
-                new FieldSpec { Path = "deepseek.thinking", Label = "思考（打开后会减慢说话速度）", Kind = "bool" },
-                false, 260));
+            // 「深度思考」已经挪到聊天页签（和网页设置共用 thinking），这里不再重复放一个配置项。
 
             _loadModel = (set, provs) =>
             {
@@ -1602,6 +1615,9 @@ namespace WhaleLauncher.Views
                     }
                 }
                 if (!mock.IsKeyboardFocusWithin) mock.IsChecked = set.ValueKind == JsonValueKind.Object && set.TryGetProperty("mock", out var m) && m.ValueKind == JsonValueKind.True;
+                if (!thinking.IsKeyboardFocusWithin)
+                    thinking.IsChecked = set.ValueKind == JsonValueKind.Object
+                        && set.TryGetProperty("thinking", out var th) && th.ValueKind == JsonValueKind.True;
                 ApplyVisionMode();
                 SyncVisionTip();
                 _loading = false;
