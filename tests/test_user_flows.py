@@ -86,6 +86,17 @@ class BridgeUserFlows(unittest.TestCase):
         function('on_message_inner', env)(self.message(), None)
         self.assertEqual(sent, ['第一句']); self.assertEqual(stickers, [])
 
+    def test_explicit_sticker_skips_background_text_and_voice(self):
+        item = {'id': 'test'}
+        env, _, sent, stickers, _ = self.env(Response({
+            'ok': True, 'action': 'reply', 'reply': '给你挑了一张',
+            'stickerOnly': True, 'sticker': item,
+        }))
+        env['voice_reply'].choose = lambda *a: self.fail('explicit sticker cannot choose voice')
+        function('on_message_inner', env)(self.message(), None)
+        self.assertEqual(sent, [])
+        self.assertEqual(stickers, [(item,)])
+
     def test_voice_replaces_all_text_bubbles_with_the_same_reply(self):
         env, _, sent, stickers, _ = self.env(Response({'ok': True, 'action': 'reply', 'reply': '模型回复', 'bubbles': ['第一句', '第二句']}))
         captured=[]

@@ -20,7 +20,7 @@ static class LatencyChecks
     public static async Task Run(string directory)
     {
         int checks=0;void Check(bool ok){if(!ok)throw new Exception("Voice latency check failed");checks++;}
-        Check(new AutoVoiceSettings().SynthTimeoutSec==20);
+        Check(new AutoVoiceSettings().SynthTimeoutSec==85);
         foreach(bool body in new[]{false,true})
         {
             using var client=new HttpClient(new Handler(async ct=>{

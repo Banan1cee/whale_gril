@@ -14,7 +14,7 @@
         <DockPanel Grid.Row="0" LastChildFill="False" Margin="0,0,0,12">
             <TextBlock DockPanel.Dock="Left" Text="表情包" Style="{StaticResource H1}" VerticalAlignment="Center" />
             <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" HorizontalAlignment="Right">
-                <Button Content="打开文件夹" Style="{StaticResource Ghost}" Click="OnOpenFolder" />
+                <Button Content="打开分类文件夹" Style="{StaticResource Ghost}" Click="OnOpenFolder" />
                 <Button Content="⟳ 刷新" Style="{StaticResource Ghost}" Margin="8,0,0,0" Click="OnReload" />
             </StackPanel>
         </DockPanel>
@@ -35,6 +35,8 @@
                 <!-- 第 1 行：开关 / 测试标题，左右对齐 -->
                 <WrapPanel Grid.Row="0" Grid.Column="0">
                     <CheckBox x:Name="ChkEnabled" Content="启用表情包（实验性）" VerticalAlignment="Center" Click="OnToggleEnabled" />
+                    <TextBlock Text="开启后，微信强制前台发送" Style="{StaticResource Small}"
+                               Margin="10,0,0,0" VerticalAlignment="Center" />
                     <TextBlock x:Name="DirHint" Style="{StaticResource Small}" Margin="14,0,0,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
                 </WrapPanel>
                 <TextBlock Grid.Row="0" Grid.Column="2" Text="可选：真实消息测试" Style="{StaticResource H2}" Margin="16,0,0,0" />
@@ -73,11 +75,10 @@
             <Button x:Name="BtnDelCat" Content="删除分类" Style="{StaticResource Ghost}" Margin="6,0,0,0"
                     Visibility="Collapsed" Click="OnDeleteCategory"
                     ToolTip="只从列表里去掉，文件夹和图片都保留" />
-            <Button Content="上传图片…" Style="{StaticResource Ghost}" Margin="10,0,0,0" Click="OnUpload" />
             <TextBlock x:Name="QueueInfo" Style="{StaticResource Small}" Margin="14,0,0,0" VerticalAlignment="Center" />
         </WrapPanel>
 
-        <Border Grid.Row="3" Style="{StaticResource Card}" Margin="0,12,0,0" AllowDrop="True" Drop="OnDrop" DragOver="OnDragOver">
+        <Border Grid.Row="3" Style="{StaticResource Card}" Margin="0,12,0,0">
             <Grid>
                 <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="12,10">
                     <WrapPanel x:Name="GridHost" />

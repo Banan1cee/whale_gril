@@ -52,7 +52,7 @@ module.exports = function register(router) {
       return json(res, 200, service.gate(info.url.searchParams.get('id') || ''));
     }
 
-    if (pathname === '/api/stickers/status' && method === 'GET') return json(res, 200, service.status());
+    if (pathname === '/api/stickers/status' && method === 'GET') return json(res, 200, service.status(info.url.searchParams.get('queueOnly') === '1'));
 
     // 控制台缩略图：只回传表情包目录里的真图，不能读任意文件
     if (pathname === '/api/stickers/image' && method === 'GET') {
