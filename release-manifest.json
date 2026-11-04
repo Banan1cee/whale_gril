@@ -1,10 +1,10 @@
 {
   "latest": "4.0.1",
-  "released_at": "2026-11-03T13:00:00Z",
+  "released_at": "2026-11-04T11:11:09Z",
   "force_after_hours": 12,
   "force": false,
   "kill_below": null,
-  "message": "首个 exe 版本：内置 Node 与 Python，装完即用。",
-  "manifest_version": 1,
+  "message": "4.0.1：界面搬进启动器，安装包 167 MB，装完即用。",
+  "manifest_version": 2,
   "channel": "stable"
 }
