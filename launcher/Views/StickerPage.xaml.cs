@@ -592,6 +592,18 @@ namespace WhaleLauncher.Views
 
         private async void OnOpenFolder(object sender, RoutedEventArgs e)
         {
+            // 右上角：整个表情包库根目录（data/stickers）
+            await ShowStickerFolder("");
+        }
+
+        private async void OnOpenCategoryFolder(object sender, RoutedEventArgs e)
+        {
+            // 页签行：当前分类自己的文件夹
+            if (string.IsNullOrEmpty(_current))
+            {
+                StatusText.Text = "先选一个分类。";
+                return;
+            }
             await ShowStickerFolder(_current);
         }
 

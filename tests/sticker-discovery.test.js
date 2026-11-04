@@ -69,6 +69,7 @@ test('自建目录里有图 → 自动登记，页签出现，模型能用', (t)
 test('幂等：重复扫描不会重复登记，也不会改掉已有的 chance / 顺序', (t) => {
   const { root, cfg, put } = fixture(t);
   put('猫猫/a.gif');
+  put('先有的/x.gif');   // 目录要在，否则会被当成「文件夹已删除」摘掉（见下一条用例）
   fs.writeFileSync(categoryFile(root), JSON.stringify([{ label: '先有的', chance: 0.9 }]), 'utf8');
   const first = stickers.syncDiscoveredCategories(cfg, root);
   assert.deepEqual(first.added, ['猫猫']);
@@ -77,6 +78,21 @@ test('幂等：重复扫描不会重复登记，也不会改掉已有的 chance 
   const saved = readJson(categoryFile(root));
   assert.deepEqual(saved.map((c) => c.label), ['先有的', '猫猫']);
   assert.equal(saved[0].chance, 0.9, '已有分类的 chance 不能被覆盖');
+});
+
+test('文件夹被删掉 → 该分类自动取消登记（不留空页签）', (t) => {
+  const { root, dir, cfg, put } = fixture(t);
+  put('恼怒/a.gif');
+  assert.deepEqual(stickers.syncDiscoveredCategories(cfg, root).added, ['恼怒']);
+  assert.deepEqual(readJson(categoryFile(root)).map((c) => c.label), ['恼怒']);
+  // 用户在资源管理器里把整个文件夹删了
+  fs.rmSync(path.join(dir, '恼怒'), { recursive: true, force: true });
+  const after = stickers.syncDiscoveredCategories(cfg, root);
+  assert.deepEqual(after.removed, ['恼怒']);
+  assert.deepEqual(readJson(categoryFile(root)), [], '登记也要一起清掉');
+  // 重新建回来还能再被发现
+  put('恼怒/b.gif');
+  assert.deepEqual(stickers.syncDiscoveredCategories(cfg, root).added, ['恼怒']);
 });
 
 test('空目录、内置分类、旧别名都不登记', (t) => {

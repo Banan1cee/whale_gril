@@ -111,6 +111,9 @@ class StickerService {
       });
       this.migration = report;
       this.libraryDir = dir;
+      // 重启后立刻同步一次分类目录：用户直接在资源管理器里新建/删除文件夹也能对上
+      this._discoveredAt = 0;
+      this.ensureDiscovered();
       state.done = report.moved + report.deduplicated;
       state.errors = report.errors.slice(0, 20);
       const m = report;
@@ -385,6 +388,11 @@ class StickerService {
         this.discovered = (this.discovered || []).concat(result.added);
         this.invalidateStatus();
         if (this.logger) this.logger.info('表情包发现新分类并已登记：' + result.added.join('、'));
+      }
+      if (result.removed && result.removed.length) {
+        this.discovered = (this.discovered || []).filter((label) => !result.removed.includes(label));
+        this.invalidateStatus();
+        if (this.logger) this.logger.info('表情包分类目录已不存在，取消登记：' + result.removed.join('、'));
       }
       return result.added;
     } catch { return []; }

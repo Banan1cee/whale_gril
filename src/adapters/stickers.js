@@ -696,15 +696,28 @@ function discoverCategories(config, root) {
 
 /** 把新发现的分类补进 sticker-categories.json（幂等：已有的 chance / 顺序都不动） */
 function syncDiscoveredCategories(config, root) {
-  const found = discoverCategories(config, root);
-  if (!found.length) return { added: [], categories: readExtraCategories(config, root) };
+  const dir = stickerDir(config, root);
   const current = readExtraCategories(config, root);
-  const known = new Set(current.map((c) => cleanCategoryLabel(c && c.label)));
-  const added = found.filter((label) => !known.has(label));
-  if (!added.length) return { added: [], categories: current };
-  const next = current.concat(added.map((label) => ({ label, chance: 0.25 })));
+  const found = discoverCategories(config, root);
+  // 目录才是事实来源：登记过但文件夹已经没了的分类要摘掉，
+  // 否则用户在资源管理器里删掉「恼怒」，页签会一直挂着一个空分类。
+  const alive = current.filter((c) => {
+    const label = cleanCategoryLabel(c && c.label);
+    if (!label) return false;
+    try {
+      const stat = fs.lstatSync(path.join(dir, label));
+      return stat.isDirectory() && !stat.isSymbolicLink();
+    } catch { return false; }
+  });
+  const aliveLabels = new Set(alive.map((c) => cleanCategoryLabel(c && c.label)));
+  const removed = current
+    .map((c) => cleanCategoryLabel(c && c.label))
+    .filter((label) => label && !aliveLabels.has(label));
+  const added = found.filter((label) => !aliveLabels.has(label));
+  if (!added.length && !removed.length) return { added: [], removed: [], categories: current };
+  const next = alive.concat(added.map((label) => ({ label, chance: 0.25 })));
   writeExtraCategories(config, root, next);
-  return { added, categories: readExtraCategories(config, root) };
+  return { added, removed, categories: readExtraCategories(config, root) };
 }
 
 function isOn(config) { return features.isOn(config, 'stickers'); }

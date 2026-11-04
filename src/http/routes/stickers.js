@@ -107,13 +107,18 @@ module.exports = function register(router) {
         const noShell = ((config.env && config.env.WHALE_TEST_NO_SHELL) || process.env.WHALE_TEST_NO_SHELL) === '1';
         if (process.platform === 'win32' && !noShell) {
           // 不拼 shell：参数走 argv，路径里的 & % 不会被解释
-          // 定位单张图用 explorer 的 /select,<path>，其余直接开目录
+          // 定位单张图用 explorer 的 /select,<path>，其余直接开目录。
+          // explorer 用绝对路径（内核是启动器拉起来的，PATH 可能被裁过），并 detached：
+          // 它是常驻进程，不能让它的退出/拉起反过来影响内核。
           const args = target.mode === 'select' ? [`/select,${target.dir}`] : [target.dir];
+          const exe = path.join(process.env.SystemRoot || 'C:\\Windows', 'explorer.exe');
+          const launch = (file) => new Promise((resolve, reject) => {
+            const child = spawn(file, args, { shell: false, windowsHide: true, detached: true, stdio: 'ignore' });
+            child.once('spawn', () => { try { child.unref(); } catch { /* ignore */ } resolve(); });
+            child.once('error', reject);
+          });
           try {
-            await new Promise((resolve, reject) => {
-              const child = spawn('explorer.exe', args, { shell: false, windowsHide: true, stdio: 'ignore' });
-              child.once('spawn', resolve); child.once('error', reject);
-            });
+            try { await launch(exe); } catch (err) { await launch('explorer.exe'); }
           } catch (err) {
             return json(res, 500, { ok: false, dir: target.dir, mode: target.mode,
               error: '打开文件夹失败：' + ((err && err.message) || err) });
