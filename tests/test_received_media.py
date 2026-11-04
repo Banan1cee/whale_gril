@@ -148,6 +148,8 @@ class MediaFailureLogTests(unittest.TestCase):
         )
         env.update(stubs)
         env['log_throttled'] = nested('log_throttled', env)
+        # on_message_inner 会调用模块级 fix_garbled（0eba2cb 的乱码还原），单函数抽取要一起带上
+        env['fix_garbled'] = nested('fix_garbled', env)
         env['on_message_inner'] = nested('on_message_inner', env)
         return env
 
