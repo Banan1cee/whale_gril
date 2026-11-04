@@ -68,7 +68,14 @@ public static class BreezeSpeech
     // UseProxy = false：这台机器的 HTTP_PROXY 指向本地 Clash（127.0.0.1:7897），
     // .NET 的 HttpClient 会读环境变量走代理 —— 实测同一条合成请求：
     // 走代理 6 分钟没回来，直连 41 秒拿到 wav。语音接口是国内服务，不需要代理。
-    static HttpClient Client() => new(new HttpClientHandler { AllowAutoRedirect = false, UseProxy = false }) { Timeout = TimeSpan.FromSeconds(90) };
+    // HTTP/1.1 连 api.breeze.blue 建连就失败（20 秒 ConnectTimeout）；实测 HTTP/2 能过：
+    // 直连 12.9 秒拿到 153KB wav，走本地代理 2.7 秒。所以强制 HTTP/2，并绕开 Clash（国内接口）。
+    static HttpClient Client() => new(new HttpClientHandler { AllowAutoRedirect = false, UseProxy = false })
+    {
+        Timeout = TimeSpan.FromSeconds(90),
+        DefaultRequestVersion = System.Net.HttpVersion.Version20,
+        DefaultVersionPolicy = System.Net.Http.HttpVersionPolicy.RequestVersionOrLower,
+    };
 
     public sealed record KeyCheck(bool Available, string Message);
 

@@ -40,10 +40,10 @@ test('语音识别有长度和开关保护，失败不影响其它消息', () =>
 test('人设允许回应语音，不再说「不处理语音」', () => {
   // data/persona.json 是「主人在微信里调过之后」才生成的运行时文件，全新安装没有它，
   // 不能因为文件不存在就让整套测试挂掉
-  const candidates = ['data/persona.json', 'personas/persona-v1.json']
+  const candidates = ['data/persona.json', 'personas/persona-standard.json']
     .map((p) => path.join(root, p))
     .filter((p) => fs.existsSync(p));
-  assert.ok(candidates.length, '找不到任何人设文件（data/persona.json 或 personas/persona-v1.json）');
+  assert.ok(candidates.length, '找不到任何人设文件（data/persona.json 或 personas/persona-standard.json）');
   const personas = candidates.map((p) => fs.readFileSync(p, 'utf8')).join('\n');
   assert.doesNotMatch(personas, /不处理语音/);
   assert.match(personas, /别人发的语音会自动转成文字/);

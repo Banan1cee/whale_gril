@@ -1,4 +1,4 @@
-﻿'use strict';
+'use strict';
 
 /**
  * 人设预设：一个版本一个文件，导入后立即生效。
@@ -32,6 +32,16 @@ test('personas/ 下每个文件都被识别，按版本号排序', () => {
   fs.rmSync(root, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
 });
 
+test('order 决定列表顺序（按攻击力从低到高），没写 order 的排在后面', () => {
+  const root = makeRoot();
+  writePreset(root, 'persona-v1.json', { id: 'persona-v1', version: '1.0.0', name: '温和', order: 20, customPrompt: 'a' });
+  writePreset(root, 'persona-v10.json', { id: 'persona-v10', version: '10.0.0', name: '最凶', order: 10, customPrompt: 'b' });
+  writePreset(root, 'persona-v2.json', { id: 'persona-v2', version: '2.0.0', name: '没写 order', customPrompt: 'c' });
+  const list = presets.list({ paths: { root } });
+  assert.deepEqual(list.map((x) => x.id), ['persona-v10', 'persona-v1', 'persona-v2']);
+  assert.equal(list[0].order, 10);
+  fs.rmSync(root, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
+});
 test('坏文件和目录不存在时不会崩', () => {
   const root = makeRoot();
   fs.writeFileSync(path.join(root, 'personas', 'broken.json'), '{ not json', 'utf8');
@@ -71,7 +81,7 @@ test('id 里带路径穿越取不到东西', () => {
   fs.rmSync(root, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
 });
 
-test('仓库自带的 persona-v1 是通用版：不含微信号、群昵称、Key', () => {
+test('仓库自带的 persona-standard 是通用版：不含微信号、群昵称、Key', () => {
   const root = path.resolve(__dirname, '..');
   const list = presets.list({ paths: { root } });
   assert.ok(list.length >= 1, '至少要有一个人设预设');

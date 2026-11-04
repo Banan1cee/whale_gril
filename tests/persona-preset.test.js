@@ -120,7 +120,7 @@ test('HTTP：预览不写盘；导入预设不打乱她的名字和外形', asyn
   const tmp = fs2.mkdtempSync(path.join(os2.tmpdir(), 'whale-preset-name-'));
   fs2.writeFileSync(path.join(tmp, 'config.json'), JSON.stringify({ server: { port: 0, openBrowser: false }, watchConfig: false, log: { level: 'error' } }));
   fs2.mkdirSync(path.join(tmp, 'personas'), { recursive: true });
-  for (const name of ['persona-v1.json', 'persona-v2.json']) {
+  for (const name of ['persona-standard.json', 'persona-zhainan.json']) {
     fs2.copyFileSync(path.join(root, 'personas', name), path.join(tmp, 'personas', name));
   }
   const { startServer } = require('../server');
@@ -128,18 +128,18 @@ test('HTTP：预览不写盘；导入预设不打乱她的名字和外形', asyn
   t.after(() => inst.close());
   const get = async (route) => (await fetch(inst.url + route)).json();
   const before = (await get('/api/persona')).persona;
-  const preview = await get('/api/persona/preset?id=persona-v1');
+  const preview = await get('/api/persona/preset?id=persona-standard');
   assert.ok(!('name' in preview.patch), '预览里不能带名字');
   assert.equal((await get('/api/persona')).persona.sourcePreset, before.sourcePreset, '预览不能写盘');
   const applied = await (await fetch(inst.url + '/api/persona/preset', {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: 'persona-v1' }) })).json();
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: 'persona-standard' }) })).json();
   assert.equal(applied.persona.name, before.name, '导入预设不能把她改名成预设标题');
   assert.equal(applied.persona.appearance, before.appearance, '外形不能丢');
 });
-test('三个人设预设的差异确实在 customPrompt 上（都写了内容且互不相同）', () => {
+test('各版人设预设的差异确实在 customPrompt 上（都写了内容且互不相同）', () => {
   const dir = path.join(root, 'personas');
   const seen = new Map();
-  for (const f of fs.readdirSync(dir).filter((n) => /^persona-v\d+\.json$/i.test(n))) {
+  for (const f of fs.readdirSync(dir).filter((n) => /^persona-.*\.json$/i.test(n))) {
     const data = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8').replace(/^\uFEFF/, ''));
     const cp = String(data.customPrompt || '');
     assert.ok(cp.length > 200, f + ' 的 customPrompt 太短，等于没有');

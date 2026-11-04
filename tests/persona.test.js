@@ -235,18 +235,18 @@ test('吵架大赛预设存在，且能切过去（火力全开但不碰四条�
   const root = fs2.mkdtempSync(path2.join(require('node:os').tmpdir(), 'whale-fight-'));
   fs2.writeFileSync(path2.join(root, 'config.json'), JSON.stringify({ server: { port: 0, openBrowser: false }, watchConfig: false, log: { level: 'error' } }));
   fs2.mkdirSync(path2.join(root, 'personas'), { recursive: true });
-  const presetSrc = path2.resolve(__dirname, '..', 'personas', 'persona-v4-fight.json');
-  fs2.copyFileSync(presetSrc, path2.join(root, 'personas', 'persona-v4-fight.json'));
+  const presetSrc = path2.resolve(__dirname, '..', 'personas', 'persona-fight.json');
+  fs2.copyFileSync(presetSrc, path2.join(root, 'personas', 'persona-fight.json'));
 
   const inst = await startServer({ root, env: { WHALE_LOG_FILE: '' }, port: 0, openBrowser: false });
   try {
     const list = await (await fetch(`${inst.url}/api/persona/presets`)).json();
-    assert.ok(list.presets.some((p) => p.id === 'persona-v4-fight'), '预设要出现在列表里');
+    assert.ok(list.presets.some((p) => p.id === 'persona-fight'), '预设要出现在列表里');
     const applied = await (
       await fetch(`${inst.url}/api/persona/preset`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', origin: inst.url },
-        body: JSON.stringify({ id: 'persona-v4-fight' }),
+        body: JSON.stringify({ id: 'persona-fight' }),
       })
     ).json();
     assert.equal(applied.ok, true, '要能切过去');
@@ -269,7 +269,7 @@ test('吵架大赛预设存在，且能切过去（火力全开但不碰四条�
 
 test('吵架大赛模式用加辣回怼库，普通模式不受影响', () => {
   const persona = require('../src/persona');
-  const fightCfg = { persona: { sourcePreset: 'persona-v4-fight' } };
+  const fightCfg = { persona: { sourcePreset: 'persona-fight' } };
   const normalCfg = { persona: { sourcePreset: 'persona-v3' } };
   const fightLines = [];
   const normalLines = [];
@@ -291,14 +291,14 @@ test('吵架预设支持「一句话一条」：maxBubbles 会写进 config.chat
   const root = fs2.mkdtempSync(path2.join(os2.tmpdir(), 'whale-bubble-'));
   fs2.writeFileSync(path2.join(root, 'config.json'), JSON.stringify({ server: { port: 0, openBrowser: false }, watchConfig: false, log: { level: 'error' } }));
   fs2.mkdirSync(path2.join(root, 'personas'), { recursive: true });
-  fs2.copyFileSync(path2.resolve(__dirname, '..', 'personas', 'persona-v4-fight.json'), path2.join(root, 'personas', 'persona-v4-fight.json'));
+  fs2.copyFileSync(path2.resolve(__dirname, '..', 'personas', 'persona-fight.json'), path2.join(root, 'personas', 'persona-fight.json'));
   const inst = await startServer({ root, env: { WHALE_LOG_FILE: '' }, port: 0, openBrowser: false });
   try {
     const applied = await (
       await fetch(`${inst.url}/api/persona/preset`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', origin: inst.url },
-        body: JSON.stringify({ id: 'persona-v4-fight' }),
+        body: JSON.stringify({ id: 'persona-fight' }),
       })
     ).json();
     assert.equal(applied.ok, true);

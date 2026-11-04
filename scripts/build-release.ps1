@@ -52,7 +52,7 @@ if (Test-Path $publishedLauncher) {
 }
 
 # 本地活动用的东西不进包：吵架大赛预设（避免别人一下载就拿去开骂）
-$localOnly = @('personas\persona-v4-fight.json', 'resources\clapback-fight.txt')
+$localOnly = @('personas\persona-fight.json', 'personas\persona-tieba.json', 'resources\clapback-fight.txt')
 foreach ($rel in $localOnly) {
   $p = Join-Path $stage $rel
   if (Test-Path $p) {

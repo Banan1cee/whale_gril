@@ -20,7 +20,7 @@ public sealed class AutoVoiceSettings
     public string Device { get; set; } = "";
     public string Instructions { get; set; } = "";
     public string RecordingHotkey { get; set; } = "Ctrl+Alt";
-    public double SynthTimeoutSec { get; set; } = 20;
+    public double SynthTimeoutSec { get; set; } = 85;
     public static AutoVoiceSettings Load(string root) => JsonSerializer.Deserialize<AutoVoiceSettings>(File.ReadAllText(Path.Combine(root,"data","voice-send.json")));
     public static bool IsEnabled(string root) { try { return Load(root)?.Enabled == true; } catch { return false; } }
     public static void CancelJobs(string root)
@@ -63,7 +63,7 @@ public static class AutoVoiceWorker
             if(string.IsNullOrWhiteSpace(settings.Device))throw new Exception("尚未选择虚拟声卡");
             var shortcut=RecordingShortcut.Parse(settings.RecordingHotkey);
             var key=BreezeSpeech.LoadKey(Path.Combine(root,"data","voice-send-breeze.key"));
-            double seconds=double.IsFinite(settings.SynthTimeoutSec)?Math.Clamp(settings.SynthTimeoutSec,5,90):20;
+            double seconds=double.IsFinite(settings.SynthTimeoutSec)?Math.Clamp(settings.SynthTimeoutSec,5,90):85;
             await BreezeSpeech.Generate(key,settings.Model,settings.Voice,job.Text,settings.Instructions,audio,cancel.Token,metrics,TimeSpan.FromSeconds(seconds));
             File.WriteAllText(path+".ready","ready");
             var deadline=DateTime.UtcNow.AddSeconds(25);

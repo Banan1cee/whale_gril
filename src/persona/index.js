@@ -200,7 +200,7 @@ function readClapPairs(file) {
   }
 }
 
-/** 吵架大赛专用加辣库（只在 persona-v4-fight 时加载） */
+/** 吵架大赛专用加辣库（只在 persona-fight / 旧名 persona-v4-fight 时加载） */
 function clapbackFightPairs() {
   if (_clapFightCache) return _clapFightCache;
   const path = require('path');
@@ -208,10 +208,10 @@ function clapbackFightPairs() {
   return _clapFightCache;
 }
 
-/** 吵架大赛模式：预设是 persona-v4-fight 时开 */
+/** 吵架大赛模式：预设是 persona-fight（旧名 persona-v4-fight）时开 */
 function fightModeOn(config) {
   const src = String((config && config.persona && config.persona.sourcePreset) || '');
-  return src === 'persona-v4-fight';
+  return src === 'persona-fight' || src === 'persona-v4-fight';
 }
 
 function clapbackPairs() {
