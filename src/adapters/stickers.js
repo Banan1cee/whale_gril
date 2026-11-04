@@ -640,6 +640,73 @@ function writeExtraCategories(config, root, list) {
   return clean;
 }
 
+// 用户明确「忽略」的目录名，不再自动登记（防止空目录/临时目录污染提示词）
+const IGNORE_FILE = 'sticker-categories.ignore.json';
+
+function readIgnored(config, root) {
+  try {
+    const raw = JSON.parse(fs.readFileSync(path.join(path.dirname(stickerDir(config, root)), IGNORE_FILE), 'utf8'));
+    return Array.isArray(raw) ? raw.map((v) => cleanCategoryLabel(v)).filter(Boolean) : [];
+  } catch { return []; }
+}
+
+function writeIgnored(config, root, labels) {
+  const clean = [...new Set((Array.isArray(labels) ? labels : []).map((v) => cleanCategoryLabel(v)).filter(Boolean))];
+  const file = path.join(path.dirname(stickerDir(config, root)), IGNORE_FILE);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file + '.tmp', JSON.stringify(clean, null, 2) + '\n', 'utf8');
+  fs.renameSync(file + '.tmp', file);
+  return clean;
+}
+
+/**
+ * 自动发现「用户自己建的分类目录」（隐形分类 bug 的修复）。
+ *
+ * 原则：**目录是事实来源，JSON 只是缓存**。以前只认 sticker-categories.json 里
+ * 登记过的分类，用户在 data/stickers 里新建「恼怒」放图，页签不出现、模型不知道、
+ * [[sticker:恼怒]] 被拒、图彻底收不到。
+ *
+ * 规则（和交接文档一致）：
+ *   - 只看一级子目录，不递归；
+ *   - 排除内置三类和所有旧别名（通用/其他/撒娇/cute/happy/嫌弃/meh/敷衍/bored…）；
+ *   - 目录要过 safeScanDir（拒链接 / 目录联接 / 非目录）；
+ *   - 目录里至少有一张能用的图才算分类，空目录不登记（防「新建文件夹」污染提示词）；
+ *   - 名字走 cleanCategoryLabel（去非法字符、截 20 字），和已登记的重名按「已存在」处理。
+ */
+function discoverCategories(config, root) {
+  if (!isOn(config)) return [];
+  const dir = stickerDir(config, root);
+  let entries;
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return []; }
+  const reserved = new Set([...Object.values(EMOTIONS), ...Object.values(FOLDERS).flat(), GENERIC]);
+  const ignored = new Set(readIgnored(config, root));
+  const found = [];
+  for (const ent of entries) {
+    if (!ent.isDirectory() || ent.isSymbolicLink()) continue;
+    if (reserved.has(ent.name)) continue;
+    const label = cleanCategoryLabel(ent.name);
+    if (!label || reserved.has(label) || ignored.has(label) || found.includes(label)) continue;
+    const full = path.join(dir, ent.name);
+    if (!safeScanDir(full, dir)) continue;
+    if (!listImages(full, { root: dir, recursive: false }).length) continue;   // 空目录不登记
+    found.push(label);
+  }
+  return found;
+}
+
+/** 把新发现的分类补进 sticker-categories.json（幂等：已有的 chance / 顺序都不动） */
+function syncDiscoveredCategories(config, root) {
+  const found = discoverCategories(config, root);
+  if (!found.length) return { added: [], categories: readExtraCategories(config, root) };
+  const current = readExtraCategories(config, root);
+  const known = new Set(current.map((c) => cleanCategoryLabel(c && c.label)));
+  const added = found.filter((label) => !known.has(label));
+  if (!added.length) return { added: [], categories: current };
+  const next = current.concat(added.map((label) => ({ label, chance: 0.25 })));
+  writeExtraCategories(config, root, next);
+  return { added, categories: readExtraCategories(config, root) };
+}
+
 function isOn(config) { return features.isOn(config, 'stickers'); }
 function choose(pool, rng = Math.random, recent = []) {
   const fresh = pool.filter((f) => !recent.includes(f));
@@ -915,7 +982,7 @@ function upload(config, root, emotion, files) {
   invalidateScan(target);
   return uploaded;
 }
-module.exports = { EMOTIONS, EMOTION_LABELS, EXTRA_PREFIX, cleanCategoryLabel, extraKey, hasCategory, readExtraCategories, writeExtraCategories, categoryFile, normalizeEmotion, categoryFromName, resolveCategory, SYNONYMS, promptCategories, GENERIC, EXTS, MAX_FILE_BYTES, MAX_UPLOAD_BYTES, MAX_UPLOAD_FILES,
+module.exports = { EMOTIONS, EMOTION_LABELS, EXTRA_PREFIX, cleanCategoryLabel, extraKey, hasCategory, readExtraCategories, writeExtraCategories, categoryFile, discoverCategories, syncDiscoveredCategories, readIgnored, writeIgnored, normalizeEmotion, categoryFromName, resolveCategory, SYNONYMS, promptCategories, GENERIC, EXTS, MAX_FILE_BYTES, MAX_UPLOAD_BYTES, MAX_UPLOAD_FILES,
   hasEmotion, resolveImage, safeDirectory, migrateLegacy, migrateLegacyAsync, ensureBuiltinDirs, stickerDir, regularFile, listImages, listImagesAsync, categoryImages, categoryImagesAsync, categoryItems, categoryItemsAsync, categoryDir, targetForOpen, imagesFor, anyImages, isOn,
   invalidateScan, clearScanCache, choose, pick, isStickerRequest, imageType, upload,
   isSeriousText, isLivelyText, SERIOUS_WINDOW_MS, SERIOUS_TURNS,

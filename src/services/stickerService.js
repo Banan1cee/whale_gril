@@ -289,11 +289,13 @@ class StickerService {
     const dir = stickers.stickerDir(this.config, this.config.root);
     // 用户手滑删了「开心」文件夹：读状态时顺手补回来（只 stat / mkdir，不扫库）
     this.restoreBuiltinDirs();
+    this.ensureDiscovered();   // 自建目录自动登记（3 秒节流，只读一次顶层目录）
     const list = (key, label, extra) => {
       // items 带上 path / version：启动器直接用 HTTP 就能画缩略图，
       // 不用再为每次刷新 spawn 一个 node 子进程（实测 630ms/次）
       const items = stickers.categoryItems(dir, key);
       return { key, label, extra: Boolean(extra), files: items.map((item) => item.name), items,
+        discovered: Boolean(this.discovered && this.discovered.includes(label)),
         count: items.length };
     };
     const emotions = Object.keys(stickers.EMOTIONS).map((key) => list(key, stickers.EMOTIONS[key], false));
@@ -331,9 +333,11 @@ class StickerService {
       return hit;
     }
     this.restoreBuiltinDirs();
+    this.ensureDiscovered();   // 自建目录自动登记（3 秒节流）
     const build = async (key, label, extra) => {
       const items = await stickers.categoryItemsAsync(dir, key);
       return { key, label, extra: Boolean(extra), files: items.map((item) => item.name), items,
+        discovered: Boolean(this.discovered && this.discovered.includes(label)),
         count: items.length };
     };
     const emotions = [];
@@ -363,6 +367,27 @@ class StickerService {
   /** 图库内容变了（上传/删除/改分类/维护结束）→ 丢掉 1.5s 的结果缓存 */
   invalidateStatus() {
     this._statusCache = { at: 0, key: '', value: null };
+  }
+
+  /**
+   * 隐形分类修复：扫一眼 data/stickers 的一级子目录，把「用户自己建、还没登记」的
+   * 分类补进 sticker-categories.json。只做一次顶层 readdir，3 秒内不重复。
+   * 这样用户在资源管理器里新建「恼怒」丢几张图，几十秒内页签就会出现、模型也能用。
+   */
+  ensureDiscovered() {
+    if (!stickers.isOn(this.config)) return [];
+    const now = this.now();
+    if (now - (this._discoveredAt || 0) < 3000) return [];
+    this._discoveredAt = now;
+    try {
+      const result = stickers.syncDiscoveredCategories(this.config, this.config.root);
+      if (result.added.length) {
+        this.discovered = (this.discovered || []).concat(result.added);
+        this.invalidateStatus();
+        if (this.logger) this.logger.info('表情包发现新分类并已登记：' + result.added.join('、'));
+      }
+      return result.added;
+    } catch { return []; }
   }
   queueStatus() {
     return { pending: [...this.jobs.values()].filter((j) => ACTIVE.has(j.status)).length,
