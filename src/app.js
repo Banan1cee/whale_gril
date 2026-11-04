@@ -12,6 +12,7 @@ const { migrateOwnerName } = require('./infra/ownerName');
 const { watchConfigFile } = require('./infra/configPatch');
 const features = require('./infra/features');
 const configSchema = require('./infra/configSchema');
+const { describeError } = require('./infra/errors');
 const { Store } = require('./memory/store');
 const memoryBackup = require('./memory/backup');
 const mediaCache = require('./adapters/mediaCache');
@@ -77,14 +78,14 @@ function createRuntime({ root = path.resolve(__dirname, '..'), env = process.env
       logger.info(`记忆清理：归档 ${swept.archived} 条、淘汰 ${swept.evicted} 条（归档共 ${store.archiveCount()} 条）`);
     }
   } catch (err) {
-    logger.warn('记忆清理失败（不影响使用）：' + ((err && err.message) || err));
+    logger.warn('记忆清理失败（不影响使用）：' + describeError(err));
   }
   // 每次启动留一份记忆快照：换目录/重装/误点重置都能捞回来
   try {
     const snap = features.isOn(config, 'memorySnapshot') ? memoryBackup.writeSnapshot(root, 'startup') : null;
     if (snap) logger.info('记忆快照：' + snap);
   } catch (err) {
-    logger.warn('记忆快照失败（不影响使用）：' + err.message);
+    logger.warn('记忆快照失败（不影响使用）：' + describeError(err));
   }
   // 媒体缓存（图片/表情包/语音 wav）永不清理会越堆越大，启动时清一次
   try {
@@ -111,7 +112,7 @@ function createRuntime({ root = path.resolve(__dirname, '..'), env = process.env
         const file = memoryBackup.writeSnapshot(root, 'cron');
         if (file) logger.info('记忆快照（定时）：' + file);
       } catch (err) {
-        logger.warn('定时记忆快照失败：' + err.message);
+        logger.warn('定时记忆快照失败：' + describeError(err));
       }
     }, 30 * 60 * 1000);
     if (timer.unref) timer.unref();
@@ -178,9 +179,9 @@ function createRuntime({ root = path.resolve(__dirname, '..'), env = process.env
           logger.info(`记忆启动恢复：${r.chats} 个聊天，补写 ${r.episodesClosed || 0} 个 episode`);
         }
       })
-      .catch((err) => logger.warn('记忆启动恢复失败（不影响聊天）：' + ((err && err.message) || err)));
+      .catch((err) => logger.warn('记忆启动恢复失败（不影响聊天）：' + describeError(err)));
   } catch (err) {
-    logger.warn('记忆启动恢复失败（不影响聊天）：' + ((err && err.message) || err));
+    logger.warn('记忆启动恢复失败（不影响聊天）：' + describeError(err));
   }
   runtime.gateways = createGateways({ config, bot: runtime.bot, logger: child('gateway') });
   watchConfigFile(runtime);

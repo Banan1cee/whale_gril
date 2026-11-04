@@ -16,6 +16,10 @@
     "model": "deepseek-flash",
     "temperature": 0.95,
     "maxTokens": 700,
+    "_thinking说明": "深度思考：false（默认）= 关掉思考直接出字，快且省；true = 先想再答。思考 token 也计入 max_tokens，所以开着的时候聊天预算抬到 chatThinkingTokens",
+    "thinking": false,
+    "chatThinkingTokens": 2000,
+    "thinkingMaxTokens": 5000,
     "timeoutMs": 45000,
     "frequencyPenalty": 0,
     "presencePenalty": 0
@@ -197,9 +201,10 @@
     "memorySnapshot": true
   },
   "sticker": {
-    "_说明": "表情包（实验性）：总闸在 features.stickers。文件夹 data/stickers/<傲娇|炸毛|开心|自定义>/（中英文名都认）。发哪一类由模型在回复里用 [[sticker:分类名]] 决定，程序不猜情绪、不按概率配图；分类没有图或名字不对就不发。demandChance 只决定“这一轮要不要在尾部提醒她带一张”（0=不提醒，0.7≈五到六成轮次，1=每轮提醒），最终发不发仍由模型判断。控制台可以上传/删除/预览缩略图。",
+    "_说明": "表情包（实验性）：总闸在 features.stickers。文件夹 data/stickers/<傲娇|炸毛|开心|自定义>/（中英文名都认）。发哪一类优先由模型在回复里用 [[sticker:分类名]] 决定，程序不猜情绪、不按概率配图；分类没有图或名字不对就不发。demandChance 决定“这一轮要不要在尾部提醒她带一张”（0=不提醒，0.7≈五到六成轮次，1=每轮提醒）；ensureSend=true 时，命中提醒的轮次即使模型没写标记也由程序补一张（1.0 + 开启才约等于每轮都发，难过/求助除外）。控制台可以上传/删除/预览缩略图。",
     "dir": "data/stickers",
     "testChat": "文件传输助手",
-    "demandChance": 0.7
+    "demandChance": 0.7,
+    "ensureSend": false
   }
 }

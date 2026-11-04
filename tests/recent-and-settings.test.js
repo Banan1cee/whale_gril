@@ -44,6 +44,32 @@ test('POST /api/settings 能把 group.cooldownSec 写进 config.json', async () 
   }
 });
 
+test('POST /api/settings 的「深度思考」能落盘并回显', async () => {
+  const { app, dir } = await boot();
+  try {
+    const post = (thinking) => fetch(app.url + '/api/settings', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ thinking }),
+    });
+
+    assert.equal((await post(true)).status, 200);
+    let settings = await (await fetch(app.url + '/api/settings')).json();
+    assert.equal(settings.thinking, true, 'GET 要回显打开状态');
+    let saved = JSON.parse(fs.readFileSync(path.join(dir, 'data', 'settings.json'), 'utf8'));
+    assert.equal(saved.thinking, true, '必须落进 data/settings.json');
+
+    assert.equal((await post(false)).status, 200);
+    settings = await (await fetch(app.url + '/api/settings')).json();
+    assert.equal(settings.thinking, false, '关掉也要能回显');
+    saved = JSON.parse(fs.readFileSync(path.join(dir, 'data', 'settings.json'), 'utf8'));
+    assert.equal(saved.thinking, false);
+  } finally {
+    await app.close();
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
+  }
+});
+
 test('GET /api/recent 返回最近消息（时间倒序、带 who/text）', async () => {
   const { app, dir } = await boot();
   try {

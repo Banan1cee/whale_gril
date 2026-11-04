@@ -2,6 +2,7 @@
 
 const { json, readBody, sseInit, sseSend, sanitizeId } = require('../http/protocol');
 const { LlmError } = require('../llm/client');
+const { describeError } = require('../infra/errors');
 
 /* ---------------- 网页聊天（SSE 流式） ---------------- */
 
@@ -92,7 +93,7 @@ async function handleChat(runtime, req, res) {
 
   if (failed) {
     const friendly = failed instanceof LlmError ? failed.userMessage : '呜…深海线路打结了，等会儿再来找人家嘛 (｡•́︿•̀｡)';
-    logger.error('生成失败：' + (failed.message || failed));
+    logger.error('生成失败：' + describeError(failed));
     bot.finalize(decision, friendly, { error: true });
     sseSend(res, { type: 'delta', text: full ? '\n' + friendly : friendly });
     sseSend(res, { type: 'done', text: (full + (full ? '\n' : '') + friendly).trim(), bubbles: [friendly], error: true, reason: 'llm_error' });

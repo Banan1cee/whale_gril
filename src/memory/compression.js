@@ -13,6 +13,7 @@
 const { LIMITS } = require('./constants');
 const { estimateTokens, messageBudgetTokens } = require('./tokens');
 const extractor = require('./extractor');
+const { describeError } = require('../infra/errors');
 
 const SUMMARY_SYSTEM = [
   '你在给一段聊天做摘要，供以后回忆用。只输出 JSON，不要解释。',
@@ -222,7 +223,7 @@ async function compressAsync(chat, { currentSeq = 0, now = Date.now(), llm = nul
     try {
       textValue = await llmSummary(chunk, llm);
     } catch (err) {
-      if (logger) logger.warn('摘要失败，原文保留、coverage 不前进：' + ((err && err.message) || err));
+      if (logger) logger.warn('摘要失败，原文保留、coverage 不前进：' + describeError(err));
       return { before, after: before, compressed: 0, chunks: 0, failed: true };
     }
     if (!textValue) {
@@ -258,7 +259,7 @@ async function prepareSoft(chat, { currentSeq = 0, llm = null, logger = null, no
     chat.pendingSummary = { fromSeq, toSeq, text: textValue, tokens: estimateTokens(textValue), at: now };
     return true;
   } catch (err) {
-    if (logger) logger.warn('预热摘要失败（不影响聊天）：' + ((err && err.message) || err));
+    if (logger) logger.warn('预热摘要失败（不影响聊天）：' + describeError(err));
     return false;
   }
 }

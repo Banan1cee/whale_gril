@@ -360,9 +360,31 @@ class StickerService {
     return { ...payload, ...queue };
   }
 
+  /** 表情包频率 / 必发：和 stickerLibraryLocal.js 的读法保持一致（离线在线看到同一个值） */
+  _demandSettings() {
+    const sticker = this.config.sticker || {};
+    const raw = Number(sticker.demandChance);
+    const chance = Number.isFinite(raw) ? Math.max(0, Math.min(1, raw)) : 0.7;
+    const ensure = [true, 1, 'true', '1', 'on', 'yes'].includes(
+      typeof sticker.ensureSend === 'string' ? sticker.ensureSend.toLowerCase() : sticker.ensureSend);
+    return { demandChance: chance, ensureSend: Boolean(ensure) };
+  }
+
+  /** 表情包频率 / 必发：和 stickerLibraryLocal.js 的读法保持一致（离线在线看到同一个值） */
+  _demandSettings() {
+    const sticker = this.config.sticker || {};
+    const raw = Number(sticker.demandChance);
+    const chance = Number.isFinite(raw) ? Math.max(0, Math.min(1, raw)) : 0.7;
+    const ensure = [true, 1, 'true', '1', 'on', 'yes'].includes(
+      typeof sticker.ensureSend === 'string' ? sticker.ensureSend.toLowerCase() : sticker.ensureSend);
+    return { demandChance: chance, ensureSend: Boolean(ensure) };
+  }
+
   _statusPayload(dir, emotions, queue) {
     return { ok: true, enabled: true, generation: this.generation, dir, migration: this.migration,
       configuredDir: this.config.sticker?.dir || '',
+      ...this._demandSettings(),
+      ...this._demandSettings(),
       maintenance: { ...this.maintenance, errors: this.maintenance.errors.slice(0, 5) },
       testChat: this.config.sticker?.testChat || '文件传输助手', emotions, ...queue };
   }

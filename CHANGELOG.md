@@ -24,13 +24,59 @@ server.listen() 之前。实测 245 张 611MB 的库要让内核 **11.5 秒**不
 - **R5 自建分类**：data/stickers 一级子目录里有图、又不是内置/旧别名，就自动登记
   （幂等、保留已有 chance；sticker-categories.ignore.json 可拉黑），页签立刻出现、模型可 [[sticker:猫猫]]。
 - **步骤 7 打开目标目录**：POST /api/stickers/open-folder 支持 {emotion} / {emotion,name}，
-  返回 oot|folder|select；启动器「打开分类文件夹」、单图右键「在文件夹中显示」、
+  返回 
+oot|folder|select；启动器「打开分类文件夹」、单图右键「在文件夹中显示」、
   调试台每个情绪框的「打开文件夹」都走它；内核不在时启动器本地拼路径自己开。
 
 测试新增 sticker-startup / sticker-status-cache / sticker-open-folder / sticker-discovery
 四组；sticker 相关 141 个用例全绿。
 
+## 未发布
+
+### 修复 · 思考 token 吃满预算导致「空泡泡」（episode 抽取 / 主回复）
+
+**现象：episode 抽取稳定退回规则兜底，日志只剩「咕噜…这次只吐出了个空泡泡」；关掉 episode 后主回复偶发整条空。**
+
+- 根因：思考模型把 `max_tokens`（被夹到 700）全用在 reasoning 上，`finish_reason=length`、`content` 为空。
+- 新增思考能力表 `thinkingPlan(provider, model)`：deepseek / qwen / glm / glm-5.3 / 混元 / kimi / minimax / mimo / step / gpt-5·O 系 / claude / gemini 各用实测有效的关/开写法。
+- 预算分档：关思考 `min(want,700)`；开思考聊天 `min(max(want,2000),6000)`；后台任务（episode 抽取传 1200）不吃 700 夹取；关不干净的模型按 `thinkingMaxTokens`（5000）。
+- 空响应阶梯：思考吃满 → 切关思考 + 原预算重试；关不掉 → 加大预算；仍空才抛，`detail` 带 `finish/usage/reasoning_tokens`。
+- 自校准 + 自适应降级：思考占比 >70% 或空响应撞长度 → 该模型天花板 ×1.5（封顶 8000）；400/422 参数被拒按候选表换写法，生效档位写 `data/thinking-caps.json`。
+- 思考隔离：新增 `pickText`（content 数组拼接）与 `stripThinking`（剥 ` thinking`/`<thinking>`/`<reasoning>`/开头 `Thinking:`），reasoning 只诊断、永不进正文。
+- 日志：`episode 抽取失败（code=… detail=…）`；`parseEpisode` 返回 null 时 warn「不是可解析 JSON（长度 N，疑似截断）」。
+- 设置：网页「深度思考」开关 + `deepseek.thinking/chatThinkingTokens/thinkingMaxTokens`。
+
+### 改进 · 记忆窗口改成「索引行常驻 + 详情按需展开」
+
+**现象：一条 400 字记忆吃掉 44% 窗口，别人的事被挤掉；`hardCut` 还会把最后一条切成半句。**
+
+- 每条事件固定一行索引（`[日期] 标题：首句`，≤60 字）；`_score`/`importance ≥ 0.8` 才额外展开详情（最多 2 条、每条 ≤200 字）。
+- 单条配额 = 记忆预算 25%，超了只留索引不展开；挤占顺序：低 importance 索引 → 详情 → 中 importance → 高 importance。
+- 硬裁前先整条丢（人物卡从最不重要的一条开始，各留 1 条），`importance ≥ 0.8` 的索引行不参与丢弃。
+- 兜底：单轮输入超硬上限先丢记忆块/关系块重算；`appendMessage`/`checkpoint` 写库失败只报 error，回复照常发出。
+
+### 改进 · 启动器设置页加「深度思考」开关
+
+**以前启动器「聊天」页没有这个开关；「语音」页签下那个 `deepseek.thinking` 还会被网页保存的 `settings.thinking` 盖掉，在 exe 里改了也不生效。**
+
+- 「设置 → 模型 → 聊天」采样区新增「深度思考」勾选，和网页设置共用 `data/settings.json` 的 `thinking`
+- 移除「语音」页签里旧的「思考（打开后会减慢说话速度）」配置项，避免两个开关互相打架
+- EXE 重新发布：`WhaleLauncher.exe` / `launcher/publish/WhaleLauncher.exe`
+- 新增 `AGENTS.md`：写明「说 UI 默认改 EXE，不是 WebUI」，省得每次口头交代
+
 ## 4.0.1
+
+### 改进 · 表情包频率进启动器 + 必发模式
+
+**以前只有 config.json / 调试台能调频率；而且把 demandChance 拉到 1 也不会真的每轮都发，因为模型仍可能不写 [[sticker:分类]]。**
+
+- 启动器「表情包」页新增频率滑块（0–100%）和「没写标记也补一张（必发）」勾选，保存走 `/api/config`，热生效
+- 新增 `sticker.ensureSend`（默认关）：命中提醒的轮次，模型没写标记时由程序按回复语气补一张（炸毛/傲娇/开心，挑不到用开心）
+- 1.0 + 必发才约等于「每轮都发」；难过/求助的严肃窗口仍然不发，明确索要仍然 100%
+- 图库空/功能关闭/内核未启动时频率控件禁用；调试台补上 ensureSend 的中文字段说明
+- `stickerLibraryLocal.js` 库存接口带出 demandChance / ensureSend，启动器不用先起服务也能看到当前值
+- 测试：`sticker-demand.test.js` 增加“必发按语气补图、没命中不补”一条
+- 重新发布 `WhaleLauncher.exe`
 
 ### 兼容 · 4.0 能直接读 3.x 旧记忆（含同 chat 合并）
 

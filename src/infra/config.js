@@ -138,8 +138,12 @@ const DEFAULT_CONFIG = {
     maxTokens: 700,
     timeoutMs: 45000,
     // 通义千问这类模型：false = 关掉「思考」直接出字（快，默认）；
-    // true = 先想一遍再回答（慢 1~3 秒，难问题更稳）。启动器「模型 → 语音」页有开关。
+    // true = 先想一遍再回答（慢 1~3 秒，难问题更稳）。网页设置和启动器共用这一个开关。
     thinking: false,
+    // 开思考时的聊天预算（关思考只给 700：思考 token 也计入 max_tokens，给多了会被思考吃光）
+    chatThinkingTokens: 2000,
+    // 关不掉思考的模型（gpt-5 / O 系）直接按这个预算给
+    thinkingMaxTokens: 5000,
   },
   persona: {
     name: '鲸鲸',
@@ -184,9 +188,12 @@ const DEFAULT_CONFIG = {
     // 三类内置 + 自定义分类：发哪一类仍由模型在回复里用 [[sticker:分类]] 决定，
     // 程序不猜情绪、不按概率配图。demandChance 只决定“这一轮要不要在尾部提醒她带一张”，
     // 0 = 完全不提醒（只靠模型自觉），0.7 ≈ 五到六成轮次提醒，1 = 每轮都提醒。
+    // ensureSend=true 时，命中提醒的轮次即使模型没写标记也由程序补一张（按回复语气选分类），
+    // 这样 1.0 才约等于“每轮都发”；难过/求助的严肃窗口仍然不发。
     // 自定义分类存在 data/sticker-categories.json（不进 config，避免被表单转成字符串）。
     testChat: '文件传输助手', // 控制台「发送测试表情包」默认发到哪
     demandChance: 0.7,
+    ensureSend: false,
   },
   // 图片理解：默认智谱 GLM-4V-Flash（免费）
   features: {
@@ -575,6 +582,13 @@ function resolveRuntime(cfg) {
   }
   const local = isLocalUrl(baseUrl);
   const needsKey = provider === 'ollama' ? false : preset.needsKey && !local;
+  // 深度思考：网页设置（data/settings.json）优先，其次 config.json 的 deepseek.thinking，默认关。
+  // 思考 token 计入 max_tokens，默认开会让 700 的输出预算全被思考吃掉（空响应根因）。
+  const thinking = typeof settings.thinking === 'boolean'
+    ? settings.thinking
+    : typeof legacy.thinking === 'boolean'
+      ? legacy.thinking
+      : false;
   const explicitMock = typeof settings.mock === 'boolean' ? settings.mock : null;
   // 「演示模式」只是「没有 Key 时的兜底」，不能反过来把本来能用的接口挡在门外：
   // 目标服务不需要 Key（本地 Ollama / 本机 / 内网自建）而且地址已经填好，就一律当真接入。
@@ -595,6 +609,7 @@ function resolveRuntime(cfg) {
     baseUrl,
     model,
     temperature,
+    thinking,
     mock,
     needsKey,
     isLocal: local,

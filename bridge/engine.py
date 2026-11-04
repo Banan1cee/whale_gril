@@ -399,6 +399,33 @@ _THROTTLE_LOG = {}
 CONN_STATE = {"ok": None}
 
 
+def fix_garbled(text):
+    """把「GBK 字节被当成 Latin-1 解出来」的乱码还原（ÏÂÎçºÃÑ½ → 下午好呀）。
+
+    微信 4.x 有的版本/群把正文按 GBK 存，读到内存时却被当成 Latin-1，
+    于是每条消息都变成一串西欧字符，模型只能对着乱码回话。
+    正常文本原样返回，不做任何改动。
+    """
+    if not text:
+        return text
+    high = sum(1 for ch in text if 0x80 <= ord(ch) <= 0xFF)
+    cjk = sum(1 for ch in text if 0x4E00 <= ord(ch) <= 0x9FFF)
+    if high < 2 or cjk * 2 >= high:
+        return text
+    try:
+        raw = text.encode("latin-1")
+    except UnicodeEncodeError:
+        return text
+    for enc in ("gbk", "utf-8"):
+        try:
+            fixed = raw.decode(enc)
+        except UnicodeDecodeError:
+            continue
+        if sum(1 for ch in fixed if 0x4E00 <= ord(ch) <= 0x9FFF) > cjk:
+            return fixed
+    return text
+
+
 def log_throttled(key, *args, ttl=600, emit=None):
     now = time.time()
     last = _THROTTLE_LOG.get(key) or 0
@@ -3753,7 +3780,7 @@ def main():
             if sender == me:
                 return  # 自己发的
             mtype = msg.get("type") or ""
-            content = (msg.get("content") or "").strip()
+            content = fix_garbled((msg.get("content") or "").strip())
             # 有的微信版本把表情包报成「图片」，正文里还是 <emoji md5=...>：
             # 这种一律走表情包识别链路，绝不能当普通图片去下载（下载器找不到表情文件）。
             is_emoji = mtype in ("表情", "动画表情") or (mtype == "图片" and "<emoji" in content)
@@ -3806,7 +3833,7 @@ def main():
                     return
             # 图片/语音/表情的 content 已经被上面替换成描述，别再重置回原始 XML
             if mtype == "文本":
-                content = (msg.get("content") or "").strip()
+                content = fix_garbled((msg.get("content") or "").strip())
                 # 微信 4.2 的群消息正文前带着发送者前缀（"wxid_xxx:\n正文"）。
                 # 不剥掉的话：模型看到的是一串 wxid、@ 判定和重复检查也跟着错，
                 # 而且私聊没有这个前缀 —— 表现就是「私聊正常、群聊怪怪的」。
@@ -3865,7 +3892,7 @@ def main():
                             continue
                         if (m.get("sender_username") or "") != sender:
                             continue
-                        prev = (m.get("content") or "").strip()
+                        prev = fix_garbled((m.get("content") or "").strip())
                         prev = __import__("re").sub(r"^[A-Za-z0-9_\-]{4,}:\s*", "", prev).strip()
                         if prev and not any(a in prev for a in aliases):
                             content = prev
@@ -4064,7 +4091,7 @@ def main():
         parts = []
         ids = []
         for m in run:
-            text = (m.get("content") or "").strip()
+            text = fix_garbled((m.get("content") or "").strip())
             if username.endswith("@chatroom"):
                 text = _GROUP_SENDER_PREFIX_RE.sub("", text, count=1).strip()
             if text:

@@ -31,6 +31,10 @@ function getSettings(runtime) {
     model: llm.model,
     baseUrl: llm.baseUrl,
     temperature: llm.temperature,
+    // 深度思考开关 + 两档预算：网页设置里要能回显，日志里要能对上实际发的 max_tokens
+    thinking: llm.thinking === true,
+    chatThinkingTokens: Number(llm.chatThinkingTokens) || 2000,
+    thinkingMaxTokens: Number(llm.thinkingMaxTokens) || 5000,
     keyMasked: maskKey(rt.apiKey),
     hasKey: Boolean(rt.apiKey),
     userName: String(saved.userName || config.persona.ownerName || ''),
@@ -262,6 +266,9 @@ async function applySettings(runtime, body) {
   if (typeof body.temperature === 'number' && Number.isFinite(body.temperature)) {
     patch.temperature = Math.max(0, Math.min(2, body.temperature));
   }
+  // 深度思考：只接受布尔值（网页开关）；落进 data/settings.json，resolveRuntime 优先读它。
+  // 思考 token 计入 max_tokens，开着会明显变慢、变贵，所以默认关。
+  if (typeof body.thinking === 'boolean') patch.thinking = body.thinking;
   if (body.group && typeof body.group === 'object') {
     // 以前只改内存里的 config.group，没落盘 —— 重启就变回旧值（用户看到「设置无效」）。
     // 统一走 config.json，和启动器设置页写的是同一份数据。
@@ -315,6 +322,7 @@ async function applySettings(runtime, body) {
       model: llm.model,
       baseUrl: llm.baseUrl,
       keyMasked: maskKey(resolveRuntime(config).apiKey),
+      thinking: llm.thinking === true,
       userName: String(loadSettings(config).userName || ''),
       // 保存后前端立刻能把「看图 Key 已存」显示出来
       vision: vision.status(config),

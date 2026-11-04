@@ -10,6 +10,7 @@
  */
 const personCard = require('./personCard');
 const { LIMITS } = require('./constants');
+const { describeError } = require('../infra/errors');
 
 const QUESTION_RE = /[?？]|(?:吗|呢|吧)\s*$|如果|要是|假如|假设|开玩笑|哈哈|呵呵|不是吧/;
 const THIRD_PERSON_RE = /^(?:他|她|他们|她们|别人|人家|我朋友|我同事|我同学|我妈|我爸|我哥|我姐|我弟|我妹|我家那位)/;
@@ -153,6 +154,18 @@ function transcript(messages) {
     .slice(0, 8000);
 }
 
+/**
+ * 不是 JSON 时给日志一个「为什么」：长度 + 花括号配对数。
+ * 不打印原文（那是模型写出来的记忆内容），只看结构就能分清「截断」和「根本没给 JSON」。
+ */
+function describeRawShape(raw) {
+  const s = String(raw == null ? '' : raw);
+  const opens = (s.match(/\{/g) || []).length;
+  const closes = (s.match(/\}/g) || []).length;
+  const paired = opens > 0 && closes > 0 && s.indexOf('{') < s.lastIndexOf('}');
+  return `长度 ${s.length}，{×${opens} }×${closes}${paired ? '' : '，没有成对花括号'}`;
+}
+
 function parseEpisode(raw) {
   const textValue = String(raw || '');
   const start = textValue.indexOf('{');
@@ -268,10 +281,18 @@ async function extractEpisode({ messages, llm, speakers = [], logger = null, now
         role: 'user',
         content: `发言人：${speakerText}\n\n聊天记录：\n${transcript(messages)}`,
       }],
-      maxTokens: 900,
+      // 这是全流程最长最抽象的一次请求：思考 token 也计入 max_tokens，
+      // 700 会被思考吃光 → finish=length、content 为空。必须关思考 + 单独给预算。
+      maxTokens: 1200,
+      allowOverflow: true,
+      thinking: false,
     });
     const parsed = parseEpisode(raw);
-    if (!parsed) return fallback();
+    if (!parsed) {
+      // 以前静默退回规则兜底 / 只说「长度 N」，看不出是截断、还是模型压根没给 JSON
+      if (logger) logger.warn(`episode 抽取返回不是可解析 JSON（${describeRawShape(raw)}，疑似截断）`);
+      return fallback();
+    }
     // 只接受本 episode 里出现过的人；没写 uid 的按最后一个说话人归
     const lastUid = String((users[users.length - 1] || {}).uid || '');
     const fix = (item) => {
@@ -288,7 +309,14 @@ async function extractEpisode({ messages, llm, speakers = [], logger = null, now
     );
     return parsed;
   } catch (err) {
-    if (logger) logger.warn('episode 抽取失败，退回规则：' + ((err && err.message) || err));
+    // 日志要能回答「为什么失败」：模型是谁、错误类型、code/status、detail（结构证据）。
+    // 绝不能用 err.message —— LlmError 的 message 是「空泡泡」这种给用户看的话术。
+    if (logger) {
+      const modelTag = llm && (llm.provider || llm.model)
+        ? ` [${llm.provider || '?'}|${llm.model || '?'}]`
+        : '';
+      logger.warn(`episode 抽取失败${modelTag}（${describeError(err)}），退回规则兜底`);
+    }
     return fallback();
   }
 }

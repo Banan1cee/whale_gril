@@ -21,6 +21,7 @@ const budgetPlan = require('./budgetPlan');
 const relations = require('./relations');
 const { LIMITS, DAY_MS } = require('./constants');
 const { estimateTokens, estimateBudgetTokens } = require('./tokens');
+const { describeError } = require('../infra/errors');
 
 /* ------------------------------ 旧文件读取（兼容工具） ------------------------------ */
 
@@ -114,7 +115,7 @@ class Store {
       const result = migrate.migrateIfNeeded({ memoryDir: this.memoryDir, chatStore: this.chatStore, logger });
       if (result.migrated) this.chatStore.load();
     } catch (err) {
-      if (this.logger) this.logger.warn('旧记忆迁移失败（不影响新记忆）：' + ((err && err.message) || err));
+      if (this.logger) this.logger.warn('旧记忆迁移失败（不影响新记忆）：' + describeError(err));
     }
     this._syncSessions();
   }
@@ -270,7 +271,7 @@ class Store {
       }
     } catch (err) {
       if (err && err.code === 'MEMORY_CHAT_MISMATCH') throw err;
-      if (this.logger) this.logger.warn('自述抽取失败（不影响聊天）：' + ((err && err.message) || err));
+      if (this.logger) this.logger.warn('自述抽取失败（不影响聊天）：' + describeError(err));
     }
 
     // 连续 20 条 user 消息：轻量候选，只写偏好，不写 L2
@@ -291,7 +292,7 @@ class Store {
         }
         chat.meta.stats.userMessagesSinceExtract = 0;
       } catch (err) {
-        if (this.logger) this.logger.warn('轻量抽取失败（不影响聊天）：' + ((err && err.message) || err));
+        if (this.logger) this.logger.warn('轻量抽取失败（不影响聊天）：' + describeError(err));
       }
     }
 
@@ -348,7 +349,7 @@ class Store {
       if (touched) this.chatStore.saveMeta(chat);
     } catch (err) {
       if (err && err.code === 'MEMORY_CHAT_MISMATCH') throw err;
-      if (this.logger) this.logger.warn('关系边抽取失败（不影响聊天）：' + ((err && err.message) || err));
+      if (this.logger) this.logger.warn('关系边抽取失败（不影响聊天）：' + describeError(err));
     }
   }
 
@@ -421,6 +422,8 @@ class Store {
       // 这个块里同时装了「人物卡 + 事件」和「摘要」，所以上限是两者之和；
       // 只给 memory 的话，摘要一长就会把卡的展示空间挤掉。
       budget: plan.memory + plan.summary,
+      // 但「单条记忆最多占 25%」要按 memory 这一片算，不能拿 memory+summary 当基数
+      memoryBudget: plan.memory,
       caps: plan.caps,
     });
     // 「这条消息提到了谁」：只做内部状态，不进任何界面；名字对不上人就整块不输出。

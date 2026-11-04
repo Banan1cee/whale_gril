@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Diagnostics;
+using System.Globalization;
 using System.Threading;
 using System.Linq;
 using System.Text.Json;
@@ -121,6 +122,8 @@ namespace WhaleLauncher.Views
                 view.ConfiguredDir = status.Str("configuredDir");
                 view.TestChat = status.Str("testChat");
                 view.Pending = status.Long("pending");
+                view.DemandChance = NumProp(status.Prop("demandChance"), 0.7);
+                view.EnsureSend = BoolProp(status.Prop("ensureSend"));
                 var m = status.Prop("maintenance");
                 if (m.ValueKind == JsonValueKind.Object)
                 {
@@ -146,6 +149,8 @@ namespace WhaleLauncher.Views
                 view.Dir = res.Str("dir");
                 view.ConfiguredDir = res.Str("configuredDir");
                 view.TestChat = res.Str("testChat");
+                view.DemandChance = NumProp(res.Prop("demandChance"), 0.7);
+                view.EnsureSend = BoolProp(res.Prop("ensureSend"));
                 view.Emotions = ParseEmotions(res.Prop("emotions"));
             }
 
@@ -153,6 +158,13 @@ namespace WhaleLauncher.Views
             ChkEnabled.IsChecked = view.Enabled;
             _loading = false;
             if (!string.IsNullOrEmpty(view.Dir)) _libraryDir = view.Dir;
+            // 频率 / 必发（main 上新增的 UI）：数据来自 status（内核在线）或库存脚本（离线）
+            SldDemand.Value = Math.Round(Math.Clamp(view.DemandChance, 0, 1) * 100);
+            ChkEnsure.IsChecked = view.EnsureSend;
+            TxtDemandValue.Text = Math.Round(SldDemand.Value) + "%";
+            var frequencyEnabled = view.Online && view.Enabled;
+            SldDemand.IsEnabled = ChkEnsure.IsEnabled = BtnSaveDemand.IsEnabled = frequencyEnabled;
+            DemandHint.Opacity = frequencyEnabled ? 1 : 0.55;
 
             // 分类集合没变就不重排页签（重排会把用户正在点的按钮换掉）
             var keys = string.Join(",", view.Emotions.Select((e) => e.Key));
@@ -199,6 +211,8 @@ namespace WhaleLauncher.Views
             public string MaintPhase = "";
             public int MaintDone;
             public int MaintTotal;
+            public double DemandChance = 0.7;
+            public bool EnsureSend;
             public List<EmotionVm> Emotions = new();
         }
 
@@ -249,6 +263,33 @@ namespace WhaleLauncher.Views
             StatusText.Text = res.Ok
                 ? "表情包设置已保存 · " + DateTime.Now.ToString("HH:mm:ss")
                 : "保存失败：" + (res.Error.Length > 0 ? res.Error : res.Raw);
+        }
+
+        /* ── 页签 ──────────────────────────────────────────────── */
+        private void OnDemandChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            if (TxtDemandValue == null) return;
+            TxtDemandValue.Text = Math.Round(e.NewValue) + "%";
+            if (DemandHint == null) return;
+            DemandHint.Text = e.NewValue >= 99.5
+                ? "100% = 每轮都提醒；只开提醒时模型仍可能不发。要真的每轮都发，请勾选「没写标记也补一张（必发）」。"
+                : "0 = 只靠模型自觉；70% ≈ 一半多轮次提醒；100% = 每轮都提醒。勾选「必发」后，命中轮次即使模型没写标记也会补一张（难过/求助除外）。";
+        }
+
+        private async void OnSaveDemand(object sender, RoutedEventArgs e)
+        {
+            if (_loading || !_sup.NodeRunning) return;
+            var chance = Math.Round(Math.Clamp(SldDemand.Value / 100.0, 0, 1), 2);
+            var ensure = ChkEnsure.IsChecked == true;
+            var body = "{\"patch\":{"
+                + "\"sticker.demandChance\":" + chance.ToString("0.##", CultureInfo.InvariantCulture)
+                + ",\"sticker.ensureSend\":" + (ensure ? "true" : "false")
+                + "}}";
+            var res = await Api.Post(_sup.Url, "/api/config", body);
+            StatusText.Text = res.Ok
+                ? $"表情包频率已保存：{Math.Round(chance * 100)}%" + (ensure ? "，必发已开" : "") + " · " + DateTime.Now.ToString("HH:mm:ss")
+                : "保存失败：" + (res.Error.Length > 0 ? res.Error : res.Raw);
+            if (res.Ok) await LoadAsync();
         }
 
         /* ── 页签 ──────────────────────────────────────────────── */
@@ -774,6 +815,20 @@ namespace WhaleLauncher.Views
 
         private static bool Bool(JsonElement e, string n)
             => e.ValueKind == JsonValueKind.Object && e.TryGetProperty(n, out var v) && v.ValueKind == JsonValueKind.True;
+
+        private static double NumProp(JsonElement e, double fallback)
+        {
+            if (e.ValueKind == JsonValueKind.Number && e.TryGetDouble(out var d)) return d;
+            if (e.ValueKind == JsonValueKind.String && double.TryParse(e.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var s)) return s;
+            return fallback;
+        }
+
+        private static bool BoolProp(JsonElement e)
+        {
+            if (e.ValueKind == JsonValueKind.True) return true;
+            if (e.ValueKind == JsonValueKind.String) return string.Equals(e.GetString(), "true", StringComparison.OrdinalIgnoreCase);
+            return false;
+        }
 
         private static double Num(JsonElement e, string n)
         {

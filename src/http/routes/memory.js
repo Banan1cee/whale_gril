@@ -4,6 +4,7 @@ const path = require('node:path');
 const { json } = require('../util');
 const { isLoopbackRequest } = require('../security');
 const migrate = require('../../memory/migrate');
+const { describeError } = require('../../infra/errors');
 
 /**
  * 旧版（3.x）记忆的检测 / 转换。
@@ -30,7 +31,7 @@ module.exports = function register(router) {
       const status = migrate.legacyStatus({ memoryDir: memoryDirOf(runtime), chatStore: runtime.store.chatStore });
       return json(res, 200, { ok: true, ...status });
     } catch (err) {
-      runtime.logger.warn('旧记忆检测失败：' + ((err && err.message) || err));
+      runtime.logger.warn('旧记忆检测失败：' + describeError(err));
       return json(res, 500, { ok: false, error: '检测失败：' + ((err && err.message) || err) });
     }
   });
@@ -83,7 +84,7 @@ module.exports = function register(router) {
         chats: report.chats.length,
       });
     } catch (err) {
-      runtime.logger.warn('手动转换旧记忆失败：' + ((err && err.message) || err));
+      runtime.logger.warn('手动转换旧记忆失败：' + describeError(err));
       return json(res, 500, { ok: false, error: '转换失败：' + ((err && err.message) || err) });
     } finally {
       running = false;
