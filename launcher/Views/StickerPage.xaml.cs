@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Diagnostics;
+using System.Globalization;
 using System.Threading;
 using System.Linq;
 using System.Text.Json;
@@ -65,7 +66,15 @@ namespace WhaleLauncher.Views
             _inventory = res;
             _loading = true;
             ChkEnabled.IsChecked = res.Bool("enabled");
+            var chanceEl = res.Prop("demandChance");
+            var chance = chanceEl.ValueKind == JsonValueKind.Number && chanceEl.TryGetDouble(out var parsed) ? parsed : 0.7;
+            SldDemand.Value = Math.Round(Math.Clamp(chance, 0, 1) * 100);
+            ChkEnsure.IsChecked = res.Bool("ensureSend");
             _loading = false;
+            TxtDemandValue.Text = Math.Round(SldDemand.Value) + "%";
+            var frequencyEnabled = online && res.Bool("enabled");
+            SldDemand.IsEnabled = ChkEnsure.IsEnabled = BtnSaveDemand.IsEnabled = frequencyEnabled;
+            DemandHint.Opacity = frequencyEnabled ? 1 : 0.55;
 
             _emotions.Clear();
             var arr = res.Prop("emotions");
@@ -109,6 +118,32 @@ namespace WhaleLauncher.Views
             StatusText.Text = res.Ok
                 ? "表情包设置已保存 · " + DateTime.Now.ToString("HH:mm:ss")
                 : "保存失败：" + (res.Error.Length > 0 ? res.Error : res.Raw);
+        }
+
+        private void OnDemandChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            if (TxtDemandValue == null) return;
+            TxtDemandValue.Text = Math.Round(e.NewValue) + "%";
+            if (DemandHint == null) return;
+            DemandHint.Text = e.NewValue >= 99.5
+                ? "100% = 每轮都提醒；只开提醒时模型仍可能不发。要真的每轮都发，请勾选「没写标记也补一张（必发）」。"
+                : "0 = 只靠模型自觉；70% ≈ 一半多轮次提醒；100% = 每轮都提醒。勾选「必发」后，命中轮次即使模型没写标记也会补一张（难过/求助除外）。";
+        }
+
+        private async void OnSaveDemand(object sender, RoutedEventArgs e)
+        {
+            if (_loading || !_sup.NodeRunning) return;
+            var chance = Math.Round(Math.Clamp(SldDemand.Value / 100.0, 0, 1), 2);
+            var ensure = ChkEnsure.IsChecked == true;
+            var body = "{\"patch\":{"
+                + "\"sticker.demandChance\":" + chance.ToString("0.##", CultureInfo.InvariantCulture)
+                + ",\"sticker.ensureSend\":" + (ensure ? "true" : "false")
+                + "}}";
+            var res = await Api.Post(_sup.Url, "/api/config", body);
+            StatusText.Text = res.Ok
+                ? $"表情包频率已保存：{Math.Round(chance * 100)}%" + (ensure ? "，必发已开" : "") + " · " + DateTime.Now.ToString("HH:mm:ss")
+                : "保存失败：" + (res.Error.Length > 0 ? res.Error : res.Raw);
+            if (res.Ok) await LoadAsync();
         }
 
         private void BuildTabs()

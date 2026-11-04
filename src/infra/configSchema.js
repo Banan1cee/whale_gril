@@ -56,6 +56,8 @@ const FIELDS = {
   // ---- 表情包 ----
   // 只控制“这一轮要不要在尾部提醒她带一张”，不按概率替模型选图；0 = 只靠模型自觉。
   'sticker.demandChance': { type: 'float', min: 0, max: 1 },
+  // 命中提醒的轮次，模型没写标记也由程序补一张（1.0 + 开启才约等于每轮都发）。
+  'sticker.ensureSend': { type: 'bool' },
 
   // ---- 记忆（旧键，运行时只读 constants.js）----
   // 唯一生效的可调项：对话预算（不含 system prompt）。没有上限：
