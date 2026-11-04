@@ -395,6 +395,40 @@ function resolveImage(dir, emotion, id) {
     : files.filter((file) => path.basename(file) === id);
   return matches.length === 1 ? matches[0] : '';
 }
+
+/** 某个分类实际落在哪个目录（优先已存在的老别名目录，比如迁移前还在用「撒娇」） */
+function categoryDir(dir, emotion, { create = false } = {}) {
+  const key = normalizeEmotion(emotion);
+  if (!key) return '';
+  const folders = categoryFolders(key);
+  if (!folders.length) return '';
+  for (const name of folders) {
+    const candidate = path.join(dir, name);
+    try {
+      if (fs.existsSync(candidate)) {
+        const stat = fs.lstatSync(candidate);
+        if (stat.isDirectory() && !stat.isSymbolicLink() && !linkedPath(candidate)) return candidate;
+      }
+    } catch { /* 坏目录就跳过，继续看下一个别名 */ }
+  }
+  if (!create) return '';
+  const primary = path.join(dir, folders[0]);
+  safeDirectory(primary);
+  return primary;
+}
+
+/** 给「打开目标目录」用：库根 / 分类目录 / 某一张图 */
+function targetForOpen(dir, emotion, name) {
+  const root = path.resolve(dir);
+  if (!emotion) return { dir: root, mode: 'root' };
+  const folder = categoryDir(root, emotion, { create: false });
+  if (!folder) return null;
+  if (!name) return { dir: folder, mode: 'folder' };
+  const file = resolveImage(root, normalizeEmotion(emotion), String(name));
+  if (!file) return null;
+  return { dir: file, mode: 'select' };
+}
+
 function safeDirectory(dir) {
   const absolute = path.resolve(dir);
   const parsed = path.parse(absolute);
@@ -882,7 +916,7 @@ function upload(config, root, emotion, files) {
   return uploaded;
 }
 module.exports = { EMOTIONS, EMOTION_LABELS, EXTRA_PREFIX, cleanCategoryLabel, extraKey, hasCategory, readExtraCategories, writeExtraCategories, categoryFile, normalizeEmotion, categoryFromName, resolveCategory, SYNONYMS, promptCategories, GENERIC, EXTS, MAX_FILE_BYTES, MAX_UPLOAD_BYTES, MAX_UPLOAD_FILES,
-  hasEmotion, resolveImage, safeDirectory, migrateLegacy, migrateLegacyAsync, ensureBuiltinDirs, stickerDir, regularFile, listImages, listImagesAsync, categoryImages, categoryImagesAsync, categoryItems, categoryItemsAsync, imagesFor, anyImages, isOn,
+  hasEmotion, resolveImage, safeDirectory, migrateLegacy, migrateLegacyAsync, ensureBuiltinDirs, stickerDir, regularFile, listImages, listImagesAsync, categoryImages, categoryImagesAsync, categoryItems, categoryItemsAsync, categoryDir, targetForOpen, imagesFor, anyImages, isOn,
   invalidateScan, clearScanCache, choose, pick, isStickerRequest, imageType, upload,
   isSeriousText, isLivelyText, SERIOUS_WINDOW_MS, SERIOUS_TURNS,
   isUsableCategory, defaultCategory, resolveUsableCategory, categoryInText, setProbeLogger };

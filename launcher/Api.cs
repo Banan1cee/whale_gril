@@ -78,7 +78,7 @@ namespace WhaleLauncher
         }
 
         public static async Task<ApiResult> Get(string baseUrl, string path)
-        {
+    {
             try
             {
                 using var response = await Http.GetAsync(baseUrl + path);
@@ -86,7 +86,7 @@ namespace WhaleLauncher
             }
             catch (Exception ex)
             {
-                return new ApiResult { Ok = false, Error = ex.Message };
+                return new ApiResult { Ok = false, Error = FriendlyError(ex) };
             }
         }
 
@@ -100,8 +100,37 @@ namespace WhaleLauncher
             }
             catch (Exception ex)
             {
-                return new ApiResult { Ok = false, Error = ex.Message };
+                return new ApiResult { Ok = false, Error = FriendlyError(ex) };
             }
+        }
+
+        /// <summary>
+        /// 把 .NET 的原始异常翻成人话。以前内核没起来时，界面直接显示
+        /// 「由于目标计算机积极拒绝，无法连接。 (127.0.0.1:8787)」—— 用户只会一脸问号。
+        /// 「连接被拒绝」= 一个字节都没发出去，和「超时」是两回事，给的提示也不同。
+        /// </summary>
+        public static string FriendlyError(Exception ex)
+        {
+            for (var e = ex; e != null; e = e.InnerException)
+            {
+                if (e is System.Net.Sockets.SocketException se
+                    && se.SocketErrorCode == System.Net.Sockets.SocketError.ConnectionRefused)
+                    return "内核没在运行（连接被拒绝）。先点顶栏「启动」，或者直接在分类文件夹里拖图片。";
+            }
+            return FriendlyError(ex?.Message ?? "");
+        }
+
+        public static string FriendlyError(string message)
+        {
+            var text = (message ?? "").Trim();
+            if (text.Length == 0) return "";
+            if (text.Contains("积极拒绝") || text.Contains("refused", StringComparison.OrdinalIgnoreCase)
+                || text.Contains("No connection could be made", StringComparison.OrdinalIgnoreCase))
+                return "内核没在运行（连接被拒绝）。先点顶栏「启动」，或者直接在分类文件夹里拖图片。";
+            if (text.Contains("timed out", StringComparison.OrdinalIgnoreCase) || text.Contains("超时")
+                || text.Contains("TaskCanceledException", StringComparison.OrdinalIgnoreCase))
+                return "内核没响应（可能正在整理图库），等几秒再试；别重复上传。";
+            return text;
         }
 
         public static string Esc(string s)

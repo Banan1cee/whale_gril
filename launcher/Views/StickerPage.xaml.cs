@@ -49,6 +49,7 @@ namespace WhaleLauncher.Views
         private CancellationTokenSource _preview = new();
         private string _renderedSignature = "";
         private bool _currentIsExtra;
+        private string _libraryDir = "";   // 库根绝对路径（内核给 / 本地库存给），离线开文件夹用
         // 缩略图缓存：键是「id|mtime」，切页签/刷新时不再重复解码
         private readonly Dictionary<string, BitmapImage> _thumbs = new();
 
@@ -151,6 +152,7 @@ namespace WhaleLauncher.Views
             _loading = true;
             ChkEnabled.IsChecked = view.Enabled;
             _loading = false;
+            if (!string.IsNullOrEmpty(view.Dir)) _libraryDir = view.Dir;
 
             // 分类集合没变就不重排页签（重排会把用户正在点的按钮换掉）
             var keys = string.Join(",", view.Emotions.Select((e) => e.Key));
@@ -460,6 +462,12 @@ namespace WhaleLauncher.Views
                 }
             };
             grid.Children.Add(del);
+            // 右键：在资源管理器里定位这张图（内核在线走 API，离线本地拼路径）
+            var menu = new ContextMenu();
+            var reveal = new MenuItem { Header = "在文件夹中显示" };
+            reveal.Click += async (s, e) => await ShowStickerFolder(_current, item.Id);
+            menu.Items.Add(reveal);
+            border.ContextMenu = menu;
             border.Child = grid;
             return (border, image);
         }
@@ -584,10 +592,31 @@ namespace WhaleLauncher.Views
 
         private async void OnOpenFolder(object sender, RoutedEventArgs e)
         {
-            var res = await StickerLibrary.Call(_sup.BaseDir, "open", _current);
-            if (!res.Ok)
+            await ShowStickerFolder(_current);
+        }
+
+        /// <summary>
+        /// 打开目标目录（三处共用）：页签行的「打开分类文件夹」、单图右键「在文件夹中显示」、
+        /// 以及内核不在时的降级动作。内核在线走 API（带 emotion/name），
+        /// 不在就本地拼路径自己开 —— 文件夹本身就是存储，不依赖内核。
+        /// </summary>
+        private async Task ShowStickerFolder(string emotion, string name = null)
+        {
+            var body = "{\"emotion\":\"" + Api.Esc(emotion ?? "") + "\""
+                + (string.IsNullOrEmpty(name) ? "" : ",\"name\":\"" + Api.Esc(name) + "\"") + "}";
+            var res = _sup.NodeRunning
+                ? await Api.Post(_sup.Url, "/api/stickers/open-folder", body)
+                : new ApiResult { Ok = false, Error = "内核未运行" };
+            if (res.Ok)
             {
-                StatusText.Text = "打开失败：" + res.Error;
+                StatusText.Text = res.Str("mode") == "select" ? "已在资源管理器里定位这张图" : "已打开：" + res.Str("dir");
+                return;
+            }
+            // 降级：本地拼路径（中文标签，不是 key）
+            var target = LocalPath(emotion, name);
+            if (target == null)
+            {
+                StatusText.Text = "打不开：" + Api.FriendlyError(res.Error.Length > 0 ? res.Error : "内核未运行");
                 return;
             }
             try
@@ -596,11 +625,28 @@ namespace WhaleLauncher.Views
                 {
                     UseShellExecute = false
                 };
-                start.ArgumentList.Add(res.Str("dir"));
+                start.ArgumentList.Add(name == null ? target : "/select," + target);
                 using var explorer = Process.Start(start);
-                StatusText.Text = "把图片拖进已打开的文件夹。图库会自动刷新。";
+                StatusText.Text = name == null
+                    ? "把图片拖进已打开的文件夹。图库会自动刷新。"
+                    : "已在资源管理器里定位这张图";
             }
             catch (Exception ex) { StatusText.Text = "无法打开资源管理器：" + ex.Message; }
+        }
+
+        private string LocalPath(string emotion, string name)
+        {
+            if (string.IsNullOrEmpty(_libraryDir)) return null;
+            if (string.IsNullOrEmpty(emotion)) return _libraryDir;
+            if (!string.IsNullOrEmpty(name))
+            {
+                var full = Path.Combine(_libraryDir, name.Replace('/', Path.DirectorySeparatorChar));
+                return File.Exists(full) ? full : null;
+            }
+            var label = _emotions.FirstOrDefault((e) => e.Key == emotion)?.Label;
+            if (string.IsNullOrEmpty(label)) return null;
+            var dir = Path.Combine(_libraryDir, label);
+            return Directory.Exists(dir) ? dir : null;
         }
 
         private async void OnReload(object sender, RoutedEventArgs e)

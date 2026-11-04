@@ -93,24 +93,33 @@ module.exports = function register(router) {
       })();
     }
 
-    // 在本机资源管理器里打开表情包目录（只打开这一个固定目录）
+    // 在本机资源管理器里打开目标目录（库根 / 某个分类 / 定位到某一张图）
     if (pathname === '/api/stickers/open-folder' && method === 'POST') {
       return (async () => {
+        const body = await readBody(req);
         const dir = stickers.stickerDir(config, config.root);
         stickers.safeDirectory(dir);
+        const target = stickers.targetForOpen(dir, body && body.emotion, body && body.name);
+        if (!target) {
+          return json(res, 404, { ok: false,
+            error: body && body.name ? '找不到这张表情包' : '没有这个分类（或分类目录还没建出来）' });
+        }
         const noShell = ((config.env && config.env.WHALE_TEST_NO_SHELL) || process.env.WHALE_TEST_NO_SHELL) === '1';
         if (process.platform === 'win32' && !noShell) {
-          // 不再把用户配置的目录拼进命令行（%, & 之类会被 shell 解释）
+          // 不拼 shell：参数走 argv，路径里的 & % 不会被解释
+          // 定位单张图用 explorer 的 /select,<path>，其余直接开目录
+          const args = target.mode === 'select' ? [`/select,${target.dir}`] : [target.dir];
           try {
             await new Promise((resolve, reject) => {
-              const child = spawn('explorer.exe', [dir], { shell: false, windowsHide: true, stdio: 'ignore' });
+              const child = spawn('explorer.exe', args, { shell: false, windowsHide: true, stdio: 'ignore' });
               child.once('spawn', resolve); child.once('error', reject);
             });
           } catch (err) {
-            return json(res, 500, { ok: false, error: '打开文件夹失败：' + ((err && err.message) || err) });
+            return json(res, 500, { ok: false, dir: target.dir, mode: target.mode,
+              error: '打开文件夹失败：' + ((err && err.message) || err) });
           }
         }
-        return json(res, 200, { ok: true, dir });
+        return json(res, 200, { ok: true, dir: target.dir, mode: target.mode });
       })();
     }
 

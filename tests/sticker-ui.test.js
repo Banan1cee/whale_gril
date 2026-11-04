@@ -75,6 +75,8 @@ function harness({ enabled = true, jobs = [], deferFileRead = false, deferRatesS
       data = {ok:true,config:JSON.parse(JSON.stringify(config))};
       if (options.method === 'POST' && deferRatesSave) await new Promise((resolve) => saves.push(resolve));
     }
+    // 上传前的 1 秒健康探针：内核在线就返回 ok，离线那条 case 会 throw
+    else if (url === '/healthz') data = { ok: true, service: 'whale-girl', up: true };
     else throw new Error('Unexpected mock request: ' + url);
     const code = url === '/api/stickers/status' && !enabled ? 404 : 200;
     return { ok: code === 200, status: code, json: async () => data };
