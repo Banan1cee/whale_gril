@@ -421,6 +421,8 @@ class Store {
       // 这个块里同时装了「人物卡 + 事件」和「摘要」，所以上限是两者之和；
       // 只给 memory 的话，摘要一长就会把卡的展示空间挤掉。
       budget: plan.memory + plan.summary,
+      // 但「单条记忆最多占 25%」要按 memory 这一片算，不能拿 memory+summary 当基数
+      memoryBudget: plan.memory,
       caps: plan.caps,
     });
     // 「这条消息提到了谁」：只做内部状态，不进任何界面；名字对不上人就整块不输出。

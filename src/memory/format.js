@@ -185,12 +185,16 @@ function hardCut(body, limit, measure) {
 }
 
 /**
- * @param {{card?:object, events?:object[], summary?:string, now?:number, budget?:number, caps?:object}} input
+ * @param {{card?:object, events?:object[], summary?:string, now?:number, budget?:number, memoryBudget?:number, caps?:object}} input
  *   budget：这一块能用的 token 上限（默认 LIMITS.memoryTokens = 900）
+ *   memoryBudget：其中「记忆」那一片的预算（默认 = budget）。单条配额按它算 25%，
+ *     生产里 block 同时装 memory + summary，不能让摘要份额把单条上限抬到 450。
  *   caps：每类展示几条 { traits, prefs, threads, events }，默认 6/10/4/5（= 900 预算下的旧值）
  * @returns {string}
  */
-function buildMemoryBlock({ card = null, events = [], summary = '', budget = LIMITS.memoryTokens, caps = null } = {}) {
+function buildMemoryBlock({
+  card = null, events = [], summary = '', budget = LIMITS.memoryTokens, memoryBudget = null, caps = null,
+} = {}) {
   const limit = Math.max(0, Number(budget) || LIMITS.memoryTokens);
   const show = {
     traits: Math.max(1, Number(caps && caps.traits) || 6),
@@ -210,9 +214,10 @@ function buildMemoryBlock({ card = null, events = [], summary = '', budget = LIM
     .map((t) => clip(t.text, 40));
   const recentEvents = (events || []).slice(0, show.events);
 
-  // 单条配额：一条记忆最多占窗口的 25%（≈225 token @900）。
+  // 单条配额：一条记忆最多占「记忆预算」的 25%（≈225 token @ memory 900）。
   // 超过就只留索引行、不展开 —— 否则一条 400 字会把别人全挤掉。
-  const itemLimit = Math.max(60, Math.round(limit * 0.25));
+  const itemBase = Number(memoryBudget) > 0 ? Number(memoryBudget) : limit;
+  const itemLimit = Math.max(60, Math.round(itemBase * 0.25));
   const expandable = recentEvents
     .filter((ev) => ev && (
       ev.expand === true
