@@ -1,10 +1,10 @@
 {
   "latest": "4.0.1",
-  "released_at": "2026-11-04T11:11:09Z",
+  "released_at": "2026-11-04T11:43:34Z",
   "force_after_hours": 12,
   "force": false,
   "kill_below": null,
   "message": "4.0.1：界面搬进启动器，安装包 167 MB，装完即用。",
-  "manifest_version": 2,
+  "manifest_version": 3,
   "channel": "stable"
 }
