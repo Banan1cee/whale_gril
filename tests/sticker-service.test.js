@@ -172,6 +172,9 @@ test('HTTP：默认关404；热开上传/分类/领取/结果；关闭取消任�
   assert.equal((await request('/api/stickers/claim', { id: job.id }, 'sticker-test-token')).status, 409);
   assert.equal((await request('/api/stickers/ack', { id: job.id, status: 'failed', error: '目标未打开' }, 'sticker-test-token')).status, 200);
   assert.equal((await request('/api/stickers/status')).body.jobs[0].status, 'failed');
+  const queue = (await request('/api/stickers/status?queueOnly=1')).body;
+  assert.equal(queue.jobs[0].status, 'failed');
+  assert.equal(queue.emotions, undefined);
   await request('/api/stickers/test', { emotion: 'other', chat: '文件传输助手' });
   await toggle('false');
   assert.equal((await request('/api/stickers/status')).status, 404, '字符串false也必须关');
@@ -217,6 +220,29 @@ test('HTTP：自动回包带一次性任务，网页SSE不泄漏本地路径，�
     headers: { 'content-type': 'application/json', 'x-bot-token': 'sticker-test-token', 'x-whale-bridge': '1' },
     body: JSON.stringify({ chat_id: 'wxid-test', text: '发个表情' }) });
   assert.equal(Object.hasOwn(await off.json(), 'sticker'), false);
+});
+
+test('HTTP：微信私聊明确请求直接预留表情包，无需模型标记', async (t) => {
+  const { inst, request, toggle } = await live(t);
+  await toggle(true);
+  await request('/api/stickers/upload', { emotion: 'happy', files: [{ name: 'a.gif', data: GIF.toString('base64') }] });
+  const webhook = async (text, bridge = true) => {
+    const response = await fetch(inst.url + '/webhook/wechat', { method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-bot-token': 'sticker-test-token', 'x-whale-bridge': bridge ? '1' : '0' },
+      body: JSON.stringify({ chat_id: 'wxid-test', sender_id: 'wxid-test', text }) });
+    return response.json();
+  };
+  const payload = await webhook('给我发个表情包');
+  assert.equal(payload.reply, '给你挑了一张');
+  assert.equal(payload.stickerOnly, true);
+  assert.equal(payload.outbound, undefined, '明确要图时不先发送文字');
+  assert.equal(payload.sticker?.emotion, 'happy');
+  assert.equal(payload.sticker?.chatUsername, 'wxid-test');
+  assert.equal(payload.sticker?.status, 'reserved');
+  assert.equal((await webhook('给我发个表情包')).sticker, undefined, '同一会话不能重复排队');
+  assert.equal((await webhook('给我发个表情包', false)).sticker, undefined);
+  assert.equal((await webhook('他说给我发个表情包')).sticker, undefined);
+  assert.equal(inst.runtime.stickerService.jobs.size, 1);
 });
 
 test('HTTP：上传请求尚在读取时关闭总闸，不允许存图或悄悄重排队', async (t) => {

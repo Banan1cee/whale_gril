@@ -190,9 +190,13 @@ class Gateway {
       this.logger.info(
         `[${this.platform}] 收到 ${msg.chatType === 'group' ? '群' : '私聊'}消息 ${msg.senderName}：${String(msg.text).slice(0, 40)}`
       );
-    const result = await this.bot.handle(msg);
+    const localWechat = local && this.platform === 'wechat';
+    const result = await this.bot.handle(msg, { localWechat });
     if (result.action !== 'reply' || !result.reply) {
       return { ok: true, action: 'ignore', reason: result.reason || 'ignored' };
+    }
+    if (localWechat && result.reason === 'sticker_request' && result.sticker) {
+      return { ok: true, action: 'reply', reply: result.reply, stickerOnly: true, sticker: result.sticker };
     }
     const out = await this.send({
       chatId: msg.chatId,
@@ -221,7 +225,7 @@ class Gateway {
     // 表情包（实验性）：总闸关着返回 null，桥接就看不到这个字段
     let sticker = null;
     try {
-      if (local && this.platform === 'wechat' && this.bot && typeof this.bot.stickerFor === 'function') {
+      if (localWechat && result.reason !== 'sticker_request' && typeof this.bot.stickerFor === 'function') {
         sticker = this.bot.stickerFor({ msg, stickerCategory: result.stickerCategory }, result.reply);
       }
     } catch (err) {
