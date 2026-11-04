@@ -2,6 +2,7 @@
 
 // Experimental sticker library. No disk access while the master switch is off.
 const fs = require('node:fs');
+const fsp = require('node:fs').promises;
 const path = require('node:path');
 const crypto = require('node:crypto');
 const features = require('../infra/features');
@@ -142,12 +143,45 @@ function regularFile(file, root) {
     return stat.isFile() && stat.size > 0 && stat.size <= MAX_FILE_BYTES;
   } catch { return false; }
 }
+
+/**
+ * 扫描用的「目录级」安全判断。
+ *
+ * 以前每个文件都要走一遍 regularFile：逐层 lstat + 每层两次 realpath，实测 0.8ms/张 ——
+ * 565 张就是 450ms 的同步阻塞。同一个目录里的文件，路径前缀的检查结果必然相同，
+ * 所以改成「每个目录验一次、结果缓存」，单文件只剩一次 lstat。
+ * 真正的发送前校验（claim）仍然走 regularFile，安全边界没有放松。
+ */
+const dirSafeCache = new Map();
+function safeScanDir(dir, root) {
+  const abs = path.resolve(dir);
+  const rootAbs = path.resolve(root);
+  if (abs !== rootAbs && !isInside(rootAbs, abs)) return false;
+  if (rootHasLinkedAncestor(rootAbs)) return false;
+  if (dirSafeCache.has(abs)) return dirSafeCache.get(abs);
+  let ok = false;
+  try {
+    const stat = fs.lstatSync(abs);
+    ok = stat.isDirectory() && !stat.isSymbolicLink() && !linkedPath(abs);
+  } catch { ok = false; }
+  dirSafeCache.set(abs, ok);
+  return ok;
+}
+
+/** 单文件便宜校验：一次 lstat（链接会被 isFile=false 排除） */
+function cheapImageFile(file, name) {
+  if (!EXTS.includes(path.extname(name).toLowerCase())) return false;
+  try {
+    const stat = fs.lstatSync(file);
+    return stat.isFile() && stat.size > 0 && stat.size <= MAX_FILE_BYTES;
+  } catch { return false; }
+}
+
 function listImages(dir, { recursive = true, root = dir, depth = 0, result = [] } = {}) {
   if (depth > 3 || result.length >= MAX_FILES) return result;
-  if (rootHasLinkedAncestor(root)) return result;
+  if (!safeScanDir(dir, root)) return result;
   let entries;
   try {
-    if (fs.lstatSync(dir).isSymbolicLink() || linkedPath(dir)) return result;
     entries = fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
   } catch { return result; }
   for (const ent of entries) {
@@ -156,7 +190,46 @@ function listImages(dir, { recursive = true, root = dir, depth = 0, result = [] 
     const full = path.join(dir, ent.name);
     if (ent.isDirectory()) {
       if (recursive) listImages(full, { recursive, root, depth: depth + 1, result });
-    } else if (EXTS.includes(path.extname(ent.name).toLowerCase()) && regularFile(full, root)) result.push(full);
+    } else if (cheapImageFile(full, ent.name)) result.push(full);
+  }
+  return result;
+}
+
+/**
+ * listImages 的异步版：fs.promises.readdir + 每轮最多 8 个并发 lstat，每 32 条让出一次事件循环。
+ * HTTP 热路径（status / 缩略图列表）和启动维护用这一条，避免同步扫描把 /healthz 堵住。
+ */
+async function listImagesAsync(dir, { recursive = true, root = dir, depth = 0, result = [] } = {}) {
+  if (depth > 3 || result.length >= MAX_FILES) return result;
+  if (!safeScanDir(dir, root)) return result;
+  let entries;
+  try {
+    entries = await fsp.readdir(dir, { withFileTypes: true });
+  } catch { return result; }
+  entries.sort((a, b) => a.name.localeCompare(b.name));
+  const files = [];
+  for (const ent of entries) {
+    if (result.length >= MAX_FILES) break;
+    if (ent.isSymbolicLink()) continue;
+    const full = path.join(dir, ent.name);
+    if (ent.isDirectory()) {
+      if (recursive) {
+        await listImagesAsync(full, { recursive, root, depth: depth + 1, result });
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+    } else if (EXTS.includes(path.extname(ent.name).toLowerCase())) {
+      files.push(full);
+    }
+  }
+  const CONCURRENCY = 8;
+  for (let i = 0; i < files.length; i += CONCURRENCY) {
+    if (result.length >= MAX_FILES) break;
+    const batch = files.slice(i, i + CONCURRENCY);
+    const stats = await Promise.all(batch.map((file) => fsp.lstat(file).catch(() => null)));
+    stats.forEach((stat, index) => {
+      if (stat && stat.isFile() && stat.size > 0 && stat.size <= MAX_FILE_BYTES) result.push(batch[index]);
+    });
+    await new Promise((resolve) => setImmediate(resolve));
   }
   return result;
 }
@@ -179,9 +252,12 @@ function scanStamp(folder) {
 
 function invalidateScan(folder) {
   if (folder) scanCache.delete(path.resolve(folder));
+  // 目录安全缓存也要一起失效：目录可能刚被创建/删除/换成链接
+  if (folder) dirSafeCache.delete(path.resolve(folder));
+  else dirSafeCache.clear();
 }
 
-function clearScanCache() { scanCache.clear(); }
+function clearScanCache() { scanCache.clear(); dirSafeCache.clear(); }
 
 function listImagesCached(folder, root) {
   const t0 = probe.now();
@@ -234,6 +310,32 @@ function categoryImages(dir, emotion) {
   return out;
 }
 function imagesFor(dir, emotion) { return categoryImages(dir, emotion); }
+
+/**
+ * categoryImages 的异步版：HTTP 热路径用。规则与同步版逐字一致，
+ * 只是把「一次读完整棵树」换成「异步 readdir + 8 路并发 lstat + 每 32 条让出」。
+ */
+async function categoryImagesAsync(dir, emotion) {
+  const t0 = probe.now();
+  const key = normalizeEmotion(emotion);
+  if (!key) return [];
+  let out;
+  if (key.startsWith(EXTRA_PREFIX)) {
+    out = await listImagesAsync(path.join(dir, categoryFolders(key)[0]), { root: dir, recursive: false });
+  } else {
+    const groups = await Promise.all(FOLDERS[key].map((name) =>
+      listImagesAsync(path.join(dir, name), { root: dir, recursive: false })));
+    const files = groups.flat();
+    if (key === 'happy') {
+      files.push(...await listImagesAsync(dir, { root: dir, recursive: false }));
+    }
+    out = [...new Set(files)].sort((a, b) => a.localeCompare(b));
+  }
+  const cost = probe.now() - t0;
+  probe.emit(probeLogger, cost > 50 ? 'warn' : 'debug',
+    `分类(异步) ${key} 目录=${dir} 张数=${out.length} 耗时=${probe.ms(cost)}ms`);
+  return out;
+}
 function anyImages(dir) { return [...new Set(Object.keys(EMOTIONS).flatMap((key) => categoryImages(dir, key)))]; }
 function resolveImage(dir, emotion, id) {
   if (typeof id !== 'string' || !id || /[\\:\x00-\x1f]/.test(id)) return '';
@@ -409,20 +511,24 @@ function migrateLegacy(config, root) {
 }
 
 /**
- * 异步迁移：每 `every` 张让出一次事件循环（setImmediate）。
- * 启动后的维护走这一条 —— 335 张 611MB 的老实现会堵住主线程 11 秒，
- * /healthz 在这期间完全没响应，启动器就判内核没起来。
+ * 异步迁移：按**时间片**让出事件循环（默认 16ms 一片），不是按条数。
+ *
+ * 为什么不用「每 20 个文件 yield 一次」：单次文件操作的成本并不稳定 ——
+ * 实测同一批 rename 在开着实时防护的机器上可能到几十毫秒一张，
+ * 按条数让出会攒出 1.5 秒的同步块，/healthz 照样超时。按时间切就一定不会超预算。
  */
-async function migrateLegacyAsync(config, root, { every = 16, onProgress = null, state = {} } = {}) {
+async function migrateLegacyAsync(config, root, { budgetMs = 16, onProgress = null, state = {} } = {}) {
   const it = migrateGen(config, root, state);
   let step = it.next();
-  let count = 0;
+  let sliceStart = probe.now();
   while (!step.done) {
-    count++;
     if (typeof onProgress === 'function') {
       try { onProgress(state.report, state.total); } catch { /* 进度回调不许影响迁移 */ }
     }
-    if (count % Math.max(1, every) === 0) await new Promise((resolve) => setImmediate(resolve));
+    if (probe.now() - sliceStart >= budgetMs) {
+      await new Promise((resolve) => setImmediate(resolve));
+      sliceStart = probe.now();
+    }
     step = it.next();
   }
   return step.value;
@@ -739,7 +845,7 @@ function upload(config, root, emotion, files) {
   return uploaded;
 }
 module.exports = { EMOTIONS, EMOTION_LABELS, EXTRA_PREFIX, cleanCategoryLabel, extraKey, hasCategory, readExtraCategories, writeExtraCategories, categoryFile, normalizeEmotion, categoryFromName, resolveCategory, SYNONYMS, promptCategories, GENERIC, EXTS, MAX_FILE_BYTES, MAX_UPLOAD_BYTES, MAX_UPLOAD_FILES,
-  hasEmotion, resolveImage, safeDirectory, migrateLegacy, migrateLegacyAsync, ensureBuiltinDirs, stickerDir, regularFile, listImages, categoryImages, imagesFor, anyImages, isOn,
+  hasEmotion, resolveImage, safeDirectory, migrateLegacy, migrateLegacyAsync, ensureBuiltinDirs, stickerDir, regularFile, listImages, listImagesAsync, categoryImages, categoryImagesAsync, imagesFor, anyImages, isOn,
   invalidateScan, clearScanCache, choose, pick, isStickerRequest, imageType, upload,
   isSeriousText, isLivelyText, SERIOUS_WINDOW_MS, SERIOUS_TURNS,
   isUsableCategory, defaultCategory, resolveUsableCategory, categoryInText, setProbeLogger };

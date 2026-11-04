@@ -61,8 +61,31 @@ test('缓存把系统调用从 O(N) 降到常数', (t) => {
   lstat.count = 0;
   stickers.categoryImages(dir, 'cute');
   const warm = lstat.count;
-  assert.ok(cold > 300, `冷扫描应该逐图校验（防链接逃逸），实际 ${cold} 次`);
+  // 2026-11-04 起：链接/联接检查按「目录」做一次（以前每张图都要逐层 lstat + realpath，
+  // 实测 0.8ms/张），单文件只剩一次 lstat。安全边界不变，见下面的软链用例。
+  assert.ok(cold >= 100, `冷扫描应该每个文件校验一次，实际 ${cold} 次`);
+  assert.ok(cold <= 130, `冷扫描不该再有每文件多层校验，实际 ${cold} 次`);
   assert.ok(warm <= 5, `热扫描只该 stat 目录本身，实际 ${warm} 次`);
+});
+
+test('目录级校验没有放松安全边界：软链逃逸仍然列不出来', (t) => {
+  const { dir, put } = fixture(t);
+  const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-outside-'));
+  t.after(() => fs.rmSync(outsideDir, { recursive: true, force: true }));
+  const outside = path.join(outsideDir, 'secret.gif');
+  fs.writeFileSync(outside, Buffer.from('not-in-library'));
+  put('傲娇/real.gif');
+  let madeSomething = false;
+  try { fs.symlinkSync(outside, path.join(dir, '傲娇/link.gif'), 'file'); madeSomething = true; }
+  catch (err) { if (!['EPERM', 'EACCES', 'UNKNOWN'].includes(err.code)) throw err; }
+  try {
+    fs.symlinkSync(outsideDir, path.join(dir, '傲娇/linkdir'), process.platform === 'win32' ? 'junction' : 'dir');
+    madeSomething = true;
+  } catch (err) { if (!['EPERM', 'EACCES', 'UNKNOWN'].includes(err.code)) throw err; }
+  if (!madeSomething) return t.skip('无创建链接权限（Windows 需要开发者模式或管理员）');
+  stickers.clearScanCache();
+  const files = stickers.categoryImages(dir, 'cute').map((f) => path.basename(f));
+  assert.deepEqual(files, ['real.gif'], '软链/目录联接不能被当成表情包列出来');
 });
 
 test('外部增删即时可见：目录 mtime 变化会让缓存失效', (t) => {

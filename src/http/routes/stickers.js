@@ -52,7 +52,13 @@ module.exports = function register(router) {
       return json(res, 200, service.gate(info.url.searchParams.get('id') || ''));
     }
 
-    if (pathname === '/api/stickers/status' && method === 'GET') return json(res, 200, service.status(info.url.searchParams.get('queueOnly') === '1'));
+    if (pathname === '/api/stickers/status' && method === 'GET') {
+      // 异步扫描 + 1.5s 结果缓存：启动器 2s、网页 3s 拉一次，别每次都全量同步扫库
+      return service.statusAsync(info.url.searchParams.get('queueOnly') === '1')
+        .then((payload) => json(res, 200, payload))
+        .catch((err) => json(res, err && err.statusCode ? err.statusCode : 500,
+          { ok: false, error: (err && err.message) || '读取表情包状态失败' }));
+    }
 
     // 控制台缩略图：只回传表情包目录里的真图，不能读任意文件
     if (pathname === '/api/stickers/image' && method === 'GET') {
@@ -81,6 +87,7 @@ module.exports = function register(router) {
         }
         // 删完马上就读 status 列表，别等目录 mtime 生效。
         stickers.invalidateScan(path.dirname(hit.file));
+        service.invalidateStatus();   // 1.5s 结果缓存也要一起丢，否则这张会被吐回来
         logger.info(`表情包已删除：${path.basename(path.dirname(hit.file))}/${path.basename(hit.file)}`);
         return json(res, 200, { ok: true, emotions: service.status().emotions });
       })();
@@ -132,6 +139,7 @@ module.exports = function register(router) {
           stickers.safeDirectory(path.join(dir, label));
           extra.push({ label, chance: 0.25 });
           stickers.writeExtraCategories(config, config.root, extra);
+          service.invalidateStatus();
           logger.info('表情包新增分类：' + label);
           return json(res, 200, { ok: true, label, emotions: service.status().emotions });
         }
@@ -139,6 +147,7 @@ module.exports = function register(router) {
           if (at < 0) return json(res, 404, { ok: false, error: '没有这个分类' });
           extra.splice(at, 1);
           stickers.writeExtraCategories(config, config.root, extra);
+          service.invalidateStatus();
           logger.info('表情包删除分类：' + label + '（文件夹保留，图片没删）');
           return json(res, 200, { ok: true, emotions: service.status().emotions });
         }
@@ -158,6 +167,7 @@ module.exports = function register(router) {
           }
           extra[at] = { ...extra[at], label: nextLabel };
           stickers.writeExtraCategories(config, config.root, extra);
+          service.invalidateStatus();
           logger.info('表情包分类改名：' + label + ' → ' + nextLabel);
           return json(res, 200, { ok: true, emotions: service.status().emotions });
         }
@@ -174,6 +184,7 @@ module.exports = function register(router) {
           return json(res, 409, { ok: false, error: '开关已变化，请重新上传' });
         }
         const uploaded = stickers.upload(config, config.root, body && body.emotion, body && body.files);
+        service.invalidateStatus();   // 传完立刻可见，别等 1.5s 缓存过期
         return json(res, 200, { ok: true, uploaded });
       })();
     }

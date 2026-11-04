@@ -6,6 +6,8 @@ const stickers = require('../adapters/stickers');
 const probe = require('../infra/probe');
 const ACTIVE = new Set(['queued', 'reserved', 'sending']);
 const TERMINAL = new Set(['confirmed', 'unconfirmed', 'failed', 'cancelled']);
+// status 结果缓存：启动器 2s、网页 3s 拉一次，1.5s 内直接复用上一次扫描结果
+const STATUS_CACHE_MS = 1500;
 function fail(message, statusCode = 400) { return Object.assign(new Error(message), { statusCode }); }
 
 /** Ephemeral, one-shot delivery jobs. Never replay a persisted queue after restart. */
@@ -31,6 +33,7 @@ class StickerService {
       done: 0, total: 0, errors: [], startedAt: 0, finishedAt: 0,
     };
     this._maintenanceTimer = null;
+    this._statusCache = { at: 0, key: '', value: null };
     // 构造函数的契约：**零磁盘 I/O**。这里只把开关状态读进内存，
     // 连 generation 都直接定好（否则 reconcile 会当成「刚被打开」而去排维护）。
     this.enabled = stickers.isOn(config);
@@ -124,6 +127,7 @@ class StickerService {
     } finally {
       state.phase = 'done';
       state.finishedAt = Date.now();
+      this.invalidateStatus();   // 刚搬完，缓存里的张数已经不对了
       probe.emit(this.logger, 'info',
         `启动维护完成 搬=${this.migration.moved} 去重=${this.migration.deduplicated} 失败=${this.migration.errors.length} 耗时=${Date.now() - startedAt}ms`);
     }
@@ -136,6 +140,7 @@ class StickerService {
       // Invalidates fetched/inflight jobs even if the feature is switched off and back on.
       this.generation = crypto.randomUUID();
       this.enabled = enabled;
+      this.invalidateStatus();
       if (!enabled) for (const job of this.jobs.values()) {
         if (ACTIVE.has(job.status)) {
           job.status = 'cancelled'; job.error = '总开关已关闭，任务已取消';
@@ -303,9 +308,62 @@ class StickerService {
     const cost = probe.now() - t0;
     probe.emit(this.logger, cost > 300 ? 'warn' : 'debug',
       `status RTT=${probe.ms(cost)}ms 分类=${emotions.length} 张数=${total}`);
+    return this._statusPayload(dir, emotions, queue);
+  }
+
+  /**
+   * status 的异步版：HTTP 热路径用这一条。
+   * 1.5 秒结果缓存（键含 generation / 目录 / 自定义分类），上传、删除、改分类、
+   * 维护结束、开关切换都会 invalidateStatus()，所以「刚传完立刻看得见」仍然成立。
+   */
+  async statusAsync(queueOnly = false) {
+    const t0 = probe.now();
+    this.requireEnabled();
+    const queue = this.queueStatus();
+    if (queueOnly) return { ok: true, ...queue };
+    const dir = stickers.stickerDir(this.config, this.config.root);
+    const extras = stickers.readExtraCategories(this.config, this.config.root);
+    const cacheKey = [this.generation, dir, JSON.stringify(extras), this.maintenance.phase, this.maintenance.done].join('|');
+    const cached = this._statusCache;
+    if (cached.value && cached.key === cacheKey && this.now() - cached.at < STATUS_CACHE_MS) {
+      const hit = { ...cached.value, ...queue };
+      probe.emit(this.logger, 'debug', `status(异步) 命中缓存 RTT=${probe.ms(probe.now() - t0)}ms`);
+      return hit;
+    }
+    this.restoreBuiltinDirs();
+    const build = async (key, label, extra) => {
+      const items = (await stickers.categoryImagesAsync(dir, key)).map((file) => ({
+        name: path.basename(file), id: path.relative(dir, file).split(path.sep).join('/'),
+      }));
+      return { key, label, extra: Boolean(extra), files: items.map((item) => item.name), items,
+        count: items.length };
+    };
+    const emotions = [];
+    for (const key of Object.keys(stickers.EMOTIONS)) emotions.push(await build(key, stickers.EMOTIONS[key], false));
+    for (const cat of extras) {
+      const label = stickers.cleanCategoryLabel(cat && cat.label);
+      const key = stickers.extraKey(label);
+      if (!key) continue;
+      emotions.push(await build(key, label, true));
+    }
+    const payload = this._statusPayload(dir, emotions, queue);
+    this._statusCache = { at: this.now(), key: cacheKey, value: payload };
+    const total = emotions.reduce((sum, e) => sum + e.count, 0);
+    const cost = probe.now() - t0;
+    probe.emit(this.logger, cost > 300 ? 'warn' : 'debug',
+      `status(异步) RTT=${probe.ms(cost)}ms 分类=${emotions.length} 张数=${total}`);
+    return { ...payload, ...queue };
+  }
+
+  _statusPayload(dir, emotions, queue) {
     return { ok: true, enabled: true, generation: this.generation, dir, migration: this.migration,
       maintenance: { ...this.maintenance, errors: this.maintenance.errors.slice(0, 5) },
       testChat: this.config.sticker?.testChat || '文件传输助手', emotions, ...queue };
+  }
+
+  /** 图库内容变了（上传/删除/改分类/维护结束）→ 丢掉 1.5s 的结果缓存 */
+  invalidateStatus() {
+    this._statusCache = { at: 0, key: '', value: null };
   }
   queueStatus() {
     return { pending: [...this.jobs.values()].filter((j) => ACTIVE.has(j.status)).length,
