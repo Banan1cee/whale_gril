@@ -103,9 +103,13 @@ test('迁移无覆盖、字节不变、可重复执行；相同内容去重，�
   assert.deepEqual(stickers.migrateLegacy(cfg, root), { moved: 0, deduplicated: 0, rootImages: 0, errors: [] });
 });
 
-test('迁移复制失败保留旧图，带相对ID仍能预览；未知文件不被清理', (t) => {
+test('迁移失败保留旧图，带相对ID仍能预览；未知文件不被清理', (t) => {
   const { cfg, root, dir, put } = fixture(t);
   const src = put('其他/source.gif'); put('开心/readme.txt', Buffer.from('keep me'));
+  // 让 rename 走不通（跨卷），并且复制也失败 → 必须留着原图并报错
+  const rename = t.mock.method(fs, 'renameSync', () => {
+    const err = new Error('simulated cross-volume'); err.code = 'EXDEV'; throw err;
+  });
   const copy = t.mock.method(fs, 'copyFileSync', () => { throw new Error('simulated copy failure'); });
   const report = stickers.migrateLegacy(cfg, root);
   assert.ok(report.errors.length);
@@ -113,6 +117,7 @@ test('迁移复制失败保留旧图，带相对ID仍能预览；未知文件不
   assert.equal(stickers.resolveImage(dir, 'happy', '其他/source.gif'), src);
   assert.equal(fs.readFileSync(path.join(dir, '开心/readme.txt'), 'utf8'), 'keep me');
   copy.mock.restore();
+  rename.mock.restore();
   assert.deepEqual(stickers.migrateLegacy(cfg, root).errors, []);
   assert.equal(fs.existsSync(src), false);
   assert.equal(fs.existsSync(path.join(dir, '开心/source.gif')), true);
@@ -239,6 +244,12 @@ test('HTTP三类旧图迁移、预览字节与删除对象一致；不改主人/
   fs.mkdirSync(path.join(root, 'data'), { recursive:true }); fs.writeFileSync(path.join(root, 'data/settings.json'), '{}');
   const inst = await startServer({root,env:{WHALE_LOG_FILE:'',WHALE_TEST_NO_SHELL:'1'},port:0,openBrowser:false}); t.after(() => inst.close());
   const get = (r) => fetch(inst.url + r);
+  // 迁移现在放在 listen 之后（startMaintenance）：等它跑完再看结果
+  for (let i = 0; i < 200; i++) {
+    const q = await (await get('/api/stickers/status?queueOnly=1')).json();
+    if (q.maintenance && q.maintenance.phase === 'done') break;
+    await new Promise((r) => setTimeout(r, 25));
+  }
   const status = await (await get('/api/stickers/status')).json();
   assert.deepEqual(status.emotions.map((e) => e.key), ['cute','angry','happy']);
   const other = status.emotions.find((e) => e.key === 'happy');

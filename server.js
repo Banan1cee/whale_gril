@@ -91,6 +91,14 @@ async function startServer({ root = projectRoot(), env = process.env, port, host
   // 探针：listen 成功 = 内核第一次能被连上。这条数字直接对应「启动器 10 秒超时 / 积极拒绝」
   probe.emit(logger, 'info',
     `listen 就绪 端口=${actualPort} 启动到 listen=${probe.ms(probe.now() - probeBootAt)}ms`);
+  // 图库维护（补内置目录 + 把旧分类/根目录散图并进「开心」）放在 listen 之后：
+  // 以前它在 StickerService 构造函数里同步跑，245 张 611MB 要让内核 11 秒不监听，
+  // 启动器 WaitForNodeAsync 10 秒到期 → 桥接压根没起来。
+  setImmediate(() => {
+    try { runtime.stickerService.startMaintenance(); } catch (err) {
+      logger.warn('表情包图库维护没起来（不影响收发）：' + ((err && err.message) || err));
+    }
+  });
   // 把实际端口写盘：桥接优先读这个文件，避免「手动 --port=8788 后桥接还连 8787」满屏积极拒绝
   try {
     fs.mkdirSync(path.join(root, 'data'), { recursive: true });

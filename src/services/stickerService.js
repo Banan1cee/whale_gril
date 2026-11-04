@@ -23,12 +23,112 @@ class StickerService {
     this.recent = new Map();
     this.libraryDir = '';
     this.migration = { moved: 0, deduplicated: 0, errors: [] };
+    // 维护状态：构造函数里**零磁盘 I/O**，只做内存判定。
+    // 真正的「补目录 + 迁移旧分类」由 startMaintenance() 在 listen 之后异步跑，
+    // 否则库大时内核十几秒不监听，启动器 10 秒超时 → 桥接根本不起来。
+    this.maintenance = {
+      phase: 'idle',     // idle | pending | running | done
+      done: 0, total: 0, errors: [], startedAt: 0, finishedAt: 0,
+    };
+    this._maintenanceTimer = null;
+    // 构造函数的契约：**零磁盘 I/O**。这里只把开关状态读进内存，
+    // 连 generation 都直接定好（否则 reconcile 会当成「刚被打开」而去排维护）。
+    this.enabled = stickers.isOn(config);
+    this.generation = this.enabled ? crypto.randomUUID() : '';
     // 探针：这一行直接量「构造函数里的同步磁盘工作」，也就是 listen 之前被堵住的时长
     const t0 = probe.now();
     this.reconcile();
     // 总闸关着时一行日志都不许有（既有测试就是这么约定的），所以只在启用时打
     if (this.enabled) probe.emit(logger, 'info', `构造/reconcile 耗时=${probe.ms(probe.now() - t0)}ms`);
   }
+
+  /**
+   * 启动后的图库维护：补内置目录 → 把旧分类（通用/其他/撒娇…）和根目录散图并进「开心」。
+   * 幂等：同一个库只跑一次；正在跑/已排期时返回 false。
+   * 用 setImmediate 排期，调用方（server.js 在 listen 成功后）立刻返回，HTTP 不会被堵住。
+   */
+  startMaintenance() {
+    if (!stickers.isOn(this.config)) return false;
+    if (this._maintenanceTimer || this.maintenance.phase === 'pending' || this.maintenance.phase === 'running') return false;
+    const dir = stickers.stickerDir(this.config, this.config.root);
+    if (this.maintenance.phase === 'done' && this.libraryDir === dir) return false;
+    // 有在飞的任务时不搬文件：搬走它正引用的图会让这次发送失败
+    if ([...this.jobs.values()].some((j) => ACTIVE.has(j.status))) return false;
+    this.maintenance = { phase: 'pending', done: 0, total: 0, errors: [], startedAt: 0, finishedAt: 0 };
+    this._maintenanceTimer = setImmediate(() => {
+      this._maintenanceTimer = null;
+      this._runMaintenance().catch((err) => {
+        this.maintenance.phase = 'done';
+        this.maintenance.finishedAt = Date.now();
+        this.maintenance.errors.push(String((err && err.message) || err));
+        if (this.logger) this.logger.warn('表情包图库维护失败（不影响收发）：' + ((err && err.message) || err));
+      });
+    });
+    if (this._maintenanceTimer.unref) this._maintenanceTimer.unref();
+    return true;
+  }
+
+  /** 内置分类（傲娇 / 炸毛 / 开心）的文件夹被删了就补回来；自定义分类不碰。只 stat，不扫库。 */
+  restoreBuiltinDirs() {
+    try {
+      const created = stickers.ensureBuiltinDirs(this.config, this.config.root);
+      if (created.length) {
+        this.restored = (this.restored || []).concat(created);
+        if (this.logger) this.logger.info('表情包内置分类文件夹已补回：' + created.join('、'));
+      }
+      return created;
+    } catch { return []; }   // 目录建不出来不影响其它逻辑
+  }
+
+  /** 测试 / 自检用：立刻把维护跑完（不等 setImmediate），返回维护状态快照 */
+  async startMaintenanceNow() {
+    if (this._maintenanceTimer) { clearImmediate(this._maintenanceTimer); this._maintenanceTimer = null; }
+    if (!stickers.isOn(this.config)) return { ...this.maintenance };
+    const dir = stickers.stickerDir(this.config, this.config.root);
+    if (this.maintenance.phase === 'done' && this.libraryDir === dir) return { ...this.maintenance };
+    await this._runMaintenance();
+    return { ...this.maintenance };
+  }
+
+  async _runMaintenance() {
+    const state = this.maintenance;
+    const startedAt = Date.now();
+    state.phase = 'running';
+    state.startedAt = startedAt;
+    state.done = 0;
+    state.errors = [];
+    const dir = stickers.stickerDir(this.config, this.config.root);
+    try {
+      this.restoreBuiltinDirs();
+      const report = await stickers.migrateLegacyAsync(this.config, this.config.root, {
+        onProgress: (partial, total) => {
+          state.done = partial.moved + partial.deduplicated;
+          state.total = Math.max(total, state.done);
+        },
+      });
+      this.migration = report;
+      this.libraryDir = dir;
+      state.done = report.moved + report.deduplicated;
+      state.errors = report.errors.slice(0, 20);
+      const m = report;
+      if (m && (m.moved || m.deduplicated) && this.logger) {
+        this.logger.info(`表情包旧分类已并入「开心」：迁移 ${m.moved} 张、去重 ${m.deduplicated} 张`
+          + (m.rootImages ? `（含根目录 ${m.rootImages} 张）` : '')
+          + (m.errors && m.errors.length ? `、${m.errors.length} 张失败（原图保留）` : ''));
+      } else if (m && this.logger) {
+        // 根目录的图只有并进「开心」才会被发出去；没搬成要明确告诉用户，别让它们静默失效
+        const left = stickers.listImages(dir, { root: dir, recursive: false })
+          .filter((file) => path.dirname(file) === path.resolve(dir)).length;
+        if (left) this.logger.warn(`data/stickers 根目录还有 ${left} 张图没并进「开心」，它们不会被发送`);
+      }
+    } finally {
+      state.phase = 'done';
+      state.finishedAt = Date.now();
+      probe.emit(this.logger, 'info',
+        `启动维护完成 搬=${this.migration.moved} 去重=${this.migration.deduplicated} 失败=${this.migration.errors.length} 耗时=${Date.now() - startedAt}ms`);
+    }
+  }
+
   reconcile() {
     const t0 = probe.now();
     const enabled = stickers.isOn(this.config);
@@ -42,6 +142,8 @@ class StickerService {
           this._note(job, 'cancelled');
         }
       }
+      // 刚被打开：补目录 / 迁移旧分类要在后台补跑（构造期不跑，见 startMaintenance）
+      if (enabled) this.startMaintenance();
     }
     for (const job of this.jobs.values()) {
       // 卡住的任务 90 秒就释放：以前是 5 分钟，失败一次就把这个会话堵 5 分钟，
@@ -57,32 +159,15 @@ class StickerService {
       }
     }
     if (enabled) {
-      const dir = stickers.stickerDir(this.config, this.config.root);
-      // 内置分类（傲娇 / 炸毛 / 开心）的文件夹被删了要补回来；自定义分类不碰
-      try {
-        const created = stickers.ensureBuiltinDirs(this.config, this.config.root);
-        if (created.length) {
-          this.restored = (this.restored || []).concat(created);
-          if (this.logger) this.logger.info('表情包内置分类文件夹已补回：' + created.join('、'));
-        }
-      } catch { /* 目录建不出来不影响其它逻辑 */ }
-      // Migrate once per enabled library; never move a file held by an active job.
-      if (this.libraryDir !== dir && ![...this.jobs.values()].some((j) => ACTIVE.has(j.status))) {
-        this.migration = stickers.migrateLegacy(this.config, this.config.root);
-        this.libraryDir = dir;
-        const m = this.migration;
-        if (m && (m.moved || m.deduplicated) && this.logger) {
-          this.logger.info(`表情包旧分类已并入「开心」：迁移 ${m.moved} 张、去重 ${m.deduplicated} 张`
-            + (m.rootImages ? `（含根目录 ${m.rootImages} 张）` : '')
-            + (m.errors && m.errors.length ? `、${m.errors.length} 张失败（原图保留）` : ''));
-        } else if (m && this.logger) {
-          // 根目录的图只有并进「开心」才会被发出去；没搬成要明确告诉用户，别让它们静默失效
-          const left = stickers.listImages(dir, { root: dir, recursive: false })
-            .filter((file) => path.dirname(file) === path.resolve(dir)).length;
-          if (left) this.logger.warn(`data/stickers 根目录还有 ${left} 张图没并进「开心」，它们不会被发送`);
-        }
-      }
-    } else this.libraryDir = '';
+      // 维护（补目录 + 迁移旧分类）改成排期执行：这里只负责「要不要跑」，
+      // 真正干活在 listen 之后，且每 16 张让出一次事件循环。
+      // 构造期 / 每次 status 都走到这里，但 startMaintenance() 是幂等的：
+      // 已跑过同一目录就直接返回，不会反复扫库。
+      if (this.maintenance.phase === 'done') this.startMaintenance();
+    } else {
+      this.libraryDir = '';
+      this.maintenance = { phase: 'idle', done: 0, total: 0, errors: [], startedAt: 0, finishedAt: 0 };
+    }
     // Preserve active jobs, but bound terminal history and session caches.
     const completed = [...this.jobs.values()].filter((j) => !ACTIVE.has(j.status));
     for (const job of completed.slice(0, Math.max(0, completed.length - 50))) this.jobs.delete(job.id);
@@ -197,6 +282,8 @@ class StickerService {
     const queue = this.queueStatus();
     if (queueOnly) return { ok: true, ...queue };
     const dir = stickers.stickerDir(this.config, this.config.root);
+    // 用户手滑删了「开心」文件夹：读状态时顺手补回来（只 stat / mkdir，不扫库）
+    this.restoreBuiltinDirs();
     const list = (key, label, extra) => {
       const items = stickers.categoryImages(dir, key).map((file) => ({
         name: path.basename(file), id: path.relative(dir, file).split(path.sep).join('/'),
@@ -217,10 +304,13 @@ class StickerService {
     probe.emit(this.logger, cost > 300 ? 'warn' : 'debug',
       `status RTT=${probe.ms(cost)}ms 分类=${emotions.length} 张数=${total}`);
     return { ok: true, enabled: true, generation: this.generation, dir, migration: this.migration,
+      maintenance: { ...this.maintenance, errors: this.maintenance.errors.slice(0, 5) },
       testChat: this.config.sticker?.testChat || '文件传输助手', emotions, ...queue };
   }
   queueStatus() {
     return { pending: [...this.jobs.values()].filter((j) => ACTIVE.has(j.status)).length,
+      // 轻量轮询也能看到「正在整理旧图 N/M」，启动器不用为此拉一次全量 status
+      maintenance: { ...this.maintenance, errors: this.maintenance.errors.slice(0, 5) },
       jobs: [...this.jobs.values()].filter((j) => ACTIVE.has(j.status))
         .concat([...this.jobs.values()].filter((j) => !ACTIVE.has(j.status)).slice(-20).reverse())
         .map(({ id, status, error, chat, emotion, path: file }) =>

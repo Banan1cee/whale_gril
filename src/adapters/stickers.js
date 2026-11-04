@@ -271,14 +271,94 @@ function safeDirectory(dir) {
   }
   return absolute;
 }
-function migrateLegacy(config, root) {
-  // OFF is a hard boundary: do not even stat/create a directory.
-  if (!isOn(config)) return { moved: 0, deduplicated: 0, rootImages: 0, errors: [] };
-  const t0 = probe.now();
-  let probeBytes = 0;    // 本次真实读进来的字节数（探针专用，不进 report）
-  let probeWritten = 0;  // 实际写出去的字节数（probe 用）
-  const dir = stickerDir(config, root);
+/** 分块比较两个文件的字节（不整文件读进内存：老实现每张图要读 3 遍 2.4MB） */
+function sameBytes(a, b) {
+  const fa = fs.openSync(a, 'r');
+  const fb = fs.openSync(b, 'r');
+  const bufA = Buffer.allocUnsafe(64 * 1024);
+  const bufB = Buffer.allocUnsafe(64 * 1024);
+  try {
+    for (;;) {
+      const na = fs.readSync(fa, bufA, 0, bufA.length, null);
+      const nb = fs.readSync(fb, bufB, 0, bufB.length, null);
+      if (na !== nb) return false;
+      if (na === 0) return true;
+      if (!bufA.subarray(0, na).equals(bufB.subarray(0, nb))) return false;
+    }
+  } finally {
+    try { fs.closeSync(fa); } catch { /* ignore */ }
+    try { fs.closeSync(fb); } catch { /* ignore */ }
+  }
+}
+
+/**
+ * 把一张旧分类的图并进目标分类目录。返回 'moved' / 'dedup' / 'skip'。
+ *
+ * 关键改动（2026-11-04）：**先试 rename**。
+ * 旧实现是「整文件读 → copyFile → 再读 source/target 比对 → 删源」，一张 2.4MB 的图
+ * 要走 4 遍读 + 1 遍写；实测 245 张 611MB 要 11 秒。而这些目录都在同一个
+ * data/stickers 树下（safeDirectory 已经拒了链接/目录联接），rename 只是改元数据，
+ * 不读内容 → 同样的 245 张降到几十毫秒。只有跨卷/被占用（EXDEV/EPERM/EBUSY）时才退回复制。
+ */
+function moveInto(source, targetDir, dir) {
+  // 这里不再跑整个 regularFile（每张都要逐层 lstat + 两次 realpath，实测 0.8ms/张）：
+  // 这些文件刚被 categoryImages 用 regularFile 验过，目录也过了 safeDirectory /
+  // rootHasLinkedAncestor 两道链接检查。这里只补一次便宜的 isInside + lstat。
+  if (!isInside(dir, source)) return 'skip';
+  let sourceStat;
+  try { sourceStat = fs.lstatSync(source); } catch { return 'skip'; }
+  if (!sourceStat.isFile() || sourceStat.size <= 0 || sourceStat.size > MAX_FILE_BYTES) return 'skip';
+  const ext = path.extname(source);
+  const stem = path.basename(source, ext);
+  const name = path.basename(source);
+  const sourceSize = sourceStat.size;
+  let target = path.join(targetDir, name);
+  let suffix = 1;
+  for (;;) {
+    let stat = null;
+    try { stat = fs.statSync(target); } catch (err) { if (err.code !== 'ENOENT') throw err; }
+    if (!stat) break;
+    if (!regularFile(target, dir)) throw fail('迁移目标不是安全文件');
+    // 同名且内容相同 → 去重，删掉旧的这份；大小不同就不必读内容
+    if (stat.size === sourceSize && sameBytes(source, target)) {
+      fs.unlinkSync(source);
+      return 'dedup';
+    }
+    target = path.join(targetDir, stem + '-迁移' + suffix++ + ext);
+  }
+  if (!isInside(dir, source) || !isInside(dir, target) || source === target) {
+    throw fail('迁移校验失败，保留原图');
+  }
+  try {
+    fs.renameSync(source, target);
+    return 'moved';
+  } catch (err) {
+    if (!['EXDEV', 'EPERM', 'EACCES', 'EBUSY'].includes(err.code)) throw err;
+  }
+  // 兜底：跨卷或文件被占用 → 复制、校验、删源（失败一律保留原图）
+  fs.copyFileSync(source, target, fs.constants.COPYFILE_EXCL);
+  if (fs.statSync(target).size !== sourceSize || !sameBytes(source, target)) {
+    try { fs.unlinkSync(target); } catch { /* 删不掉也没关系，源图还在 */ }
+    throw fail('迁移校验失败，保留原图');
+  }
+  fs.unlinkSync(source);
+  return 'moved';
+}
+
+/**
+ * 迁移的**唯一**实现，写成生成器：每搬完一张就 yield 一次。
+ *   - 同步调用方（测试、兼容接口）把它抽干 → 行为与以前一致；
+ *   - 异步调用方（服务启动后的维护）每 N 张让出一次事件循环 → 不再堵住 /healthz。
+ */
+function* migrateGen(config, root, state = {}) {
   const report = { moved: 0, deduplicated: 0, rootImages: 0, errors: [] };
+  state.report = report;
+  state.total = 0;
+  // OFF is a hard boundary: do not even stat/create a directory.
+  if (!isOn(config)) return report;
+  const t0 = probe.now();
+  let probeBytes = 0;
+  const dir = stickerDir(config, root);
   // 迁移会大量搬文件：先把扫描缓存清掉，避免拿到搬之前的目录内容。
   clearScanCache();
   try { safeDirectory(dir); } catch (err) { report.errors.push(err.message); return report; }
@@ -288,32 +368,17 @@ function migrateLegacy(config, root) {
     for (const source of categoryImages(dir, key)) {
       if (path.dirname(source) === targetDir) continue;
       const fromRoot = path.dirname(path.resolve(source)) === path.resolve(dir);
+      state.total++;
       try {
-        if (!regularFile(source, dir)) continue;
-        const bytes = fs.readFileSync(source);
-        probeBytes += bytes.length;   // 探针：整文件读第 1 遍
-        const ext = path.extname(source);
-        const stem = path.basename(source, ext);
-        let target = path.join(targetDir, path.basename(source));
-        let suffix = 1;
-        while (fs.existsSync(target)) {
-          if (!regularFile(target, dir)) throw fail('迁移目标不是安全文件');
-          if (fs.readFileSync(target).equals(bytes)) break;
-          target = path.join(targetDir, stem + '-迁移' + suffix++ + ext);
+        try { probeBytes += fs.statSync(source).size; } catch { /* 统计失败不影响迁移 */ }
+        const outcome = moveInto(source, targetDir, dir);
+        if (outcome === 'dedup') report.deduplicated++;
+        else if (outcome === 'moved') {
+          report.moved++;
+          if (fromRoot) report.rootImages++;   // 本次从 data/stickers 根目录并进来的张数
         }
-        const existed = fs.existsSync(target);
-        if (!existed) { fs.copyFileSync(source, target, fs.constants.COPYFILE_EXCL); probeWritten += bytes.length; }
-        // Verify both absolute paths and bytes BEFORE deleting the source. A failed
-        // copy/permission error keeps the source readable via legacy inventory.
-        if (!isInside(dir, source) || !isInside(dir, target) || source === target
-            || !regularFile(source, dir) || !regularFile(target, dir)
-            || !fs.readFileSync(source).equals(bytes) || !fs.readFileSync(target).equals(bytes)) {
-          throw fail('迁移校验失败，保留原图');
-        }
-        fs.unlinkSync(source);
-        if (existed) report.deduplicated++; else report.moved++;
-        if (fromRoot) report.rootImages++;   // 本次从 data/stickers 根目录并进来的张数
       } catch (err) { report.errors.push(path.relative(dir, source) + '：' + err.message); }
+      yield report;   // 让调用方决定是否让出事件循环
     }
     // Remove only proven-empty, known legacy folders. Unknown files/subfolders
     // are never deleted just to make Explorer show three folders.
@@ -328,12 +393,39 @@ function migrateLegacy(config, root) {
   }
   // 搬完再清一次：上面按目录读数时又把缓存填回来了。
   clearScanCache();
-  // 探针：启动期最值钱的一行数字 —— 迁移到底花了多久、读写了多少字节
   probe.emit(probeLogger, 'info',
     `迁移完成 搬=${report.moved} 去重=${report.deduplicated} 根目录=${report.rootImages}`
-    + ` 失败=${report.errors.length} 首读字节=${probeBytes} 写入字节=${probeWritten}`
+    + ` 失败=${report.errors.length} 涉及字节=${probeBytes}`
     + ` 耗时=${probe.ms(probe.now() - t0)}ms`);
   return report;
+}
+
+/** 同步迁移：抽干生成器。保留给测试与老调用方。 */
+function migrateLegacy(config, root) {
+  const it = migrateGen(config, root);
+  let step = it.next();
+  while (!step.done) step = it.next();
+  return step.value;
+}
+
+/**
+ * 异步迁移：每 `every` 张让出一次事件循环（setImmediate）。
+ * 启动后的维护走这一条 —— 335 张 611MB 的老实现会堵住主线程 11 秒，
+ * /healthz 在这期间完全没响应，启动器就判内核没起来。
+ */
+async function migrateLegacyAsync(config, root, { every = 16, onProgress = null, state = {} } = {}) {
+  const it = migrateGen(config, root, state);
+  let step = it.next();
+  let count = 0;
+  while (!step.done) {
+    count++;
+    if (typeof onProgress === 'function') {
+      try { onProgress(state.report, state.total); } catch { /* 进度回调不许影响迁移 */ }
+    }
+    if (count % Math.max(1, every) === 0) await new Promise((resolve) => setImmediate(resolve));
+    step = it.next();
+  }
+  return step.value;
 }
 
 // 自定义分类存 data/sticker-categories.json（不进 config：那个文件是给表单用的，
@@ -647,7 +739,7 @@ function upload(config, root, emotion, files) {
   return uploaded;
 }
 module.exports = { EMOTIONS, EMOTION_LABELS, EXTRA_PREFIX, cleanCategoryLabel, extraKey, hasCategory, readExtraCategories, writeExtraCategories, categoryFile, normalizeEmotion, categoryFromName, resolveCategory, SYNONYMS, promptCategories, GENERIC, EXTS, MAX_FILE_BYTES, MAX_UPLOAD_BYTES, MAX_UPLOAD_FILES,
-  hasEmotion, resolveImage, safeDirectory, migrateLegacy, ensureBuiltinDirs, stickerDir, regularFile, listImages, categoryImages, imagesFor, anyImages, isOn,
+  hasEmotion, resolveImage, safeDirectory, migrateLegacy, migrateLegacyAsync, ensureBuiltinDirs, stickerDir, regularFile, listImages, categoryImages, imagesFor, anyImages, isOn,
   invalidateScan, clearScanCache, choose, pick, isStickerRequest, imageType, upload,
   isSeriousText, isLivelyText, SERIOUS_WINDOW_MS, SERIOUS_TURNS,
   isUsableCategory, defaultCategory, resolveUsableCategory, categoryInText, setProbeLogger };
