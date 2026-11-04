@@ -45,6 +45,12 @@ git push origin fix/一句话说明
 
 ## 四、启动器 / 安装包
 
+### UI 改动默认改哪边？
+
+说「界面 / UI / 设置项 / 加个开关」时，**默认改启动器 EXE（`launcher/`）**，不是 `web/`；
+只有明确说「网页 / WebUI / 浏览器」才改网页，两边都有设置页时默认同步（EXE 为主）。
+给 AI 协作者的同一约定写在仓库根目录 `AGENTS.md`，不用每次口头交代。
+
 - 改 `launcher/` 之后要重新发布：`dotnet publish launcher/WhaleLauncher.csproj -c Release -o launcher/publish -p:PublishSingleFile=true -p:SelfContained=false`，
   再把 `launcher/publish/WhaleLauncher.exe` 覆盖到仓库根目录（根目录那份是直接发给用户的成品）。
 - 安装包**只在 GitHub Actions 构建**（`.github/workflows/installer.yml`，手动 `workflow_dispatch` 或推 `v*` tag）；

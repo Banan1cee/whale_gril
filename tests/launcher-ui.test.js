@@ -157,10 +157,20 @@ test('设置页去掉侧栏和标题，单列铺开，模型/高级模式/外观
   assert.ok(!titles.includes('语音'), '语音已并进模型卡，不该再占 Specs 分组');
 });
 
-test('「思考」开关在模型卡的语音页里，默认关，标签带减速提示', () => {
+test('「深度思考」开关在模型卡的聊天页里，默认关，读写 settings.thinking', () => {
   const code = readLauncher('Views/SettingsPage.xaml.cs');
-  assert.match(code, /Path = "deepseek\.thinking"/, '缺少思考开关');
-  assert.match(code, /思考（打开后会减慢说话速度）/, '标签要带括号说明');
+  const chatStart = code.indexOf('// ── 聊天面板');
+  const voiceStart = code.indexOf('// ── 语音面板');
+  assert.ok(chatStart >= 0 && voiceStart > chatStart, '找不到聊天 / 语音面板分界');
+  const chatPanel = code.slice(chatStart, voiceStart);
+  assert.ok(chatPanel.includes('"深度思考"'), '聊天页缺少深度思考开关');
+  assert.ok(chatPanel.includes('思考 token 计入输出预算'), '要说明变慢 / 变贵');
+  // 不能再挂 config 的 deepseek.thinking：它会被网页保存的 settings.thinking 盖掉
+  assert.ok(!code.includes('Path = "deepseek.thinking"'), '不要再用 config 的 deepseek.thinking');
+  assert.ok(!code.includes('思考（打开后会减慢说话速度）'), '旧语音页开关要删掉');
+  // 读写都走 data/settings.json：保存时带 thinking，加载时回填
+  assert.ok(code.includes('\\"thinking\\":'), '保存请求要带 thinking');
+  assert.ok(code.includes('TryGetProperty("thinking"'), '加载时要回填 thinking');
   // 默认必须是关：DEFAULT_CONFIG 里 thinking=false
   const config = read('src/infra/config.js');
   assert.match(config, /thinking: false/, '默认值应为 false');
