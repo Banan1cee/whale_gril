@@ -317,6 +317,49 @@ class Bot {
   }
 
   /**
+   * 记忆拉取失败时的兜底上下文：整块放弃记忆（人物卡 / 事件 / 摘要 / 关系），
+   * 只带这个会话最近的原文继续回复。
+   *
+   * 记忆读不出来是「少了一点了解」，不是「不能说话」；宁可回得普通一点，
+   * 也不能让整条消息静默丢掉。原文也读不出来时返回空 recent，至少还能回当前这条。
+   */
+  recentOnlyContext(key, { isGroup = false } = {}) {
+    const chat = (this.config && this.config.chat) || {};
+    const configured = Number(isGroup ? chat.groupHistoryTurns : chat.historyTurns) || 20;
+    const cap = Math.max(4, Math.min(200, configured));
+    let recent = [];
+    try {
+      recent = (this.store.messages(key, cap) || []).filter((m) => m && m.text && !m.error);
+    } catch { /* 连原文都读不出来就只回当前这条 */ }
+    // 记忆块没了，历史再灌满也没意义，还容易把单轮预算顶爆：只留最近 6,000 字
+    const kept = [];
+    let chars = 0;
+    for (let i = recent.length - 1; i >= 0; i -= 1) {
+      const len = String(recent[i].text || '').length;
+      if (kept.length && chars + len > 6000) break;
+      kept.unshift(recent[i]);
+      chars += len;
+    }
+    return {
+      chatId: key,
+      card: null,
+      events: [],
+      block: '',
+      relationsBlock: '',
+      relations: [],
+      mentions: [],
+      summary: '',
+      recent: kept,
+      recentTokens: 0,
+      summaryTokens: 0,
+      memoryTokens: 0,
+      relationsTokens: 0,
+      notes: [],
+      memoryFailed: true,
+    };
+  }
+
+  /**
    * 判断并准备好这次回复（不调用模型）。返回 decision。
    */
   async decide(rawMsg) {
@@ -449,9 +492,19 @@ class Bot {
         replyToUserId: msg.replyToUserId,
       });
     }
-    const profile = this.store.profile(key, msg.senderId, msg.senderName);
+    // 人物卡也是记忆：读不出来就用空卡顶上（昵称退回微信昵称），别让整条消息陪葬。
+    // 以前这里没兜底，记忆目录一坏（文件损坏 / 权限 / 迁移中）就直接抛到 _handleOnce。
+    let profile = null;
+    try {
+      profile = this.store.profile(key, msg.senderId, msg.senderName);
+    } catch (err) {
+      if (this.logger) this.logger.error('读取人物卡失败（按空卡继续回复）：' + ((err && err.message) || err));
+      profile = { uid: msg.senderId, name: msg.senderName, nickname: '', notes: [], count: 0 };
+    }
     // 群里用微信昵称区分说话人，避免用户改 profile.nickname 造成冒名；私聊仍沿用自报昵称。
-    const displayName = isGroup ? (msg.senderName || profile.nickname) : (profile.nickname || msg.senderName);
+    const displayName = isGroup
+      ? (msg.senderName || profile.nickname || '')
+      : (profile.nickname || msg.senderName || '');
     // 自述 / 纠正 / 手动记住的抽取在 Store.appendMessage 里同步完成：
     // 只写「当前 chat + 当前说话人」的卡，跨 chat 写入会直接抛错。
     // 回填的旧问题（recycled）在上面的 appendMessage 处整体跳过，不会重复抽事实。
@@ -844,20 +897,40 @@ class Bot {
     // 校准样本够（n ≥ 10）才让 scale 参与裁剪；trimScale 已量化到 0.05，窗口不会每轮抖。
     const modelInfo = this.modelContext();
     const trimScale = this.calibrationEngine().trimScale(modelInfo);
-    const mem = this.store.buildContext({
-      key,
-      uid: msg.senderId,
-      name: displayName,
-      query: clean.text,
-      now: nowMs,
-      isGroup,
-      mentionedNames,
-      relationsEnabled: relationsOn,
-      tokenScale: trimScale,
-    });
+    // 记忆（人物卡 / 事件 / 摘要 / 关系）是加分项，不是回复的前提：
+    // buildContext 抛错（记忆文件坏了 / 磁盘满 / 正在迁移）时整块放弃，
+    // 只带本会话最近的原文继续回复 —— 以前这里没兜底，异常会一路抛到
+    // _handleOnce，最后变成「这条不回话」。失败本身仍然要报 error。
+    let mem;
+    try {
+      mem = this.store.buildContext({
+        key,
+        uid: msg.senderId,
+        name: displayName,
+        query: clean.text,
+        now: nowMs,
+        isGroup,
+        mentionedNames,
+        relationsEnabled: relationsOn,
+        tokenScale: trimScale,
+      });
+      this._memoryErrorLogged = false;
+    } catch (err) {
+      if (this.logger) {
+        // 第一次带完整堆栈（能定位到具体模块），之后同一进程内只留一行，别每条消息刷一遍
+        const detail = this._memoryErrorLogged
+          ? ((err && err.message) || String(err))
+          : ((err && err.stack) || String(err));
+        this.logger.error('拉取记忆失败（本轮放弃记忆块，只用 recent 消息回复）：' + detail);
+      }
+      this._memoryErrorLogged = true;
+      mem = this.recentOnlyContext(key, { isGroup });
+    }
     const notes = mem.notes || [];
     if (notes.length && msg.senderId) {
-      this.store.touchNotes(key, msg.senderId, notes, nowMs);
+      try {
+        this.store.touchNotes(key, msg.senderId, notes, nowMs);
+      } catch { /* 「提过几次」没记上不影响这轮回复 */ }
     }
     // mem.recent 已经按 3,200 token 预算裁过；刚写入的当前消息先去掉，由 buildTurns 统一拼一次
     const history = mem.recent || [];
@@ -951,6 +1024,9 @@ class Bot {
     const envBlock = envInfo.systemBlock(this.config, this.version);
     const turnState = { envBlock, bridgeLine: envInfo.bridgeLine(msg) };
 
+    // 动作账本也是记忆的一部分：读不出来就不带，别把整条回复拖死
+    let recentEvents = [];
+    try { recentEvents = this.store.events(key, 12) || []; } catch { recentEvents = []; }
     // 提示词拆成两块：system 只放静态人设/规则/日期，尾部放这一轮会变的东西
     // （心情、说话人、字数、@、梗、联网资料、动作账本……），前缀缓存才不会被每轮打断。
     // features.staticSystem=false 时完全回到旧行为：所有内容都在 system，tail 为空串。
@@ -964,7 +1040,7 @@ class Bot {
       sessionSummary: '',
       // 外部动作账本：她做过什么（发表情包、交给桥接、读链接、联网），
       // 不塞进去她就永远不知道自己的副作用，只能编。
-      events: this.store.events(key, 12),
+      events: recentEvents,
       now,
       envBlock,
     });

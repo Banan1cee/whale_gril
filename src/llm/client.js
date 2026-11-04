@@ -98,6 +98,30 @@ function cutToSentence(text) {
   return last ? s.slice(0, last.index + 1) : s;
 }
 
+/**
+ * 空响应到底为什么空：只拼「结构证据」，不碰聊天正文。
+ *
+ * 以前空响应只抛一句「空泡泡」，detail 是空的 —— 日志里既看不出是限流、
+ * 审核、还是 max_tokens 被思考打满，也看不出是不是 200 里塞了个错误体。
+ * 现在把 finish_reason / usage / 有没有 reasoning_content / choices 是否为空
+ * 一起带进 detail，下次再出现能直接定位。
+ */
+function describeEmpty(json, choice = {}) {
+  const bits = [];
+  if (!json || !Array.isArray(json.choices)) bits.push('choices=缺失');
+  else if (!json.choices.length) bits.push('choices=空');
+  const finish = choice && choice.finish_reason;
+  if (finish) bits.push('finish=' + finish);
+  const usage = json && json.usage;
+  if (usage) bits.push(`usage=${Number(usage.prompt_tokens) || 0}/${Number(usage.completion_tokens) || 0}`);
+  const msg = (choice && choice.message) || {};
+  if (msg.reasoning_content) bits.push('reasoning=' + String(msg.reasoning_content).length + '字');
+  if (Array.isArray(msg.tool_calls) && msg.tool_calls.length) bits.push('tool_calls=' + msg.tool_calls.length);
+  if (msg.refusal) bits.push('refusal=' + String(msg.refusal).slice(0, 40));
+  if (!bits.length) bits.push('未知');
+  return '空响应（' + bits.join(' ') + '）';
+}
+
 function parseSseLines(bufferText) {
   const events = [];
   const chunks = bufferText.split(/\r?\n\r?\n/);
@@ -445,9 +469,29 @@ class DeepSeekClient {
           throw new LlmError(FRIENDLY.empty, { code: 'bad_json', detail: 'invalid json: ' + raw.slice(0, 200) });
         }
         this._recordUsage(json);
+        // HTTP 200 也可能带错误体（网关 / 反向代理 / 部分兼容服务会这么干）。
+        // 以前这里直接当「模型没说话」吞成空响应，日志里只剩一句「空泡泡」，
+        // 真正的限流原因全丢了。
+        if (json && json.error) {
+          const errObj = json.error;
+          const detail = String((errObj && (errObj.message || errObj.msg)) || errObj || '').slice(0, 300);
+          const status = Number(errObj && (errObj.code || errObj.status)) || 0;
+          throw new LlmError(friendlyForStatus(status, detail), {
+            code: 'api_error',
+            status,
+            detail: 'HTTP 200 但带错误体：' + (detail || '(没有说明)'),
+            retryable: true,
+          });
+        }
         const choice = (json && json.choices && json.choices[0]) || {};
         const text = String((choice.message && choice.message.content) || '').trim();
-        if (!text) throw new LlmError(FRIENDLY.empty, { code: 'empty' });
+        if (!text) {
+          const emptyDetail = describeEmpty(json, choice);
+          // 空响应多数是服务商抖一下，换保守参数再要一次通常就有了；
+          // 真不行才把「空泡泡」发给用户。只重试一次，别让一条消息等三轮。
+          if (!safe && this.logger) this.logger.warn('模型返回' + emptyDetail + '，换保守参数重试一次');
+          throw new LlmError(FRIENDLY.empty, { code: 'empty', detail: emptyDetail, retryable: true });
+        }
         const truncated = choice.finish_reason === 'length';
         const degenerate = looksDegenerate(text);
         if ((degenerate || truncated) && !safe) {
@@ -467,7 +511,8 @@ class DeepSeekClient {
         if (signal && signal.aborted) throw new LlmError('aborted', { code: 'aborted' });
         lastErr = err;
         const llmErr = err instanceof LlmError ? err : new LlmError(FRIENDLY.default, { detail: String(err && err.message) });
-        if (!llmErr.retryable || attempt === 2 || llmErr.code === 'aborted') {
+        // 空响应只重试一次（两次都空基本不是抖动，再试只是让用户多等）
+        if (!llmErr.retryable || attempt === 2 || llmErr.code === 'aborted' || (llmErr.code === 'empty' && attempt >= 1)) {
           // 接口错误时如果之前已经拿到过跑飞的文本，至少给个能用的短句
           if (sawDegenerate && llmErr.retryable) break;
           throw llmErr;
@@ -570,6 +615,8 @@ class DeepSeekClient {
     res.setEncoding('utf8');
     let buffer = '';
     let sent = 0;
+    // 一个字都没吐时也要留下证据：finish_reason 能区分「预算打满」和「模型真的没说话」
+    let lastFinish = '';
     try {
       for await (const chunk of res) {
         buffer += chunk;
@@ -593,6 +640,8 @@ class DeepSeekClient {
             throw new LlmError(FRIENDLY.default, { code: 'stream_error', detail: String(json.error.message || '') });
           }
           if (json && json.usage) this._recordUsage(json);
+          const finish = json?.choices?.[0]?.finish_reason;
+          if (finish) lastFinish = finish;
           const delta = json?.choices?.[0]?.delta;
           const piece = delta?.content;
           if (piece) {
@@ -609,7 +658,12 @@ class DeepSeekClient {
       try { req.destroy(); } catch { /* ignore */ }
       try { res.destroy(); } catch { /* ignore */ }
     }
-    if (!sent) throw new LlmError(FRIENDLY.empty, { code: 'empty' });
+    if (!sent) {
+      throw new LlmError(FRIENDLY.empty, {
+        code: 'empty',
+        detail: '空响应（流式没吐字' + (lastFinish ? ' finish=' + lastFinish : '') + '）',
+      });
+    }
   }
 }
 

@@ -132,3 +132,99 @@ test('payload 会带上温度、max_tokens 和系统提示', () => {
   assert.equal(payload.max_tokens, 200);
   assert.equal(client.endpoint(), 'http://127.0.0.1:1/chat/completions');
 });
+
+// ── 空响应：以前只报一句「空泡泡」，查不出原因 ──────────────────────────
+// 现场（2026-11-04 00:30）：同一条日志里 memory/extractor 和 pipeline 都拿到
+// 「咕噜…这次只吐出了个空泡泡」，两条独立的提示词都空 → 不是记忆坏了，是模型返回了空内容。
+
+test('空响应会换保守参数重试一次，第二次有字就用第二次的', async () => {
+  let calls = 0;
+  const fake = await startFake((req, res) => {
+    req.resume();
+    req.on('end', () => {
+      calls += 1;
+      res.writeHead(200, { 'content-type': 'application/json' });
+      if (calls === 1) {
+        res.end(JSON.stringify({ choices: [{ message: { content: '' }, finish_reason: 'stop' }], usage: { prompt_tokens: 100, completion_tokens: 0 } }));
+      } else {
+        res.end(JSON.stringify({ choices: [{ message: { content: '咕噜，我在' }, finish_reason: 'stop' }] }));
+      }
+    });
+  });
+  const client = makeClient(fake.url);
+  const text = await client.complete({ system: 's', turns: [{ role: 'user', content: '在吗' }] });
+  assert.equal(text, '咕噜，我在');
+  assert.equal(calls, 2, '空响应应当重试一次');
+  await fake.close();
+});
+
+test('两次都空：抛 LlmError，detail 里带 finish/usage 证据', async () => {
+  const fake = await startFake((req, res) => {
+    req.resume();
+    req.on('end', () => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({
+        choices: [{ message: { content: '' }, finish_reason: 'length' }],
+        usage: { prompt_tokens: 3200, completion_tokens: 700 },
+      }));
+    });
+  });
+  const client = makeClient(fake.url);
+  let err = null;
+  try {
+    await client.complete({ system: 's', turns: [{ role: 'user', content: '在吗' }] });
+  } catch (e) {
+    err = e;
+  }
+  assert.ok(err instanceof LlmError);
+  assert.equal(err.code, 'empty');
+  assert.equal(err.userMessage.includes('空泡泡'), true);
+  assert.ok(err.detail.includes('finish=length'), 'detail 要能看出是预算打满：' + err.detail);
+  assert.ok(err.detail.includes('usage=3200/700'), 'detail 要带 usage：' + err.detail);
+  await fake.close();
+});
+
+test('HTTP 200 但带错误体：报 api_error 而不是「空泡泡」', async () => {
+  const fake = await startFake((req, res) => {
+    req.resume();
+    req.on('end', () => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: { message: 'Rate limit reached for requests', code: 429 } }));
+    });
+  });
+  const client = makeClient(fake.url);
+  let err = null;
+  try {
+    await client.complete({ system: 's', turns: [{ role: 'user', content: '在吗' }] });
+  } catch (e) {
+    err = e;
+  }
+  assert.ok(err instanceof LlmError);
+  assert.equal(err.code, 'api_error');
+  assert.ok(err.detail.includes('HTTP 200 但带错误体'), err.detail);
+  assert.ok(err.detail.includes('Rate limit'), err.detail);
+  await fake.close();
+});
+
+test('流式一个字都没吐：detail 带 finish_reason', async () => {
+  const fake = await startFake((req, res) => {
+    req.resume();
+    req.on('end', () => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write('data: {"choices":[{"delta":{},"finish_reason":"length"}]}\n\n');
+      res.write('data: [DONE]\n\n');
+      res.end();
+    });
+  });
+  const client = makeClient(fake.url);
+  let err = null;
+  try {
+    for await (const _ of client.stream({ system: 's', turns: [{ role: 'user', content: 'hi' }] })) { /* 不该有内容 */ }
+  } catch (e) {
+    err = e;
+  }
+  assert.ok(err instanceof LlmError);
+  assert.equal(err.code, 'empty');
+  assert.ok(err.detail.includes('finish=length'), err.detail);
+  await fake.close();
+});
