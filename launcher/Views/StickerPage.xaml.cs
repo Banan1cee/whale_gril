@@ -26,6 +26,15 @@ namespace WhaleLauncher.Views
         private CancellationTokenSource _preview = new();
         private string _librarySignature = "";
         private bool _currentIsExtra;
+        // 计时探针：WHALE_PROBE=1 才写 launcher.log，默认完全不产生额外日志
+        private static readonly bool ProbeOn =
+            string.Equals(Environment.GetEnvironmentVariable("WHALE_PROBE"), "1", StringComparison.Ordinal);
+
+        private void Probe(string text)
+        {
+            if (!ProbeOn) return;
+            try { _sup.Say("[probe] " + text); } catch { /* 探针不许影响界面 */ }
+        }
 
         public StickerPage(RuntimeSupervisor sup)
         {
@@ -36,7 +45,9 @@ namespace WhaleLauncher.Views
 
         public async Task RefreshAsync()
         {
-            if (DateTime.UtcNow < _nextRefresh || _refreshLock.CurrentCount == 0) return;
+            // 探针：这两条早退就是「点页签没反应」的候选原因，量一下到底吞了多少次
+            if (DateTime.UtcNow < _nextRefresh) { Probe("RefreshAsync 被 5 秒节流跳过"); return; }
+            if (_refreshLock.CurrentCount == 0) { Probe("RefreshAsync 上一轮还没跑完，本次跳过"); return; }
             await LoadAsync();
         }
 
@@ -53,12 +64,16 @@ namespace WhaleLauncher.Views
 
         private async Task LoadCoreAsync()
         {
+            var tLoad = Stopwatch.StartNew();
             var online = _sup.NodeRunning;
             ChkEnabled.IsEnabled = TxtDir.IsEnabled = online;
+            var tInv = Stopwatch.StartNew();
             var res = await StickerLibrary.Call(_sup.BaseDir, "inventory");
+            tInv.Stop();
             if (!res.Ok)
             {
                 StatusText.Text = "无法读取图库：" + res.Error;
+                Probe($"LoadCore 失败 inventory={tInv.ElapsedMilliseconds}ms err={res.Error}");
                 return;
             }
 
@@ -90,13 +105,16 @@ namespace WhaleLauncher.Views
             if (!TxtDir.IsKeyboardFocusWithin) TxtDir.Text = res.Str("configuredDir");
             if (!_loaded) StatusText.Text = "选一个分类，打开文件夹，把图片拖进去即可。";
             _loaded = true;
+            var tQueue = Stopwatch.StartNew();
             var queue = online && res.Bool("enabled")
                 ? await Api.Get(_sup.Url, "/api/stickers/status?queueOnly=1")
                 : new ApiResult();
+            tQueue.Stop();
             var pending = queue.Long("pending");
             QueueInfo.Text = !online ? "内核未启动" : !res.Bool("enabled") ? "发送已关闭"
                 : !queue.Ok ? "暂时无法读取发送队列" : pending > 0 ? $"排队中 {pending} 张" : "队列空";
             RenderJobs(queue);
+            Probe($"LoadCore 完成 inventory={tInv.ElapsedMilliseconds}ms 队列接口={tQueue.ElapsedMilliseconds}ms 总计={tLoad.ElapsedMilliseconds}ms 分类数={_emotions.Count} 在线={online}");
         }
 
         private async void OnSaveStickerSettings(object sender, RoutedEventArgs e)
@@ -140,6 +158,9 @@ namespace WhaleLauncher.Views
 
         private async void RenderGrid(ApiResult res)
         {
+            var tGrid = Stopwatch.StartNew();
+            long firstCellMs = -1, uiMs = 0;
+            var added = 0;
             _preview.Cancel();
             _preview.Dispose();
             _preview = new CancellationTokenSource();
@@ -160,9 +181,20 @@ namespace WhaleLauncher.Views
             {
                 var path = S(item, "path");
                 var bitmap = await Task.Run(() => ReadThumbnail(path, token));
-                if (token.IsCancellationRequested) return;
+                if (token.IsCancellationRequested)
+                {
+                    Probe($"RenderGrid 分类={selected} 被取消 已上屏={added}/{items.GetArrayLength()} 用时={tGrid.ElapsedMilliseconds}ms");
+                    return;
+                }
+                var tUi = Stopwatch.StartNew();
                 GridHost.Children.Add(BuildCell(selected, S(item, "id"), bitmap));
+                tUi.Stop();
+                uiMs += tUi.ElapsedMilliseconds;
+                added++;
+                if (firstCellMs < 0) firstCellMs = tGrid.ElapsedMilliseconds;
             }
+            // 探针：首图 = 用户眼里「点下去有没有反应」，uiMs = 真正卡住 UI 线程的部分
+            Probe($"RenderGrid 分类={selected} 张数={added} 首图={firstCellMs}ms UI阻塞={uiMs}ms 总计={tGrid.ElapsedMilliseconds}ms");
         }
 
         private static BitmapImage ReadThumbnail(string path, CancellationToken token)

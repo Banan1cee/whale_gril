@@ -3,6 +3,7 @@
 const crypto = require('node:crypto');
 const path = require('node:path');
 const stickers = require('../adapters/stickers');
+const probe = require('../infra/probe');
 const ACTIVE = new Set(['queued', 'reserved', 'sending']);
 const TERMINAL = new Set(['confirmed', 'unconfirmed', 'failed', 'cancelled']);
 function fail(message, statusCode = 400) { return Object.assign(new Error(message), { statusCode }); }
@@ -22,9 +23,14 @@ class StickerService {
     this.recent = new Map();
     this.libraryDir = '';
     this.migration = { moved: 0, deduplicated: 0, errors: [] };
+    // 探针：这一行直接量「构造函数里的同步磁盘工作」，也就是 listen 之前被堵住的时长
+    const t0 = probe.now();
     this.reconcile();
+    // 总闸关着时一行日志都不许有（既有测试就是这么约定的），所以只在启用时打
+    if (this.enabled) probe.emit(logger, 'info', `构造/reconcile 耗时=${probe.ms(probe.now() - t0)}ms`);
   }
   reconcile() {
+    const t0 = probe.now();
     const enabled = stickers.isOn(this.config);
     if (enabled !== this.enabled) {
       // Invalidates fetched/inflight jobs even if the feature is switched off and back on.
@@ -81,6 +87,9 @@ class StickerService {
     const completed = [...this.jobs.values()].filter((j) => !ACTIVE.has(j.status));
     for (const job of completed.slice(0, Math.max(0, completed.length - 50))) this.jobs.delete(job.id);
     while (this.recent.size > 2000) this.recent.delete(this.recent.keys().next().value);
+    // 探针：热路径（status/plan 都会调 reconcile）只在真的慢时留一行
+    const cost = probe.now() - t0;
+    if (cost > 20) probe.emit(this.logger, cost > 200 ? 'warn' : 'debug', `reconcile 耗时=${probe.ms(cost)}ms 启用=${enabled}`);
     return enabled;
   }
   requireEnabled() { if (!this.reconcile()) throw fail('表情包功能未开启', 404); }
@@ -183,6 +192,7 @@ class StickerService {
         .map(({ id, status, generation }) => ({ id, status, generation })) };
   }
   status(queueOnly = false) {
+    const t0 = probe.now();
     this.requireEnabled();
     const queue = this.queueStatus();
     if (queueOnly) return { ok: true, ...queue };
@@ -201,6 +211,11 @@ class StickerService {
       if (!key) continue;
       emotions.push(list(key, label, true));
     }
+    // 探针：status 的 RTT（启动器每 2s、网页每 3s 拉一次，这条就是它们等的时间）
+    const total = emotions.reduce((sum, e) => sum + e.count, 0);
+    const cost = probe.now() - t0;
+    probe.emit(this.logger, cost > 300 ? 'warn' : 'debug',
+      `status RTT=${probe.ms(cost)}ms 分类=${emotions.length} 张数=${total}`);
     return { ok: true, enabled: true, generation: this.generation, dir, migration: this.migration,
       testChat: this.config.sticker?.testChat || '文件传输助手', emotions, ...queue };
   }

@@ -21,6 +21,8 @@ const { createTrace } = require('./core/trace');
 const { createGateways } = require('./adapters/gateway');
 const personaStore = require('./persona/store');
 const { StickerService } = require('./services/stickerService');
+const stickersAdapter = require('./adapters/stickers');
+const probe = require('./infra/probe');
 const { ContactsCache } = require('./services/contacts');
 const { ReminderService } = require('./services/reminderService');
 const locationProbe = require('./services/location');
@@ -28,6 +30,7 @@ const locationProbe = require('./services/location');
 const VERSION = require('../package.json').version;
 
 function createRuntime({ root = path.resolve(__dirname, '..'), env = process.env, loggerLevel } = {}) {
+  const probeT0 = probe.now();   // 探针：createRuntime 整体耗时（listen 之前的关键路径）
   ensureConfigFile(root);
   const config = loadConfig({ root, env });
   // 称呼只认一个真源：config.json 的 persona.ownerName。
@@ -44,6 +47,9 @@ function createRuntime({ root = path.resolve(__dirname, '..'), env = process.env
     fileLevel: (config.log && config.log.fileLevel) || 'debug',
     file: logFile,
   });
+  // 探针：事件循环延迟采样必须从 createRuntime 就开始 —— 同步迁移就堵在这里，
+  // 放到 listen 之后再开会永远看不到那 10 秒。默认关，WHALE_PROBE_LOOP=1 才启动。
+  const loopProbe = probe.startEventLoopProbe(logger);
   // 配置体检：非法值以前会被各处的 `Number(x) || 默认` 静默吃掉，
   // 用户在调试台填错了也看不出来。这里启动时报一次，不阻断运行。
   try {
@@ -94,7 +100,7 @@ function createRuntime({ root = path.resolve(__dirname, '..'), env = process.env
     logger.warn('媒体缓存清理失败（不影响使用）：' + err.message);
   }
 
-  const runtime = { config, logger, store, startedAt: Date.now(), version: VERSION };
+  const runtime = { config, logger, store, startedAt: Date.now(), version: VERSION, loopProbe };
   runtime.child = child;
 
   // 长时间挂着也要有断点：每 30 分钟留一份（启动那份可能已经是几十小时前了）
@@ -133,6 +139,7 @@ function createRuntime({ root = path.resolve(__dirname, '..'), env = process.env
   }
   // 表情包任务队列：内存态，重启不重放（避免把上一条没发出去的表情再补发一次）
   // store 用来记动作账：发了哪张、桥接确认没确认，下一轮提示词才看得见
+  stickersAdapter.setProbeLogger(child('sticker'));   // 探针：让适配层也往同一份日志写
   runtime.stickerService = new StickerService(config, { store, logger: child('sticker') });
   runtime.bot.stickerService = runtime.stickerService;
   // 联系人缓存：桥接推上来的 wxid 清单，给启动器选择器和 care 白名单用
@@ -177,6 +184,8 @@ function createRuntime({ root = path.resolve(__dirname, '..'), env = process.env
   }
   runtime.gateways = createGateways({ config, bot: runtime.bot, logger: child('gateway') });
   watchConfigFile(runtime);
+  // 探针：createRuntime 结束 = server.js 可以 listen 的时刻，这条就是「启动被堵了多久」
+  probe.emit(logger, 'info', `createRuntime 耗时=${probe.ms(probe.now() - probeT0)}ms（listen 之前）`);
   return runtime;
 }
 

@@ -5,7 +5,12 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const features = require('../infra/features');
+const probe = require('../infra/probe');
 const EMOTIONS = Object.freeze({ cute: '傲娇', angry: '炸毛', happy: '开心' });
+// 探针用 logger：由 stickerService/app 注入；子进程（stickerLibraryLocal）不注入 → 完全静默，
+// 免得往被当作 JSON 解析的 stdout 里掺东西。
+let probeLogger = null;
+function setProbeLogger(logger) { probeLogger = logger || null; }
 const EMOTION_LABELS = EMOTIONS;
 const GENERIC = '通用';
 // Legacy keys remain accepted by the API, but are never exposed as extra cards.
@@ -179,6 +184,7 @@ function invalidateScan(folder) {
 function clearScanCache() { scanCache.clear(); }
 
 function listImagesCached(folder, root) {
+  const t0 = probe.now();
   const stamp = scanStamp(folder);
   if (!stamp) { invalidateScan(folder); return []; }
   const key = path.resolve(folder);
@@ -187,11 +193,17 @@ function listImagesCached(folder, root) {
     // Map 保持插入顺序：命中后挪到末尾，简单的 LRU。
     scanCache.delete(key);
     scanCache.set(key, hit);
+    probe.emit(probeLogger, 'debug', `扫描缓存命中 ${key} 张数=${hit.files.length} 耗时=${probe.ms(probe.now() - t0)}ms`);
     return hit.files.slice();
   }
   const files = listImages(folder, { root, recursive: false });
   scanCache.set(key, { root, stamp, files });
   while (scanCache.size > SCAN_CACHE_MAX) scanCache.delete(scanCache.keys().next().value);
+  // 探针：这条是「首次扫描 / 上传后重扫」的真实成本，也是 0.8ms/张 那个数字的来源
+  const cost = probe.now() - t0;
+  const perFile = files.length ? cost / files.length : 0;
+  probe.emit(probeLogger, cost > 50 ? 'warn' : 'debug',
+    `扫描 ${key} 张数=${files.length} 耗时=${probe.ms(cost)}ms 单张=${probe.ms(perFile)}ms`);
   return files.slice();
 }
 // Every public entry has a relative ID, not just a basename: legacy folders can
@@ -202,17 +214,24 @@ function categoryFolders(key) {
   return FOLDERS[key] || [];
 }
 function categoryImages(dir, emotion) {
+  const t0 = probe.now();
   const key = normalizeEmotion(emotion);
   if (!key) return [];
-  if (key.startsWith(EXTRA_PREFIX)) {
-    // 自定义分类：目录名就是标签，不递归（用户自己往里复制/拖文件）
-    return listImagesCached(path.join(dir, categoryFolders(key)[0]), dir);
-  }
-  const files = FOLDERS[key].flatMap((name) => listImagesCached(path.join(dir, name), dir));
-  // 直接扔在 data/stickers 根目录的图也算「开心」：以前这里是 key === 'other'，
-  // 但 normalizeEmotion 早把 other 映射成 happy，那段是死代码，根目录的图永远收不到。
-  if (key === 'happy') files.push(...listImagesCached(dir, dir));
-  return [...new Set(files)].sort((a, b) => a.localeCompare(b));
+  const out = (() => {
+    if (key.startsWith(EXTRA_PREFIX)) {
+      // 自定义分类：目录名就是标签，不递归（用户自己往里复制/拖文件）
+      return listImagesCached(path.join(dir, categoryFolders(key)[0]), dir);
+    }
+    const files = FOLDERS[key].flatMap((name) => listImagesCached(path.join(dir, name), dir));
+    // 直接扔在 data/stickers 根目录的图也算「开心」：以前这里是 key === 'other'，
+    // 但 normalizeEmotion 早把 other 映射成 happy，那段是死代码，根目录的图永远收不到。
+    if (key === 'happy') files.push(...listImagesCached(dir, dir));
+    return [...new Set(files)].sort((a, b) => a.localeCompare(b));
+  })();
+  const cost = probe.now() - t0;
+  probe.emit(probeLogger, cost > 50 ? 'warn' : 'debug',
+    `分类 ${key} 目录=${dir} 张数=${out.length} 耗时=${probe.ms(cost)}ms`);
+  return out;
 }
 function imagesFor(dir, emotion) { return categoryImages(dir, emotion); }
 function anyImages(dir) { return [...new Set(Object.keys(EMOTIONS).flatMap((key) => categoryImages(dir, key)))]; }
@@ -255,6 +274,9 @@ function safeDirectory(dir) {
 function migrateLegacy(config, root) {
   // OFF is a hard boundary: do not even stat/create a directory.
   if (!isOn(config)) return { moved: 0, deduplicated: 0, rootImages: 0, errors: [] };
+  const t0 = probe.now();
+  let probeBytes = 0;    // 本次真实读进来的字节数（探针专用，不进 report）
+  let probeWritten = 0;  // 实际写出去的字节数（probe 用）
   const dir = stickerDir(config, root);
   const report = { moved: 0, deduplicated: 0, rootImages: 0, errors: [] };
   // 迁移会大量搬文件：先把扫描缓存清掉，避免拿到搬之前的目录内容。
@@ -269,6 +291,7 @@ function migrateLegacy(config, root) {
       try {
         if (!regularFile(source, dir)) continue;
         const bytes = fs.readFileSync(source);
+        probeBytes += bytes.length;   // 探针：整文件读第 1 遍
         const ext = path.extname(source);
         const stem = path.basename(source, ext);
         let target = path.join(targetDir, path.basename(source));
@@ -279,7 +302,7 @@ function migrateLegacy(config, root) {
           target = path.join(targetDir, stem + '-迁移' + suffix++ + ext);
         }
         const existed = fs.existsSync(target);
-        if (!existed) fs.copyFileSync(source, target, fs.constants.COPYFILE_EXCL);
+        if (!existed) { fs.copyFileSync(source, target, fs.constants.COPYFILE_EXCL); probeWritten += bytes.length; }
         // Verify both absolute paths and bytes BEFORE deleting the source. A failed
         // copy/permission error keeps the source readable via legacy inventory.
         if (!isInside(dir, source) || !isInside(dir, target) || source === target
@@ -305,6 +328,11 @@ function migrateLegacy(config, root) {
   }
   // 搬完再清一次：上面按目录读数时又把缓存填回来了。
   clearScanCache();
+  // 探针：启动期最值钱的一行数字 —— 迁移到底花了多久、读写了多少字节
+  probe.emit(probeLogger, 'info',
+    `迁移完成 搬=${report.moved} 去重=${report.deduplicated} 根目录=${report.rootImages}`
+    + ` 失败=${report.errors.length} 首读字节=${probeBytes} 写入字节=${probeWritten}`
+    + ` 耗时=${probe.ms(probe.now() - t0)}ms`);
   return report;
 }
 
@@ -622,4 +650,4 @@ module.exports = { EMOTIONS, EMOTION_LABELS, EXTRA_PREFIX, cleanCategoryLabel, e
   hasEmotion, resolveImage, safeDirectory, migrateLegacy, ensureBuiltinDirs, stickerDir, regularFile, listImages, categoryImages, imagesFor, anyImages, isOn,
   invalidateScan, clearScanCache, choose, pick, isStickerRequest, imageType, upload,
   isSeriousText, isLivelyText, SERIOUS_WINDOW_MS, SERIOUS_TURNS,
-  isUsableCategory, defaultCategory, resolveUsableCategory, categoryInText };
+  isUsableCategory, defaultCategory, resolveUsableCategory, categoryInText, setProbeLogger };
