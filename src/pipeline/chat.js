@@ -25,6 +25,7 @@ const links = require('../adapters/links');
 const websearch = require('../adapters/websearch');
 const searchRouter = require('../adapters/searchRouter');
 const { LlmError } = require('../llm/client');
+const { describeError } = require('../infra/errors');
 const { saveSettings } = require('../infra/config');
 const personaStore = require('../persona/store');
 const { sanitizeForModel, nameMatches, clampInt } = require('../core/text');
@@ -495,7 +496,7 @@ class Bot {
           replyToUserId: msg.replyToUserId,
         });
       } catch (err) {
-        if (this.logger) this.logger.error('写入用户消息失败（继续回复）：' + ((err && err.message) || err));
+        if (this.logger) this.logger.error('写入用户消息失败（继续回复）：' + describeError(err));
       }
     }
     // 人物卡也是记忆：读不出来就用空卡顶上（昵称退回微信昵称），别让整条消息陪葬。
@@ -504,7 +505,7 @@ class Bot {
     try {
       profile = this.store.profile(key, msg.senderId, msg.senderName);
     } catch (err) {
-      if (this.logger) this.logger.error('读取人物卡失败（按空卡继续回复）：' + ((err && err.message) || err));
+      if (this.logger) this.logger.error('读取人物卡失败（按空卡继续回复）：' + describeError(err));
       profile = { uid: msg.senderId, name: msg.senderName, nickname: '', notes: [], count: 0 };
     }
     // 群里用微信昵称区分说话人，避免用户改 profile.nickname 造成冒名；私聊仍沿用自报昵称。
@@ -923,10 +924,9 @@ class Bot {
       this._memoryErrorLogged = false;
     } catch (err) {
       if (this.logger) {
-        // 第一次带完整堆栈（能定位到具体模块），之后同一进程内只留一行，别每条消息刷一遍
-        const detail = this._memoryErrorLogged
-          ? ((err && err.message) || String(err))
-          : ((err && err.stack) || String(err));
+        // 第一次带完整堆栈（能定位到具体模块），之后同一进程内只留一行 code/detail，别每条消息刷一遍
+        const info = describeError(err);
+        const detail = this._memoryErrorLogged ? info : `${info}\n${(err && err.stack) || ''}`;
         this.logger.error('拉取记忆失败（本轮放弃记忆块，只用 recent 消息回复）：' + detail);
       }
       this._memoryErrorLogged = true;
@@ -1093,6 +1093,7 @@ class Bot {
       if (!retried) {
         this.logger && this.logger.error(
           `单轮输入超硬上限，拒绝调用模型：system≈${err.budget ? err.budget.systemTokens : '?'} token`
+          + `（${describeError(err)}）`
         );
         return { action: 'ignore', reason: 'input_budget_exceeded', key, msg, atMe };
       }
@@ -1832,13 +1833,13 @@ class Bot {
         error,
       });
     } catch (err) {
-      this.logger && this.logger.error('写入回复失败（照常发送）：' + ((err && err.message) || err));
+      this.logger && this.logger.error('写入回复失败（照常发送）：' + describeError(err));
     }
     // 每轮一个 checkpoint：重启后能知道停在哪、episode 有没有关
     try {
       this.store.checkpoint(decision.key);
     } catch (err) {
-      this.logger && this.logger.error('写 checkpoint 失败（照常发送）：' + ((err && err.message) || err));
+      this.logger && this.logger.error('写 checkpoint 失败（照常发送）：' + describeError(err));
     }
     const isGroup = msg.chatType === 'group';
     // 命令路径以前在这里直接 return [text]，刚剥出来的 foundEmoji（🫧 这种）直接丢了（M28）
@@ -1918,7 +1919,7 @@ class Bot {
       });
       return text;
     } catch (err) {
-      this.logger && this.logger.warn('读取链接失败：' + (err && err.message));
+      this.logger && this.logger.warn('读取链接失败：' + describeError(err));
       this.store.appendEvent(key, { type: 'link', detail: url.slice(0, 120), status: 'failed' });
       return `对方发了一个链接（${url}），但读取失败。`;
     }
@@ -1930,7 +1931,8 @@ class Bot {
     try {
       decision = await this.decide(rawMsg);
     } catch (err) {
-      this.logger && this.logger.error('处理消息出错：' + (err && err.stack ? err.stack : err));
+      // 结构证据 + 堆栈：光看 stack 只能知道哪一行，不知道是配额、磁盘还是网络
+      this.logger && this.logger.error('处理消息出错：' + describeError(err) + '\n' + ((err && err.stack) || ''));
       return { action: 'ignore', reason: 'error' };
     }
     if (decision.action === 'ignore') {
@@ -1990,7 +1992,10 @@ class Bot {
       // （errText 以前叫 rawMsg，把 handle 的入参 rawMsg 遮蔽了（L12），改个名）
       const errText = String((err && err.message) || '');
       const blocked = /敏感|不安全|安全|内容/.test(errText) && /400/.test(errText);
-      this.logger && this.logger.error('生成回复失败：' + (err && err.message));
+      // 带上模型和结构证据：光一句「生成回复失败」分不清是额度、超长、审核还是空响应
+      this.logger && this.logger.error(
+        `生成回复失败 [${(this.llm && this.llm.provider) || '?'}|${(this.llm && this.llm.model) || '?'}]：${describeError(err)}`
+      );
       let retried = null;
       // 上下文超长：砍掉一半 turns 只重试一次，保留当前消息；不要退化成只发当前一句。
       if (isContextLengthError(err) && this.shrinkTurnsForContext(decision)) {
@@ -1998,7 +2003,7 @@ class Bot {
           retried = await this.llm.complete({ system: decision.system, turns: decision.turns, signal });
           this.logger && this.logger.warn('上下文超长，半窗重试成功');
         } catch (err2) {
-          this.logger && this.logger.error('半窗重试仍失败：' + (err2 && err2.message));
+          this.logger && this.logger.error('半窗重试仍失败：' + describeError(err2));
         }
       }
       // 钥匙失效 / 额度用完（429）/ 模型名不可用（404）→ 切到存过 Key 的备用服务商再试一次。
@@ -2014,7 +2019,7 @@ class Bot {
             retried = await this.llm.complete({ system: decision.system, turns: decision.turns, signal });
             this.logger && this.logger.warn(`已切到备用服务商 ${switched.label} 并重试成功`);
           } catch (err2) {
-            this.logger && this.logger.error('备用服务商也失败了：' + (err2 && err2.message));
+            this.logger && this.logger.error('备用服务商也失败了：' + describeError(err2));
           }
         }
       }
@@ -2025,7 +2030,7 @@ class Bot {
           retried = await this.llm.complete({ system: sys, turns: cur ? [{ role: 'user', content: cur }] : [], signal });
           this.logger && this.logger.warn('内容审核拦截，已丢掉历史用精简上下文重试成功');
         } catch (err2) {
-          this.logger && this.logger.error('精简重试仍失败：' + (err2 && err2.message));
+          this.logger && this.logger.error('精简重试仍失败：' + describeError(err2));
         }
       }
       if (retried) {

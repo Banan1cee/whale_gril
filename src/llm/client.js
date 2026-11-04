@@ -12,6 +12,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { URL } = require('node:url');
 const { resolveRuntime, maskKey } = require('../infra/config');
+const { describeError } = require('../infra/errors');
 
 const FRIENDLY = {
   nokey: '呜…人家还没拿到深海的钥匙（API Key），去右上角「设置」里填一下吧 (｡•́︿•̀｡)',
@@ -345,7 +346,7 @@ class DeepSeekClient {
       fs.mkdirSync(path.dirname(file), { recursive: true });
       fs.writeFileSync(file, JSON.stringify(all, null, 2));
     } catch (err) {
-      this.logger && this.logger.warn('[llm] 写思考能力缓存失败：' + ((err && err.message) || err));
+      this.logger && this.logger.warn('[llm] 写思考能力缓存失败：' + describeError(err));
     }
     return all[key];
   }
@@ -491,7 +492,7 @@ class DeepSeekClient {
         return { from: current, to: this.provider, label: this.providerLabel };
       }
     } catch (err) {
-      this.logger && this.logger.warn('[llm] 切换备用服务商失败：' + err.message);
+      this.logger && this.logger.warn('[llm] 切换备用服务商失败：' + describeError(err));
     }
     return null;
   }
@@ -870,7 +871,7 @@ class DeepSeekClient {
           degradations += 1;
           attempt -= 1;
           this.logger &&
-            this.logger.warn(`思考参数被拒（${String(llmErr.detail || '').slice(0, 80)}），换下一档参数重试`);
+            this.logger.warn(`思考参数被拒（${describeError(llmErr, { maxDetail: 120 })}），换下一档参数重试`);
           continue;
         }
         // 空响应阶梯已经在上面走完，这里不再额外重试（否则一条消息要等四轮）
