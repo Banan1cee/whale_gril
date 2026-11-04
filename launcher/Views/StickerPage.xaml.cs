@@ -607,6 +607,70 @@ namespace WhaleLauncher.Views
             await ShowStickerFolder(_current);
         }
 
+        /// <summary>上传：选 1~5 张 ≤4MB 的图片存进当前分类（只存不发）。</summary>
+        private async void OnUpload(object sender, RoutedEventArgs e)
+        {
+            if (string.IsNullOrEmpty(_current))
+            {
+                StatusText.Text = "先选一个分类。";
+                return;
+            }
+            var dlg = new Microsoft.Win32.OpenFileDialog
+            {
+                Multiselect = true,
+                Filter = "图片|*.gif;*.png;*.jpg;*.jpeg;*.webp",
+                Title = "挑 1~5 张表情包"
+            };
+            if (dlg.ShowDialog() != true) return;
+            if (dlg.FileNames.Length > 5)
+            {
+                StatusText.Text = "一次最多 5 张，请分两批。";
+                return;
+            }
+            await UploadFilesAsync(dlg.FileNames);
+        }
+
+        private async Task UploadFilesAsync(string[] files)
+        {
+            try
+            {
+                var sb = new System.Text.StringBuilder();
+                sb.Append("{\"emotion\":\"").Append(Api.Esc(_current)).Append("\",\"files\":[");
+                var first = true;
+                var uploaded = 0;
+                var skipped = 0;
+                foreach (var f in files)
+                {
+                    var info = new FileInfo(f);
+                    if (info.Length > 4 * 1024 * 1024) { skipped++; continue; }
+                    var data = Convert.ToBase64String(await File.ReadAllBytesAsync(f));
+                    uploaded++;
+                    if (!first) sb.Append(',');
+                    first = false;
+                    sb.Append("{\"name\":\"").Append(Api.Esc(info.Name)).Append("\",\"data\":\"").Append(data).Append("\"}");
+                }
+                sb.Append("]}");
+                if (first)
+                {
+                    StatusText.Text = "没有可上传的图片（单张上限 4MB）。";
+                    return;
+                }
+                StatusText.Text = $"正在上传 {uploaded} 张…";
+                var res = await Api.Post(_sup.Url, "/api/stickers/upload", sb.ToString());
+                StatusText.Text = res.Ok
+                    ? $"已上传 {uploaded} 张到「{_emotions.FirstOrDefault((x) => x.Key == _current)?.Label}」。"
+                      + (skipped > 0 ? $"另有 {skipped} 张超过 4MB，已跳过。" : "")
+                    : "上传失败：" + (res.Error.Length > 0 ? res.Error : res.Raw);
+                if (res.Ok)
+                {
+                    _renderedSignature = "";
+                    _nextRefresh = DateTime.MinValue;
+                    await LoadAsync();
+                }
+            }
+            catch (Exception ex) { StatusText.Text = "上传未完成：" + ex.Message; }
+        }
+
         /// <summary>
         /// 打开目标目录（三处共用）：页签行的「打开分类文件夹」、单图右键「在文件夹中显示」、
         /// 以及内核不在时的降级动作。内核在线走 API（带 emotion/name），
@@ -614,38 +678,47 @@ namespace WhaleLauncher.Views
         /// </summary>
         private async Task ShowStickerFolder(string emotion, string name = null)
         {
+            var mode = string.IsNullOrEmpty(name) ? (string.IsNullOrEmpty(emotion) ? "root" : "folder") : "select";
+            // 先让内核把路径解析好、安全检查做掉；**弹窗由启动器自己做**。
+            // 原因：内核经常跟着启动器一起提权，从提权进程里 spawn explorer.exe 在 Windows 上
+            // 会“进程起来了但窗口不出现”（用户看到的就是「说已打开但其实没开」）。
+            // 这里改用 ShellExecute（UseShellExecute=true），交给已经在跑的 explorer 处理。
             var body = "{\"emotion\":\"" + Api.Esc(emotion ?? "") + "\""
-                + (string.IsNullOrEmpty(name) ? "" : ",\"name\":\"" + Api.Esc(name) + "\"") + "}";
+                + (string.IsNullOrEmpty(name) ? "" : ",\"name\":\"" + Api.Esc(name) + "\"")
+                + ",\"open\":false}";
             var res = _sup.NodeRunning
                 ? await Api.Post(_sup.Url, "/api/stickers/open-folder", body)
                 : new ApiResult { Ok = false, Error = "内核未运行" };
-            if (res.Ok)
+
+            string target = res.Ok ? res.Str("dir") : LocalPath(emotion, name);
+            if (string.IsNullOrEmpty(target))
             {
-                StatusText.Text = res.Str("mode") == "select" ? "已在资源管理器里定位这张图" : "已打开：" + res.Str("dir");
-                return;
-            }
-            // 降级：本地拼路径（中文标签，不是 key）
-            var target = LocalPath(emotion, name);
-            if (target == null)
-            {
-                StatusText.Text = "打不开：" + Api.FriendlyError(res.Error.Length > 0 ? res.Error : "内核未运行");
+                StatusText.Text = "打不开：" + Api.FriendlyError(res.Error.Length > 0 ? res.Error : "找不到这个文件夹");
                 return;
             }
             try
             {
-                var start = new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "explorer.exe"))
+                ProcessStartInfo psi;
+                if (mode == "select" && File.Exists(target))
                 {
-                    UseShellExecute = false
-                };
-                start.ArgumentList.Add(name == null ? target : "/select," + target);
-                using var explorer = Process.Start(start);
-                StatusText.Text = name == null
-                    ? "把图片拖进已打开的文件夹。图库会自动刷新。"
-                    : "已在资源管理器里定位这张图";
+                    psi = new ProcessStartInfo("explorer.exe") { UseShellExecute = true };
+                    psi.ArgumentList.Add("/select," + target);
+                }
+                else
+                {
+                    // 直接交给 shell：目录关联由资源管理器处理，不自己拼 explorer 命令行
+                    psi = new ProcessStartInfo(target) { UseShellExecute = true };
+                }
+                using var proc = Process.Start(psi);
+                StatusText.Text = mode == "select"
+                    ? "已在资源管理器里定位这张图：" + Path.GetFileName(target)
+                    : "已打开：" + target;
             }
-            catch (Exception ex) { StatusText.Text = "无法打开资源管理器：" + ex.Message; }
+            catch (Exception ex)
+            {
+                StatusText.Text = "无法打开资源管理器：" + ex.Message;
+            }
         }
-
         private string LocalPath(string emotion, string name)
         {
             if (string.IsNullOrEmpty(_libraryDir)) return null;

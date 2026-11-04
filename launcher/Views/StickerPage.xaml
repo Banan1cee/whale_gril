@@ -71,6 +71,8 @@
 
         <WrapPanel Grid.Row="2" Margin="0,12,0,0">
             <StackPanel x:Name="Tabs" Orientation="Horizontal" VerticalAlignment="Center" />
+            <Button Content="上传图片…" Style="{StaticResource Ghost}" Margin="6,0,0,0" Click="OnUpload"
+                    ToolTip="选 1~5 张图片存进当前分类（单张 4MB 以内，不会发消息）" />
             <Button x:Name="BtnOpenCat" Content="打开本分类文件夹" Style="{StaticResource Ghost}" Margin="6,0,0,0"
                     Click="OnOpenCategoryFolder" ToolTip="打开当前分类的文件夹，把图拖进去即可" />
             <TextBox x:Name="TxtNewCat" Width="110" Margin="14,0,0,0" ToolTip="新分类的名字（文件夹会同名建出来）" />

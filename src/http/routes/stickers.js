@@ -105,17 +105,29 @@ module.exports = function register(router) {
             error: body && body.name ? '找不到这张表情包' : '没有这个分类（或分类目录还没建出来）' });
         }
         const noShell = ((config.env && config.env.WHALE_TEST_NO_SHELL) || process.env.WHALE_TEST_NO_SHELL) === '1';
-        if (process.platform === 'win32' && !noShell) {
+        // 启动器会把 open 传成 false：它只要内核把路径解析好、校验好，弹窗由它自己用
+        // ShellExecute 做（内核常常是提权进程，从提权进程拉 explorer 在 Windows 上会静默失败）
+        const wantOpen = !(body && body.open === false);
+        if (wantOpen && process.platform === 'win32' && !noShell) {
           // 不拼 shell：参数走 argv，路径里的 & % 不会被解释
           // 定位单张图用 explorer 的 /select,<path>，其余直接开目录。
           // explorer 用绝对路径（内核是启动器拉起来的，PATH 可能被裁过），并 detached：
           // 它是常驻进程，不能让它的退出/拉起反过来影响内核。
           const args = target.mode === 'select' ? [`/select,${target.dir}`] : [target.dir];
           const exe = path.join(process.env.SystemRoot || 'C:\\Windows', 'explorer.exe');
+          // 注意：**不能**带 windowsHide —— 它会以 SW_HIDE 启动 explorer，
+          // 资源管理器进程起来了、接口也返回 200，但窗口根本看不见（实测 v1 不弹窗，v2/v3/v4 都弹）。
           const launch = (file) => new Promise((resolve, reject) => {
-            const child = spawn(file, args, { shell: false, windowsHide: true, detached: true, stdio: 'ignore' });
-            child.once('spawn', () => { try { child.unref(); } catch { /* ignore */ } resolve(); });
-            child.once('error', reject);
+            const child = spawn(file, args, { shell: false, detached: true, stdio: 'ignore' });
+            child.once('spawn', () => {
+              try { child.unref(); } catch { /* ignore */ }
+              logger.info(`[probe] open-folder spawn ${path.basename(file)} pid=${child.pid} mode=${target.mode} dir=${target.dir}`);
+              resolve();
+            });
+            child.once('error', (err) => {
+              logger.warn(`[probe] open-folder spawn 失败 ${file}：${err.message}`);
+              reject(err);
+            });
           });
           try {
             try { await launch(exe); } catch (err) { await launch('explorer.exe'); }
