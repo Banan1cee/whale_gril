@@ -1,35 +1,27 @@
-# 人设预设（一个版本一个文件）
+# 人设预设（一个风格一个文件）
 
-这里放**给所有人用的通用人设**。规则只有一条：**每次升级人设就新增一个文件，不覆盖旧的**。
+这里放**可以直接导入的人设**。按**攻击力从低到高**排列，启动器下拉里也是这个顺序（由每个文件里的 `order` 决定）。
 
-```
-personas/
-  persona-v1.json                  # 第一版（温和基线）
-  persona-community-*.json         # 群友自定义，按 order 排在后面
-  persona-v4-fight.json            # 吵架大赛（本地娱乐，不进发行包）
-```
-
-## 为什么不覆盖
-
-- 新版不好用可以直接切回旧版，不用凭记忆重写
-- 群里出问题能对上「当时用的是哪一版」
-- 别人问「你这版跟上一版差在哪」，文件 diff 一目了然
+| order | 文件 | 风格 | 攻击力 |
+|---|---|---|---|
+| 10 | `persona-standard.json` | 鲸鲸标准版：像群友一样聊天 | 低 |
+| 20 | `persona-baili.json` | 群友版：白璃（一张白纸，群里教什么学什么） | 低 |
+| 30 | `persona-zhainan.json` | 群友版：宅女鲸鲸（普通群友，去人机感） | 中低 |
+| 40 | `persona-dafeiyu.json` | 群友版：大肥鱼（串子 + 锐评） | 中 |
+| 50 | `persona-jingjing.json` | 群友版：鲸鲸有性子版（人味规则 + 贴吧老哥模式） | 高 |
+| 60 | `persona-tieba.json` | 群友版：贴吧老油子（嘴硬心软） | 很高（本地娱乐，不进发行包） |
+| 70 | `persona-fight.json` | 吵架大赛：火力全开 | 极高（本地娱乐，不进发行包） |
 
 ## 文件格式
 
 ```json
 {
-  "id": "persona-v2",
-  "version": "2.0.0",
+  "id": "persona-standard",
   "order": 10,
   "name": "预设标题（只用于列表展示，不会改她的名字）",
-  "personaName": "鲸鲸",
-  "description": "这版改了什么",
+  "description": "这版是什么风格、适合什么时候用",
   "preset": "正常",
   "age": 20,
-  "appearance": "外观描述",
-  "personality": "性格描述",
-  "background": "背景设定",
   "privateMaxChars": 140,
   "groupMaxChars": 70,
   "historyTurns": 100,
@@ -42,45 +34,31 @@ personas/
 
 只认上面这些字段，其他字段会被忽略。`id` 只能是小写字母、数字、点、横线、下划线。
 
-- `order` 决定启动器下拉里的**排列位置**（数字小的排前面），用来按攻击力从低到高排；
-  没写 `order` 的排在最后，再按 `version` 比。`id` 只能是小写字母、数字、点、横线、下划线。
-
-- `name` 是**预设标题**（导入后列表里显示的那一行），**不会改她的名字**；真要改名用 `personaName`。
-- 其余可写字段：`appearance` / `personality` / `background`（对应人设页的外观、性格、背景）、`maxBubbles`（最多分几条消息，1–8）。
+- `order` 决定启动器下拉里的**排列位置**（数字小的排前面），按攻击力从低到高；没写 `order` 的排在最后，再按 `version` 比。
+- `name` 是**预设标题**（列表里显示的那一行），**不会改她的名字**；真要改名用 `personaName`。但现有预设有测试钉着「预设标题不能当她的名字」，所以都不要写 `personaName`。
+- 其余可写字段：`appearance` / `personality` / `background`、`maxBubbles`（最多分几条消息，1-8）。
 
 ## 怎么用
 
-三种方式，任选：
-
 1. **启动器**：左栏「人设」→「人设预设」下拉选一版 →【导入这版】
-2. **接口**：`POST /api/persona/preset`，body `{"id":"persona-v1"}`
+2. **接口**：`POST /api/persona/preset`，body `{"id":"persona-standard"}`
 3. **手动**：把人设内容粘进「人设 → 身份 → 自定义提示词」
 
 导入只会改人设相关设置，不动模型、Key、群配置和记忆。
 
 > 注意：`personas/` 里只能放通用内容。**不要**写主人的微信号、群成员真名、API Key——这个目录是跟着发行包发出去的。
 
+## 写新预设的约定
+
+1. **`customPrompt` 最多 6000 字**（`src/persona/presets.js` 的 `toPatch` 会截断）。超长的原文要么精简后再放，要么指出要保留的部分。
+2. **必须写「可以发语音」**：默认写「默认发文字；对方明确要你发语音时，直接正常答应……别自称没有麦克风」。少这一句她会回「我没麦克风，发不了语音」。
+3. 群友原文里的 `QQ` 之类平台名改成本项目的「微信」，其余措辞尽量别动——那是人家的风格。
+4. 群友发来的原创，`description` 里注明「群友自定义」，不要改人家的人设内核。
+5. 攻击力高的预设：`description` 里写明「本地娱乐，不进发行包」，并同时加进 `installer/whale.iss` 的 `Excludes` 和 `scripts/build-release.ps1` 的 `localOnly`。
+
 ## 本地活动预设（不进发行包）
 
-`persona-v4-fight.json` 是「吵架大赛（火力全开）」用的，允许任何脏话、人身攻击。
-`persona-community-tieba.json`（群友版贴吧老油子）同样攻击性强，只在熟人小群里开。
-这两个**不打进发行包**（`scripts/build-release.ps1` 里有排除规则），只在作者本机用；要试的话把文件自己拷进 `personas/` 再在启动器人设页导入。
+- `persona-fight.json`：吵架大赛（火力全开），允许脏话和人身攻击，只留四条硬边界。
+- `persona-tieba.json`：贴吧老油子，先怼后办、阴阳怪气，只怼逻辑不碰人身。
 
-## 群友自定义预设（`persona-community-*`）
-
-群里朋友发来的提示词，原样保存成预设，只在描述里标明风格，方便切换：
-
-| 文件 | 风格 |
-|---|---|
-| `persona-community-zhainan.json` | 宅女鲸鲸：熬夜打游戏的普通群友，短句、接梗、不客服腔 |
-| `persona-community-baili.json` | 白璃：一张白纸，群里教什么学什么，学到的梗才用 |
-| `persona-community-dafeiyu-beta.json` | 大肥鱼：串子 + 锐评，被骂略显急躁但不认真辱骂 |
-| `persona-community-jingjing-v5.json` | 鲸鲸 v5：有性子/抽象/可爱/毒舌配比 + 人味规则 + 贴吧老哥模式 |
-| `persona-community-tieba.json` | 贴吧老油子：先怼后办、只怼逻辑不碰人身（本地娱乐） |
-
-约定：
-
-- **`customPrompt` 最多 6000 字**（`src/persona/presets.js` 的 `toPatch` 会截断）。超长的原文要么精简后再放，要么指出要保留的部分。
-- 群友原文里的 `QQ` 之类平台名改成本项目的「微信」，其余措辞尽量别动——那是人家的风格。
-- 人设里如果写了「只发文字」，记得改成「默认发文字 + 要语音时正常答应」，否则她会回「我没麦克风」。
-- 这些是人家的原创，新增/修改时在 `description` 里注明来源是「群友自定义」。
+两个都**不打进发行包**，只在作者本机用；要试的话把文件拷进 `personas/` 再在启动器人设页导入。

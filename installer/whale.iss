@@ -1,4 +1,4 @@
-; 鲸鲸 4.0 — 安装脚本（Inno Setup 7）
+﻿; 鲸鲸 4.0 — 安装脚本（Inno Setup 7）
 ;
 ; 设计要点：
 ;   1. 装到 %LOCALAPPDATA%\Programs\鲸鲸，**安装过程零 UAC**；
@@ -72,7 +72,7 @@ Source: "..\config.example.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\src\*"; DestDir: "{app}\src"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "__pycache__\*,*.pyc"
 Source: "..\bridge\*"; DestDir: "{app}\bridge"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "__pycache__\*,*.pyc"
-Source: "..\personas\*"; DestDir: "{app}\personas"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "persona-v4-fight.json"
+Source: "..\personas\*"; DestDir: "{app}\personas"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "persona-fight.json,persona-tieba.json"
 Source: "..\resources\*"; DestDir: "{app}\resources"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "clapback-fight.txt"
 Source: "..\examples\*"; DestDir: "{app}\examples"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "__pycache__\*,*.pyc"
 ; runtime：内置 node.exe + CPython + .NET 运行时安装包；wheelhouse 是构建缓存，不进包

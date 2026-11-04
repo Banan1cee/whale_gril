@@ -1,8 +1,8 @@
 'use strict';
 
 /**
- * 人设预设：根目录 personas/ 下每个版本一个文件（persona-v1.json、persona-v2.json…）。
- * 只读，升级时新增文件而不是覆盖旧版本，方便对比和回滚。
+ * 人设预设：根目录 personas/ 下一个风格一个文件（persona-standard.json、persona-tieba.json…）。
+ * 只读；列表按 order（攻击力从低到高）排。
  */
 const fs = require('node:fs');
 const path = require('node:path');
