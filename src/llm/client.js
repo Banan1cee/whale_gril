@@ -7,6 +7,9 @@
 const http = require('node:http');
 const https = require('node:https');
 const crypto = require('node:crypto');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const { URL } = require('node:url');
 const { resolveRuntime, maskKey } = require('../infra/config');
 
@@ -28,6 +31,9 @@ class LlmError extends Error {
     super(detail || userMessage);
     this.name = 'LlmError';
     this.userMessage = userMessage || FRIENDLY.default;
+    // detail 是给日志/诊断用的结构证据（HTTP 状态、finish、usage…），不发给用户。
+    // 以前只放进 message，err.detail 一直是 undefined，extractor / probe 都读不到。
+    this.detail = detail || '';
     this.code = code;
     this.status = status;
     this.retryable = retryable;
@@ -99,6 +105,119 @@ function cutToSentence(text) {
 }
 
 /**
+ * 取「答案正文」。
+ *
+ * 有的兼容服务会把 content 发成 [{type:'text',text:'…'}] 的数组（多模态格式），
+ * 以前直接 String(...) 会得到 "[object Object]" 当回复发出去。reasoning_content /
+ * reasoning / reasoning_details 只做诊断，永远不拼进正文。
+ */
+function pickText(message) {
+  const content = message && message.content;
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .filter((x) => x && x.type === 'text' && typeof x.text === 'string')
+      .map((x) => x.text)
+      .join('');
+  }
+  return '';
+}
+
+/**
+ * 剥掉混进正文的思考片段。只在「成对出现」或「在开头」时剥，避免误伤正常正文：
+ * DeepSeek 偶尔把  thinking…<｜end▁of▁thinking｜> 留在 content 里，Kimi / 一些网关还会
+ * 用 <thinking>、<reasoning>，或者正文开头一整段 "Thinking: …"。
+ */
+function stripThinking(text) {
+  let s = String(text == null ? '' : text);
+  if (!s) return '';
+  // 成对标签（DeepSeek 的结束符是全角竖线包着的 <｜end▁of▁thinking｜>）
+  s = s.replace(/<think(?:ing)?>[\s\S]*?(?:<\/think(?:ing)?>|<｜end[^｜]*thinking｜>)/gi, '');
+  s = s.replace(/<reasoning>[\s\S]*?<\/reasoning>/gi, '');
+  // 没有尖括号开标签、但正文开头直接是思考内容 + DeepSeek 结束符：从开头整段剥掉
+  s = s.replace(/^\s*[\s\S]*?<｜end[^｜]*thinking｜>/i, '');
+  // 只剩开始标记、没有结束符：把标记本身删掉（内容见下一条规则）
+  s = s.replace(/<｜[^｜]*thinking｜>/gi, '');
+  // 只有开标签没闭合：宁可整段丢掉，也不能把思考当答案发出去
+  s = s.replace(/<think(?:ing)?>[\s\S]*$/i, '');
+  s = s.replace(/<reasoning>[\s\S]*$/i, '');
+  // 正文开头的 "Thinking: …"：到空行或文末为止
+  s = s.replace(/^\s*Thinking:\s*[\s\S]*?(?:\n\s*\n|$)/i, '');
+  return s.trim();
+}
+
+/** 服务商上报的思考 token（各家字段名不一样，拿不到就 0） */
+function reasoningTokensOf(json) {
+  const usage = (json && json.usage) || {};
+  const details = usage.completion_tokens_details || usage.output_tokens_details || {};
+  const n = Number(details.reasoning_tokens);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/**
+ * 每个模型族「关思考 / 开思考」要发什么参数 —— 2026-11-04 实测 11 个模型得来。
+ * 顺序就是降级顺序：先换字段名，再丢参数。canDisable=false 表示关不干净（gpt-5 / O 系），
+ * 只能靠加预算顶着。
+ */
+const RULE = {
+  deepseek: { off: [{ thinking: { type: 'disabled' } }], on: [{ reasoning_effort: 'low' }], canDisable: true },
+  qwen: { off: [{ enable_thinking: false }, { thinking: { type: 'disabled' } }], on: [{ reasoning_effort: 'low' }], canDisable: true },
+  glm: { off: [{ thinking: { type: 'disabled' } }], on: [{ reasoning_effort: 'low' }], canDisable: true },
+  // glm-5.3（非 flash）是 thinking-only：发 thinking/eefort:none 会 400，只能降到 low
+  glm53: { off: [{ reasoning_effort: 'low' }], on: [{ reasoning_effort: 'low' }], canDisable: true },
+  hunyuan: { off: [{ reasoning_effort: 'none' }], on: [{ reasoning_effort: 'low' }], canDisable: true },
+  kimi: { off: [{ reasoning_effort: 'none' }], on: [{ reasoning_effort: 'low' }], canDisable: true },
+  minimax: { off: [{ enable_thinking: false }], on: [{ enable_thinking: true }], canDisable: true },
+  thinkingDisabled: { off: [{ thinking: { type: 'disabled' } }], on: [{ reasoning_effort: 'low' }], canDisable: true },
+  noThinking: { off: [], on: [], canDisable: true },
+  // ChatGPT / Sub2API 的 gpt-5 与 O 系：只能 minimal，关不干净
+  openaiReasoning: { off: [{ reasoning_effort: 'minimal' }], on: [{ reasoning_effort: 'low' }], canDisable: false },
+  claude: { off: [{ thinking: { type: 'disabled' } }], on: [{ thinking: { type: 'enabled', budget_tokens: 1024 } }], canDisable: true },
+  gemini: { off: [{ reasoning_effort: 'none' }, { thinking_budget: 0 }], on: [{ reasoning_effort: 'low' }], canDisable: true },
+};
+
+/** 按模型名（优先）匹配思考能力表；不认识返回 null，交给 provider 兜底 */
+function thinkingRuleByModel(model) {
+  const m = String(model || '').toLowerCase();
+  if (!m) return null;
+  // 更具体的型号必须排在族前面：glm-5.3-flash 走 thinking:disabled，不能落到 glm-5.3 那条
+  if (/^(gpt-5|gpt5|o[134](?:-|$)|chatgpt)/.test(m)) return RULE.openaiReasoning;
+  if (/^claude/.test(m)) return RULE.claude;
+  if (/(^|[/-])glm-5\.3(?!-flash)/.test(m)) return RULE.glm53;
+  if (/(^|[/-])glm/.test(m)) return RULE.glm;
+  if (/(^|[/-])deepseek/.test(m)) return RULE.deepseek;
+  if (/(^|[/-])qwen/.test(m)) return RULE.qwen;
+  if (/(^|[/-])hy\d/.test(m)) return RULE.hunyuan;
+  if (/(^|[/-])kimi/.test(m)) return RULE.kimi;
+  if (/(^|[/-])minimax/.test(m)) return RULE.minimax;
+  if (/(^|[/-])(mimo|longcat)/.test(m)) return RULE.thinkingDisabled;
+  if (/(^|[/-])step-/.test(m)) return RULE.noThinking;
+  if (/^(gemini|grok)/.test(m)) return RULE.gemini;
+  return null;
+}
+
+/** provider 兜底：只对「这家只会跑自家模型」的服务商生效，opencode/custom/tju 交给自适应 */
+function thinkingRuleByProvider(provider) {
+  switch (String(provider || '')) {
+    case 'deepseek': return RULE.deepseek;
+    case 'zhipu': return RULE.glm;
+    case 'qwen': return RULE.qwen;
+    default: return null;
+  }
+}
+
+/**
+ * 这个 provider|model 该怎么关 / 开思考。
+ * @returns {{off:Array<object>, on:Array<object>, canDisable:boolean}}
+ */
+function thinkingPlan(provider, model) {
+  const rule = thinkingRuleByModel(model) || thinkingRuleByProvider(provider)
+    // custom / tju / 未知模型：不发任何思考参数，靠 400 自适应降级
+    || RULE.noThinking;
+  return { off: rule.off.slice(), on: rule.on.slice(), canDisable: rule.canDisable !== false };
+}
+
+/**
  * 空响应到底为什么空：只拼「结构证据」，不碰聊天正文。
  *
  * 以前空响应只抛一句「空泡泡」，detail 是空的 —— 日志里既看不出是限流、
@@ -114,6 +233,8 @@ function describeEmpty(json, choice = {}) {
   if (finish) bits.push('finish=' + finish);
   const usage = json && json.usage;
   if (usage) bits.push(`usage=${Number(usage.prompt_tokens) || 0}/${Number(usage.completion_tokens) || 0}`);
+  // 思考 token 计入 max_tokens：不记这一项，就分不清「模型没说话」和「预算全用来想了」
+  bits.push('reasoning_tokens=' + reasoningTokensOf(json));
   const msg = (choice && choice.message) || {};
   if (msg.reasoning_content) bits.push('reasoning=' + String(msg.reasoning_content).length + '字');
   if (Array.isArray(msg.tool_calls) && msg.tool_calls.length) bits.push('tool_calls=' + msg.tool_calls.length);
@@ -150,6 +271,9 @@ class DeepSeekClient {
     // Bot 靠 seq 水位把这些调用累加起来算「本轮用量」，不用在每个调用点手工记账。
     this.usageSeq = 0;
     this.usageEvents = [];
+    // 思考能力缓存（data/thinking-caps.json）：记录「这个模型实测关不干净、天花板多少」，
+    // 每次 reload 清空，靠 provider|model + baseUrl 校验失效
+    this._caps = null;
     this.reload();
   }
 
@@ -170,10 +294,140 @@ class DeepSeekClient {
     this.presencePenalty = Number(ds.presencePenalty) || 0;
     this.maxTokens = ds.maxTokens || 700;
     this.timeoutMs = ds.timeoutMs || 45000;
-    // 通义千问默认会先「思考」一遍再回答：同一句闲聊实测 2.1s → 关掉思考 1.3s。
-    // 想在难问题上保留思考就把 config 的 deepseek.thinking 设成 true。
-    this.thinking = ds.thinking === true;
+    // 聊天默认关思考（快）；开了先想一遍再答。后台抽取显式传 thinking:false。
+    this.thinking = rt.thinking === true;
+    this.chatThinkingTokens = Number(ds.chatThinkingTokens) || 2000;
+    this.thinkingMaxTokens = Number(ds.thinkingMaxTokens) || 5000;
+    this._caps = null;
     return this;
+  }
+
+  /** 思考能力缓存文件：优先 dataDir，测试里退回 settingsFile 所在目录，别往仓库 data/ 里写 */
+  capsFile() {
+    const p = (this.config && this.config.paths) || {};
+    const dir = p.dataDir || (p.settingsFile ? path.dirname(p.settingsFile) : path.join(os.tmpdir(), 'whale-girl'));
+    return path.join(dir, 'thinking-caps.json');
+  }
+
+  _loadCaps() {
+    if (this._caps) return this._caps;
+    this._caps = {};
+    try {
+      const obj = JSON.parse(fs.readFileSync(this.capsFile(), 'utf8'));
+      if (obj && typeof obj === 'object') this._caps = obj;
+    } catch { /* 没有缓存就从零开始 */ }
+    return this._caps;
+  }
+
+  /** 取本模型生效的自适应档位；模型名或 baseUrl 变了就失效 */
+  _capsFor() {
+    const all = this._loadCaps();
+    const entry = all[`${this.provider}|${this.model}`];
+    if (!entry) return null;
+    if (entry.model && entry.model !== this.model) return null;
+    if (entry.baseUrl && this.baseUrl && entry.baseUrl !== this.baseUrl) return null;
+    return entry;
+  }
+
+  _saveCaps(patch) {
+    const all = this._loadCaps();
+    const key = `${this.provider}|${this.model}`;
+    all[key] = {
+      ...(all[key] || {}),
+      ...patch,
+      provider: this.provider,
+      model: this.model,
+      baseUrl: this.baseUrl,
+      at: Date.now(),
+    };
+    try {
+      const file = this.capsFile();
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, JSON.stringify(all, null, 2));
+    } catch (err) {
+      this.logger && this.logger.warn('[llm] 写思考能力缓存失败：' + ((err && err.message) || err));
+    }
+    return all[key];
+  }
+
+  /** 这个 provider|model 该怎么关 / 开思考 */
+  thinkingPlan() {
+    return thinkingPlan(this.provider, this.model);
+  }
+
+  /**
+   * 候选参数列表：自适应缓存里已生效的档位优先，再按能力表逐级降级，最后「什么都不发」。
+   * 400/422 被拒时按这个顺序换下一个。
+   */
+  _thinkingCandidates(plan, modeOn) {
+    const caps = this._capsFor();
+    const saved = caps && (modeOn ? caps.on : caps.off);
+    const list = [];
+    const push = (item) => {
+      if (!item || typeof item !== 'object') return;
+      if (!list.some((x) => JSON.stringify(x) === JSON.stringify(item))) list.push(item);
+    };
+    if (saved && typeof saved === 'object') {
+      // 已经学过这个模型认什么写法（包括「什么都不能发」的 {}）：直接用它，别再每轮先 400 一次
+      push(saved);
+      push({});
+      return list;
+    }
+    if (modeOn || plan.canDisable !== false) {
+      for (const item of (modeOn ? plan.on : plan.off) || []) push(item);
+    }
+    push({});
+    return list;
+  }
+
+  /** 输出预算：max_tokens 是天花板不是花费，但思考 token 也计入，所以按模式给不同档 */
+  _budgetFor({ maxTokens, safe = false, allowOverflow = false, modeOn = false, plan, caps }) {
+    const ceiling = Math.max(
+      Number(this.maxTokens) || 700,
+      Math.min(8000, Number(caps && caps.maxTokens) || 0)
+    );
+    // 调用方没指定就用「本模型当前天花板」：截断过的话它已经比配置值高
+    const want = Number(maxTokens) || ceiling;
+    // 跑飞重试：给足预算，别再因为 320 token 把话截断（旧行为）
+    if (safe) return Math.min(Math.max(want, 900), 2000);
+    // gpt-5 / O 系关不干净：无视开关，按 thinkingMaxTokens 给
+    if (plan && plan.canDisable === false) return Number(this.thinkingMaxTokens) || 5000;
+    // 后台任务（episode 抽取）：不走聊天那套 700 夹取，但也不能无限给
+    if (allowOverflow) return Math.min(Math.max(0, want), 6000);
+    // 关不干净的老实模型（实测关思考后 reasoning_tokens 仍 > 0）：后续直接按思考给预算
+    if (modeOn || (caps && caps.offThinks)) {
+      return Math.min(Math.max(want, Number(this.chatThinkingTokens) || 2000), 6000);
+    }
+    return Math.min(want, Math.max(700, ceiling));
+  }
+
+  /** 自校准：思考吃掉 >70% 预算、或空响应撞长度上限 → 天花板 ×1.5（封顶 8000） */
+  _bumpCeiling(reason) {
+    const base = Number(this.maxTokens) || 700;
+    const caps = this._capsFor() || {};
+    const current = Math.max(base, Number(caps.maxTokens) || 0);
+    const next = Math.min(8000, Math.round(current * 1.5));
+    if (next <= current) return;
+    this._saveCaps({ maxTokens: next, bumpReason: reason, bumpedAt: Date.now() });
+    this.logger && this.logger.warn(`[llm] ${this.provider}|${this.model} ${reason}，输出上限 ${current} → ${next}`);
+  }
+
+  /** 请求成功后：把「降级生效的档位 / 关不干净」写进缓存，并校准天花板 */
+  _noteThinking({ plan, modeOn, thinkingParam, reasoningTokens, maxTokens }) {
+    const used = thinkingParam && typeof thinkingParam === 'object' ? thinkingParam : {};
+    const first = (modeOn ? plan.on : plan.off)[0] || {};
+    if (JSON.stringify(used) !== JSON.stringify(first)) {
+      // 走到能力表第二档、或「丢参数」才成功 → 记住这个模型认哪套写法
+      // （{} 也要记：下次别再把被拒的参数发一遍）
+      this._saveCaps(modeOn ? { on: used } : { off: used });
+    }
+    if (!modeOn && reasoningTokens > 0) {
+      // 关了还在想：记下来，后续直接按思考给预算
+      this._saveCaps({ offThinks: true, offReasoningTokens: reasoningTokens });
+    }
+    if (maxTokens > 0 && reasoningTokens / maxTokens > 0.7) {
+      this._bumpCeiling(`思考占用 ${Math.round((reasoningTokens / maxTokens) * 100)}%`);
+    }
   }
 
   get isMock() {
@@ -205,6 +459,8 @@ class DeepSeekClient {
       promptCacheMissTokens: miss,
       completionTokens: Number(u.completion_tokens) || 0,
       totalTokens: Number(u.total_tokens) || promptTokens + (Number(u.completion_tokens) || 0),
+      // 思考 token 计入 completion：单独记一份，日志里才看得出「是不是全用来想了」
+      reasoningTokens: reasoningTokensOf(json),
       at: Date.now(),
     };
     this.usageSeq += 1;
@@ -273,13 +529,40 @@ class DeepSeekClient {
     };
   }
 
-  buildPayload({ system, turns = [], stream = false, maxTokens, safe = false }) {
+  /**
+   * 拼请求体。
+   *
+   * 思考参数按「模型族能力表」发：同一句「关掉思考」在 11 个模型上写法全不一样，
+   * 发错了不是 400 就是继续想。预算也随模式变：关思考只给 700，开思考至少 2000。
+   *
+   * @param {{thinking?:boolean, allowOverflow?:boolean, thinkingParam?:object, bigBudget?:boolean}} opts
+   *   thinking：显式指定开/关；不传跟设置走
+   *   allowOverflow：后台任务（episode 抽取）用，不吃聊天的 700 夹取
+   *   thinkingParam：complete() 自适应降级时指定的那一档参数；不传就用能力表第一档
+   *   bigBudget：关不掉思考的模型，空响应后加大预算重试
+   */
+  buildPayload({
+    system, turns = [], stream = false, maxTokens, safe = false,
+    thinking, allowOverflow = false, thinkingParam, bigBudget = false,
+  }) {
     const messages = [];
     if (system) messages.push({ role: 'system', content: system });
     for (const t of turns) {
       if (!t || !t.content) continue;
       const role = t.role === 'assistant' ? 'assistant' : t.role === 'system' ? 'system' : 'user';
       messages.push({ role, content: t.content });
+    }
+    const plan = this.thinkingPlan();
+    const caps = this._capsFor();
+    // 用户的选择；关不干净的模型（gpt-5 / O 系）由预算那一步单独处理，参数照样可以省
+    const modeOn = thinking === undefined ? this.thinking === true : thinking === true;
+    const params = thinkingParam !== undefined
+      ? thinkingParam
+      : ((caps && (modeOn ? caps.on : caps.off)) || (modeOn ? plan.on : plan.off)[0] || {});
+    let budget = this._budgetFor({ maxTokens, safe, allowOverflow, modeOn, plan, caps });
+    if (bigBudget && plan.canDisable === false) {
+      // 关不掉思考：加大预算再试一次（封顶 8000，别无限烧）
+      budget = Math.min(8000, Math.max(Number(this.thinkingMaxTokens) || 5000, budget) * 2);
     }
     const payload = {
       model: this.model,
@@ -292,23 +575,20 @@ class DeepSeekClient {
         if (this.provider === 'zhipu') t = Math.min(t, 0.99);
         return t;
       })(),
-      max_tokens: (() => {
-        const want = Number(maxTokens) || this.maxTokens;
-        // 正常请求：调用方可以要更少，但不会超过配置上限
-        if (!safe) return Math.min(want, this.maxTokens);
-        // 跑飞重试：给足预算，别再因为 320 token 把话截断
-        return Math.min(Math.max(want, 900), 2000);
-      })(),
+      max_tokens: budget,
     };
-    // 惩罚项会逼模型避开常用词，是「乱说话」的元凶之一；跑飞重试时一律不带
-    if (!safe && this.frequencyPenalty) payload.frequency_penalty = this.frequencyPenalty;
-    if (!safe && this.presencePenalty) payload.presence_penalty = this.presencePenalty;
-    // 通义千问（DashScope 兼容模式）默认会先「思考」再给答案，普通闲聊白等一秒多。
-    // 实测同一句话：默认 2.1s / enable_thinking=false 1.3s。默认关；
-    // 想让它在难问题上继续思考，把 config 的 deepseek.thinking 设成 true。
-    if (this.provider === 'qwen' && /dashscope/i.test(this.baseUrl || '')) {
-      payload.enable_thinking = this.thinking === true;
+    // OpenAI 系（gpt-5 / o1|o3|o4）字段名不同，而且不认 temperature
+    const openaiReasoning = /^(gpt-5|gpt5|o[134](?:-|$)|chatgpt)/.test(String(this.model || '').toLowerCase());
+    if (openaiReasoning) {
+      delete payload.max_tokens;
+      delete payload.temperature;
+      payload.max_completion_tokens = budget;
     }
+    // 惩罚项会逼模型避开常用词，是「乱说话」的元凶之一；跑飞重试时一律不带
+    if (!safe && !openaiReasoning && this.frequencyPenalty) payload.frequency_penalty = this.frequencyPenalty;
+    if (!safe && !openaiReasoning && this.presencePenalty) payload.presence_penalty = this.presencePenalty;
+    // 思考参数：极少数兼容服务不认任何写法，此时 params 是空对象，什么都不发
+    if (params && typeof params === 'object') Object.assign(payload, params);
     // DeepSeek 流式默认不回 usage；显式要一下，用来校准 token 估算。
     // 其它兼容服务不认这个字段，别硬塞。
     if (stream && this.provider === 'deepseek') payload.stream_options = { include_usage: true };
@@ -448,17 +728,52 @@ class DeepSeekClient {
     });
   }
 
-  /** 非流式，返回完整文本 */
-  async complete({ system, turns, maxTokens, signal }) {
+  /**
+   * 非流式，返回完整文本。
+   *
+   * 空响应阶梯（2026-11 修「思考吃满预算 → 空响应」）：
+   *   1) 按设置 / 能力表发；
+   *   2) 空 && finish=length && reasoning_tokens>0 → 用本族关思考参数 + 原预算重试一次；
+   *   3) 关不掉（gpt-5 / O 系）→ 加大预算重试一次；
+   *   4) 其它空响应 → 保守参数重试一次；
+   *   5) 仍空 → 抛 LlmError(empty, detail)，detail 带 finish/usage/reasoning_tokens。
+   * 参数被 400/422 拒时（不同服务商字段名不一样），按候选表换下一档再试。
+   */
+  async complete({ system, turns, maxTokens, signal, thinking, allowOverflow = false } = {}) {
     this.lastUsage = null;
     let lastErr = null;
     let sawDegenerate = false;
-    for (let attempt = 0; attempt < 3; attempt++) {
+    const plan = this.thinkingPlan();
+    // 关不干净的模型（gpt-5 / O 系）：参数用 low、预算用 thinkingMaxTokens，但不能假装「已关」
+    let modeOn = thinking === undefined ? this.thinking === true : thinking === true;
+    let candidates = this._thinkingCandidates(plan, modeOn);
+    let candIdx = 0;
+    let safeRetry = false;
+    let thinkingFallback = false;
+    let bigBudget = false;
+    // 阶梯②要「关思考参数 + 原预算」，所以要记住上一次实际发的预算（天花板可能刚被校准抬高）
+    let forcedBudget = 0;
+    let attempt = 0;
+    let degradations = 0;
+    const resetCandidates = () => {
+      candidates = this._thinkingCandidates(plan, modeOn);
+      candIdx = 0;
+    };
+    while (attempt < 4) {
+      attempt += 1;
       // 第一次用用户配的参数；发现跑飞或撞长度上限后，用更稳的参数再要一遍
-      const safe = attempt > 0;
+      const safe = safeRetry;
+      const thinkingParam = candidates[Math.min(candIdx, candidates.length - 1)];
       try {
         if (signal && signal.aborted) throw new LlmError('aborted', { code: 'aborted' });
-        const payload = this.buildPayload({ system, turns, stream: false, maxTokens, safe });
+        const payload = this.buildPayload({
+          system, turns, stream: false, maxTokens: forcedBudget || maxTokens, safe,
+          thinking: modeOn,
+          // 已经切到关思考档后，别再让 allowOverflow 把预算拉高——阶梯②要的是「原预算」
+          allowOverflow: allowOverflow && !thinkingFallback,
+          thinkingParam,
+          bigBudget,
+        });
         const { res } = await this._open(payload, { stream: false, signal });
         if (res.statusCode !== 200) throw await this._errorFrom(res, { signal });
         const raw = await this._readAll(res, { signal });
@@ -484,12 +799,35 @@ class DeepSeekClient {
           });
         }
         const choice = (json && json.choices && json.choices[0]) || {};
-        const text = String((choice.message && choice.message.content) || '').trim();
+        const reasoningTokens = reasoningTokensOf(json);
+        // 思考内容永不拼进正文：reasoning_content / reasoning / reasoning_details 只用于诊断
+        const text = stripThinking(pickText(choice.message)).trim();
         if (!text) {
           const emptyDetail = describeEmpty(json, choice);
-          // 空响应多数是服务商抖一下，换保守参数再要一次通常就有了；
-          // 真不行才把「空泡泡」发给用户。只重试一次，别让一条消息等三轮。
-          if (!safe && this.logger) this.logger.warn('模型返回' + emptyDetail + '，换保守参数重试一次');
+          // ② 思考吃满：关掉思考 + 原预算再要一次。这是 episode 抽取空响应的根因。
+          if (choice.finish_reason === 'length' && reasoningTokens > 0 && plan.canDisable !== false && !thinkingFallback) {
+            thinkingFallback = true;
+            modeOn = false;
+            forcedBudget = Number(payload.max_tokens || payload.max_completion_tokens) || 0;
+            resetCandidates();
+            this._bumpCeiling('空响应且思考吃满');
+            this.logger && this.logger.warn(`模型返回${emptyDetail}，思考吃满预算，切到关思考档重试一次`);
+            continue;
+          }
+          // ③ 关不掉（gpt-5 / O 系）：加大预算重试一次
+          if (plan.canDisable === false && !bigBudget) {
+            bigBudget = true;
+            this._bumpCeiling('空响应且思考关不掉');
+            this.logger && this.logger.warn(`模型返回${emptyDetail}，思考关不掉，加大预算重试一次`);
+            continue;
+          }
+          // ④ 其它空响应：换保守参数再要一次
+          if (!safeRetry) {
+            safeRetry = true;
+            this.logger && this.logger.warn(`模型返回${emptyDetail}，换保守参数重试一次`);
+            continue;
+          }
+          // ⑤ 仍空：把结构证据交给调用方（日志里要能看出 finish/usage/reasoning_tokens）
           throw new LlmError(FRIENDLY.empty, { code: 'empty', detail: emptyDetail, retryable: true });
         }
         const truncated = choice.finish_reason === 'length';
@@ -500,8 +838,17 @@ class DeepSeekClient {
             this.logger.warn(
               `回复${degenerate ? '疑似跑飞（凑字/没标点）' : '撞上长度上限'}（${text.length} 字），换保守参数重试一次`
             );
+          safeRetry = true;
           continue;
         }
+        // 走到这里才算成功：记录生效档位 / 校准天花板
+        this._noteThinking({
+          plan,
+          modeOn,
+          thinkingParam,
+          reasoningTokens,
+          maxTokens: Number(payload.max_tokens || payload.max_completion_tokens) || 0,
+        });
         this.logger &&
           this.logger.debug(
             `DeepSeek 完成：${payload.messages.length} 条消息，输出 ${text.length} 字${safe ? '（保守参数）' : ''}`
@@ -511,8 +858,23 @@ class DeepSeekClient {
         if (signal && signal.aborted) throw new LlmError('aborted', { code: 'aborted' });
         lastErr = err;
         const llmErr = err instanceof LlmError ? err : new LlmError(FRIENDLY.default, { detail: String(err && err.message) });
-        // 空响应只重试一次（两次都空基本不是抖动，再试只是让用户多等）
-        if (!llmErr.retryable || attempt === 2 || llmErr.code === 'aborted' || (llmErr.code === 'empty' && attempt >= 1)) {
+        // 参数被拒（400/422 且提示里带 max_tokens / thinking / temperature…）：
+        // 换下一档候选（先换字段名，再丢参数），这不算一次「重试」，但要有上限
+        if (
+          (llmErr.status === 400 || llmErr.status === 422)
+          && /max_tokens|max_completion_tokens|unsupported_parameter|unsupported_value|temperature|thinking|reasoning_effort|enable_thinking|budget_tokens/i.test(String(llmErr.detail || ''))
+          && candIdx + 1 < candidates.length
+          && degradations < 8
+        ) {
+          candIdx += 1;
+          degradations += 1;
+          attempt -= 1;
+          this.logger &&
+            this.logger.warn(`思考参数被拒（${String(llmErr.detail || '').slice(0, 80)}），换下一档参数重试`);
+          continue;
+        }
+        // 空响应阶梯已经在上面走完，这里不再额外重试（否则一条消息要等四轮）
+        if (llmErr.code === 'empty' || !llmErr.retryable || attempt >= 3 || llmErr.code === 'aborted') {
           // 接口错误时如果之前已经拿到过跑飞的文本，至少给个能用的短句
           if (sawDegenerate && llmErr.retryable) break;
           throw llmErr;
@@ -575,7 +937,8 @@ class DeepSeekClient {
           stream: false,
           maxTokens: 4,
         });
-        payload.temperature = 0;
+        // OpenAI 推理模型没有 temperature 字段，别为了数 token 又塞回去
+        if ('temperature' in payload) payload.temperature = 0;
         const { res } = await this._open(payload, { stream: false, signal: controller.signal });
         if (res.statusCode !== 200) throw await this._errorFrom(res, { signal: controller.signal });
         const raw = await this._readAll(res, { signal: controller.signal });
@@ -627,8 +990,12 @@ class DeepSeekClient {
         buffer = lastBreak >= 0 ? buffer.slice(lastBreak).replace(/^\r?\n\r?\n/, '') : buffer;
         for (const data of events) {
           if (data === '[DONE]') {
-            this.logger && this.logger.debug(`DeepSeek 流式结束：${sent} 字`);
-            return;
+            // 有内容就正常收尾；一个字都没吐时不能在这里 return（否则跳过后面的空响应诊断）
+            if (sent) {
+              this.logger && this.logger.debug(`DeepSeek 流式结束：${sent} 字`);
+              return;
+            }
+            break;
           }
           let json;
           try {
@@ -643,7 +1010,8 @@ class DeepSeekClient {
           const finish = json?.choices?.[0]?.finish_reason;
           if (finish) lastFinish = finish;
           const delta = json?.choices?.[0]?.delta;
-          const piece = delta?.content;
+          // 思考内容（delta.reasoning_content 等）只诊断、整段丢弃，绝不拼进正文
+          const piece = pickText(delta);
           if (piece) {
             sent += piece.length;
             yield piece;
@@ -667,5 +1035,17 @@ class DeepSeekClient {
   }
 }
 
-module.exports = { DeepSeekClient, LlmError, FRIENDLY, parseSseLines, friendlyForStatus, looksDegenerate, cutToSentence };
+module.exports = {
+  DeepSeekClient,
+  LlmError,
+  FRIENDLY,
+  parseSseLines,
+  friendlyForStatus,
+  looksDegenerate,
+  cutToSentence,
+  thinkingPlan,
+  pickText,
+  stripThinking,
+  reasoningTokensOf,
+};
 

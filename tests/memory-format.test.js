@@ -61,7 +61,7 @@ test('正常预算：三段都在，结尾声明单独一段且在最后', () =>
   const summary = '上次说过喜欢猫。还聊到杭州的天气！周末要不要去爬山？';
   const block = buildMemoryBlock({ card, events, summary, budget: 900 });
 
-  const order = ['【这个聊天里的 TA】', '【相关事件】', '【这段之前聊过】', MEMORY_SCOPE_NOTICE]
+  const order = ['【这个聊天里的 TA】', '【相关事件·索引】', '【这段之前聊过】', MEMORY_SCOPE_NOTICE]
     .map((h) => block.indexOf(h));
   assert.ok(order.every((idx) => idx >= 0), '四段都要在：' + block);
   for (let i = 1; i < order.length; i += 1) {
@@ -119,7 +119,7 @@ test('超很多：事件清空、摘要变短但仍是完整句子（不切半�
   // 100 token：事件已经全丢完，摘要还能留前 6 句（再多就超预算）
   const block = buildMemoryBlock({ card, events, summary, budget: 100 });
 
-  assert.ok(!block.includes('【相关事件】'), '超很多时事件应当清空：' + block);
+  assert.ok(!block.includes('【相关事件·索引】'), '超很多时事件应当清空：' + block);
   const kept = summaryOf(block);
   assert.ok(kept != null && kept.length > 0, '摘要不该被整段切没');
   assert.ok(kept.length < summary.length, '摘要应当变短：' + kept);

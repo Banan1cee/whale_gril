@@ -478,19 +478,25 @@ class Bot {
     const hasText = Boolean(clean.text);
     let appended = null;
     if (hasText && !msg.recycled) {
-      appended = this.store.appendMessage(key, {
-        role: 'user',
-        name: msg.senderName,
-        uid: msg.senderId,
-        text: clean.text,
-        ts: nowMs,
-        msgId: msg.msgId,
-        addressedToBot: msg.addressedToBot,
-        mentionedNames,
-        inferredTargetNames: msg.inferredTargetNames || [],
-        replyToName: msg.replyToName,
-        replyToUserId: msg.replyToUserId,
-      });
+      // 落库失败不能拖死这一轮：记忆/原文是加分项，回复本身要继续。
+      // 以前这里没兜底，磁盘满 / 文件被占用时整条消息直接变成「不回话」。
+      try {
+        appended = this.store.appendMessage(key, {
+          role: 'user',
+          name: msg.senderName,
+          uid: msg.senderId,
+          text: clean.text,
+          ts: nowMs,
+          msgId: msg.msgId,
+          addressedToBot: msg.addressedToBot,
+          mentionedNames,
+          inferredTargetNames: msg.inferredTargetNames || [],
+          replyToName: msg.replyToName,
+          replyToUserId: msg.replyToUserId,
+        });
+      } catch (err) {
+        if (this.logger) this.logger.error('写入用户消息失败（继续回复）：' + ((err && err.message) || err));
+      }
     }
     // 人物卡也是记忆：读不出来就用空卡顶上（昵称退回微信昵称），别让整条消息陪葬。
     // 以前这里没兜底，记忆目录一坏（文件损坏 / 权限 / 迁移中）就直接抛到 _handleOnce。
@@ -1054,18 +1060,44 @@ class Bot {
     // 预算：system 只测量，不裁剪；dialogueBudget 默认 5,500，给裁剪窗口用。
     // 硬上限看**真实输入估算**（system + 实际 turns），不再拿 system + 预算上限冒充。
     let promptBudget;
+    const buildBudgetFor = (turnsToUse, withRelations) => memoryBudget.buildBudget(system, {
+      dialogueBudget: this.config && this.config.memory && this.config.memory.dialogueBudget,
+      // 关系卡开着就从 recent 里切出 120 token，预算口径和 Store 的分片保持一致
+      relations: withRelations,
+      turns: turnsToUse,
+    });
     try {
-      promptBudget = memoryBudget.assertWithinHardLimit(memoryBudget.buildBudget(system, {
-        dialogueBudget: this.config && this.config.memory && this.config.memory.dialogueBudget,
-        // 关系卡开着就从 recent 里切出 120 token，预算口径和 Store 的分片保持一致
-        relations: relationsOn,
-        turns,
-      }));
+      promptBudget = memoryBudget.assertWithinHardLimit(buildBudgetFor(turns, relationsOn));
     } catch (err) {
-      this.logger && this.logger.error(
-        `单轮输入超硬上限，拒绝调用模型：system≈${err.budget ? err.budget.systemTokens : '?'} token`
-      );
-      return { action: 'ignore', reason: 'input_budget_exceeded', key, msg, atMe };
+      // 超硬上限以前直接 ignore（只有一行 error 日志，用户看到的是「她突然不回话」）。
+      // 现在先丢掉记忆块 + 关系块（用 recentOnlyContext）重算一次，仍超才拒绝。
+      let retried = null;
+      if (!mem.memoryFailed) {
+        try {
+          const plain = this.recentOnlyContext(key, { isGroup });
+          const recent = plain.recent || [];
+          const curSeq = appended && appended.seq;
+          const plainHistory = (curSeq && recent.length && recent[recent.length - 1].seq === curSeq)
+            ? recent.slice(0, -1)
+            : recent;
+          const plainTurns = this.buildTurns({ ...msg, ts: nowMs }, plainHistory, '', tail);
+          retried = memoryBudget.assertWithinHardLimit(buildBudgetFor(plainTurns, false));
+          // decision.turns 引用的就是这个数组：原地换成「没有记忆块」的版本
+          turns.length = 0;
+          turns.push(...plainTurns);
+          mem = { ...plain, memoryTokens: 0 };
+        } catch {
+          retried = null;
+        }
+      }
+      if (!retried) {
+        this.logger && this.logger.error(
+          `单轮输入超硬上限，拒绝调用模型：system≈${err.budget ? err.budget.systemTokens : '?'} token`
+        );
+        return { action: 'ignore', reason: 'input_budget_exceeded', key, msg, atMe };
+      }
+      promptBudget = retried;
+      this.logger && this.logger.warn('单轮输入超硬上限，已丢掉记忆块/关系块重算预算后继续');
     }
     // 只把计数挂到 decision / Bot 上，供日志和内部 status 用；不打印记忆正文
     const applied = this.calibrationEngine().apply(promptBudget.estimatedPromptTokens, modelInfo);
@@ -1790,15 +1822,24 @@ class Bot {
     // 记一笔全局回复时间（跨会话共用），_decide 的全局闸门读它
     this.globalReplyTimes.push(this.now().getTime());
     if (this.globalReplyTimes.length > 600) this.globalReplyTimes = this.globalReplyTimes.slice(-300);
-    this.store.appendMessage(decision.key, {
-      role: 'assistant',
-      name: this.config.persona.name,
-      text,
-      ts: this.now().getTime(),
-      error,
-    });
+    // 写库失败照常返回 bubbles：话已经生成了，不能因为落库失败把回复丢了
+    try {
+      this.store.appendMessage(decision.key, {
+        role: 'assistant',
+        name: this.config.persona.name,
+        text,
+        ts: this.now().getTime(),
+        error,
+      });
+    } catch (err) {
+      this.logger && this.logger.error('写入回复失败（照常发送）：' + ((err && err.message) || err));
+    }
     // 每轮一个 checkpoint：重启后能知道停在哪、episode 有没有关
-    this.store.checkpoint(decision.key);
+    try {
+      this.store.checkpoint(decision.key);
+    } catch (err) {
+      this.logger && this.logger.error('写 checkpoint 失败（照常发送）：' + ((err && err.message) || err));
+    }
     const isGroup = msg.chatType === 'group';
     // 命令路径以前在这里直接 return [text]，刚剥出来的 foundEmoji（🫧 这种）直接丢了（M28）
     if (decision.action === 'command') return foundEmoji ? [text, foundEmoji] : [text];

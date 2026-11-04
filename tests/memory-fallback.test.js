@@ -147,3 +147,27 @@ test('人物卡读取失败：按空卡继续回复，昵称退回微信名', as
     cleanup();
   }
 });
+
+test('finalize 写库失败：回复已经生成，仍然返回气泡', async () => {
+  const { bot, store, logs, cleanup } = makeBot();
+  try {
+    const append = store.appendMessage.bind(store);
+    store.appendMessage = (key, payload) => {
+      // 只让「写回复」失败；用户消息照常落库
+      if (payload && payload.role === 'assistant') throw new Error('EIO: 磁盘满了');
+      return append(key, payload);
+    };
+
+    const res = await bot.handle(privateMsg('在吗'));
+
+    assert.equal(res.action, 'reply', '写库失败不能把回复吞掉');
+    assert.ok(Array.isArray(res.bubbles) && res.bubbles.length >= 1, '要有气泡');
+    assert.ok(res.reply && res.reply.length > 0);
+    assert.ok(
+      logs.some(([level, text]) => level === 'error' && text.includes('写入回复失败')),
+      '失败本身要报 error'
+    );
+  } finally {
+    cleanup();
+  }
+});

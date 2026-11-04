@@ -28,6 +28,16 @@ const MEMORY_SCOPE_NOTICE = '（这些只来自当前这个聊天；别提别的
 /** 摘要的原文上限（字符）。按整句丢，不切半句，所以只是「最多留这么多句」 */
 const SUMMARY_MAX_CHARS = 1200;
 
+/** 索引行上限：一条 5000 字的记忆进来也只占这一行 */
+const INDEX_MAX_CHARS = 60;
+/** 详情展开：最多 2 条、每条 ≤200 字（单条配额另算，见 buildMemoryBlock） */
+const DETAIL_MAX_CHARS = 200;
+const DETAIL_MAX_ITEMS = 2;
+/** importance 到这个档位：索引行永不被「挤占」丢掉 */
+const IMPORTANCE_KEEP = 0.8;
+/** 低 importance 索引行先丢的界线 */
+const IMPORTANCE_LOW = 0.5;
+
 /** 句子边界：中文句末标点 + 换行 */
 const SENTENCE_END = new Set(['。', '！', '？', '；', '\n']);
 
@@ -77,29 +87,64 @@ function eventTime(ev) {
   return Number(ev && ev.createdAt) || 0;
 }
 
-/** 最旧的那条事件（按时间，不按检索排名——排名靠前不代表新） */
-function oldestEventIndex(events) {
-  let idx = 0;
-  let best = Infinity;
-  for (let i = 0; i < events.length; i += 1) {
-    const t = eventTime(events[i]);
-    if (t < best) {
-      best = t;
-      idx = i;
-    }
-  }
-  return idx;
-}
-
 function halve(list) {
   return list.length <= 1 ? list : list.slice(0, Math.max(1, Math.ceil(list.length / 2)));
+}
+
+/** 事件首句：只取第一个句末标点之前的部分，别把整段 5000 字塞进索引 */
+function firstSentence(textValue, max) {
+  const s = String(textValue || '').replace(/\s+/g, ' ').trim();
+  if (!s) return '';
+  const end = s.search(/[。！？；!?;\n]/);
+  const first = end >= 0 ? s.slice(0, end + 1) : s;
+  return clip(first, Math.max(0, max));
+}
+
+/**
+ * 索引行：`- [日期] 标题：首句`，整条 ≤60 字。
+ * 每条事件都至少有一行，详情另段展开 —— 以前一条 400 字会占掉 44% 窗口。
+ */
+function indexLine(ev) {
+  const date = ev && ev.date ? ev.date : '';
+  const title = clip(ev && ev.title, 24);
+  const prefix = `- [${date}] ${title}：`;
+  const room = Math.max(0, INDEX_MAX_CHARS - Array.from(prefix).length);
+  return clip(prefix + firstSentence(ev && ev.summary, room), INDEX_MAX_CHARS);
+}
+
+/** 事件 importance（缺省 0） */
+function importanceOf(ev) {
+  return Number(ev && ev.importance) || 0;
+}
+
+/**
+ * 从候选里挑一条「可丢」的事件：优先最不重要，同分丢最旧。
+ * maxImportance 用来分档：先丢 <0.5 的，再 <0.8 的；≥0.8 永不在这里丢。
+ */
+function pickDroppableEvent(events, maxImportance) {
+  let best = -1;
+  let bestImp = Infinity;
+  let bestTime = Infinity;
+  for (let i = 0; i < events.length; i += 1) {
+    const imp = importanceOf(events[i]);
+    if (imp >= maxImportance) continue;
+    const t = eventTime(events[i]);
+    if (imp < bestImp || (imp === bestImp && t < bestTime)) {
+      best = i;
+      bestImp = imp;
+      bestTime = t;
+    }
+  }
+  return best;
 }
 
 /**
  * 渲染三段正文（不含结尾声明）。
  * 每段只在有内容时出现，段间空行分隔；空段不占位置。
+ *
+ * 事件分两层：【相关事件·索引】每条一行常驻；命中的少数事件另起【展开：标题】段。
  */
-function renderBody({ traits, prefs, threads, events, summary }) {
+function renderBody({ traits, prefs, threads, events, expand = [], summary }) {
   const sections = [];
   if (traits.length || prefs.length || threads.length) {
     const lines = ['【这个聊天里的 TA】'];
@@ -109,11 +154,13 @@ function renderBody({ traits, prefs, threads, events, summary }) {
     sections.push(lines.join('\n'));
   }
   if (events.length) {
-    const lines = ['【相关事件】'];
-    for (const ev of events) {
-      lines.push(`- [${ev && ev.date ? ev.date : ''}] ${clip(ev && ev.title, 24)}：${clip(ev && ev.summary, 100)}`);
-    }
+    const lines = ['【相关事件·索引】'];
+    for (const ev of events) lines.push(indexLine(ev));
     sections.push(lines.join('\n'));
+  }
+  for (const ev of expand) {
+    const detail = clip(ev && ev.summary, DETAIL_MAX_CHARS);
+    if (detail) sections.push(`【展开：${clip(ev && ev.title, 24)}】\n${detail}`);
   }
   const summaryText = summary.join('').trim();
   if (summaryText) sections.push(`【这段之前聊过】\n${summaryText}`);
@@ -163,12 +210,26 @@ function buildMemoryBlock({ card = null, events = [], summary = '', budget = LIM
     .map((t) => clip(t.text, 40));
   const recentEvents = (events || []).slice(0, show.events);
 
+  // 单条配额：一条记忆最多占窗口的 25%（≈225 token @900）。
+  // 超过就只留索引行、不展开 —— 否则一条 400 字会把别人全挤掉。
+  const itemLimit = Math.max(60, Math.round(limit * 0.25));
+  const expandable = recentEvents
+    .filter((ev) => ev && (
+      ev.expand === true
+      || ev._expand === true
+      || importanceOf(ev) >= IMPORTANCE_KEEP
+    ))
+    .filter((ev) => estimateBudgetTokens(clip(ev && ev.summary, DETAIL_MAX_CHARS)) <= itemLimit)
+    .sort((a, b) => importanceOf(b) - importanceOf(a))
+    .slice(0, DETAIL_MAX_ITEMS);
+
   // 分级的「可丢弃状态」：后面的裁剪只改这里的条数，渲染交给 renderBody
   const state = {
     traits: traits.slice(0, show.traits),
     prefs: prefs.slice(0, show.prefs),
     threads: threads.slice(0, show.threads),
     events: recentEvents.slice(),
+    expand: expandable.slice(),
     summary: capSentences(splitSentences(summary)),
   };
 
@@ -177,33 +238,63 @@ function buildMemoryBlock({ card = null, events = [], summary = '', budget = LIM
   let body = renderBody(state);
   if (!body) return '';
 
-  // 1) 相关事件：从最旧的一条开始删，直到不超预算
-  while (measure(body) > limit && state.events.length) {
-    state.events.splice(oldestEventIndex(state.events), 1);
+  const dropEvent = (idx) => {
+    const [gone] = state.events.splice(idx, 1);
+    // 索引行没了，它对应的详情段也不能单独留着
+    state.expand = state.expand.filter((ev) => ev !== gone);
+    body = renderBody(state);
+  };
+
+  // 1) 挤占顺序①：低 importance（<0.5）的索引行先整条丢，不看新旧
+  while (measure(body) > limit) {
+    const idx = pickDroppableEvent(state.events, IMPORTANCE_LOW);
+    if (idx < 0) break;
+    dropEvent(idx);
+  }
+
+  // 2) 挤占顺序②：详情展开从最不重要的一条开始整段丢（索引行还留着）
+  while (measure(body) > limit && state.expand.length) {
+    state.expand.pop();
     body = renderBody(state);
   }
 
-  // 2) 摘要：从尾部按整句删，直到不超预算（删的是整句，不会切半句 / 半截 JSON）
+  // 3) 挤占顺序③：中 importance（<0.8）的索引行整条丢；≥0.8 的永不在这里丢
+  while (measure(body) > limit) {
+    const idx = pickDroppableEvent(state.events, IMPORTANCE_KEEP);
+    if (idx < 0) break;
+    dropEvent(idx);
+  }
+
+  // 4) 摘要：从尾部按整句删，直到不超预算（删的是整句，不会切半句 / 半截 JSON）
   while (measure(body) > limit && state.summary.length) {
     state.summary.pop();
     body = renderBody(state);
   }
 
-  // 3) 人物卡条数减半：先减一半，还超就再减一半，一直减到每条只剩 1 条
+  // 5) 人物卡条数减半：先减一半，还超就再减一半，一直减到每条只剩 1 条
   while (measure(body) > limit) {
     const before = state.traits.length + state.prefs.length + state.threads.length;
     state.traits = halve(state.traits);
     state.prefs = halve(state.prefs);
     state.threads = halve(state.threads);
     const after = state.traits.length + state.prefs.length + state.threads.length;
-    if (after === before) break; // 每条都只剩 1 条，再减不下去，只能硬裁
+    if (after === before) break; // 每条都只剩 1 条，再减不下去，只能走下一步
     body = renderBody(state);
   }
 
-  // 4) 最后才是按字符硬裁（按码点，不切开代理对）；结尾声明仍在最后
+  // 6) 硬裁前先整条丢：从最不重要的一条开始整条删除（各留 1 条），避免切出半句
+  while (measure(body) > limit) {
+    const lists = [state.traits, state.prefs, state.threads].filter((list) => list.length > 1);
+    if (!lists.length) break;
+    // 人物卡各列表都按 confidence 降序排过，pop 掉的就是最不重要的一条
+    lists.sort((a, b) => b.length - a.length)[0].pop();
+    body = renderBody(state);
+  }
+
+  // 7) 最后才是按字符硬裁（按码点，不切开代理对）；结尾声明仍在最后
   if (measure(body) > limit) body = hardCut(body, limit, measure);
 
   return body ? `${body}\n\n${MEMORY_SCOPE_NOTICE}` : MEMORY_SCOPE_NOTICE;
 }
 
-module.exports = { buildMemoryBlock, MEMORY_SCOPE_NOTICE, splitSentences };
+module.exports = { buildMemoryBlock, MEMORY_SCOPE_NOTICE, splitSentences, indexLine };

@@ -268,10 +268,18 @@ async function extractEpisode({ messages, llm, speakers = [], logger = null, now
         role: 'user',
         content: `发言人：${speakerText}\n\n聊天记录：\n${transcript(messages)}`,
       }],
-      maxTokens: 900,
+      // 这是全流程最长最抽象的一次请求：思考 token 也计入 max_tokens，
+      // 700 会被思考吃光 → finish=length、content 为空。必须关思考 + 单独给预算。
+      maxTokens: 1200,
+      allowOverflow: true,
+      thinking: false,
     });
     const parsed = parseEpisode(raw);
-    if (!parsed) return fallback();
+    if (!parsed) {
+      // 以前静默退回规则兜底，日志里看不出是「模型没给 JSON」还是「JSON 被截断」
+      if (logger) logger.warn(`episode 抽取返回不是可解析 JSON（长度 ${String(raw || '').length}，疑似截断）`);
+      return fallback();
+    }
     // 只接受本 episode 里出现过的人；没写 uid 的按最后一个说话人归
     const lastUid = String((users[users.length - 1] || {}).uid || '');
     const fix = (item) => {
@@ -288,7 +296,14 @@ async function extractEpisode({ messages, llm, speakers = [], logger = null, now
     );
     return parsed;
   } catch (err) {
-    if (logger) logger.warn('episode 抽取失败，退回规则：' + ((err && err.message) || err));
+    // 不要用 err.message（那是给用户看的「空泡泡」话术）；code/detail 才是能定位的证据
+    if (logger) {
+      const code = (err && err.code) || '-';
+      // LlmError 的 message 是给用户看的话术，没有 detail 时宁可写「无 detail」也别把「空泡泡」当证据
+      const detail = (err && err.detail)
+        || (err && err.name !== 'LlmError' ? String(err) : '(无 detail)');
+      logger.warn(`episode 抽取失败（code=${code} detail=${String(detail).slice(0, 300)}），退回规则兜底`);
+    }
     return fallback();
   }
 }

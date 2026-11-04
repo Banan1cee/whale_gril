@@ -138,8 +138,12 @@ const DEFAULT_CONFIG = {
     maxTokens: 700,
     timeoutMs: 45000,
     // 通义千问这类模型：false = 关掉「思考」直接出字（快，默认）；
-    // true = 先想一遍再回答（慢 1~3 秒，难问题更稳）。启动器「模型 → 语音」页有开关。
+    // true = 先想一遍再回答（慢 1~3 秒，难问题更稳）。网页设置和启动器共用这一个开关。
     thinking: false,
+    // 开思考时的聊天预算（关思考只给 700：思考 token 也计入 max_tokens，给多了会被思考吃光）
+    chatThinkingTokens: 2000,
+    // 关不掉思考的模型（gpt-5 / O 系）直接按这个预算给
+    thinkingMaxTokens: 5000,
   },
   persona: {
     name: '鲸鲸',
@@ -575,6 +579,13 @@ function resolveRuntime(cfg) {
   }
   const local = isLocalUrl(baseUrl);
   const needsKey = provider === 'ollama' ? false : preset.needsKey && !local;
+  // 深度思考：网页设置（data/settings.json）优先，其次 config.json 的 deepseek.thinking，默认关。
+  // 思考 token 计入 max_tokens，默认开会让 700 的输出预算全被思考吃掉（空响应根因）。
+  const thinking = typeof settings.thinking === 'boolean'
+    ? settings.thinking
+    : typeof legacy.thinking === 'boolean'
+      ? legacy.thinking
+      : false;
   const explicitMock = typeof settings.mock === 'boolean' ? settings.mock : null;
   // 「演示模式」只是「没有 Key 时的兜底」，不能反过来把本来能用的接口挡在门外：
   // 目标服务不需要 Key（本地 Ollama / 本机 / 内网自建）而且地址已经填好，就一律当真接入。
@@ -595,6 +606,7 @@ function resolveRuntime(cfg) {
     baseUrl,
     model,
     temperature,
+    thinking,
     mock,
     needsKey,
     isLocal: local,
