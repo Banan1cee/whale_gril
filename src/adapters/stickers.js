@@ -509,6 +509,21 @@ function categoryInText(config, value) {
   return '';
 }
 
+// 程序补图时按语气挑一个近似的内置分类；挑不到就退回默认有图分类。
+// 只在「必发」模式下用，模型自己写标记时完全不参与。
+const MOOD_CUES = [
+  ['angry', /(气死|烦死|火大|滚|骂|傻|离谱|无语|闭嘴|恶心|欠揍|找打|生气|愤怒)/],
+  ['cute', /(抱抱|亲亲|喜欢|想你|可爱|撒娇|贴贴|乖|害羞|心疼)/],
+  ['happy', /(哈哈|笑死|好耶|开心|太棒|厉害|牛|恭喜|升职|庆祝|绝了)/],
+];
+function moodCategory(config, value) {
+  const text = String(value == null ? '' : value);
+  for (const [key, re] of MOOD_CUES) {
+    if (re.test(text) && isUsableCategory(config, key)) return key;
+  }
+  return defaultCategory(config);
+}
+
 /** 内置分类的文件夹是硬编码的：被删掉就补回来（只补缺失的，不动已有内容） */
 function ensureBuiltinDirs(config, root) {
   const dir = stickerDir(config, root);
@@ -622,4 +637,4 @@ module.exports = { EMOTIONS, EMOTION_LABELS, EXTRA_PREFIX, cleanCategoryLabel, e
   hasEmotion, resolveImage, safeDirectory, migrateLegacy, ensureBuiltinDirs, stickerDir, regularFile, listImages, categoryImages, imagesFor, anyImages, isOn,
   invalidateScan, clearScanCache, choose, pick, isStickerRequest, imageType, upload,
   isSeriousText, isLivelyText, SERIOUS_WINDOW_MS, SERIOUS_TURNS,
-  isUsableCategory, defaultCategory, resolveUsableCategory, categoryInText };
+  isUsableCategory, defaultCategory, resolveUsableCategory, categoryInText, moodCategory };
