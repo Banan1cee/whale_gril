@@ -14,10 +14,10 @@ _health = {}  # Per installation, in memory only. Never stores text or credentia
 
 def synth_timeout(config):
     try:
-        value = float(config.get("SynthTimeoutSec", 20))
-        return max(5.0, min(90.0, value)) if math.isfinite(value) else 20.0
+        value = float(config.get("SynthTimeoutSec", 85))
+        return max(5.0, min(90.0, value)) if math.isfinite(value) else 85.0
     except (TypeError, ValueError):
-        return 20.0
+        return 85.0
 
 def _health_update(root, failed):
     with _health_lock:

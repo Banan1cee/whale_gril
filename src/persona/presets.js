@@ -14,7 +14,7 @@ function dirFor(config) {
   return path.join(root, 'personas');
 }
 
-/** 列出可用的预设文件（按版本号从小到大） */
+/** 列出可用的预设文件（按 order 从小到大；没写 order 的排在后面，再按版本号） */
 function list(config) {
   const dir = dirFor(config);
   let names = [];
@@ -29,16 +29,22 @@ function list(config) {
     if (!data) continue;
     const id = String(data.id || name.replace(/\.json$/i, ''));
     const version = String(data.version || '');
+    // order 是「列表里的位置」，按攻击力从低到高排；没写就排到最后
+    const order = Number.isFinite(Number(data.order)) && data.order !== '' && data.order != null
+      ? Number(data.order) : 1e9;
     out.push({
       id,
       file: name,
       version,
+      order,
       name: String(data.name || ''),
       description: String(data.description || ''),
       chars: String(data.customPrompt || '').length,
     });
   }
-  return out.sort((a, b) => a.version.localeCompare(b.version, 'en', { numeric: true }) || a.id.localeCompare(b.id));
+  return out.sort((a, b) => a.order - b.order
+    || a.version.localeCompare(b.version, 'en', { numeric: true })
+    || a.id.localeCompare(b.id));
 }
 
 function readFile(file) {
