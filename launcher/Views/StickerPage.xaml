@@ -14,7 +14,8 @@
         <DockPanel Grid.Row="0" LastChildFill="False" Margin="0,0,0,12">
             <TextBlock DockPanel.Dock="Left" Text="表情包" Style="{StaticResource H1}" VerticalAlignment="Center" />
             <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" HorizontalAlignment="Right">
-                <Button Content="打开分类文件夹" Style="{StaticResource Ghost}" Click="OnOpenFolder" />
+                <Button Content="打开总目录" Style="{StaticResource Ghost}" Click="OnOpenFolder"
+                        ToolTip="打开表情包库根目录（data\stickers）" />
                 <Button Content="⟳ 刷新" Style="{StaticResource Ghost}" Margin="8,0,0,0" Click="OnReload" />
             </StackPanel>
         </DockPanel>
@@ -95,6 +96,10 @@
             <Button x:Name="BtnDelCat" Content="删除分类" Style="{StaticResource Ghost}" Margin="6,0,0,0"
                     Visibility="Collapsed" Click="OnDeleteCategory"
                     ToolTip="只从列表里去掉，文件夹和图片都保留" />
+            <Button Content="上传图片…" Style="{StaticResource Ghost}" Margin="10,0,0,0" Click="OnUpload"
+                    ToolTip="选 1~5 张图片存进当前分类（单张 4MB 以内，不会发消息）" />
+            <Button x:Name="BtnOpenCat" Content="打开本分类文件夹" Style="{StaticResource Ghost}" Margin="6,0,0,0"
+                    Click="OnOpenCategoryFolder" ToolTip="打开当前分类的文件夹，把图拖进去即可" />
             <TextBlock x:Name="QueueInfo" Style="{StaticResource Small}" Margin="14,0,0,0" VerticalAlignment="Center" />
         </WrapPanel>
 

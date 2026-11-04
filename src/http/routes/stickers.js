@@ -52,7 +52,13 @@ module.exports = function register(router) {
       return json(res, 200, service.gate(info.url.searchParams.get('id') || ''));
     }
 
-    if (pathname === '/api/stickers/status' && method === 'GET') return json(res, 200, service.status(info.url.searchParams.get('queueOnly') === '1'));
+    if (pathname === '/api/stickers/status' && method === 'GET') {
+      // 异步扫描 + 1.5s 结果缓存：启动器 2s、网页 3s 拉一次，别每次都全量同步扫库
+      return service.statusAsync(info.url.searchParams.get('queueOnly') === '1')
+        .then((payload) => json(res, 200, payload))
+        .catch((err) => json(res, err && err.statusCode ? err.statusCode : 500,
+          { ok: false, error: (err && err.message) || '读取表情包状态失败' }));
+    }
 
     // 控制台缩略图：只回传表情包目录里的真图，不能读任意文件
     if (pathname === '/api/stickers/image' && method === 'GET') {
@@ -81,29 +87,56 @@ module.exports = function register(router) {
         }
         // 删完马上就读 status 列表，别等目录 mtime 生效。
         stickers.invalidateScan(path.dirname(hit.file));
+        service.invalidateStatus();   // 1.5s 结果缓存也要一起丢，否则这张会被吐回来
         logger.info(`表情包已删除：${path.basename(path.dirname(hit.file))}/${path.basename(hit.file)}`);
         return json(res, 200, { ok: true, emotions: service.status().emotions });
       })();
     }
 
-    // 在本机资源管理器里打开表情包目录（只打开这一个固定目录）
+    // 在本机资源管理器里打开目标目录（库根 / 某个分类 / 定位到某一张图）
     if (pathname === '/api/stickers/open-folder' && method === 'POST') {
       return (async () => {
+        const body = await readBody(req);
         const dir = stickers.stickerDir(config, config.root);
         stickers.safeDirectory(dir);
+        const target = stickers.targetForOpen(dir, body && body.emotion, body && body.name);
+        if (!target) {
+          return json(res, 404, { ok: false,
+            error: body && body.name ? '找不到这张表情包' : '没有这个分类（或分类目录还没建出来）' });
+        }
         const noShell = ((config.env && config.env.WHALE_TEST_NO_SHELL) || process.env.WHALE_TEST_NO_SHELL) === '1';
-        if (process.platform === 'win32' && !noShell) {
-          // 不再把用户配置的目录拼进命令行（%, & 之类会被 shell 解释）
-          try {
-            await new Promise((resolve, reject) => {
-              const child = spawn('explorer.exe', [dir], { shell: false, windowsHide: true, stdio: 'ignore' });
-              child.once('spawn', resolve); child.once('error', reject);
+        // 启动器会把 open 传成 false：它只要内核把路径解析好、校验好，弹窗由它自己用
+        // ShellExecute 做（内核常常是提权进程，从提权进程拉 explorer 在 Windows 上会静默失败）
+        const wantOpen = !(body && body.open === false);
+        if (wantOpen && process.platform === 'win32' && !noShell) {
+          // 不拼 shell：参数走 argv，路径里的 & % 不会被解释
+          // 定位单张图用 explorer 的 /select,<path>，其余直接开目录。
+          // explorer 用绝对路径（内核是启动器拉起来的，PATH 可能被裁过），并 detached：
+          // 它是常驻进程，不能让它的退出/拉起反过来影响内核。
+          const args = target.mode === 'select' ? [`/select,${target.dir}`] : [target.dir];
+          const exe = path.join(process.env.SystemRoot || 'C:\\Windows', 'explorer.exe');
+          // 注意：**不能**带 windowsHide —— 它会以 SW_HIDE 启动 explorer，
+          // 资源管理器进程起来了、接口也返回 200，但窗口根本看不见（实测 v1 不弹窗，v2/v3/v4 都弹）。
+          const launch = (file) => new Promise((resolve, reject) => {
+            const child = spawn(file, args, { shell: false, detached: true, stdio: 'ignore' });
+            child.once('spawn', () => {
+              try { child.unref(); } catch { /* ignore */ }
+              logger.info(`[probe] open-folder spawn ${path.basename(file)} pid=${child.pid} mode=${target.mode} dir=${target.dir}`);
+              resolve();
             });
+            child.once('error', (err) => {
+              logger.warn(`[probe] open-folder spawn 失败 ${file}：${err.message}`);
+              reject(err);
+            });
+          });
+          try {
+            try { await launch(exe); } catch (err) { await launch('explorer.exe'); }
           } catch (err) {
-            return json(res, 500, { ok: false, error: '打开文件夹失败：' + ((err && err.message) || err) });
+            return json(res, 500, { ok: false, dir: target.dir, mode: target.mode,
+              error: '打开文件夹失败：' + ((err && err.message) || err) });
           }
         }
-        return json(res, 200, { ok: true, dir });
+        return json(res, 200, { ok: true, dir: target.dir, mode: target.mode });
       })();
     }
 
@@ -132,6 +165,7 @@ module.exports = function register(router) {
           stickers.safeDirectory(path.join(dir, label));
           extra.push({ label, chance: 0.25 });
           stickers.writeExtraCategories(config, config.root, extra);
+          service.invalidateStatus();
           logger.info('表情包新增分类：' + label);
           return json(res, 200, { ok: true, label, emotions: service.status().emotions });
         }
@@ -139,6 +173,7 @@ module.exports = function register(router) {
           if (at < 0) return json(res, 404, { ok: false, error: '没有这个分类' });
           extra.splice(at, 1);
           stickers.writeExtraCategories(config, config.root, extra);
+          service.invalidateStatus();
           logger.info('表情包删除分类：' + label + '（文件夹保留，图片没删）');
           return json(res, 200, { ok: true, emotions: service.status().emotions });
         }
@@ -158,6 +193,7 @@ module.exports = function register(router) {
           }
           extra[at] = { ...extra[at], label: nextLabel };
           stickers.writeExtraCategories(config, config.root, extra);
+          service.invalidateStatus();
           logger.info('表情包分类改名：' + label + ' → ' + nextLabel);
           return json(res, 200, { ok: true, emotions: service.status().emotions });
         }
@@ -174,6 +210,7 @@ module.exports = function register(router) {
           return json(res, 409, { ok: false, error: '开关已变化，请重新上传' });
         }
         const uploaded = stickers.upload(config, config.root, body && body.emotion, body && body.files);
+        service.invalidateStatus();   // 传完立刻可见，别等 1.5s 缓存过期
         return json(res, 200, { ok: true, uploaded });
       })();
     }

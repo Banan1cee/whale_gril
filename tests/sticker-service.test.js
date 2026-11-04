@@ -397,7 +397,7 @@ test('任务超时作废要留日志，不静默改状态', (t) => {
   assert.ok(log.lines.some((line) => line.startsWith('warn') && line.includes('超时作废') && line.includes('状态=cancelled')));
 });
 
-test('根目录还有图但迁移为 0：warn 说清它们不会被发送', (t) => {
+test('根目录还有图但迁移为 0：warn 说清它们不会被发送', async (t) => {
   const { root, cfg } = fixture(t);
   const dir = stickers.stickerDir(cfg, root);
   fs.mkdirSync(path.join(dir, '开心'), { recursive: true });
@@ -409,7 +409,9 @@ test('根目录还有图但迁移为 0：warn 说清它们不会被发送', (t) 
   try { fs.symlinkSync(outside, path.join(dir, '开心'), process.platform === 'win32' ? 'junction' : 'dir'); }
   catch (err) { if (['EPERM', 'EACCES'].includes(err.code)) { t.skip('无创建链接权限'); return; } throw err; }
   const log = loggerStub();
-  new StickerService(cfg, { logger: log });
+  const service = new StickerService(cfg, { logger: log });
+  // 迁移已经挪到 listen 之后（startMaintenance），这里显式跑一次
+  await service.startMaintenanceNow();
   assert.ok(log.lines.some((line) => line.startsWith('warn') && line.includes('根目录还有')), log.lines.join('|'));
 });
 

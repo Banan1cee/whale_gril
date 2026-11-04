@@ -2,10 +2,16 @@
 
 // Experimental sticker library. No disk access while the master switch is off.
 const fs = require('node:fs');
+const fsp = require('node:fs').promises;
 const path = require('node:path');
 const crypto = require('node:crypto');
 const features = require('../infra/features');
+const probe = require('../infra/probe');
 const EMOTIONS = Object.freeze({ cute: '傲娇', angry: '炸毛', happy: '开心' });
+// 探针用 logger：由 stickerService/app 注入；子进程（stickerLibraryLocal）不注入 → 完全静默，
+// 免得往被当作 JSON 解析的 stdout 里掺东西。
+let probeLogger = null;
+function setProbeLogger(logger) { probeLogger = logger || null; }
 const EMOTION_LABELS = EMOTIONS;
 const GENERIC = '通用';
 // Legacy keys remain accepted by the API, but are never exposed as extra cards.
@@ -137,12 +143,45 @@ function regularFile(file, root) {
     return stat.isFile() && stat.size > 0 && stat.size <= MAX_FILE_BYTES;
   } catch { return false; }
 }
+
+/**
+ * 扫描用的「目录级」安全判断。
+ *
+ * 以前每个文件都要走一遍 regularFile：逐层 lstat + 每层两次 realpath，实测 0.8ms/张 ——
+ * 565 张就是 450ms 的同步阻塞。同一个目录里的文件，路径前缀的检查结果必然相同，
+ * 所以改成「每个目录验一次、结果缓存」，单文件只剩一次 lstat。
+ * 真正的发送前校验（claim）仍然走 regularFile，安全边界没有放松。
+ */
+const dirSafeCache = new Map();
+function safeScanDir(dir, root) {
+  const abs = path.resolve(dir);
+  const rootAbs = path.resolve(root);
+  if (abs !== rootAbs && !isInside(rootAbs, abs)) return false;
+  if (rootHasLinkedAncestor(rootAbs)) return false;
+  if (dirSafeCache.has(abs)) return dirSafeCache.get(abs);
+  let ok = false;
+  try {
+    const stat = fs.lstatSync(abs);
+    ok = stat.isDirectory() && !stat.isSymbolicLink() && !linkedPath(abs);
+  } catch { ok = false; }
+  dirSafeCache.set(abs, ok);
+  return ok;
+}
+
+/** 单文件便宜校验：一次 lstat（链接会被 isFile=false 排除） */
+function cheapImageFile(file, name) {
+  if (!EXTS.includes(path.extname(name).toLowerCase())) return false;
+  try {
+    const stat = fs.lstatSync(file);
+    return stat.isFile() && stat.size > 0 && stat.size <= MAX_FILE_BYTES;
+  } catch { return false; }
+}
+
 function listImages(dir, { recursive = true, root = dir, depth = 0, result = [] } = {}) {
   if (depth > 3 || result.length >= MAX_FILES) return result;
-  if (rootHasLinkedAncestor(root)) return result;
+  if (!safeScanDir(dir, root)) return result;
   let entries;
   try {
-    if (fs.lstatSync(dir).isSymbolicLink() || linkedPath(dir)) return result;
     entries = fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
   } catch { return result; }
   for (const ent of entries) {
@@ -151,7 +190,46 @@ function listImages(dir, { recursive = true, root = dir, depth = 0, result = [] 
     const full = path.join(dir, ent.name);
     if (ent.isDirectory()) {
       if (recursive) listImages(full, { recursive, root, depth: depth + 1, result });
-    } else if (EXTS.includes(path.extname(ent.name).toLowerCase()) && regularFile(full, root)) result.push(full);
+    } else if (cheapImageFile(full, ent.name)) result.push(full);
+  }
+  return result;
+}
+
+/**
+ * listImages 的异步版：fs.promises.readdir + 每轮最多 8 个并发 lstat，每 32 条让出一次事件循环。
+ * HTTP 热路径（status / 缩略图列表）和启动维护用这一条，避免同步扫描把 /healthz 堵住。
+ */
+async function listImagesAsync(dir, { recursive = true, root = dir, depth = 0, result = [] } = {}) {
+  if (depth > 3 || result.length >= MAX_FILES) return result;
+  if (!safeScanDir(dir, root)) return result;
+  let entries;
+  try {
+    entries = await fsp.readdir(dir, { withFileTypes: true });
+  } catch { return result; }
+  entries.sort((a, b) => a.name.localeCompare(b.name));
+  const files = [];
+  for (const ent of entries) {
+    if (result.length >= MAX_FILES) break;
+    if (ent.isSymbolicLink()) continue;
+    const full = path.join(dir, ent.name);
+    if (ent.isDirectory()) {
+      if (recursive) {
+        await listImagesAsync(full, { recursive, root, depth: depth + 1, result });
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+    } else if (EXTS.includes(path.extname(ent.name).toLowerCase())) {
+      files.push(full);
+    }
+  }
+  const CONCURRENCY = 8;
+  for (let i = 0; i < files.length; i += CONCURRENCY) {
+    if (result.length >= MAX_FILES) break;
+    const batch = files.slice(i, i + CONCURRENCY);
+    const stats = await Promise.all(batch.map((file) => fsp.lstat(file).catch(() => null)));
+    stats.forEach((stat, index) => {
+      if (stat && stat.isFile() && stat.size > 0 && stat.size <= MAX_FILE_BYTES) result.push(batch[index]);
+    });
+    await new Promise((resolve) => setImmediate(resolve));
   }
   return result;
 }
@@ -174,11 +252,15 @@ function scanStamp(folder) {
 
 function invalidateScan(folder) {
   if (folder) scanCache.delete(path.resolve(folder));
+  // 目录安全缓存也要一起失效：目录可能刚被创建/删除/换成链接
+  if (folder) dirSafeCache.delete(path.resolve(folder));
+  else dirSafeCache.clear();
 }
 
-function clearScanCache() { scanCache.clear(); }
+function clearScanCache() { scanCache.clear(); dirSafeCache.clear(); }
 
 function listImagesCached(folder, root) {
+  const t0 = probe.now();
   const stamp = scanStamp(folder);
   if (!stamp) { invalidateScan(folder); return []; }
   const key = path.resolve(folder);
@@ -187,11 +269,17 @@ function listImagesCached(folder, root) {
     // Map 保持插入顺序：命中后挪到末尾，简单的 LRU。
     scanCache.delete(key);
     scanCache.set(key, hit);
+    probe.emit(probeLogger, 'debug', `扫描缓存命中 ${key} 张数=${hit.files.length} 耗时=${probe.ms(probe.now() - t0)}ms`);
     return hit.files.slice();
   }
   const files = listImages(folder, { root, recursive: false });
   scanCache.set(key, { root, stamp, files });
   while (scanCache.size > SCAN_CACHE_MAX) scanCache.delete(scanCache.keys().next().value);
+  // 探针：这条是「首次扫描 / 上传后重扫」的真实成本，也是 0.8ms/张 那个数字的来源
+  const cost = probe.now() - t0;
+  const perFile = files.length ? cost / files.length : 0;
+  probe.emit(probeLogger, cost > 50 ? 'warn' : 'debug',
+    `扫描 ${key} 张数=${files.length} 耗时=${probe.ms(cost)}ms 单张=${probe.ms(perFile)}ms`);
   return files.slice();
 }
 // Every public entry has a relative ID, not just a basename: legacy folders can
@@ -202,19 +290,89 @@ function categoryFolders(key) {
   return FOLDERS[key] || [];
 }
 function categoryImages(dir, emotion) {
+  const t0 = probe.now();
   const key = normalizeEmotion(emotion);
   if (!key) return [];
-  if (key.startsWith(EXTRA_PREFIX)) {
-    // 自定义分类：目录名就是标签，不递归（用户自己往里复制/拖文件）
-    return listImagesCached(path.join(dir, categoryFolders(key)[0]), dir);
-  }
-  const files = FOLDERS[key].flatMap((name) => listImagesCached(path.join(dir, name), dir));
-  // 直接扔在 data/stickers 根目录的图也算「开心」：以前这里是 key === 'other'，
-  // 但 normalizeEmotion 早把 other 映射成 happy，那段是死代码，根目录的图永远收不到。
-  if (key === 'happy') files.push(...listImagesCached(dir, dir));
-  return [...new Set(files)].sort((a, b) => a.localeCompare(b));
+  const out = (() => {
+    if (key.startsWith(EXTRA_PREFIX)) {
+      // 自定义分类：目录名就是标签，不递归（用户自己往里复制/拖文件）
+      return listImagesCached(path.join(dir, categoryFolders(key)[0]), dir);
+    }
+    const files = FOLDERS[key].flatMap((name) => listImagesCached(path.join(dir, name), dir));
+    // 直接扔在 data/stickers 根目录的图也算「开心」：以前这里是 key === 'other'，
+    // 但 normalizeEmotion 早把 other 映射成 happy，那段是死代码，根目录的图永远收不到。
+    if (key === 'happy') files.push(...listImagesCached(dir, dir));
+    return [...new Set(files)].sort((a, b) => a.localeCompare(b));
+  })();
+  const cost = probe.now() - t0;
+  probe.emit(probeLogger, cost > 50 ? 'warn' : 'debug',
+    `分类 ${key} 目录=${dir} 张数=${out.length} 耗时=${probe.ms(cost)}ms`);
+  return out;
 }
 function imagesFor(dir, emotion) { return categoryImages(dir, emotion); }
+
+/**
+ * categoryImages 的异步版：HTTP 热路径用。规则与同步版逐字一致，
+ * 只是把「一次读完整棵树」换成「异步 readdir + 8 路并发 lstat + 每 32 条让出」。
+ */
+async function categoryImagesAsync(dir, emotion) {
+  const t0 = probe.now();
+  const key = normalizeEmotion(emotion);
+  if (!key) return [];
+  let out;
+  if (key.startsWith(EXTRA_PREFIX)) {
+    out = await listImagesAsync(path.join(dir, categoryFolders(key)[0]), { root: dir, recursive: false });
+  } else {
+    const groups = await Promise.all(FOLDERS[key].map((name) =>
+      listImagesAsync(path.join(dir, name), { root: dir, recursive: false })));
+    const files = groups.flat();
+    if (key === 'happy') {
+      files.push(...await listImagesAsync(dir, { root: dir, recursive: false }));
+    }
+    out = [...new Set(files)].sort((a, b) => a.localeCompare(b));
+  }
+  const cost = probe.now() - t0;
+  probe.emit(probeLogger, cost > 50 ? 'warn' : 'debug',
+    `分类(异步) ${key} 目录=${dir} 张数=${out.length} 耗时=${probe.ms(cost)}ms`);
+  return out;
+}
+
+/**
+ * 分类下的图 + 版本（mtime），给 UI 做缩略图缓存键用。
+ * 异步版：每 32 张一批 stat，批间让出事件循环。
+ */
+async function categoryItemsAsync(dir, emotion) {
+  const files = await categoryImagesAsync(dir, emotion);
+  const out = [];
+  for (let i = 0; i < files.length; i += 32) {
+    const batch = files.slice(i, i + 32);
+    const stats = await Promise.all(batch.map((file) => fsp.stat(file).catch(() => null)));
+    batch.forEach((file, index) => {
+      out.push({
+        name: path.basename(file),
+        id: path.relative(dir, file).split(path.sep).join('/'),
+        path: file,
+        version: stats[index] ? Math.round(stats[index].mtimeMs) : 0,
+      });
+    });
+    if (i + 32 < files.length) await new Promise((resolve) => setImmediate(resolve));
+  }
+  return out;
+}
+
+/** 同步版：只给测试/老调用方用 */
+function categoryItems(dir, emotion) {
+  return categoryImages(dir, emotion).map((file) => {
+    let version = 0;
+    try { version = Math.round(fs.statSync(file).mtimeMs); } catch { /* 读不到就当 0 */ }
+    return {
+      name: path.basename(file),
+      id: path.relative(dir, file).split(path.sep).join('/'),
+      path: file,
+      version,
+    };
+  });
+}
 function anyImages(dir) { return [...new Set(Object.keys(EMOTIONS).flatMap((key) => categoryImages(dir, key)))]; }
 function resolveImage(dir, emotion, id) {
   if (typeof id !== 'string' || !id || /[\\:\x00-\x1f]/.test(id)) return '';
@@ -237,6 +395,40 @@ function resolveImage(dir, emotion, id) {
     : files.filter((file) => path.basename(file) === id);
   return matches.length === 1 ? matches[0] : '';
 }
+
+/** 某个分类实际落在哪个目录（优先已存在的老别名目录，比如迁移前还在用「撒娇」） */
+function categoryDir(dir, emotion, { create = false } = {}) {
+  const key = normalizeEmotion(emotion);
+  if (!key) return '';
+  const folders = categoryFolders(key);
+  if (!folders.length) return '';
+  for (const name of folders) {
+    const candidate = path.join(dir, name);
+    try {
+      if (fs.existsSync(candidate)) {
+        const stat = fs.lstatSync(candidate);
+        if (stat.isDirectory() && !stat.isSymbolicLink() && !linkedPath(candidate)) return candidate;
+      }
+    } catch { /* 坏目录就跳过，继续看下一个别名 */ }
+  }
+  if (!create) return '';
+  const primary = path.join(dir, folders[0]);
+  safeDirectory(primary);
+  return primary;
+}
+
+/** 给「打开目标目录」用：库根 / 分类目录 / 某一张图 */
+function targetForOpen(dir, emotion, name) {
+  const root = path.resolve(dir);
+  if (!emotion) return { dir: root, mode: 'root' };
+  const folder = categoryDir(root, emotion, { create: false });
+  if (!folder) return null;
+  if (!name) return { dir: folder, mode: 'folder' };
+  const file = resolveImage(root, normalizeEmotion(emotion), String(name));
+  if (!file) return null;
+  return { dir: file, mode: 'select' };
+}
+
 function safeDirectory(dir) {
   const absolute = path.resolve(dir);
   const parsed = path.parse(absolute);
@@ -252,11 +444,94 @@ function safeDirectory(dir) {
   }
   return absolute;
 }
-function migrateLegacy(config, root) {
-  // OFF is a hard boundary: do not even stat/create a directory.
-  if (!isOn(config)) return { moved: 0, deduplicated: 0, rootImages: 0, errors: [] };
-  const dir = stickerDir(config, root);
+/** 分块比较两个文件的字节（不整文件读进内存：老实现每张图要读 3 遍 2.4MB） */
+function sameBytes(a, b) {
+  const fa = fs.openSync(a, 'r');
+  const fb = fs.openSync(b, 'r');
+  const bufA = Buffer.allocUnsafe(64 * 1024);
+  const bufB = Buffer.allocUnsafe(64 * 1024);
+  try {
+    for (;;) {
+      const na = fs.readSync(fa, bufA, 0, bufA.length, null);
+      const nb = fs.readSync(fb, bufB, 0, bufB.length, null);
+      if (na !== nb) return false;
+      if (na === 0) return true;
+      if (!bufA.subarray(0, na).equals(bufB.subarray(0, nb))) return false;
+    }
+  } finally {
+    try { fs.closeSync(fa); } catch { /* ignore */ }
+    try { fs.closeSync(fb); } catch { /* ignore */ }
+  }
+}
+
+/**
+ * 把一张旧分类的图并进目标分类目录。返回 'moved' / 'dedup' / 'skip'。
+ *
+ * 关键改动（2026-11-04）：**先试 rename**。
+ * 旧实现是「整文件读 → copyFile → 再读 source/target 比对 → 删源」，一张 2.4MB 的图
+ * 要走 4 遍读 + 1 遍写；实测 245 张 611MB 要 11 秒。而这些目录都在同一个
+ * data/stickers 树下（safeDirectory 已经拒了链接/目录联接），rename 只是改元数据，
+ * 不读内容 → 同样的 245 张降到几十毫秒。只有跨卷/被占用（EXDEV/EPERM/EBUSY）时才退回复制。
+ */
+function moveInto(source, targetDir, dir) {
+  // 这里不再跑整个 regularFile（每张都要逐层 lstat + 两次 realpath，实测 0.8ms/张）：
+  // 这些文件刚被 categoryImages 用 regularFile 验过，目录也过了 safeDirectory /
+  // rootHasLinkedAncestor 两道链接检查。这里只补一次便宜的 isInside + lstat。
+  if (!isInside(dir, source)) return 'skip';
+  let sourceStat;
+  try { sourceStat = fs.lstatSync(source); } catch { return 'skip'; }
+  if (!sourceStat.isFile() || sourceStat.size <= 0 || sourceStat.size > MAX_FILE_BYTES) return 'skip';
+  const ext = path.extname(source);
+  const stem = path.basename(source, ext);
+  const name = path.basename(source);
+  const sourceSize = sourceStat.size;
+  let target = path.join(targetDir, name);
+  let suffix = 1;
+  for (;;) {
+    let stat = null;
+    try { stat = fs.statSync(target); } catch (err) { if (err.code !== 'ENOENT') throw err; }
+    if (!stat) break;
+    if (!regularFile(target, dir)) throw fail('迁移目标不是安全文件');
+    // 同名且内容相同 → 去重，删掉旧的这份；大小不同就不必读内容
+    if (stat.size === sourceSize && sameBytes(source, target)) {
+      fs.unlinkSync(source);
+      return 'dedup';
+    }
+    target = path.join(targetDir, stem + '-迁移' + suffix++ + ext);
+  }
+  if (!isInside(dir, source) || !isInside(dir, target) || source === target) {
+    throw fail('迁移校验失败，保留原图');
+  }
+  try {
+    fs.renameSync(source, target);
+    return 'moved';
+  } catch (err) {
+    if (!['EXDEV', 'EPERM', 'EACCES', 'EBUSY'].includes(err.code)) throw err;
+  }
+  // 兜底：跨卷或文件被占用 → 复制、校验、删源（失败一律保留原图）
+  fs.copyFileSync(source, target, fs.constants.COPYFILE_EXCL);
+  if (fs.statSync(target).size !== sourceSize || !sameBytes(source, target)) {
+    try { fs.unlinkSync(target); } catch { /* 删不掉也没关系，源图还在 */ }
+    throw fail('迁移校验失败，保留原图');
+  }
+  fs.unlinkSync(source);
+  return 'moved';
+}
+
+/**
+ * 迁移的**唯一**实现，写成生成器：每搬完一张就 yield 一次。
+ *   - 同步调用方（测试、兼容接口）把它抽干 → 行为与以前一致；
+ *   - 异步调用方（服务启动后的维护）每 N 张让出一次事件循环 → 不再堵住 /healthz。
+ */
+function* migrateGen(config, root, state = {}) {
   const report = { moved: 0, deduplicated: 0, rootImages: 0, errors: [] };
+  state.report = report;
+  state.total = 0;
+  // OFF is a hard boundary: do not even stat/create a directory.
+  if (!isOn(config)) return report;
+  const t0 = probe.now();
+  let probeBytes = 0;
+  const dir = stickerDir(config, root);
   // 迁移会大量搬文件：先把扫描缓存清掉，避免拿到搬之前的目录内容。
   clearScanCache();
   try { safeDirectory(dir); } catch (err) { report.errors.push(err.message); return report; }
@@ -266,31 +541,17 @@ function migrateLegacy(config, root) {
     for (const source of categoryImages(dir, key)) {
       if (path.dirname(source) === targetDir) continue;
       const fromRoot = path.dirname(path.resolve(source)) === path.resolve(dir);
+      state.total++;
       try {
-        if (!regularFile(source, dir)) continue;
-        const bytes = fs.readFileSync(source);
-        const ext = path.extname(source);
-        const stem = path.basename(source, ext);
-        let target = path.join(targetDir, path.basename(source));
-        let suffix = 1;
-        while (fs.existsSync(target)) {
-          if (!regularFile(target, dir)) throw fail('迁移目标不是安全文件');
-          if (fs.readFileSync(target).equals(bytes)) break;
-          target = path.join(targetDir, stem + '-迁移' + suffix++ + ext);
+        try { probeBytes += fs.statSync(source).size; } catch { /* 统计失败不影响迁移 */ }
+        const outcome = moveInto(source, targetDir, dir);
+        if (outcome === 'dedup') report.deduplicated++;
+        else if (outcome === 'moved') {
+          report.moved++;
+          if (fromRoot) report.rootImages++;   // 本次从 data/stickers 根目录并进来的张数
         }
-        const existed = fs.existsSync(target);
-        if (!existed) fs.copyFileSync(source, target, fs.constants.COPYFILE_EXCL);
-        // Verify both absolute paths and bytes BEFORE deleting the source. A failed
-        // copy/permission error keeps the source readable via legacy inventory.
-        if (!isInside(dir, source) || !isInside(dir, target) || source === target
-            || !regularFile(source, dir) || !regularFile(target, dir)
-            || !fs.readFileSync(source).equals(bytes) || !fs.readFileSync(target).equals(bytes)) {
-          throw fail('迁移校验失败，保留原图');
-        }
-        fs.unlinkSync(source);
-        if (existed) report.deduplicated++; else report.moved++;
-        if (fromRoot) report.rootImages++;   // 本次从 data/stickers 根目录并进来的张数
       } catch (err) { report.errors.push(path.relative(dir, source) + '：' + err.message); }
+      yield report;   // 让调用方决定是否让出事件循环
     }
     // Remove only proven-empty, known legacy folders. Unknown files/subfolders
     // are never deleted just to make Explorer show three folders.
@@ -305,7 +566,43 @@ function migrateLegacy(config, root) {
   }
   // 搬完再清一次：上面按目录读数时又把缓存填回来了。
   clearScanCache();
+  probe.emit(probeLogger, 'info',
+    `迁移完成 搬=${report.moved} 去重=${report.deduplicated} 根目录=${report.rootImages}`
+    + ` 失败=${report.errors.length} 涉及字节=${probeBytes}`
+    + ` 耗时=${probe.ms(probe.now() - t0)}ms`);
   return report;
+}
+
+/** 同步迁移：抽干生成器。保留给测试与老调用方。 */
+function migrateLegacy(config, root) {
+  const it = migrateGen(config, root);
+  let step = it.next();
+  while (!step.done) step = it.next();
+  return step.value;
+}
+
+/**
+ * 异步迁移：按**时间片**让出事件循环（默认 16ms 一片），不是按条数。
+ *
+ * 为什么不用「每 20 个文件 yield 一次」：单次文件操作的成本并不稳定 ——
+ * 实测同一批 rename 在开着实时防护的机器上可能到几十毫秒一张，
+ * 按条数让出会攒出 1.5 秒的同步块，/healthz 照样超时。按时间切就一定不会超预算。
+ */
+async function migrateLegacyAsync(config, root, { budgetMs = 16, onProgress = null, state = {} } = {}) {
+  const it = migrateGen(config, root, state);
+  let step = it.next();
+  let sliceStart = probe.now();
+  while (!step.done) {
+    if (typeof onProgress === 'function') {
+      try { onProgress(state.report, state.total); } catch { /* 进度回调不许影响迁移 */ }
+    }
+    if (probe.now() - sliceStart >= budgetMs) {
+      await new Promise((resolve) => setImmediate(resolve));
+      sliceStart = probe.now();
+    }
+    step = it.next();
+  }
+  return step.value;
 }
 
 // 自定义分类存 data/sticker-categories.json（不进 config：那个文件是给表单用的，
@@ -341,6 +638,86 @@ function writeExtraCategories(config, root, list) {
   fs.writeFileSync(tmp, JSON.stringify(clean, null, 2) + '\n', 'utf8');
   fs.renameSync(tmp, file);
   return clean;
+}
+
+// 用户明确「忽略」的目录名，不再自动登记（防止空目录/临时目录污染提示词）
+const IGNORE_FILE = 'sticker-categories.ignore.json';
+
+function readIgnored(config, root) {
+  try {
+    const raw = JSON.parse(fs.readFileSync(path.join(path.dirname(stickerDir(config, root)), IGNORE_FILE), 'utf8'));
+    return Array.isArray(raw) ? raw.map((v) => cleanCategoryLabel(v)).filter(Boolean) : [];
+  } catch { return []; }
+}
+
+function writeIgnored(config, root, labels) {
+  const clean = [...new Set((Array.isArray(labels) ? labels : []).map((v) => cleanCategoryLabel(v)).filter(Boolean))];
+  const file = path.join(path.dirname(stickerDir(config, root)), IGNORE_FILE);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file + '.tmp', JSON.stringify(clean, null, 2) + '\n', 'utf8');
+  fs.renameSync(file + '.tmp', file);
+  return clean;
+}
+
+/**
+ * 自动发现「用户自己建的分类目录」（隐形分类 bug 的修复）。
+ *
+ * 原则：**目录是事实来源，JSON 只是缓存**。以前只认 sticker-categories.json 里
+ * 登记过的分类，用户在 data/stickers 里新建「恼怒」放图，页签不出现、模型不知道、
+ * [[sticker:恼怒]] 被拒、图彻底收不到。
+ *
+ * 规则（和交接文档一致）：
+ *   - 只看一级子目录，不递归；
+ *   - 排除内置三类和所有旧别名（通用/其他/撒娇/cute/happy/嫌弃/meh/敷衍/bored…）；
+ *   - 目录要过 safeScanDir（拒链接 / 目录联接 / 非目录）；
+ *   - 空目录也登记（建了文件夹就该在页签里出现），但 0 张的分类不会进提示词；
+ *   - 名字走 cleanCategoryLabel（去非法字符、截 20 字），和已登记的重名按「已存在」处理。
+ */
+function discoverCategories(config, root) {
+  if (!isOn(config)) return [];
+  const dir = stickerDir(config, root);
+  let entries;
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return []; }
+  const reserved = new Set([...Object.values(EMOTIONS), ...Object.values(FOLDERS).flat(), GENERIC]);
+  const ignored = new Set(readIgnored(config, root));
+  const found = [];
+  for (const ent of entries) {
+    if (!ent.isDirectory() || ent.isSymbolicLink()) continue;
+    if (reserved.has(ent.name)) continue;
+    const label = cleanCategoryLabel(ent.name);
+    if (!label || reserved.has(label) || ignored.has(label) || found.includes(label)) continue;
+    const full = path.join(dir, ent.name);
+    if (!safeScanDir(full, dir)) continue;
+    // 空目录也登记：用户建了文件夹就该看见页签（提示词那边会过滤掉 0 张的分类，见 promptCategories）
+    found.push(label);
+  }
+  return found;
+}
+
+/** 把新发现的分类补进 sticker-categories.json（幂等：已有的 chance / 顺序都不动） */
+function syncDiscoveredCategories(config, root) {
+  const dir = stickerDir(config, root);
+  const current = readExtraCategories(config, root);
+  const found = discoverCategories(config, root);
+  // 目录才是事实来源：登记过但文件夹已经没了的分类要摘掉，
+  // 否则用户在资源管理器里删掉「恼怒」，页签会一直挂着一个空分类。
+  const alive = current.filter((c) => {
+    const label = cleanCategoryLabel(c && c.label);
+    if (!label) return false;
+    try {
+      const stat = fs.lstatSync(path.join(dir, label));
+      return stat.isDirectory() && !stat.isSymbolicLink();
+    } catch { return false; }
+  });
+  const aliveLabels = new Set(alive.map((c) => cleanCategoryLabel(c && c.label)));
+  const removed = current
+    .map((c) => cleanCategoryLabel(c && c.label))
+    .filter((label) => label && !aliveLabels.has(label));
+  const added = found.filter((label) => !aliveLabels.has(label));
+  if (!added.length && !removed.length) return { added: [], removed: [], categories: current };
+  const next = alive.concat(added.map((label) => ({ label, chance: 0.25 })));
+  writeExtraCategories(config, root, next);
+  return { added, removed, categories: readExtraCategories(config, root) };
 }
 
 function isOn(config) { return features.isOn(config, 'stickers'); }
@@ -449,6 +826,8 @@ function promptCategories(config, root) {
     const label = cleanCategoryLabel(cat && cat.label);
     const key = extraKey(label);
     if (!key) continue;
+    // 这里**不过滤**空分类：页签、resolveCategory 都要能看见用户刚建的文件夹。
+    // 真正给模型看的清单在 src/persona/index.js 里，那边已经 .filter(c => c.count > 0)。
     out.push({ key, label, count: categoryImages(dir, key).length });
   }
   return out;
@@ -633,8 +1012,8 @@ function upload(config, root, emotion, files) {
   invalidateScan(target);
   return uploaded;
 }
-module.exports = { EMOTIONS, EMOTION_LABELS, EXTRA_PREFIX, cleanCategoryLabel, extraKey, hasCategory, readExtraCategories, writeExtraCategories, categoryFile, normalizeEmotion, categoryFromName, resolveCategory, SYNONYMS, promptCategories, GENERIC, EXTS, MAX_FILE_BYTES, MAX_UPLOAD_BYTES, MAX_UPLOAD_FILES,
-  hasEmotion, resolveImage, safeDirectory, migrateLegacy, ensureBuiltinDirs, stickerDir, regularFile, listImages, categoryImages, imagesFor, anyImages, isOn,
+module.exports = { EMOTIONS, EMOTION_LABELS, EXTRA_PREFIX, cleanCategoryLabel, extraKey, hasCategory, readExtraCategories, writeExtraCategories, categoryFile, discoverCategories, syncDiscoveredCategories, readIgnored, writeIgnored, normalizeEmotion, categoryFromName, resolveCategory, SYNONYMS, promptCategories, GENERIC, EXTS, MAX_FILE_BYTES, MAX_UPLOAD_BYTES, MAX_UPLOAD_FILES,
+  hasEmotion, resolveImage, safeDirectory, migrateLegacy, migrateLegacyAsync, ensureBuiltinDirs, stickerDir, regularFile, listImages, listImagesAsync, categoryImages, categoryImagesAsync, categoryItems, categoryItemsAsync, categoryDir, targetForOpen, imagesFor, anyImages, isOn,
   invalidateScan, clearScanCache, choose, pick, isStickerRequest, imageType, upload,
   isSeriousText, isLivelyText, SERIOUS_WINDOW_MS, SERIOUS_TURNS,
-  isUsableCategory, defaultCategory, resolveUsableCategory, categoryInText, moodCategory };
+  isUsableCategory, defaultCategory, resolveUsableCategory, categoryInText, setProbeLogger, moodCategory };

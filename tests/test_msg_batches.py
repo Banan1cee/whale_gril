@@ -114,6 +114,10 @@ class MergeTextBatchTest(unittest.TestCase):
             'log': lambda *a: self.log.append(' '.join(str(x) for x in a)),
             '_GROUP_SENDER_PREFIX_RE': _module_regex('_GROUP_SENDER_PREFIX_RE'),
         }
+        # merge_text_batch 会调用模块级 fix_garbled（0eba2cb 的乱码还原）
+        env['fix_garbled'] = _bridge_function('fix_garbled', env)
+        # merge_text_batch 会调用模块级 fix_garbled（0eba2cb 的乱码还原）
+        env['fix_garbled'] = _bridge_function('fix_garbled', env)
         self.merge = _bridge_function('merge_text_batch', env)
 
     def _m(self, content, sender='wxid_me', lid=1):

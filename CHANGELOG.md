@@ -1,5 +1,36 @@
 # 更新记录
 
+## 未发布（fix/sticker-freeze-and-folder）
+
+### 修复 · 表情包「一点启动就卡死 / 上传报积极拒绝 / 自建分类看不见」
+
+**启动卡死的主因是同步迁移**：StickerService 构造函数直接跑旧分类迁移，而 createRuntime 在
+server.listen() 之前。实测 245 张 611MB 的库要让内核 **11.5 秒**不监听，启动器 WaitForNodeAsync
+只等 10 秒 → 判「内核未就绪」→ 桥接压根不起来；这 11.5 秒也是「点上传就报积极拒绝」的窗口。
+
+- **R1 启动**：构造函数零磁盘 I/O；迁移由 server.js 在 listen 之后 setImmediate 触发，
+  按 16ms 时间片让出事件循环；迁移本身从「整文件读 3 遍 + 写 1 遍」改成 **rename 优先**
+  （同卷只改元数据，跨卷才退回复制+校验）。启动到 listen **11.5s → 20-40ms**，
+  整理期间 /healthz 最长一次 **11.8s → 444ms**。状态里新增 maintenance{phase,done,total}。
+- **R2 扫描**：安全校验从「每文件逐层 lstat + 每层两次 realpath」（0.8ms/张）下沉到「每目录验一次」，
+  单文件只剩一次 lstat；新增异步版（8 路并发、每 32 条让出）给 HTTP 热路径；
+  status 加 1.5s 结果缓存 + 显式 invalidateStatus()。单张扫描 **0.8ms → 0.02ms**，
+  冷 status **450ms → 19ms**。
+- **R3 缩略图**：内核在线时一次 HTTP 拿全（不再每次 spawn node，**630ms → 16-113ms**）；
+  缩略图按 id+mtime 缓存、132px、4 路并发、骨架先上屏（**首图 597ms → 25-46ms**）；
+  内容签名没变就不重建；切回同一分类命中缓存（**2.9s → 266-347ms**）。
+- **R4 错误与降级**：Api.FriendlyError() 把连接被拒绝 / 超时翻译成人话，
+  不再把 .NET 原文甩给用户；网页调试台上传前先探 /healthz，探不动就提示直接往分类文件夹拖图。
+- **R5 自建分类**：data/stickers 一级子目录里有图、又不是内置/旧别名，就自动登记
+  （幂等、保留已有 chance；sticker-categories.ignore.json 可拉黑），页签立刻出现、模型可 [[sticker:猫猫]]。
+- **步骤 7 打开目标目录**：POST /api/stickers/open-folder 支持 {emotion} / {emotion,name}，
+  返回 
+oot|folder|select；启动器「打开分类文件夹」、单图右键「在文件夹中显示」、
+  调试台每个情绪框的「打开文件夹」都走它；内核不在时启动器本地拼路径自己开。
+
+测试新增 sticker-startup / sticker-status-cache / sticker-open-folder / sticker-discovery
+四组；sticker 相关 141 个用例全绿。
+
 ## 未发布
 
 ### 修复 · 思考 token 吃满预算导致「空泡泡」（episode 抽取 / 主回复）

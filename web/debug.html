@@ -617,9 +617,34 @@ async function uploadStickers(emotion, input, button, droppedFiles = null) {
     show('上传未开始：只支持动图和常见图片，每张必须非空且不超过 4 兆。'); return;
   }
   const epoch = STICKER_UPLOAD_EPOCH;
+  // 先占住这一类（同步生效：界面立刻显示「正在上传」，也不会让同一类并发上传两次），
+  // 再做 1 秒的内核探针。探针失败 = 内核压根没在跑，直接降级提示去文件夹拖。
   STICKER_UPLOAD_BUSY.add(emotion);
   button.disabled = true;
   if (zone) zone.setAttribute('aria-busy', 'true');
+  const release = () => {
+    STICKER_UPLOAD_BUSY.delete(emotion);
+    button.disabled = false;
+    input.value = '';
+    if (zone) zone.setAttribute('aria-busy', 'false');
+  };
+  // 上传前先探一次内核（1 秒超时）：连接被拒绝和「内核忙」要分开说，
+  // 别再把浏览器/.NET 的原始报错甩给用户。文件夹本身就是存储，传不上去也能直接拖。
+  try {
+    let timer = null;
+    let signal;
+    if (typeof AbortController === 'function' && typeof setTimeout === 'function') {
+      const controller = new AbortController();
+      signal = controller.signal;
+      timer = setTimeout(() => controller.abort(), 1000);
+    }
+    await fetch('/healthz', signal ? { signal, cache: 'no-store' } : { cache: 'no-store' });
+    if (timer) clearTimeout(timer);
+  } catch {
+    release();
+    show('内核没在运行，图片没传出去。点「打开文件夹」把图直接拖进去，内核起来后会自动出现。');
+    return;
+  }
   show('正在上传到「' + label + '」（不会发送消息）…');
   try {
     const files = await Promise.all(selected.map(async (file) => ({ name: file.name, data: await stickerFileBase64(file) })));
@@ -630,7 +655,13 @@ async function uploadStickers(emotion, input, button, droppedFiles = null) {
     show('「' + label + '」已保存 ' + (data.uploaded || []).length + ' 张图片，未发送微信消息。');
     input.value = '';
     await loadStickers();
-  } catch (error) { show('上传失败：' + stickerMessage(error, '图片上传未完成，请重新选择后再试。')); }
+  } catch (error) {
+    if (error instanceof TypeError) {
+      show('内核没在运行，图片没传出去。点「打开文件夹」把图直接拖进去，内核起来后会自动出现。');
+    } else {
+      show('上传失败：' + stickerMessage(error, '图片上传未完成，请重新选择后再试。'));
+    }
+  }
   finally {
     STICKER_UPLOAD_BUSY.delete(emotion);
     button.disabled = false;
@@ -654,10 +685,10 @@ async function deleteSticker(emotion, file) {
   }
 }
 
-async function openStickerFolder() {
+async function openStickerFolder(emotion = '') {
   const msg = $('stkFolderMsg');
   try {
-    const r = await fetch('/api/stickers/open-folder', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    const r = await fetch('/api/stickers/open-folder', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(emotion ? { emotion } : {}) });
     const d = await r.json();
     if (!r.ok || !d.ok) throw new Error(d.error || '打不开');
     msg.textContent = '已打开：' + d.dir;
@@ -741,6 +772,13 @@ function bindStickerUi() {
     });
     input.addEventListener('change', () => uploadStickers(key, input, button));
     zone.appendChild(button);
+    // 每个情绪框自带「打开文件夹」：内核没在跑时也能知道图该放哪、直接拖进去
+    const openBtn = document.createElement('button');
+    openBtn.type = 'button';
+    openBtn.id = 'stkOpenFolder-' + key;
+    openBtn.textContent = '打开文件夹';
+    openBtn.addEventListener('click', (event) => { event.stopPropagation(); openStickerFolder(key); });
+    zone.appendChild(openBtn);
     const note = document.createElement('div');
     note.id = 'stkUploadState-' + key;
     note.className = 'muted sticker-note';
