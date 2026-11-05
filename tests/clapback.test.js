@@ -15,7 +15,7 @@ const { Store } = require('../src/memory/store');
 const { DEFAULT_CONFIG } = require('../src/infra/config');
 
 const root = path.resolve(__dirname, '..');
-const lines = fs.readFileSync(path.join(root, 'resources', 'clapback.txt'), 'utf8')
+const lines = fs.readFileSync(path.join(root, 'assets', 'clapback.txt'), 'utf8')
   .split(/\r?\n/).map((s) => s.trim()).filter((s) => s && !s.startsWith('#'));
 
 const cats = new Set(lines.map((s) => s.split('|')[0].trim()));

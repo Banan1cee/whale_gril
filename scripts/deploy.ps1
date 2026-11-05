@@ -41,7 +41,7 @@ if ($LASTEXITCODE -ge 8) { throw "robocopy 失败，退出码 $LASTEXITCODE" }
 $must = @(
   'server.js', 'package.json',
   'src/pipeline/chat.js', 'src/adapters/vision.js', 'src/core/master.js', 'src/persona/index.js',
-  'src/app.js', 'bridge/engine.py', 'tools/uia-diag.py', 'scripts/release-check.js'
+  'src/app.js', 'bridge/engine.py', 'scripts/tools/uia-diag.py', 'scripts/release-check.js'
 )
 $bad = @()
 foreach ($f in $must) {

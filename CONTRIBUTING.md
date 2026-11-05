@@ -11,6 +11,7 @@ npm start            # 打开 http://127.0.0.1:8787
 
 # 接微信才需要 Python 3.12
 python -m pip install -r requirements.txt
+# wechatauto 由仓库 vendor/wechatauto 提供，pip 不需要装它；源码直跑桥接时把 vendor 加进 PYTHONPATH
 ```
 
 不想装环境：下载 Releases 里的完整包，里面已经带好 Node + Python，解压双击就能跑。

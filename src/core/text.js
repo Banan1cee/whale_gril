@@ -25,13 +25,6 @@ function nameMatches(a, b) {
   return x === y || x.includes(y) || y.includes(x);
 }
 
-function formatChatTime(ts) {
-  if (!ts) return '时间未知';
-  const d = new Date(Number(ts));
-  if (Number.isNaN(d.getTime())) return '时间未知';
-  return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
-}
-
 /**
  * 消息时间戳 [MM-DD HH:mm]：提示词里每条历史消息前面的那个标记。
  * 必须确定性：同一个 ts，不管当「当前消息」还是当「历史消息」，渲染结果一样。
@@ -61,7 +54,6 @@ module.exports = {
   SENSITIVE_PATTERNS,
   sanitizeForModel,
   nameMatches,
-  formatChatTime,
   formatStamp,
   normalizeForCompare,
   clampInt,

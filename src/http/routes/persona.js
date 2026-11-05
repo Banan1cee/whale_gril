@@ -26,7 +26,7 @@ module.exports = function register(router) {
     return json(res, result && result.ok ? 200 : 400, result);
   });
 
-  // 人设预设：personas/ 下每个版本一个文件
+  // 人设预设：assets/personas/ 下每个版本一个文件
   router.get('/api/persona/presets', (runtime, req, res) => {
     return json(res, 200, { ok: true, presets: presets.list(runtime.config) });
   });

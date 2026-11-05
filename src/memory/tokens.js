@@ -70,18 +70,11 @@ function messageBudgetTokens(message, factor = LIMITS.estimateSafety) {
   return Math.ceil((Number(raw) || 0) * (Number(factor) || 1));
 }
 
-function sumTokens(list, pick = (x) => x) {
-  let total = 0;
-  for (const item of list || []) total += pick(item) || 0;
-  return total;
-}
-
 module.exports = {
   estimateTokens,
   estimateBudgetTokens,
   messageTokens,
   messageBudgetTokens,
   estimatePrompt,
-  sumTokens,
   CJK_RE,
 };

@@ -22,7 +22,7 @@ const { LIMITS } = require('./constants');
 const { estimateBudgetTokens } = require('./tokens');
 const personCard = require('./personCard');
 
-/** 结尾声明：独立一段、永远在最后。改这句话前先看 docs/memory-v2-spec.md 第 7.7 节 */
+/** 结尾声明：独立一段、永远在最后。改这句话前先看 docs/记忆系统.md 的『读取』一节 */
 const MEMORY_SCOPE_NOTICE = '（这些只来自当前这个聊天；别提别的聊天里的事，被问到就说“这个我不清楚”。）';
 
 /** 摘要的原文上限（字符）。按整句丢，不切半句，所以只是「最多留这么多句」 */

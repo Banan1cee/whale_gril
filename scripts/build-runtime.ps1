@@ -25,7 +25,15 @@
 param(
   [string]$PythonVersion = '3.12.10',
   [string]$PythonUrl = '',
-  [string[]]$Packages = @('wechatauto-replica==1.2.9', 'psutil', 'pywin32', 'requests'),
+  # wechatauto 不在这里：它由仓库 vendor/wechatauto 提供（见 vendor/README.md）。
+  # 下面这些是 vendor dist-info 里 Requires-Dist 的全集 + 本项目直接 import 的依赖——
+  # 以前靠 wechatauto-replica 的传递依赖带去，现在必须显式列出来，漏一个桥接就 import 失败。
+  [string[]]$Packages = @(
+    'psutil==7.2.2', 'pywin32==312', 'requests==2.34.2',
+    'uiautomation==2.0.29', 'comtypes==1.4.17',
+    'colorama==0.4.6', 'Pillow==13.0.0', 'pyperclip==1.11.0',
+    'cryptography==50.0.2', 'winsdk==1.0.0b10', 'imageio-ffmpeg==0.8.1',
+    'zstandard==0.25.0', 'opencv-python==5.0.0.93', 'pyautogui==0.9.54'),
   [string]$Mirror = 'https://pypi.tuna.tsinghua.edu.cn/simple',
   [switch]$Force,
   [switch]$SkipNode
@@ -41,6 +49,16 @@ $wheelhouse = Join-Path $runtime 'wheelhouse'
 $sitePackages = Join-Path $pythonDir 'Lib\site-packages'
 $pythonExe = Join-Path $pythonDir 'python.exe'
 $pyTag = ($PythonVersion -split '\.')[0..1] -join ''          # 3.12 -> 312
+# pip download 必须按「目标解释器」挑轮子：构建机的系统 Python 可能不是 3.12，
+# 直接下会拿到 cp313 的 pywin32 / charset_normalizer，装进 3.12 时报「没有匹配的版本」。
+$targetArgs = @('--only-binary=:all:', '--python-version', (($PythonVersion -split '\.')[0..1] -join '.'), '--platform', 'win_amd64', '--implementation', 'cp')
+# 这几个上游只发 sdist、没有 wheel：跨平台参数下 pip 会直接说「没有匹配的版本」，
+# 必须用 --no-binary 抓源码包，安装时由 runtime 里的 setuptools 现场构建。
+$sdistOnly = @('pyautogui', 'pyscreeze', 'pytweening', 'mouseinfo', 'pygetwindow', 'pyrect', 'pymsgbox')
+function Test-SdistOnly($spec) {
+  $n = (($spec -split '[=<>!~ ]')[0]).Trim().ToLower()
+  return ($sdistOnly -contains $n)
+}
 if (-not $PythonUrl) {
   $PythonUrl = "https://www.python.org/ftp/python/$PythonVersion/python-$PythonVersion-embed-amd64.zip"
 }
@@ -63,7 +81,8 @@ function Get-File($url, $out) {
 # 构建机就是目标平台（Windows x64 + Python 3.12），所以不用 --platform 那套跨平台参数：
 # 那套模式 pip 不解析传递依赖，只能缺一个补一个。
 function Get-Wheel($name) {
-  & python -m pip download --dest $wheelhouse --no-deps --prefer-binary `
+  $how = if (Test-SdistOnly $name) { @('--no-binary', ':all:') } else { $targetArgs }
+  & python -m pip download --dest $wheelhouse --no-deps --prefer-binary @how `
     -i $Mirror --trusted-host $mirrorHost $name 2>&1 | Out-Null
   if ($LASTEXITCODE -eq 0) { Info "  抓到 $name"; return }
   Fail "拿不到 $name（镜像源或网络问题）"
@@ -73,9 +92,16 @@ function Get-Wheel($name) {
 # 31 个包要 31 轮 HTTP，慢得像卡死；这里一条命令下完。
 function Get-Closure($packages) {
   Info '抓依赖闭包到 wheelhouse（含传递依赖，约 118MB）'
-  & python -m pip download --dest $wheelhouse --prefer-binary `
-    -i $Mirror --trusted-host $mirrorHost @packages 2>&1 | Out-Null
-  if ($LASTEXITCODE -ne 0) { Fail '依赖闭包下载失败（镜像源或网络问题）' }
+  $bin = @($packages | Where-Object { -not (Test-SdistOnly $_) })
+  if ($bin.Count -gt 0) {
+    & python -m pip download --dest $wheelhouse --prefer-binary @targetArgs `
+      -i $Mirror --trusted-host $mirrorHost @bin 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) { Fail '依赖闭包下载失败（镜像源或网络问题）' }
+  }
+  # 只有 sdist 的那几个（pyautogui 及其纯 Python 依赖）：单独抓源码包，安装时现场构建
+  & python -m pip download --dest $wheelhouse --no-deps --no-binary ':all:' `
+    -i $Mirror --trusted-host $mirrorHost @sdistOnly 2>&1 | Out-Null
+  if ($LASTEXITCODE -ne 0) { Fail 'sdist 依赖下载失败（镜像源或网络问题）' }
   $n = (Get-ChildItem $wheelhouse -File | Measure-Object).Count
   Info "wheelhouse 现有 $n 个包"
 }
@@ -83,7 +109,11 @@ function Get-Closure($packages) {
 # ---------------------------------------------------------------- 缓存快速通道
 # CI 每轮都会跑这个脚本，但依赖没变时没理由重装 380MB 的包。
 # runtime 目录整体命中缓存时，看指纹直接退出，把这一步从几十秒压到 1~2 秒。
-$stamp = (@($Packages) -join '|') + "|python=$PythonVersion|schema=2"
+# vendor/wechatauto 也要进指纹：换了 vendored 源码必须重新构建，不能命中旧 runtime
+$vendorManifest = Join-Path $root 'vendor\MANIFEST.sha256'
+if (-not (Test-Path $vendorManifest)) { Fail '缺少 vendor\MANIFEST.sha256；vendor/wechatauto 没有入库？' }
+$vendorHash = (Get-FileHash $vendorManifest -Algorithm SHA256).Hash.ToLower()
+$stamp = (@($Packages) -join '|') + "|python=$PythonVersion|vendor=$vendorHash|schema=3"
 $marker = Join-Path $runtime '.built'
 if ((Test-Path $marker) -and (Test-Path $pythonExe) -and (Test-Path (Join-Path $runtime 'node.exe')) -and
     ((Get-Content $marker -Raw -ErrorAction SilentlyContinue).Trim() -eq $stamp)) {
@@ -183,6 +213,59 @@ if ($LASTEXITCODE -ne 0) { $out | Select-Object -Last 20; Fail '依赖安装没�
 # 装成功才留标记：下次命中缓存时就能跳过整段下载
 if ($LASTEXITCODE -eq 0) { New-Item -ItemType File -Force -Path (Join-Path $wheelhouse 'wheelhouse.ok') | Out-Null }
 
+# ---------------------------------------------------------------- 4.5 vendored wechatauto
+# wechatauto-replica 不从 PyPI 装：仓库里 vendor/wechatauto 是固定版本的原样源码
+# （见 vendor/README.md）。装之前先按 MANIFEST.sha256 逐文件核对，防止有人顺手改一行，
+# 导致“仓库里的源码”和“真正装进 runtime 的代码”不是同一份。
+Step '4.5/6 安装 vendored wechatauto'
+$vendorPkg = Join-Path $root 'vendor\wechatauto'
+$vendorDistInfo = Join-Path $vendorPkg 'dist-info'
+if (-not (Test-Path (Join-Path $vendorPkg '__init__.py'))) { Fail 'vendor\wechatauto\__init__.py 不存在' }
+if (-not (Test-Path (Join-Path $vendorDistInfo 'METADATA'))) { Fail 'vendor\wechatauto\dist-info\METADATA 不存在' }
+
+$expected = @{}
+foreach ($line in (Get-Content $vendorManifest -Encoding UTF8)) {
+  if (-not $line -or -not $line.Trim()) { continue }
+  $m = [regex]::Match($line, '^([0-9a-f]{64})  (.+)$')
+  if (-not $m.Success) { Fail "MANIFEST 行格式不对：$line" }
+  $expected[$m.Groups[2].Value] = $m.Groups[1].Value
+}
+$vendorRoot = [IO.Path]::GetFullPath((Join-Path $root 'vendor'))
+$actual = @(Get-ChildItem $vendorPkg -Recurse -File)
+if ($actual.Count -ne $expected.Count) {
+  Fail ("vendor/wechatauto 文件数 {0} 与 MANIFEST 的 {1} 不一致：vendor/wechatauto 被手改过，请还原" -f $actual.Count, $expected.Count)
+}
+foreach ($f in $actual) {
+  $rel = $f.FullName.Substring($vendorRoot.Length + 1).Replace('\', '/')
+  if (-not $expected.ContainsKey($rel)) { Fail "$rel：vendor/wechatauto 被手改过，请还原（MANIFEST 里没有这个文件）" }
+  $h = (Get-FileHash $f.FullName -Algorithm SHA256).Hash.ToLower()
+  if ($h -ne $expected[$rel]) { Fail "$rel：vendor/wechatauto 被手改过，请还原（哈希对不上）" }
+}
+Info "MANIFEST 校验通过（$($actual.Count) 个文件）"
+
+$destPkg = Join-Path $sitePackages 'wechatauto'
+$destDistInfo = Join-Path $sitePackages 'wechatauto_replica-1.2.9.dist-info'
+if (Test-Path $destPkg) { Remove-Item $destPkg -Recurse -Force }
+if (Test-Path $destDistInfo) { Remove-Item $destDistInfo -Recurse -Force }
+Copy-Item $vendorPkg $destPkg -Recurse -Force
+# dist-info 只放 site-packages 顶层（和 pip 装出来的布局一致），包目录里那份副本删掉
+$nestedDistInfo = Join-Path $destPkg 'dist-info'
+if (Test-Path $nestedDistInfo) { Remove-Item $nestedDistInfo -Recurse -Force }
+Copy-Item $vendorDistInfo $destDistInfo -Recurse -Force
+Info "已复制 vendor\wechatauto → site-packages\wechatauto"
+
+# 版本断言：优先读包自己的 __version__，没有就退回 dist-info/METADATA
+$vendorVer = ''
+$verOut = & $pythonExe -c "import wechatauto; print(getattr(wechatauto,'__version__',''))" 2>&1
+if ($LASTEXITCODE -eq 0 -and $verOut) { $vendorVer = ([string]($verOut | Select-Object -Last 1)).Trim() }
+if (-not $vendorVer) {
+  $metaLine = Select-String -Path (Join-Path $destDistInfo 'METADATA') -Pattern '^Version:\s*(.+)$' -Encoding UTF8 | Select-Object -First 1
+  if ($metaLine) { $vendorVer = $metaLine.Matches[0].Groups[1].Value.Trim() }
+}
+if (-not $vendorVer) { Fail '拿不到 vendored wechatauto 的版本（__version__ 与 METADATA 都没有），拒绝继续构建' }
+if ($vendorVer -ne '1.2.9') { Fail ("vendored wechatauto 版本是 {0}，脚本按 1.2.9 校验；升级时请同步改这里与 requirements.txt" -f $vendorVer) }
+Info "wechatauto $vendorVer（来自 vendor/，未走 PyPI）"
+
 # ---------------------------------------------------------------- 5. pywin32 postinstall
 Step '5/6 pywin32 postinstall'
 $post = Get-ChildItem $sitePackages -Recurse -Filter 'pywin32_postinstall.py' -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -196,13 +279,15 @@ if (-not $post) {
 
 # ---------------------------------------------------------------- 6. 自检 + manifest
 Step '6/6 自检与 manifest'
-$check = & $pythonExe -c "import wechatauto, psutil, win32com, uiautomation; print('imports ok')" 2>&1
+$check = & $pythonExe -c "import wechatauto, psutil, win32com, uiautomation, comtypes; print('imports ok, wechatauto ' + str(getattr(wechatauto, '__version__', '')))" 2>&1
 if ($LASTEXITCODE -ne 0) { $check | Select-Object -Last 6; Fail '依赖导入失败' }
 Info $check
 
 $listJson = & $pythonExe -m pip list --format=json --disable-pip-version-check
 $packagesObj = [ordered]@{}
 foreach ($p in ($listJson | ConvertFrom-Json | Sort-Object name)) { $packagesObj[$p.name] = $p.version }
+# wechatauto 不是 pip 装的，pip list 里看不到；manifest 里补一行，方便事后核对版本
+$packagesObj['wechatauto-replica'] = $vendorVer
 
 # ---------------------------------------------------------------- 6.5 瘦身
 # 装进用户机器的东西越小越好。下面这些运行时一律用不到，删掉不损失任何功能：

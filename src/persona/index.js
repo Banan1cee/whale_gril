@@ -29,9 +29,9 @@ function selectSlang(config, text) {
 function loadSlang(config) {
   try {
     const dir = (config.paths && config.paths.dataDir) || path.join(process.cwd(), 'data');
-    // 优先用 data/slang.txt（用户可改），没有就用仓库自带的 resources/slang.txt
+    // 优先用 data/slang.txt（用户可改），没有就用仓库自带的 assets/slang.txt
     let file = path.join(dir, 'slang.txt');
-    if (!fs.existsSync(file)) file = path.join(__dirname, '..', '..', 'resources', 'slang.txt');
+    if (!fs.existsSync(file)) file = path.join(__dirname, '..', '..', 'assets', 'slang.txt');
     const st = fs.statSync(file);
     if (_slangCache.mtime === st.mtimeMs && _slangCache.text) return _slangCache.text;
     const raw = fs.readFileSync(file, 'utf8');
@@ -129,7 +129,7 @@ function isLateNight(date = new Date()) {
 let _abbrevCache = null;
 function abbrevList() {
   if (_abbrevCache) return _abbrevCache;
-  const file = path.join(__dirname, '..', '..', 'resources', 'abbrev.txt');
+  const file = path.join(__dirname, '..', '..', 'assets', 'abbrev.txt');
   try {
     const seen = new Set();
     _abbrevCache = fs
@@ -204,7 +204,7 @@ function readClapPairs(file) {
 function clapbackFightPairs() {
   if (_clapFightCache) return _clapFightCache;
   const path = require('path');
-  _clapFightCache = readClapPairs(path.join(__dirname, '..', '..', 'resources', 'clapback-fight.txt'));
+  _clapFightCache = readClapPairs(path.join(__dirname, '..', '..', 'assets', 'clapback-fight.txt'));
   return _clapFightCache;
 }
 
@@ -218,7 +218,7 @@ function clapbackPairs() {
   if (_clapCache) return _clapCache;
   const fs = require('fs');
   const path = require('path');
-  const file = path.join(__dirname, '..', '..', 'resources', 'clapback.txt');
+  const file = path.join(__dirname, '..', '..', 'assets', 'clapback.txt');
   try {
     const raw = fs.readFileSync(file, 'utf8');
     _clapCache = raw
@@ -234,10 +234,6 @@ function clapbackPairs() {
     _clapCache = [];
   }
   return _clapCache;
-}
-
-function clapbackLines() {
-  return clapbackPairs().map((x) => x.text);
 }
 
 function clapbackPick(kind, rng = Math.random, config = null) {
@@ -1328,7 +1324,7 @@ function aliasList(config) {
  * 清洗收到的消息：去掉 @提及 和她自己的名字前缀，判断是否点名。
  * @returns {{text: string, atMe: boolean, hadAlias: boolean}}
  */
-function cleanIncoming(text, config) {
+function cleanIncomingForPersona(text, config) {
   let s = String(text || '').replace(/\u2005/g, ' ').replace(/\u200b/g, '');
   const aliases = aliasList(config);
   let hadAlias = false;
@@ -1458,7 +1454,6 @@ function kaomojiPick(rng = Math.random) {
 module.exports = {
   fightModeOn,
   abbrevReply,
-  clapbackLines,
   clapbackPick,
   clapbackKinds,
   SOFT_FIGHT_RE,
@@ -1479,7 +1474,7 @@ module.exports = {
   buildSystem,
   buildLegacySystem,
   mockReply,
-  cleanIncoming,
+  cleanIncomingForPersona,
   splitBubbles,
   aliasList,
   emojiChanceFor,

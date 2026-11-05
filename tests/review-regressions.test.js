@@ -41,7 +41,7 @@ test('启动器管道正常关闭内核并保存刚收到的会话', { timeout: 
   if (pipedSpawnBlocked()) return t.skip(SKIP_REASON);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-shutdown-fix-'));
   const source = path.resolve(__dirname, '..');
-  for (const name of ['src', 'resources', 'personas', 'server.js', 'package.json'])
+  for (const name of ['src', 'assets', 'server.js', 'package.json'])
     fs.cpSync(path.join(source, name), path.join(root, name), { recursive: true });
   fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ server: { port: 0, openBrowser: false }, watchConfig: false, deepseek: { mock: true }, gateway: { wechat: { enabled: true, inboundToken: 'regression-bridge-token' } } }));
   const child = spawn(process.execPath, ['server.js', '--port=0', '--no-browser'], {

@@ -12,7 +12,7 @@ const path = require('node:path');
 
 const root = path.resolve(__dirname, '..');
 const bridge = fs.readFileSync(path.join(root, 'bridge', 'engine.py'), 'utf8');
-const diagPath = path.join(root, 'tools', 'uia-diag.py');
+const diagPath = path.join(root, 'scripts', 'tools', 'uia-diag.py');
 
 test('桥接预热失败时会解释属于哪一类原因', () => {
   assert.match(bridge, /def explain_uia_failure/, '要有专门的解释函数');
@@ -23,7 +23,7 @@ test('桥接预热失败时会解释属于哪一类原因', () => {
 });
 
 test('诊断工具存在，且能只读地报告版本/候选 RVA', () => {
-  assert.ok(fs.existsSync(diagPath), '缺少 tools/uia-diag.py');
+  assert.ok(fs.existsSync(diagPath), '缺少 scripts/tools/uia-diag.py');
   const tool = fs.readFileSync(diagPath, 'utf8');
   assert.match(tool, /QACCESSIBLE_ACTIVE_RVA_BY_VERSION/, '要能读库内置版本表');
   assert.match(tool, /--probe/, '要支持真的热激活一次');

@@ -1293,7 +1293,7 @@ namespace WhaleLauncher.Views
             MaintenanceHint.Text = "正在检查微信 UIA 控件树（3~15 秒）…";
             try
             {
-                var (code, output) = await RunToolAsync(PythonExe(), "\"" + Path.Combine(_sup.BaseDir, "tools", "uia-check.py") + "\"", 60000);
+                var (code, output) = await RunToolAsync(PythonExe(), "\"" + Path.Combine(_sup.BaseDir, "scripts", "tools", "uia-check.py") + "\"", 60000);
                 MaintenanceHint.Text = code == 0 ? "UIA 自检完成。" : "UIA 自检没通过，看窗口里的结论。";
                 ShowTextWindow("UIA 自检", output);
             }

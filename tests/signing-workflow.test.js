@@ -97,8 +97,8 @@ test('artifact configuration 带 metadata restrictions，版本号从 parameters
     '两轮签名请求都要传 version 参数');
 });
 
-test('仓库首页和 CODE_SIGNING_POLICY.md 满足 SignPath 的「代码签名策略」要求', () => {
-  const policyPath = path.join(root, 'CODE_SIGNING_POLICY.md');
+test('策略文件满足 SignPath 要求；README 如实说明当前尚未签名', () => {
+  const policyPath = path.join(root, 'docs', 'CODE_SIGNING_POLICY.md');
   assert.ok(fs.existsSync(policyPath), '缺少 CODE_SIGNING_POLICY.md（SignPath 审核硬要求）');
   const policy = fs.readFileSync(policyPath, 'utf8');
   assert.match(policy, /Free code signing provided by \[SignPath\.io\]\(https:\/\/about\.signpath\.io\)/,
@@ -113,22 +113,23 @@ test('仓库首页和 CODE_SIGNING_POLICY.md 满足 SignPath 的「代码签名�
   const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
   assert.match(readme, /## 代码签名（Code signing policy）/, 'README 首页要有 Code signing policy 段落');
   assert.match(readme, /CODE_SIGNING_POLICY\.md/, 'README 要链到策略文件');
-  assert.match(readme, /Free code signing provided by/, 'README 也要带那句原话');
+  assert.match(readme, /尚未签名/, '签名没下来时首页要如实说未签名');
+  assert.doesNotMatch(readme, /Free code signing provided by/, '签名没下来时不要写“已提供签名”');
 });
 
 test('SignPath 申请表单要的三个页面都在仓库里', () => {
-  // 表单要 Homepage / Download / Privacy Policy 三个 URL，其中 Download 页面
-  // 必须写明「用了 SignPath Foundation 做签名」。
+  // 表单要 Homepage / Download / Privacy Policy 三个 URL；签名没下来前，
+  // 下载页只能说明「尚未签名」并给校验方式，不能写“已用 SignPath 签名”。
   const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
   assert.match(readme, /## 下载（Download）/, 'README 要有下载段落当 Homepage/Download 入口');
   assert.match(readme, /PRIVACY\.md/, 'README 要链到隐私声明');
 
-  const download = fs.readFileSync(path.join(root, 'DOWNLOAD.md'), 'utf8');
-  assert.match(download, /SignPath Foundation/, '下载页必须写明用 SignPath Foundation 签名');
-  assert.match(download, /Free code signing provided by/);
+  const download = fs.readFileSync(path.join(root, 'docs', 'DOWNLOAD.md'), 'utf8');
+  assert.match(download, /尚未签名/, '下载页要说明当前未签名');
+  assert.match(download, /SHA256SUMS\.txt/, '下载页要给校验方式');
   assert.match(download, /github\.com\/Banan1cee\/whale_gril\/releases/, '下载页要给 Releases 链接');
 
-  const privacy = fs.readFileSync(path.join(root, 'PRIVACY.md'), 'utf8');
+  const privacy = fs.readFileSync(path.join(root, 'docs', 'PRIVACY.md'), 'utf8');
   assert.match(privacy, /隐私声明/, '隐私声明要有标题');
   assert.match(privacy, /遥测/, '隐私声明要说明有没有遥测');
   assert.match(privacy, /data\\/, '隐私声明要写清本地数据放在哪');

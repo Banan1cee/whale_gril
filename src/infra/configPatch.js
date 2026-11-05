@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { loadConfig, DEFAULT_CONFIG } = require('./config');
 const configSchema = require('./configSchema');
+const { getByPath } = require('./objpath');
 
 /* ------------------------------------------------------------------ */
 /* 设置接口：直接读写 config.json（改完立刻生效，不用重启）            */
@@ -32,15 +33,6 @@ const SECRET_PATHS = new Set([
 
 function isPlainObject(v) {
   return v !== null && typeof v === 'object' && !Array.isArray(v);
-}
-
-function getByPath(obj, dotted) {
-  let cur = obj;
-  for (const part of String(dotted).split('.')) {
-    if (cur === null || typeof cur !== 'object') return undefined;
-    cur = cur[part];
-  }
-  return cur;
 }
 
 function setByPath(obj, dotted, value) {

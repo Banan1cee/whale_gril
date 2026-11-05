@@ -1,6 +1,21 @@
 # 微信桥接的可选依赖（仅 Windows 需要）
 # 安装：py -3.12 -m pip install -r requirements.txt
-wechatauto-replica==1.2.9
-psutil>=5.9
-pywin32>=306
-requests>=2.31
+# wechatauto 由仓库 vendor/wechatauto 提供，不走 pip（见 vendor/README.md）；
+# 源码直跑桥接时把 vendor 加进 PYTHONPATH。
+#
+# 下面这些是 vendor dist-info 里 Requires-Dist 的全集：以前由 wechatauto-replica 传递安装，
+# 现在必须显式列出，漏一个桥接就 import 失败。版本与 scripts/build-runtime.ps1 的 $Packages 保持一致。
+psutil==7.2.2
+pywin32==312
+requests==2.34.2
+uiautomation==2.0.29
+comtypes==1.4.17
+colorama==0.4.6
+Pillow==13.0.0
+pyperclip==1.11.0
+cryptography==50.0.2
+winsdk==1.0.0b10
+imageio-ffmpeg==0.8.1
+zstandard==0.25.0
+opencv-python==5.0.0.93
+pyautogui==0.9.54

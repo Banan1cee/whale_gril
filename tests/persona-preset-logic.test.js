@@ -75,9 +75,9 @@ test('预设标题不能当她的名字；只有 personaName 才能改名', () =
 test('HTTP：预览不写盘；导入预设不打乱她的名字和外形', async (t) => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-preset-name-'));
   fs.writeFileSync(path.join(tmp, 'config.json'), JSON.stringify({ server: { port: 0, openBrowser: false }, watchConfig: false, log: { level: 'error' } }));
-  fs.mkdirSync(path.join(tmp, 'personas'), { recursive: true });
+  fs.mkdirSync(path.join(tmp, 'assets', 'personas'), { recursive: true });
   for (const name of ['persona-standard.json', 'persona-zhainan.json']) {
-    fs.copyFileSync(path.join(root, 'personas', name), path.join(tmp, 'personas', name));
+    fs.copyFileSync(path.join(root, 'assets', 'personas', name), path.join(tmp, 'assets', 'personas', name));
   }
   const { startServer } = require('../server');
   const inst = await startServer({ root: tmp, env: { WHALE_LOG_FILE: '' }, port: 0, openBrowser: false });
@@ -94,7 +94,7 @@ test('HTTP：预览不写盘；导入预设不打乱她的名字和外形', asyn
 });
 
 test('各版人设预设的差异确实在 customPrompt 上（都写了内容且互不相同）', () => {
-  const dir = path.join(root, 'personas');
+  const dir = path.join(root, 'assets', 'personas');
   const seen = new Map();
   for (const f of fs.readdirSync(dir).filter((n) => /^persona-.*\.json$/i.test(n))) {
     const data = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8').replace(/^\uFEFF/, ''));

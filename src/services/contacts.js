@@ -12,12 +12,9 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { clean } = require('../infra/text');
 
 const MAX_ITEMS = 5000;
-
-function clean(value, max) {
-  return String(value == null ? '' : value).replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, max);
-}
 
 /** 一条联系人记录只保留这几样，别把头像、备注原文之外的东西全塞进来 */
 function normalizeItem(item) {

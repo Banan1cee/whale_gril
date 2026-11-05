@@ -11,27 +11,14 @@
 const personCard = require('./personCard');
 const { LIMITS } = require('./constants');
 const { describeError } = require('../infra/errors');
+const { cleanIncoming } = require('./text');
 
 const QUESTION_RE = /[?？]|(?:吗|呢|吧)\s*$|如果|要是|假如|假设|开玩笑|哈哈|呵呵|不是吧/;
 const THIRD_PERSON_RE = /^(?:他|她|他们|她们|别人|人家|我朋友|我同事|我同学|我妈|我爸|我哥|我姐|我弟|我妹|我家那位)/;
 
-function cleanIncoming(text) {
-  return String(text || '')
-    .replace(/^[A-Za-z0-9_-]{4,}:\s*/, '')
-    .replace(/^@\S+\s*/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
 function clampText(value, max) {
   const s = String(value == null ? '' : value).replace(/\s+/g, ' ').trim();
   return s.length > max ? s.slice(0, max) : s;
-}
-
-function looksExplicitSelf(text) {
-  const s = cleanIncoming(text);
-  if (!s || s.length > 120) return false;
-  return /^我(?:叫|的名字|住在|搬到|搬去|在|是|喜欢|爱|讨厌|不喜欢|怕|害怕|不吃|不能吃|对.*过敏|的?生日|今天|刚刚|刚|最近|已经|要)/.test(s);
 }
 
 /**
@@ -324,7 +311,6 @@ async function extractEpisode({ messages, llm, speakers = [], logger = null, now
 module.exports = {
   EPISODE_SYSTEM,
   cleanIncoming,
-  looksExplicitSelf,
   extractSelfFacts,
   applyFacts,
   lightweightCandidates,

@@ -5,7 +5,7 @@
 ;   2. 启动器（WhaleLauncher.exe）带 requireAdministrator 清单：微信是管理员，
 ;      桥接必须同级才能改 gate / 读进程；拖拽已用 ChangeWindowMessageFilterEx 放行；
 ;   3. runtime\wheelhouse 只是构建缓存，不进包（省 117MB）；
-;   4. 界面只有启动器，所以 docs/、tools/、scripts/、launcher 源码、安装脚本
+;   4. 界面只有启动器，所以 docs/、scripts/、launcher 源码、安装脚本
 ;      本身都不进包 —— 装完的目录里只剩运行需要的东西；
 ;   5. 运行环境全在包里：runtime\node.exe、runtime\python\（CPython 3.12 + 依赖）、
 ;      runtime\dotnet\windowsdesktop-runtime-10-win-x64.exe（缺 .NET 10 时由 [Code] 提权装）。
@@ -62,7 +62,7 @@ Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: 
 ; "No module named encodings"（4.0 的 CI 烟测就是这么抓到的）。
 [Files]
 ; 这里必须逐项列目录，不能用 "..\*" + 一大堆 Excludes：
-; Inno 的通配符会跨路径分隔符匹配，`tools\*` 会把 site-packages 里
+; Inno 的通配符会跨路径分隔符匹配，按目录名写的通配符会把 site-packages 里
 ; comtypes\tools、pywin\tools 这类**任意层级**的 tools 目录整片吃掉
 ; （4.0 的 CI 烟测就是这么发现 comtypes.tools 缺文件的）。
 Source: "..\launcher\publish\WhaleLauncher.exe"; DestDir: "{app}"; Flags: ignoreversion
@@ -72,8 +72,8 @@ Source: "..\config.example.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\src\*"; DestDir: "{app}\src"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "__pycache__\*,*.pyc"
 Source: "..\bridge\*"; DestDir: "{app}\bridge"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "__pycache__\*,*.pyc"
-Source: "..\personas\*"; DestDir: "{app}\personas"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "persona-fight.json,persona-tieba.json"
-Source: "..\resources\*"; DestDir: "{app}\resources"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "clapback-fight.txt"
+Source: "..\assets\personas\*"; DestDir: "{app}\assets\personas"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "persona-fight.json,persona-tieba.json"
+Source: "..\assets\*.txt"; DestDir: "{app}\assets"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "clapback-fight.txt"
 Source: "..\examples\*"; DestDir: "{app}\examples"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "__pycache__\*,*.pyc"
 ; runtime：内置 node.exe + CPython + .NET 运行时安装包；wheelhouse 是构建缓存，不进包
 ; （它也是 CPython 标准库 python312.zip 所在目录，所以绝不能整体排除 *.zip）

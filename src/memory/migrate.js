@@ -13,20 +13,13 @@
  */
 const fs = require('node:fs');
 const path = require('node:path');
+const { readJson } = require('../infra/jsonFile');
 const personCard = require('./personCard');
 const compression = require('./compression');
 const { writeJsonAtomic } = require('./chatStore');
 const { describeError } = require('../infra/errors');
 
 const LEGACY_SOURCES = ['memory.json', 'store.json'];
-
-function readJson(file) {
-  try {
-    return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
-  } catch {
-    return null;
-  }
-}
 
 function readJournal(file) {
   let raw = '';

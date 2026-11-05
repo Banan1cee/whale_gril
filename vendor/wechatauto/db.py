@@ -1,0 +1,3374 @@
+# -*- coding: utf-8 -*-
+"""wechatauto 数据库读取模块（微信 4.x）
+
+通过读取微信本地 SQLCipher 加密数据库实现消息读取，不依赖 UI 自动化。
+
+原理：
+    1. 从微信配置文件（%APPDATA%/Tencent/xwechat/config/*.ini）定位数据目录；
+    2. 从 Weixin.exe 进程内存中只读扫描 ``com.Tencent.WCDB.Config.Cipher``
+       配置对象，提取每个数据库独立的 32 字节密钥（SQLCipher 4 格式，
+       PBKDF2-HMAC-SHA512, 256000 迭代）；
+    3. 按页解密数据库到临时目录（带缓存），再用标准 sqlite3 查询。
+
+限制：
+    - 微信必须处于登录状态（密钥存在于进程内存中，首次提取后本地缓存）；
+    - 合并 -wal 时若微信正在 checkpoint，可能触发一次全量重建重试；
+    - 仅支持读取，不支持发送。
+"""
+
+from __future__ import annotations
+
+import ctypes
+import glob
+import hashlib
+import hmac as hmac_mod
+import base64
+import json
+import os
+import queue
+import re
+import shutil
+import sqlite3
+import struct
+import sys
+import tempfile
+import threading
+import time
+import unicodedata
+from ctypes import wintypes
+from typing import Dict, List, Optional, Tuple
+
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from wechatauto.logger import wxlog
+
+PAGE_SZ = 4096
+RESERVE_SZ = 80  # IV(16) + HMAC(64)
+STAMP_VERSION = 3  # v3: stamp 内 mtime 改用 %r 完整精度（%f 只留 6 位小数，与 Windows 7 位小数比较恒不等→每秒重建缓存→磁盘 50MB/s 读+写）
+CONFIG_CIPHER_NAME = b"com.Tencent.WCDB.Config.Cipher"
+CONFIG_XOR_MASK = bytes.fromhex(
+    "d2c7442458020000004889442450488b"
+    "450048844c2448488944254048584c24"
+)
+HEX_LITERAL_RE = re.compile(rb"[xX]'([0-9a-fA-F]{64,192})'")
+
+# 主密钥 cfg 提取(ReadWeixinKey-rev 同源, 每版本需重采锚点):
+#   weixin.dll 特征码(sub_1803308D0 机器码前缀, 其后 4×movabs 立即数 = XOR 材料)
+MASTER_DLL_PATTERN = bytes.fromhex(
+    "83ec404889d64889cb0f57c00f1142100f11024c8bb1c8020000"
+    "4883b9d0020000107209488b9bb8020000eb074881c3b8020000"
+    "4d85f60f880a0200004983fe10736d4c89761048c746180f0000"
+    "000f10030f110648b8"
+)
+MASTER_DLL_VERIFY = (b"488944242048b8", b"488944242848b8", b"488944243048b8")
+CFG_LANDMARK = b"global_config"   # cfg 对象地标字符串(SSO 内联)
+CFG_PTR_BACK = 0x138              # 地标前指针链回退偏移(版本敏感: 4.1.10.31=0x130)
+CFG_OFFSET = 0x68                 # v18 → cfg 指针偏移(版本敏感)
+CFG_DWORD_OFF = 0x40              # cfgDword(图片密钥派生源)
+CFG_WXID_OFF = 0x48               # wxId std::string
+CFG_CIPHER_OFF = 0x2B8            # dbKey 密文 std::string
+
+MSG_TYPE_NAMES = {
+    1: "文本",
+    3: "图片",
+    34: "语音",
+    43: "视频",
+    47: "动画表情",
+    48: "位置",
+    49: "文件/链接/卡片",
+    50: "音视频通话",          # <voipmsg> 气泡（如「已拒绝」）
+    10000: "系统消息",
+    11000: "动画表情",         # 4.x 新版表情码（以复合码低 32 位出现，正文常为空）
+    8594229559345: "红包",     # 红包卡片（0x7D100000031，get_moments 等场景会用）
+}
+
+
+class _MBI(ctypes.Structure):
+    _fields_ = [
+        ("BaseAddress", ctypes.c_void_p),
+        ("AllocationBase", ctypes.c_void_p),
+        ("AllocationProtect", wintypes.DWORD),
+        ("__alignment1", wintypes.DWORD),
+        ("RegionSize", ctypes.c_size_t),
+        ("State", wintypes.DWORD),
+        ("Protect", wintypes.DWORD),
+        ("Type", wintypes.DWORD),
+        ("__alignment2", wintypes.DWORD),
+    ]
+
+
+class _MODULEENTRY32W(ctypes.Structure):
+    _fields_ = [
+        ("dwSize", wintypes.DWORD),
+        ("th32ModuleID", wintypes.DWORD),
+        ("th32ProcessID", wintypes.DWORD),
+        ("GlblcntUsage", wintypes.DWORD),
+        ("ProccntUsage", wintypes.DWORD),
+        ("modBaseAddr", ctypes.c_void_p),
+        ("modBaseSize", wintypes.DWORD),
+        ("hModule", wintypes.HMODULE),
+        ("szModule", ctypes.c_wchar * 256),
+        ("szExePath", ctypes.c_wchar * 260),
+    ]
+
+
+_k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+_k32.OpenProcess.restype = wintypes.HANDLE
+_k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+_k32.VirtualQueryEx.argtypes = [
+    wintypes.HANDLE, ctypes.c_void_p, ctypes.POINTER(_MBI), ctypes.c_size_t,
+]
+_k32.VirtualQueryEx.restype = ctypes.c_size_t
+_k32.ReadProcessMemory.argtypes = [
+    wintypes.HANDLE, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t,
+    ctypes.POINTER(ctypes.c_size_t),
+]
+
+
+def _md5_hex(data: bytes) -> str:
+    return hashlib.md5(data).hexdigest()
+
+
+def _is_malformed(exc) -> bool:
+    """是否 SQLite "database disk image is malformed" 类库损坏（数据页损坏）。"""
+    return isinstance(exc, sqlite3.DatabaseError) and "malformed" in str(exc).lower()
+
+
+def _row_get(r, key, default=None):
+    """从 sqlite3.Row 或 dict 取一列，缺列时给默认值。
+
+    ``shard`` 是新加的列，老库/桩数据（自制 (conn, table) 列表）没有它，
+    直接 ``r[key]`` 会抛 IndexError/KeyError 把整次读取打死。
+    """
+    try:
+        return r[key]
+    except (KeyError, IndexError):
+        return default
+
+
+def _pbkdf2(passwd: bytes, salt: bytes, iters: int) -> bytes:
+    return hashlib.pbkdf2_hmac("sha512", passwd, salt, iters, dklen=32)
+
+
+def _aes_cbc_decrypt(key: bytes, iv: bytes, data: bytes) -> bytes:
+    dec = Cipher(algorithms.AES(key), modes.CBC(iv)).decryptor()
+    return dec.update(data) + dec.finalize()
+
+
+def _split_key(key: bytes) -> Tuple[bytes, Optional[bytes]]:
+    """拆分密钥形态：32 字节 = 标准裸 key（salt 用文件头前 16 字节）；
+    48 字节 = SQLCipher 4 "Raw Key with Explicit Salt"（前 32B key + 后 16B salt，
+    用于 cipher_plaintext_header_size 明文头模式）。返回 (enc_key, salt_or_None)。"""
+    if len(key) == 48:
+        return key[:32], key[32:]
+    return key, None
+
+
+def _verify_enc_key(enc_key: bytes, page1: bytes, salt: Optional[bytes] = None) -> bool:
+    """验证 enc_key 是否为 page1 的 SQLCipher 4 密钥。
+
+    - enc_key 为 32 字节裸 key：默认用文件头前 16 字节作 salt（标准形式）；
+    - enc_key 为 48 字节 key+salt：显式 salt 优先于文件头（明文头模式）；
+    - 也允许单独传 salt 参数覆盖（供提取逻辑按 96hex 拆分尝试）。
+    """
+    if len(page1) < PAGE_SZ:
+        return False
+    if len(enc_key) == 48 and salt is None:
+        enc_key, salt = enc_key[:32], enc_key[32:]
+    if salt is None:
+        salt = page1[:16]
+    elif len(salt) != 16:
+        return False
+    mac_salt = bytes(b ^ 0x3A for b in salt)
+    mac_key = _pbkdf2(enc_key, mac_salt, 2)
+    hmac_data = page1[16: PAGE_SZ - RESERVE_SZ + 16]
+    stored_hmac = page1[PAGE_SZ - 64: PAGE_SZ]
+    hm = hmac_mod.new(mac_key, hmac_data, hashlib.sha512)
+    hm.update(struct.pack("<I", 1))
+    return hm.digest() == stored_hmac
+
+
+# ---------------------------------------------------------------------------
+# 密钥缓存加密（DPAPI）
+# ---------------------------------------------------------------------------
+# keys.json 曾明文落盘两处（TEMP 工作目录 + 用户目录稳定副本），谁的 SQLCipher
+# 密钥谁能解库 —— 值得按当前 Windows 用户加密。无前缀 = 旧明文缓存，读取时
+# 原样解析（兼容），下一次保存自然升级为密文；没有 pywin32 的环境保存时退回
+# 明文（与旧版行为一致，不新增失败模式）。
+
+_KEY_CACHE_PREFIX = b"dpapi1:"
+
+
+def _protect_key_cache(payload: bytes) -> bytes:
+    try:
+        import win32crypt
+        blob = win32crypt.CryptProtectData(
+            payload, "wechatauto-keys", None, None, None, 0)
+        return _KEY_CACHE_PREFIX + base64.b64encode(blob)
+    except Exception:
+        return payload
+
+
+def _unprotect_key_cache(raw: bytes) -> bytes:
+    if not raw.startswith(_KEY_CACHE_PREFIX):
+        return raw  # 旧明文缓存
+    try:
+        import win32crypt
+        blob = base64.b64decode(raw[len(_KEY_CACHE_PREFIX):])
+        _desc, payload = win32crypt.CryptUnprotectData(blob, None, None, None, 0)
+        return payload
+    except Exception:
+        # 前缀在但解不开（换用户/被拷走/损坏）：按空缓存处理，
+        # 绝不伪装成明文继续解析
+        return b""
+
+
+def _sqlite_text_factory(data: bytes):
+    """sqlite TEXT 列解码：合法 UTF-8 返回 str，否则原样返回 bytes（图片等二进制内容）"""
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        return data
+
+
+# ---------------------------------------------------------------------------
+# 主密钥 cfg 提取(ReadWeixinKey-rev 同源; 锚点每版本重采)
+# ---------------------------------------------------------------------------
+def _find_weixin_module(pid: int) -> Optional[Tuple[int, int, str]]:
+    """返回 (模块基址, 模块大小, 路径); weixin.dll 为微信 4.x 主模块"""
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.CreateToolhelp32Snapshot.restype = ctypes.c_void_p
+    k32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+    k32.CloseHandle.argtypes = [ctypes.c_void_p]
+    k32.Module32FirstW.argtypes = [ctypes.c_void_p, ctypes.POINTER(_MODULEENTRY32W)]
+    k32.Module32NextW.argtypes = [ctypes.c_void_p, ctypes.POINTER(_MODULEENTRY32W)]
+    snap = k32.CreateToolhelp32Snapshot(0x08 | 0x10, pid)
+    if not snap or snap == -1 or snap == (1 << 64) - 1:
+        return None
+    try:
+        me = _MODULEENTRY32W()
+        me.dwSize = ctypes.sizeof(me)
+        ok = k32.Module32FirstW(snap, ctypes.byref(me))
+        while ok:
+            if me.szModule and me.szModule.lower() == "weixin.dll":
+                return (me.modBaseAddr or 0), me.modBaseSize, me.szExePath
+            me.dwSize = ctypes.sizeof(me)
+            ok = k32.Module32NextW(snap, ctypes.byref(me))
+    finally:
+        k32.CloseHandle(snap)
+    return None
+
+
+def _extract_movabs_xor_key(dll_path: str) -> Optional[bytes]:
+    """从 weixin.dll 特征码后提取 4×movabs 立即数拼接成 32 字节 XOR 材料。
+
+    特征码(sub_1803308D0 前缀)后紧跟 4 个 '48 b8 <imm64>' movabs 指令,
+    立即数即主密钥的 XOR 材料。小版本通常不改此代码段, 大版本需重采。
+    """
+    try:
+        with open(dll_path, "rb") as f:
+            data = f.read()
+    except OSError:
+        return None
+    hit = data.find(MASTER_DLL_PATTERN)
+    if hit < 0:
+        return None
+    take = min(200, len(data) - hit)
+    hex_txt = data[hit:hit + take].hex()
+    hex_txt = hex_txt[len(MASTER_DLL_PATTERN) * 2:]  # 丢弃特征码自身
+    key = ""
+    for vf in MASTER_DLL_VERIFY:
+        if len(hex_txt) < 30 or hex_txt[16:30] != vf.decode():
+            return None
+        key += hex_txt[0:16]
+        hex_txt = hex_txt[30:]
+    if len(hex_txt) < 16:
+        return None
+    key += hex_txt[0:16]
+    try:
+        return bytes.fromhex(key)
+    except ValueError:
+        return None
+
+
+def _read_remote_string(h, read, addr: int) -> str:
+    """跨进程读 MSVC x64 std::string(SSO: size<=15 内联, 否则堆指针)"""
+    sz_buf = read(addr + 16, 8)
+    if not sz_buf:
+        return ""
+    size = struct.unpack_from("<Q", sz_buf)[0]
+    if size <= 0 or size > 0x7FFFFFFF:
+        return ""
+    if size <= 15:
+        data = read(addr, size)
+    else:
+        p_buf = read(addr, 8)
+        if not p_buf:
+            return ""
+        data = read(struct.unpack_from("<Q", p_buf)[0], size)
+    if not data:
+        return ""
+    return data[:size].decode("utf-8", "replace")
+
+
+def _read_remote_bytes(h, read, addr: int) -> Optional[bytes]:
+    """跨进程读字节缓冲(std::string 布局: data@+0, size@+16, cap@+24)"""
+    sz_buf = read(addr + 16, 8)
+    if not sz_buf:
+        return None
+    size = struct.unpack_from("<Q", sz_buf)[0]
+    if size <= 0 or size > 0x400:
+        return None
+    cap_buf = read(addr + 24, 4)
+    cap = struct.unpack_from("<I", cap_buf)[0] if cap_buf else 0
+    if (cap | 0xF) == 0xF:
+        data = read(addr, size)          # SSO 内联
+    else:
+        p_buf = read(addr, 8)
+        if not p_buf:
+            return None
+        data = read(struct.unpack_from("<Q", p_buf)[0], size)
+    if not data or len(data) != size:
+        return None
+    return data[:size]
+
+
+def extract_master_key_from_cfg(pid: int) -> Optional[Tuple[str, int, str]]:
+    """从 Weixin.exe 进程提取 (主密钥hex, cfgDword, wxId)。
+
+    流程(ReadWeixinKey-rev 同源): 整块读 weixin.dll 映像 → 扫 global_config
+    SSO 地标 → 指针链 cfg → 读 cfg+0x2B8 密文与 cfg+0x40 cfgDword →
+    密文 XOR DLL movabs 材料得主密钥。锚点(CFG_PTR_BACK/CFG_OFFSET/特征码)
+    每版本重采; 提取失败返回 None。
+    """
+    base, mod_size, dll_path = _find_weixin_module(pid) or (0, 0, "")
+    if not base or not dll_path or mod_size <= 0 or mod_size >= 0x40000000:
+        return None
+    h = _k32.OpenProcess(0x0010 | 0x0400, False, pid)
+    if not h:
+        return None
+    try:
+        def read(addr: int, n: int):
+            buf = ctypes.create_string_buffer(n)
+            br = ctypes.c_size_t(0)
+            if _k32.ReadProcessMemory(h, ctypes.c_void_p(addr), buf, n, ctypes.byref(br)) and br.value:
+                return buf.raw[: br.value]
+            return None
+
+        image = read(base, mod_size)
+        if not image or len(image) != mod_size:
+            return None
+        # 扫 global_config SSO 地标(size==13@+16, cap==15@+24, 内容内联@+0)
+        pos = -1
+        for i in range(len(image) - 8, 0, -8):
+            if struct.unpack_from("<I", image, i)[0] == len(CFG_LANDMARK):
+                cap = struct.unpack_from("<I", image, i + 8)[0]
+                if cap and (cap | 0xF) == 0xF and i - 16 >= 0:
+                    if image[i - 16:i - 16 + len(CFG_LANDMARK)] == CFG_LANDMARK:
+                        pos = i
+                        break
+        if pos < 0:
+            return None
+        # 指针链: v18 = *(base + pos - CFG_PTR_BACK); cfg = *(v18 + CFG_OFFSET)
+        v18_buf = read(base + pos - CFG_PTR_BACK, 8)
+        if not v18_buf:
+            return None
+        v18 = struct.unpack_from("<Q", v18_buf)[0]
+        cfg_buf = read(v18 + CFG_OFFSET, 8)
+        if not cfg_buf:
+            return None
+        cfg = struct.unpack_from("<Q", cfg_buf)[0]
+        if not (0x10000 <= cfg < 0x800000000000):
+            return None
+        # cfgDword + wxId
+        dw_buf = read(cfg + CFG_DWORD_OFF, 4)
+        cfg_dword = struct.unpack_from("<I", dw_buf)[0] if dw_buf else 0
+        wxid = _read_remote_string(h, read, cfg + CFG_WXID_OFF)
+        # dbKey 密文
+        cipher = _read_remote_bytes(h, read, cfg + CFG_CIPHER_OFF)
+        if not cipher:
+            return None
+        material = _extract_movabs_xor_key(dll_path)
+        if not material or len(material) != len(cipher):
+            return None
+        master = bytes(a ^ b for a, b in zip(cipher, material))
+        return master.hex(), cfg_dword, wxid
+    finally:
+        _k32.CloseHandle(h)
+
+
+def _decrypt_page(enc_key: bytes, page: bytes, pgno: int) -> bytes:
+    iv = page[PAGE_SZ - RESERVE_SZ: PAGE_SZ - RESERVE_SZ + 16]
+    if pgno == 1:
+        # 48 字节 key（key+salt）= cipher_plaintext_header_size 明文头模式：
+        # 页 1 前 16 字节是明文头（非加密 salt），加密数据从 offset 16 开始；
+        # 解密后拼接明文头 + 明文数据 + reserve。
+        if len(enc_key) == 48:
+            enc = page[16: PAGE_SZ - RESERVE_SZ]
+            return page[:16] + _aes_cbc_decrypt(enc_key[:32], iv, enc) + b"\x00" * RESERVE_SZ
+        enc = page[16: PAGE_SZ - RESERVE_SZ]
+        return b"SQLite format 3\x00" + _aes_cbc_decrypt(enc_key, iv, enc) + b"\x00" * RESERVE_SZ
+    enc = page[: PAGE_SZ - RESERVE_SZ]
+    return _aes_cbc_decrypt(enc_key[:32] if len(enc_key) == 48 else enc_key, iv, enc) + b"\x00" * RESERVE_SZ
+
+
+def _looks_like_text(t: str) -> bool:
+    """判断解码结果是否像可读文本（**不要求包含中文**）。
+
+    纯英文 / 纯数字 / URL / Emoji 消息同样需要还原，因此不再用「必须含中文」
+    的粗暴门槛；改用可打印字符占比 + 控制/未分配类字符占比双重判定，避免把
+    二进制噪声误判成文本。Cf（格式类，如 ZWJ）不计入噪声，否则 Emoji 组合
+    序列（👨\u200d👩\u200d👧）会被误杀。
+    """
+    if not t:
+        return False
+    bad = 0
+    printable = 0
+    for ch in t:
+        if ch in "\n\r\t":
+            printable += 1
+            continue
+        if unicodedata.category(ch) in ("Cc", "Co", "Cs", "Cn"):
+            bad += 1
+        else:
+            printable += 1
+    if printable / len(t) < 0.7:
+        return False
+    return bad / len(t) <= 0.1
+
+
+def _extract_text_from_blob(content: bytes) -> Optional[str]:
+    """从微信消息容器头中还原 UTF-8 明文文本。
+
+    微信 4.x 部分文本消息的 message_content 为「容器头(0x28 b5 2f fd...)
+    + UTF-8 明文 + 尾部填充(\x01\x00...)」，多数消息明文从第 10 字节开始；
+    长消息可能加密，无法还原返回 None。
+    """
+    def _try_off(off: int) -> Optional[str]:
+        if off >= len(content):
+            return None
+        chunk = content[off:]
+        if b"\x01\x00" in chunk:
+            chunk = chunk.split(b"\x01\x00")[0]
+        try:
+            t = chunk.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+        # 保留换行符(\n和\r)，删除其他控制字符
+        t = re.sub(r"[\x00-\x09\x0b\x0c\x0e-\x1f\x7f]+", "", t).strip()
+        if not t:
+            return None
+        if not _looks_like_text(t):
+            return None
+        return t
+
+    t = _try_off(10)
+    if t:
+        return t
+    for off in range(0, min(16, len(content))):
+        if off == 10:
+            continue
+        t = _try_off(off)
+        if t:
+            return t
+    return None
+
+
+_ZSTD_MODULE = None
+
+
+def _get_zstd_module():
+    """惰性加载 zstd 模块，兼容 `zstandard` / `zstd` 两种包名。
+
+    WeChat 4.x 长文本消息的 message_content 为 zstd 压缩帧；缺少该第三方
+    库时无法解压（会退化为 `[类型]` 占位符）。此函数做了延迟导入 + 双包名
+    兼容，缺失库时返回 None（由调用方决定如何兜底）。
+    """
+    global _ZSTD_MODULE
+    if _ZSTD_MODULE is not None:
+        return _ZSTD_MODULE
+    for mod_name in ("zstandard", "zstd"):
+        try:
+            _ZSTD_MODULE = __import__(mod_name)
+            return _ZSTD_MODULE
+        except Exception:
+            continue
+    _ZSTD_MODULE = False
+    return None
+
+
+def _zstd_decompress(zstd, content: bytes) -> Optional[str]:
+    """用 zstd 解压微信消息帧并解码 UTF-8，失败返回 None。"""
+    if not content:
+        return None
+    try:
+        dctx = zstd.ZstdDecompressor()
+        decompressed = dctx.decompress(content, max_output_size=200000)
+        if not decompressed:
+            return None
+        text = decompressed.decode("utf-8", "ignore").strip()
+        return text if text else None
+    except Exception:
+        return None
+
+
+
+def _find_account_dirs(db_dir: str) -> List[str]:
+    """列出 db_dir 下所有含 db_storage 子目录的账号目录。
+
+    微信号目录不一定以 wxid_ 开头（如自定义微信号），这里只依赖
+    db_storage 子目录的存在性判断。
+    """
+    out = []
+    try:
+        for name in os.listdir(db_dir):
+            p = os.path.join(db_dir, name, "db_storage")
+            if os.path.isdir(p):
+                out.append(os.path.join(db_dir, name))
+    except OSError:
+        pass
+    return sorted(out)
+
+
+class WeChatDB:
+    """微信 4.x 本地数据库读取器"""
+
+    def __init__(
+        self,
+        db_dir: Optional[str] = None,
+        keys_file: Optional[str] = None,
+        workdir: Optional[str] = None,
+        account: Optional[str] = None,
+        master_key: Optional[str] = None,
+    ):
+        self.db_dir = db_dir or auto_detect_db_dir()
+        if not self.db_dir:
+            raise RuntimeError("未找到微信数据库目录，请通过 db_dir 参数手动指定")
+        self.account = account or self._pick_account()
+        self.account_dir = os.path.join(self.db_dir, self.account)
+        self.workdir = workdir or os.path.join(
+            tempfile.gettempdir(), "wechatauto_db", self.account
+        )
+        self.keys_file = keys_file or os.path.join(self.workdir, "keys.json")
+        self._keys: Dict[str, bytes] = {}
+        self._db_files = self._collect_db_files()
+        self.master_key: Optional[str] = None
+        self.cfg_dword: Optional[int] = None
+        self._load_or_extract_keys(master_key=master_key)
+
+    # ------------------------------------------------------------------
+    # 账号与数据库文件
+    # ------------------------------------------------------------------
+    def _pick_account(self) -> str:
+        candidates = []
+        for d in _find_account_dirs(self.db_dir):
+            if os.path.isdir(os.path.join(d, "db_storage")):
+                recent = max(
+                    (
+                        os.path.getmtime(os.path.join(root, f))
+                        for root, _, files in os.walk(os.path.join(d, "db_storage"))
+                        for f in files
+                        if f.endswith(".db") and not f.endswith("-wal")
+                    ),
+                    default=0,
+                )
+                candidates.append((recent, os.path.basename(d)))
+        if not candidates:
+            raise RuntimeError("未找到任何已登录账号的数据库")
+        candidates.sort(reverse=True)
+        return candidates[0][1]
+
+    def _collect_db_files(self) -> List[Tuple[str, str, int]]:
+        files = []
+        base = os.path.join(self.account_dir, "db_storage")
+        for root, _, names in os.walk(base):
+            # migrate 目录下的 unspportmsg.db 是微信保留的未支持消息库，
+            # 进程内存中不存在对应密钥、代码从不访问，排除以免误触发密钥提取
+            if os.path.normcase(os.path.relpath(root, base)).startswith("migrate"):
+                continue
+            for name in names:
+                if not name.endswith(".db") or name.endswith("-wal") or name.endswith("-shm"):
+                    continue
+                path = os.path.join(root, name)
+                files.append((os.path.relpath(path, base), path, os.path.getsize(path)))
+        return files
+
+    @property
+    def wxid(self) -> str:
+        """当前账号的微信号（去掉目录名末尾的 4 位哈希后缀）"""
+        return re.sub(r"_\w{4}$", "", self.account)
+
+    def get_self_info(self) -> dict:
+        """当前登录账号的昵称等信息"""
+        for rel, path, _ in self._db_files:
+            if os.path.basename(path) != "contact.db":
+                continue
+            conn = self._open(rel)
+            try:
+                row = conn.execute(
+                    "SELECT username, nick_name, remark FROM contact WHERE username=? LIMIT 1",
+                    (self.wxid,),
+                ).fetchone()
+            finally:
+                conn.close()
+            if row:
+                return {"username": row[0], "nick_name": row[1], "remark": row[2]}
+        return {"username": self.wxid, "nick_name": "", "remark": ""}
+
+    # ------------------------------------------------------------------
+    # 密钥提取
+    # ------------------------------------------------------------------
+    KDF_ITER = 256000  # 主密钥→库密钥 PBKDF2 迭代(微信魔改 WCDB, 实测确认)
+
+    def _try_other_accounts(self) -> bool:
+        """账号自愈：当前账号目录解不开时，改用同一主密钥能解开的其它账号目录。
+
+        多账号机器上 `_pick_account()` 的“最近修改 .db”启发式可能选错账号：
+        内存里提取到的主密钥属于**当前登录账号**，拿去解另一个账号的库会全部
+        页1 HMAC 校验失败（表现为“已加载 0/N 个密钥”、`-N/N`）。
+        这里用同一主密钥对其余账号目录重新派生/校验，选可用库最多的那个并
+        切换过去。返回是否发生了切换。
+        """
+        try:
+            dirs = [d for d in _find_account_dirs(self.db_dir)
+                    if os.path.basename(d) != self.account]
+        except Exception:
+            return False
+        if not dirs:
+            return False
+
+        master = self.master_key
+        if not master:
+            try:
+                auto = self.extract_master_key()
+            except Exception:
+                auto = None
+            if auto:
+                master = auto[0]
+                self.master_key = master
+        if not master:
+            return False
+
+        def probe(acct: str):
+            """在不动全局状态的前提下，试算某账号可用库数。"""
+            acct_dir = os.path.join(self.db_dir, acct)
+            workdir = os.path.join(tempfile.gettempdir(), "wechatauto_db", acct)
+            keys_file = os.path.join(workdir, "keys.json")
+            saved = (self.account, self.account_dir, self._db_files, self.workdir,
+                     self.keys_file, self._keys)
+            try:
+                self.account, self.account_dir = acct, acct_dir
+                self._db_files = self._collect_db_files()
+                self.workdir, self.keys_file = workdir, keys_file
+                self._keys = {}
+                if os.path.exists(keys_file):     # 先用该账号已有缓存
+                    # 走 _load_key_cache：兼容 DPAPI 密文与明文旧缓存
+                    self._keys.update(self._load_key_cache(keys_file))
+                if not any(self._key_works(rel) for rel, _, _ in self._db_files):
+                    self._keys.update(self.derive_keys_from_master(master))
+                ok = sum(1 for rel, _, _ in self._db_files if self._key_works(rel))
+                return ok, dict(self._keys), list(self._db_files), workdir, keys_file
+            except Exception:
+                return 0, {}, [], workdir, keys_file
+            finally:
+                (self.account, self.account_dir, self._db_files, self.workdir,
+                 self.keys_file, self._keys) = saved
+
+        cur_ok = sum(1 for rel, _, _ in self._db_files if self._key_works(rel))
+        best = None
+        for d in dirs:
+            ok, keys, files, workdir, keys_file = probe(os.path.basename(d))
+            if ok and (best is None or ok > best[0]):
+                best = (ok, os.path.basename(d), keys, files, workdir, keys_file)
+        if best is None or best[0] <= cur_ok:
+            return False
+
+        ok, acct, keys, files, workdir, keys_file = best
+        self.account = acct
+        self.account_dir = os.path.join(self.db_dir, acct)
+        self._keys, self._db_files = keys, files
+        self.workdir, self.keys_file = workdir, keys_file
+        try:
+            os.makedirs(self.workdir, exist_ok=True)
+            self._save_keys()
+        except Exception:
+            pass
+        print("[wechatauto] 已自动切换账号目录: %s（%d 个库可用密钥）" % (acct, ok),
+              file=sys.stderr)
+        return True
+
+    def _load_or_extract_keys(self, master_key: Optional[str] = None) -> None:
+        """加载/提取密钥, 五层优先级:
+
+        1. 显式 master_key(构造参数) → 主密钥派生;
+        2. 本地缓存 keys.json(已验证);
+        3. Config.Cipher 内存扫描(4.1+ 主路径);
+        4. cfg 自动提取(老版本回退);
+        5. 密钥提取(最终回退)。
+
+        派生/扫描结果均经 SQLCipher4 页1 HMAC 强校验, 零误报。
+        """
+        if master_key:
+            self._keys.update(self.derive_keys_from_master(master_key))
+            self.master_key = master_key
+            self.cfg_dword = None
+            self._save_keys()
+        else:
+            self.master_key = None
+            self.cfg_dword = None
+            
+            # 优先级1: 尝试已保存的密钥——多位置合并（稳定副本 > 工作缓存 > .bak >
+            # 其它账号缓存），全部经页1 HMAC 校验，只保留真能用的
+            cache_paths = []
+            sf = self._stable_key_file()
+            if sf:
+                cache_paths.append(sf)
+            cache_paths += [self.keys_file, self.keys_file + ".bak"]
+            try:
+                for other in _find_account_dirs(self.db_dir):
+                    oa = os.path.basename(other)
+                    if oa != self.account:
+                        cache_paths.append(os.path.join(
+                            tempfile.gettempdir(), "wechatauto_db", oa, "keys.json"))
+            except Exception:
+                pass
+            for cp in cache_paths:
+                if not os.path.exists(cp):
+                    continue
+                for rel, key in self._load_key_cache(cp).items():
+                    self._keys.setdefault(rel, key)
+            # 只保留能通过页1 校验的（丢弃错账号/陈旧条目）
+            if self._keys:
+                valid: Dict[str, bytes] = {}
+                for rel, k in self._keys.items():
+                    try:
+                        if self._key_works(rel):
+                            valid[rel] = k
+                    except Exception:
+                        continue          # 缓存里可能残留已不存在的库条目，忽略
+                self._keys = valid
+                # 规范化存储形式：48 字节（key+salt）只适用于「明文头」库；
+                # 若能以 32 字节裸密钥通过页1 校验，说明是标准库 → 截回 32 字节。
+                # （否则解密会走错分支，产出 file is not a database 的文件）
+                for rel in list(self._keys):
+                    k = self._keys[rel]
+                    if len(k) != 48:
+                        continue
+                    try:
+                        with open(self._db_path(rel), "rb") as f:
+                            _p1 = f.read(PAGE_SZ)
+                    except Exception:
+                        continue
+                    if _verify_enc_key(k[:32], _p1):
+                        self._keys[rel] = k[:32]
+                self._save_keys()
+            
+            missing = [
+                rel for rel, path, _ in self._db_files
+                if rel not in self._keys or not self._key_works(rel)
+            ]
+            
+            # 优先级2: Config.Cipher 内存扫描(4.1+ 主路径)
+            if missing:
+                extracted = self.extract_keys()
+                self._keys.update(extracted)
+                self._save_keys()
+            
+            # 尝试提取cfg_dword用于图片密钥派生
+            if self.cfg_dword is None:
+                auto = self.extract_master_key()
+                if auto:
+                    _, cfg_dword, _ = auto
+                    self.cfg_dword = cfg_dword
+            
+            missing = [
+                rel for rel, path, _ in self._db_files
+                if rel not in self._keys or not self._key_works(rel)
+            ]
+            
+            # 优先级3: cfg 自动提取(老版本回退)
+            # 注意：cfg 路径在微信 4.1.13+ 会返回**不可信的主密钥**（v1.1.9 起已把
+            # Config.Cipher 内存扫描提为主路径，此处仅作老版本回退）。若它一把库都
+            # 复现不出来，要明确告警，而不是静默当成成功。
+            if missing:
+                auto = self.extract_master_key()
+                if auto:
+                    master, cfg_dword, _ = auto
+                    derived = self.derive_keys_from_master(master)
+                    self.cfg_dword = cfg_dword
+                    if derived:
+                        self.master_key = master
+                        self._keys.update(derived)
+                        self._save_keys()
+                    else:
+                        import sys as _sys
+                        print(
+                            "[wechatauto] 提示: cfg 主密钥无法复现任何库密钥"
+                            "（微信 4.1.13+ 已知问题，cfg 路径已不可信）。当前依赖 "
+                            "Config.Cipher 内存扫描；若扫描也失败，请运行 "
+                            "python -m wechatauto.diagnose_keys",
+                            file=_sys.stderr,
+                        )
+        def _still_now():
+            return [rel for rel, _, _ in self._db_files if not self._key_works(rel)]
+
+        still = _still_now()
+        # 账号自愈（第一步，便宜）：先试其它账号目录已有的缓存/主密钥派生
+        if still and self._try_other_accounts():
+            still = _still_now()
+        if still:
+            # 账号自愈（第二步，彻底）：一次内存扫描收集候选密钥材料，对**每个账号
+            # 目录**分别做 HMAC 打分，选能解开的那一个——不再依赖 mtime 启发式，
+            # 从根上解决“微信每次更新后重写 .db → 选错账号 → 0 密钥”。
+            try:
+                cands = self._all_key_candidates()
+            except Exception:
+                cands = set()
+            if cands and self._select_account_by_keys(cands):
+                still = _still_now()
+        if still:
+            import sys as _sys
+            total = len(self._db_files)
+            print(
+                "[wechatauto] 警告: 以下库无可用密钥，无法解密: %s"
+                % ", ".join(still),
+                file=_sys.stderr,
+            )
+            print(
+                "[wechatauto] 已加载 %d/%d 个密钥 (缓存: %s)。请确认微信已登录，"
+                "可运行 python -m wechatauto.diagnose_keys 排查"
+                % (total - len(still), total, self.keys_file),
+                file=_sys.stderr,
+            )
+            try:
+                accounts = sorted(os.path.basename(d)
+                                  for d in _find_account_dirs(self.db_dir))
+            except Exception:
+                accounts = []
+            if len(accounts) > 1:
+                print(
+                    "[wechatauto]  >> 检测到多个微信账号目录: %s；当前使用: %s。"
+                    "若仍报错，请用 WeChatDB(account=\"当前登录账号\") 显式指定"
+                    % (", ".join(accounts), self.account),
+                    file=_sys.stderr,
+                )
+        self.unkeyed = still
+
+    def derive_keys_from_master(self, master_hex: str) -> Dict[str, bytes]:
+        """主密钥派生逐库密钥: PBKDF2-HMAC-SHA512(主密钥, 库头salt, KDF_ITER)。
+
+        微信 4.x 为单一主密钥 + 每库随机 salt 派生独立库密钥(SQLCipher4
+        passphrase 语义)。仅返回通过页1 HMAC 校验的派生密钥。
+        """
+        try:
+            master = bytes.fromhex(master_hex)
+        except ValueError:
+            raise ValueError("主密钥必须为 64 位 hex 字符串")
+        if len(master) != 32:
+            raise ValueError("主密钥必须为 32 字节(64 位 hex)")
+        keys: Dict[str, bytes] = {}
+        for rel, path, _ in self._db_files:
+            try:
+                with open(path, "rb") as f:
+                    page1 = f.read(PAGE_SZ)
+            except OSError:
+                continue
+            if len(page1) < PAGE_SZ:
+                continue
+            derived = _pbkdf2(master, page1[:16], self.KDF_ITER)
+            if _verify_enc_key(derived, page1):
+                keys[rel] = derived
+        return keys
+
+    def extract_master_key(self) -> Optional[Tuple[str, int, str]]:
+        """从 Weixin.exe 进程 cfg 自动提取 (主密钥hex, cfgDword, wxId)。
+
+        遍历微信进程调 extract_master_key_from_cfg; 主密钥可离线派生全部库。
+        微信未运行或锚点漂移(版本变更)时返回 None, 由调用方回退。
+        """
+        pids = self._find_weixin_pids()
+        for pid in pids:
+            got = extract_master_key_from_cfg(pid)
+            if got:
+                return got
+        return None
+
+    def _key_works(self, rel: str) -> bool:
+        """该库密钥是否能通过页1 校验（rel 已不存在等异常一律 False）。"""
+        key = self._keys.get(rel)
+        if not key:
+            return False
+        try:
+            path = self._db_path(rel)
+            with open(path, "rb") as f:
+                page1 = f.read(PAGE_SZ)
+        except Exception:
+            return False
+        return _verify_enc_key(key, page1)
+
+    def _db_path(self, rel: str) -> str:
+        for r, path, _ in self._db_files:
+            if r == rel:
+                return path
+        raise KeyError(rel)
+
+    def extract_keys(self) -> Dict[str, bytes]:
+        """从 Weixin.exe 进程内存扫描 Config.Cipher 对象，提取各库密钥"""
+        pids = self._find_weixin_pids()
+        if not pids:
+            raise RuntimeError("未检测到 Weixin.exe，请先登录微信再运行")
+        keys: Dict[str, bytes] = {}
+        tested: set = set()
+        for pid in pids:
+            keys.update(self._extract_keys_pid(pid, tested))
+            if len(keys) >= len(self._db_files):
+                break
+        return keys
+
+    def _collect_key_candidates(self, pid: int, seen: set) -> set:
+        """收集候选密钥材料（**不做账号校验**）：{(cand, salt_or_None), ...}
+
+        与 `_extract_keys_pid` 的区别：这里只负责“找出可能是密钥的 32 字节
+        （或 32+16 带显式 salt）”，校验交给调用方对**每个账号目录**分别做。
+        原因：内存里的密钥属于**当前登录账号**，只有对正确的账号目录才能通过
+        页1 HMAC；这样账号选择由密码学校验决定，不再依赖“最近修改 .db”启发式
+        （微信每次更新会重写 .db，mtime 全变 → 启发式会选错账号 → 0 密钥）。
+        """
+        h = _k32.OpenProcess(0x0010 | 0x0400, False, pid)
+        if not h:
+            return set()
+        out: set = set()
+        try:
+            def read(addr: int, n: int):
+                buf = ctypes.create_string_buffer(n)
+                br = ctypes.c_size_t(0)
+                if _k32.ReadProcessMemory(h, ctypes.c_void_p(addr), buf, n,
+                                          ctypes.byref(br)) and br.value:
+                    return buf.raw[: br.value]
+                return None
+
+            needles = self._find_bytes(h, read, CONFIG_CIPHER_NAME)
+            pairs = [
+                struct.pack("<Q", addr) + struct.pack("<Q", len(CONFIG_CIPHER_NAME))
+                for addr in needles
+            ]
+            for pair in pairs:
+                for qaddr in self._find_bytes(h, read, pair):
+                    node = read(qaddr - 0x10, 0x50)
+                    if not node or len(node) < 0x40:
+                        continue
+                    if struct.unpack_from("<Q", node, 0x10)[0] not in needles:
+                        continue
+                    if struct.unpack_from("<Q", node, 0x18)[0] != len(CONFIG_CIPHER_NAME):
+                        continue
+                    config_ptr = struct.unpack_from("<Q", node, 0x28)[0]
+                    if not (0x10000 <= config_ptr < 0x800000000000):
+                        continue
+                    obj = read(config_ptr + 0x88, 0x28)
+                    if not obj or len(obj) < 0x18:
+                        continue
+                    data_ptr = struct.unpack_from("<Q", obj, 0x8)[0]
+                    data_len = struct.unpack_from("<Q", obj, 0x10)[0]
+                    if not (0 < data_len <= 1024 and 0x10000 <= data_ptr < 0x800000000000):
+                        continue
+                    blob = read(data_ptr, int(data_len))
+                    if not blob or len(blob) != data_len:
+                        continue
+                    decoded = bytes(
+                        v ^ CONFIG_XOR_MASK[i % len(CONFIG_XOR_MASK)]
+                        for i, v in enumerate(blob)
+                    )
+                    for m in HEX_LITERAL_RE.finditer(decoded):
+                        run = m.group(1).decode().lower()
+                        starts = [0]
+                        if len(run) > 96:
+                            starts += list(range(0, len(run) - 63, 32))
+                            starts.append(len(run) - 64)
+                        for s in dict.fromkeys(starts):
+                            if s + 64 > len(run):
+                                continue
+                            cand = bytes.fromhex(run[s:s + 64])
+                            if cand in seen or not self._probable_key(cand):
+                                continue
+                            seen.add(cand)
+                            out.add((cand, None))
+                            if s + 96 <= len(run):
+                                out.add((cand, bytes.fromhex(run[s + 64: s + 96])))
+        finally:
+            _k32.CloseHandle(h)
+        return out
+
+    def _all_key_candidates(self) -> set:
+        """一次内存扫描，收集所有候选密钥材料（与账号无关）。"""
+        seen: set = set()
+        out: set = set()
+        for pid in self._find_weixin_pids():
+            try:
+                out |= self._collect_key_candidates(pid, seen)
+            except Exception:
+                continue
+        return out
+
+    def _keys_from_candidates(self, cands) -> Dict[str, bytes]:
+        """把候选材料对**当前 self._db_files** 逐个 HMAC 校验，返回可用密钥。
+
+        存储形式按库的实际布局决定：**先按标准形式（文件头 salt）校验**，通过就
+        存 32 字节裸密钥；只有标准形式验不过时（明文头库）才用候选自带的显式
+        salt 并存成 48 字节 key+salt。
+        顺序很关键：若先试显式 salt，标准库也会被存成 48 字节，解密时就会走
+        「明文头」分支，产出非 SQLite 文件（实测踩过：file is not a database）。
+        """
+        keys: Dict[str, bytes] = {}
+        for cand, salt in cands:
+            for rel, path, _ in self._db_files:
+                if rel in keys:
+                    continue
+                try:
+                    with open(path, "rb") as f:
+                        page1 = f.read(PAGE_SZ)
+                except OSError:
+                    continue
+                if _verify_enc_key(cand, page1):
+                    keys[rel] = cand                      # 标准库：32 字节
+                    break
+                if salt and _verify_enc_key(cand, page1, salt=salt):
+                    keys[rel] = cand + salt               # 明文头库：48 字节
+                    break
+        return keys
+
+    def _select_account_by_keys(self, cands) -> bool:
+        """用候选密钥给每个账号目录打分，选可用库最多的那个并切换。
+
+        这是“微信更新后选错账号”的根除手段：不再看 mtime，而看**能不能解开**。
+        返回是否发生了切换/改善。
+        """
+        if not cands:
+            return False
+        best = None
+        try:
+            dirs = _find_account_dirs(self.db_dir)
+        except Exception as exc:
+            wxlog.debug(f'枚举账号目录失败，跳过账号自愈：{exc!r}')
+            return False
+        for d in dirs:
+            acct = os.path.basename(d)
+            saved = (self.account, self.account_dir, self._db_files, self.workdir,
+                     self.keys_file, self._keys)
+            try:
+                self.account, self.account_dir = acct, d
+                self.workdir = os.path.join(tempfile.gettempdir(), "wechatauto_db", acct)
+                self.keys_file = os.path.join(self.workdir, "keys.json")
+                self._db_files = self._collect_db_files()
+                if not self._db_files:
+                    continue
+                merged = {}
+                if self.master_key:
+                    try:
+                        merged.update(self.derive_keys_from_master(self.master_key))
+                    except Exception:
+                        pass
+                merged.update(self._keys_from_candidates(cands))
+                ok = len(merged)
+                if ok and (best is None or ok > best[0]):
+                    best = (ok, acct, merged, list(self._db_files))
+            except Exception:
+                continue
+            finally:
+                (self.account, self.account_dir, self._db_files, self.workdir,
+                 self.keys_file, self._keys) = saved
+        if best is None:
+            return False
+        cur = sum(1 for rel, _, _ in self._db_files if self._key_works(rel))
+        if best[0] <= cur:
+            return False
+        ok, acct, keys, files = best
+        self.account = acct
+        self.account_dir = os.path.join(self.db_dir, acct)
+        self._keys, self._db_files = keys, files
+        self.workdir = os.path.join(tempfile.gettempdir(), "wechatauto_db", acct)
+        self.keys_file = os.path.join(self.workdir, "keys.json")
+        try:
+            os.makedirs(self.workdir, exist_ok=True)
+            self._save_keys()
+        except Exception:
+            pass
+        print("[wechatauto] 已按密钥校验选定账号目录: %s（%d/%d 个库可用密钥）"
+              % (acct, ok, len(files)), file=sys.stderr)
+        return True
+
+    def _find_weixin_pids(self) -> List[int]:
+        import subprocess
+
+        try:
+            r = subprocess.run(
+                ["tasklist", "/FI", "IMAGENAME eq Weixin.exe", "/FO", "CSV", "/NH"],
+                capture_output=True, text=True, encoding="gbk", errors="replace",
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except OSError:
+            return []
+        # 中文 Windows 的 tasklist 输出是 GBK：不显式指定编码时，UTF-8 模式
+        # （-X utf8 / PYTHONUTF8=1）下解码失败会让 stdout 变成 None，
+        # “取密钥”这一步就会以 AttributeError 收场（已实测复现）。
+        pids = []
+        for line in (r.stdout or "").strip().splitlines():
+            parts = line.strip('"').split('","')
+            if len(parts) >= 2 and parts[1].isdigit():
+                pids.append(int(parts[1]))
+        return pids
+
+    def _extract_keys_pid(self, pid: int, tested: set) -> Dict[str, bytes]:
+        h = _k32.OpenProcess(0x0010 | 0x0400, False, pid)
+        if not h:
+            return {}
+        try:
+            def read(addr: int, n: int):
+                buf = ctypes.create_string_buffer(n)
+                br = ctypes.c_size_t(0)
+                if _k32.ReadProcessMemory(h, ctypes.c_void_p(addr), buf, n, ctypes.byref(br)) and br.value:
+                    return buf.raw[: br.value]
+                return None
+
+            needles = self._find_bytes(h, read, CONFIG_CIPHER_NAME)
+            pairs = [
+                struct.pack("<Q", addr) + struct.pack("<Q", len(CONFIG_CIPHER_NAME))
+                for addr in needles
+            ]
+            keys: Dict[str, bytes] = {}
+            for pair in pairs:
+                for qaddr in self._find_bytes(h, read, pair):
+                    node = read(qaddr - 0x10, 0x50)
+                    if not node or len(node) < 0x40:
+                        continue
+                    if struct.unpack_from("<Q", node, 0x10)[0] not in needles:
+                        continue
+                    if struct.unpack_from("<Q", node, 0x18)[0] != len(CONFIG_CIPHER_NAME):
+                        continue
+                    config_ptr = struct.unpack_from("<Q", node, 0x28)[0]
+                    if not (0x10000 <= config_ptr < 0x800000000000):
+                        continue
+                    obj = read(config_ptr + 0x88, 0x28)
+                    if not obj or len(obj) < 0x18:
+                        continue
+                    data_ptr = struct.unpack_from("<Q", obj, 0x8)[0]
+                    data_len = struct.unpack_from("<Q", obj, 0x10)[0]
+                    if not (0 < data_len <= 1024 and 0x10000 <= data_ptr < 0x800000000000):
+                        continue
+                    blob = read(data_ptr, int(data_len))
+                    if not blob or len(blob) != data_len:
+                        continue
+                    decoded = bytes(
+                        v ^ CONFIG_XOR_MASK[i % len(CONFIG_XOR_MASK)]
+                        for i, v in enumerate(blob)
+                    )
+                    for m in HEX_LITERAL_RE.finditer(decoded):
+                        run = m.group(1).decode().lower()
+                        starts = [0]
+                        if len(run) > 96:
+                            starts += list(range(0, len(run) - 63, 32))
+                            starts.append(len(run) - 64)
+                        for s in dict.fromkeys(starts):
+                            if s + 64 > len(run):
+                                continue
+                            cand = bytes.fromhex(run[s:s + 64])
+                            if cand in tested or not self._probable_key(cand):
+                                continue
+                            tested.add(cand)
+                            # 96hex 形式：后 32 hex 是显式 salt（Raw Key with
+                            # Explicit Salt），与文件头 salt 都要尝试
+                            explicit = None
+                            if s + 96 <= len(run):
+                                explicit = bytes.fromhex(run[s + 64: s + 96])
+                            salt_choices = [None]
+                            if explicit:
+                                salt_choices.append(explicit)
+                            for salt_opt in salt_choices:
+                                for rel, path, _ in self._db_files:
+                                    if rel in keys:
+                                        continue
+                                    try:
+                                        with open(path, "rb") as f:
+                                            page1 = f.read(PAGE_SZ)
+                                    except OSError:
+                                        # 微信 checkpoint 期间文件可能被短暂替换/锁定，跳过该文件
+                                        continue
+                                    if _verify_enc_key(cand, page1, salt=salt_opt):
+                                        # 显式 salt 通过 → 存 key+salt（明文头模式）；
+                                        # 文件头 salt 通过 → 存裸 key
+                                        keys[rel] = cand + (salt_opt or b"")
+                                        break
+        finally:
+            _k32.CloseHandle(h)
+        return keys
+
+    @staticmethod
+    def _probable_key(b: bytes) -> bool:
+        return (
+            len(b) == 32
+            and len(set(b)) >= 15
+            and b not in {b"\x00" * 32, b"\xff" * 32}
+        )
+
+    @staticmethod
+    def _find_bytes(h, read, needle: bytes) -> List[int]:
+        hits = []
+        addr = 0
+        while True:
+            mbi = _MBI()
+            r = _k32.VirtualQueryEx(h, ctypes.c_void_p(addr), ctypes.byref(mbi), ctypes.sizeof(mbi))
+            if r == 0:
+                break
+            if (
+                mbi.State == 0x1000
+                and (mbi.Protect & 0xFF) & 0xE6
+                and not (mbi.Protect & 0x100)
+                and 0 < mbi.RegionSize < 0x10000000
+            ):
+                buf = read(mbi.BaseAddress or 0, mbi.RegionSize)
+                if buf:
+                    base = mbi.BaseAddress or 0
+                    pos = 0
+                    while True:
+                        pos = buf.find(needle, pos)
+                        if pos < 0:
+                            break
+                        hits.append(base + pos)
+                        pos += 1
+            addr = (mbi.BaseAddress or 0) + mbi.RegionSize
+        return hits
+
+    def _stable_key_dirs(self) -> List[str]:
+        """稳定密钥副本目录（不随 TEMP 清理而丢失）。
+
+        TEMP 被清理/重置后密钥缓存就没了，而微信更新**不会重新加密 DB**，
+        所以一份有效的缓存本可跨更新长期复用。优先用环境变量
+        ``WECHATAUTO_KEYS_DIR``，否则用 ``%LOCALAPPDATA%\\wechatauto_keys``。
+        """
+        dirs = []
+        env = os.environ.get("WECHATAUTO_KEYS_DIR")
+        if env:
+            dirs.append(env)
+        base = os.environ.get("LOCALAPPDATA") or os.environ.get("USERPROFILE")
+        if base:
+            dirs.append(os.path.join(base, "wechatauto_keys"))
+        return dirs
+
+    def _stable_key_file(self, account: Optional[str] = None) -> Optional[str]:
+        dirs = self._stable_key_dirs()
+        if not dirs:
+            return None
+        return os.path.join(dirs[0], (account or self.account) + ".json")
+
+    def _load_key_cache(self, path: str) -> Dict[str, bytes]:
+        """读一个 keys.json（只返回格式合法的条目；兼容明文旧缓存）。"""
+        out: Dict[str, bytes] = {}
+        try:
+            with open(path, "rb") as f:
+                raw = _unprotect_key_cache(f.read())
+            for rel, hexkey in json.loads(raw.decode("utf-8")).items():
+                try:
+                    out[rel] = bytes.fromhex(hexkey)
+                except (ValueError, TypeError):
+                    pass
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            pass
+        return out
+
+    def _save_keys(self) -> None:
+        """写密钥缓存。
+
+        两个保护：
+        1. **绝不把非空缓存覆盖成空缓存**——提取偶发失败（权限/版本/未登录）
+           不该毁掉已有的好缓存，否则下次再无回退可用；
+        2. 原子写入 + 保留 .bak，并同步一份到稳定目录（跨 TEMP 清理/微信更新）。
+        """
+        if not self._keys:
+            return
+        data = {k: v.hex() for k, v in self._keys.items()}
+        blob = _protect_key_cache(json.dumps(data, indent=2).encode("utf-8"))
+        try:
+            os.makedirs(os.path.dirname(self.keys_file), exist_ok=True)
+            tmp = self.keys_file + ".tmp"
+            with open(tmp, "wb") as f:
+                f.write(blob)
+            if os.path.exists(self.keys_file):
+                try:
+                    with open(self.keys_file, "rb") as src, \
+                            open(self.keys_file + ".bak", "wb") as dst:
+                        dst.write(src.read())
+                except OSError:
+                    pass
+            os.replace(tmp, self.keys_file)
+        except OSError:
+            pass
+        # 稳定副本
+        sf = self._stable_key_file()
+        if sf:
+            try:
+                os.makedirs(os.path.dirname(sf), exist_ok=True)
+                with open(sf, "wb") as f:
+                    f.write(blob)
+            except OSError:
+                pass
+
+    # ------------------------------------------------------------------
+    # 解密与查询
+    # ------------------------------------------------------------------
+    WAL_HEADER_SZ = 32   # WCDB WAL 文件头
+    WAL_FRAME_SZ = 4120  # 帧头 24 字节(大端 pgno + 校验等) + 4096 加密页
+
+    def _auto_diagnose_key_failure(self, rel: str) -> None:
+        """密钥缺失报错时的自动诊断，向 stderr 输出三项最常见根因：
+        1) Python 位数（32 位 Python 读不了 64 位微信进程内存）；
+        2) 微信进程读取权限（管理员权限不匹配 → OpenProcess 失败 → 0 密钥）；
+        3) 多账号目录与所选账号对比（选错账号 → 密钥验证不过）。
+        """
+        print("[wechatauto] 密钥诊断: '%s' 无可用密钥" % rel, file=sys.stderr)
+        bits = 64 if sys.maxsize > 2**32 else 32
+        if bits != 64:
+            print("[wechatauto]  >> 当前 Python 是 %d 位，而微信 4.x 是 64 位进程。"
+                  "请改用 64 位 Python（python -c \"import struct; print(struct.calcsize('P')*8)\" 应输出 64）"
+                  % bits, file=sys.stderr)
+        import subprocess as _sp
+        try:
+            r = _sp.run(
+                ["tasklist", "/FI", "IMAGENAME eq Weixin.exe", "/FO", "CSV", "/NH"],
+                capture_output=True, text=True, encoding="gbk", errors="replace",
+                creationflags=getattr(_sp, "CREATE_NO_WINDOW", 0),
+            )
+        except OSError:
+            return
+        pids = []
+        for line in (r.stdout or "").strip().splitlines():
+            parts = line.strip('"').split('","')
+            if len(parts) >= 2 and parts[1].isdigit():
+                pids.append(int(parts[1]))
+        if not pids:
+            print("[wechatauto]  >> 未检测到 Weixin.exe 进程，请先登录微信并保持窗口打开",
+                  file=sys.stderr)
+            return
+        perms = []
+        for pid in pids:
+            h = _k32.OpenProcess(0x0010 | 0x0400, False, pid)
+            if not h:
+                err = ctypes.get_last_error()
+                perms.append((pid, False, err))
+            else:
+                _k32.CloseHandle(h)
+                perms.append((pid, True, 0))
+        blocked = [p for p, ok, err in perms if not ok]
+        if blocked:
+            print("[wechatauto]  >> 部分微信进程无法读取内存 (PID %s，错误码 %s)："
+                  "请用管理员身份运行 Python（若微信本身以管理员运行），"
+                  "或取消微信的\"以管理员身份运行\"后重新登录"
+                  % (", ".join(str(p) for p, _, _ in blocked),
+                     ", ".join(str(e) for _, _, e in blocked)),
+                  file=sys.stderr)
+        accounts = [
+            os.path.basename(d)
+            for d in _find_account_dirs(self.db_dir)
+        ]
+        if len(accounts) > 1:
+            print("[wechatauto]  >> 检测到多个微信账号目录: %s；当前自动选择: %s。"
+                  "若报错，请用 WeChatDB(account=\"当前登录账号\") 显式指定"
+                  % (", ".join(sorted(accounts)), self.account),
+                  file=sys.stderr)
+        print("[wechatauto] 密钥诊断完成，以上为自动检测结果。完整排查请运行 "
+              "python -m wechatauto.diagnose_keys", file=sys.stderr)
+
+    def _build_lock_for(self, rel: str) -> threading.Lock:
+        """按库文件取一把构建锁（注册表本身用一把小锁保护）。"""
+        reg = getattr(self, "_build_locks", None)
+        if reg is None:
+            reg = self._build_locks = {}
+            self._build_locks_guard = threading.Lock()
+        with self._build_locks_guard:
+            return reg.setdefault(rel, threading.Lock())
+
+    def _open(self, rel: str) -> sqlite3.Connection:
+        """同一份库的并发解密要串行：两个线程各自解一遍是几秒级的重复重活，
+        还会互相踩中间产物（监听所有会话时几百个会话同时开库必现）。"""
+        with self._build_lock_for(rel):
+            return self._open_unlocked(rel)
+
+    def _open_unlocked(self, rel: str) -> sqlite3.Connection:
+        """打开解密(并合并 -wal 增量)后的只读库。
+
+        解密结果缓存到 workdir；主库或 WAL 有变化时：
+        - 主库被 checkpoint 改写（mtime/size 变化）或 WAL 被重置 → 全量重建；
+        - 仅 WAL 追加了新帧 → 增量合并新帧（秒级）。
+        """
+        if rel not in self._keys:
+            self._auto_diagnose_key_failure(rel)
+            raise RuntimeError(
+                "数据库无可用密钥: %s。请确认微信已登录且保持窗口打开。"
+                "常见原因：① 32 位 Python 读不了 64 位微信内存；"
+                "② 本脚本权限低于微信（微信以管理员运行时，脚本也要以管理员运行）；"
+                "③ 多账号机器选错账号（用 WeChatDB(account=\"当前登录账号\") 指定）。"
+                "仍复现请运行 python -m wechatauto.diagnose_keys 并把完整输出发给维护者。"
+                "也可删除密钥缓存强制重新提取后重试: %s"
+                % (rel, self.keys_file)
+            )
+        src = self._db_path(rel)
+        dst = os.path.join(self.workdir, rel.replace(os.sep, "__"))
+        key = self._keys[rel]
+        if len(key) == 48:
+            # 兼容历史上误存的形式：48 字节 = key+salt，仅适用于「明文头」库；
+            # 标准 SQLCipher 库若存成 48 字节，解密会保留文件头 16 字节、从
+            # offset 16 开始解 → 产出非 SQLite 文件（file is not a database）。
+            # 用页1 校验判定：文件头 salt 能验过 → 标准形式，截回 32 字节。
+            try:
+                with open(src, "rb") as _f:
+                    _p1 = _f.read(PAGE_SZ)
+                if _verify_enc_key(key[:32], _p1):
+                    key = key[:32]
+            except OSError:
+                pass
+        src_mtime = os.path.getmtime(src)
+        src_size = os.path.getsize(src)
+        wal_path = self._wal_path(rel)
+        wal_mtime = os.path.getmtime(wal_path) if wal_path else 0.0
+        wal_size = os.path.getsize(wal_path) if wal_path else 0
+        stamp = dst + ".stamp"
+        old = None
+        if os.path.exists(stamp):
+            try:
+                with open(stamp, "r") as f:
+                    parts = f.read().split(",")
+                old = {
+                    "ver": int(parts[0]),
+                    "mtime": float(parts[1]),
+                    "size": int(parts[2]),
+                    "wal_mtime": float(parts[3]),
+                    "wal_size": int(parts[4]),
+                    "applied": int(parts[5]),
+                }
+                if old["ver"] != STAMP_VERSION:
+                    old = None
+            except (ValueError, OSError, IndexError):
+                old = None
+        build = (not old or old["mtime"] != src_mtime or old["size"] != src_size
+                 or old["wal_mtime"] != wal_mtime or old["wal_size"] != wal_size)
+        # 构建策略：**先做主库自洽快照当底线，再尝试合并 WAL**。
+        # 主库在上次 checkpoint 时是自洽的（SQLite 保证），所以「仅解密主库」
+        # 一定可读，代价是可能缺最近少量消息；WAL 合并成功则用更新的那份。
+        # 关键：任何中间产物都写在 tmp，**成功才原子替换** dst，失败不会毁掉
+        # 上一份已验证副本。
+        # 中间产物按「进程 + 线程」唯一命名：固定名 dst+".tmp" 会被并发打开同一份
+        # 库的另一个线程用 os.replace 掉，这边就 FileNotFoundError（监听所有会话、
+        # 几百个会话同时开库时必现）。唯一命名后异常退出会留下残留文件，故构建前
+        # 顺手清掉 10 分钟前的陈旧中间产物。
+        tmp = "%s.%d.%x.tmp" % (dst, os.getpid(), threading.get_ident())
+        applied = 0
+        if build:
+            for stale in glob.glob(dst + ".*.tmp*"):
+                try:
+                    if time.time() - os.path.getmtime(stale) > 600:
+                        os.remove(stale)
+                except OSError:
+                    pass
+            # 微信 checkpoint 会**就地改写主库页**：单次读取可能读到“撕裂”状态
+            # （页头与内容来自不同时刻）→ quick_check 会失败。故解密后必须校验，
+            # 失败就重读（每次重读都是一次新的快照）。
+            best = None
+            for attempt in range(1, 5):
+                self._decrypt_file(src, tmp, key)
+                if self._check_merged(tmp):
+                    best = tmp
+                    break
+                wxlog.debug('主库解密快照校验失败（第 %d/4 次）: %s' % (attempt, rel))
+                time.sleep(0.35)
+            if best is None:
+                if os.path.exists(dst) and self._check_merged(dst):
+                    wxlog.warning('主库持续处于撕裂状态，改用上一份可用副本（可能略旧）: %s'
+                                  % rel)
+                    build = False
+                else:
+                    raise RuntimeError("数据库解密结果校验失败(微信正在 checkpoint): %s" % rel)
+            if build:
+                best_applied = 0
+                if wal_path and wal_size > self.WAL_HEADER_SZ:
+                    merged = tmp + ".wal"
+                    ok_wal = False
+                    for attempt in (1, 3):
+                        try:
+                            shutil.copyfile(best, merged)
+                            got = self._merge_wal(merged, wal_path, key, 0)
+                            if self._check_merged(merged):
+                                os.replace(merged, best)
+                                best_applied, ok_wal = got, True
+                                break
+                        except Exception as exc:
+                            wxlog.debug('WAL 合并第 %d 次失败：%r' % (attempt, exc))
+                        time.sleep(0.3)
+                    if not ok_wal:
+                        best_applied = -1          # 标记：本轮未合并 WAL
+                        wxlog.warning('WAL 合并失败（微信持续写入），改用仅主库快照'
+                                      '（可能缺少最近消息）: %s' % rel)
+                os.replace(best, dst)
+                applied = best_applied
+                os.makedirs(os.path.dirname(stamp), exist_ok=True)
+                with open(stamp, "w") as f:
+                    f.write("%d,%r,%d,%r,%d,%d"
+                            % (STAMP_VERSION, src_mtime, src_size, wal_mtime, wal_size, applied))
+            build = False
+        conn = sqlite3.connect(f"file:{dst}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+        conn.text_factory = _sqlite_text_factory
+        return conn
+
+    @staticmethod
+    def _check_merged(dst: str) -> bool:
+        """校验解密/合并结果可完整读取。
+
+        只兜底 sqlite_master 无法发现数据页损坏：WAL 若带入过期/错位页，
+        schema 树可能仍正常，但表数据页已损坏，直到 SELECT 才抛
+        "database disk image is malformed"。这里用 PRAGMA quick_check
+        全库校验（含数据页与索引页），损坏时返回 False，触发全量重建重试。
+        """
+        try:
+            conn = sqlite3.connect(f"file:{dst}?mode=ro", uri=True)
+            try:
+                rows = conn.execute("PRAGMA quick_check").fetchall()
+            finally:
+                conn.close()
+            return bool(rows) and all(str(r[0]) == "ok" for r in rows)
+        except sqlite3.Error:
+            return False
+
+    def _wal_path(self, rel: str) -> Optional[str]:
+        wal = self._db_path(rel) + "-wal"
+        return wal if os.path.exists(wal) else None
+
+    def _merge_wal(self, dst: str, wal_path: str, key: bytes, from_frame: int) -> int:
+        """把 -wal 中的加密帧按页号覆盖进已解密的主库文件，返回已应用帧数。
+
+        帧结构（WCDB，全部大端）：[0:4] 页号, [4:8] 提交标记, [8:16] salt, [16:24] 校验。
+        帧内页面与主库页相同加密格式，直接用库密钥解密。
+        页 1 帧用页 1 专用布局（数据区 [16:4016]，IV 在 [4016:4032]）解密。
+
+        只合并 salt 与当前 WAL 头一致的帧：微信 checkpoint 会重置 WAL（salt+1 并
+        清零写游标），旧世代帧若被合并会用过期页覆盖新数据，造成库损坏。
+        """
+        if not os.path.exists(dst):
+            return 0
+        out = open(dst, "r+b")
+        try:
+            db_pages = (os.path.getsize(dst) + 4095) // PAGE_SZ
+            max_pgno = 0
+            last = from_frame
+            with open(wal_path, "rb") as wal:
+                wal_hdr = wal.read(self.WAL_HEADER_SZ)
+                wal_salt = wal_hdr[16:24]
+                wal_size = os.path.getsize(wal_path)
+                n = (wal_size - self.WAL_HEADER_SZ) // self.WAL_FRAME_SZ
+                for i in range(from_frame, n):
+                    wal.seek(self.WAL_HEADER_SZ + i * self.WAL_FRAME_SZ)
+                    hdr = wal.read(24)
+                    page = wal.read(PAGE_SZ)
+                    if len(page) < PAGE_SZ:
+                        break
+                    pgno = struct.unpack(">I", hdr[:4])[0]
+                    last = i + 1
+                    if hdr[8:16] != wal_salt:
+                        continue
+                    pt = _decrypt_page(key, page, pgno)
+                    if pgno == 1:
+                        # 明文头模式（48B key）页 1 解密后保留明文头，
+                        # 头部 magic 可能不是标准 SQLite；用版本字节兜底校验。
+                        if len(key) == 48:
+                            if len(pt) < PAGE_SZ or pt[16:18] != b"\x01\x01":
+                                continue
+                        elif pt[:16] != b"SQLite format 3\x00":
+                            continue
+                    elif pt[0] not in (0, 2, 5, 10, 13):
+                        continue
+                    out.seek((pgno - 1) * PAGE_SZ)
+                    out.write(pt)
+                    max_pgno = max(max_pgno, pgno)
+            out.flush()
+            db_pages = (os.path.getsize(dst) + 4095) // PAGE_SZ
+            out.seek(0)
+            page1 = out.read(PAGE_SZ)
+            hdr_pages = struct.unpack(">I", page1[28:32])[0]
+            new_pages = max(hdr_pages, max_pgno, db_pages)
+            if new_pages != hdr_pages:
+                page1 = page1[:28] + struct.pack(">I", new_pages) + page1[32:]
+                out.seek(0)
+                out.write(page1)
+            out.flush()
+        finally:
+            out.close()
+        return last
+
+    def _decrypt_file(self, src: str, dst: str, key: bytes) -> None:
+        size = os.path.getsize(src)
+        pages = size // PAGE_SZ + (1 if size % PAGE_SZ else 0)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        with open(src, "rb") as fin, open(dst, "wb") as fout:
+            for pgno in range(1, pages + 1):
+                page = fin.read(PAGE_SZ)
+                if not page:
+                    break
+                if len(page) < PAGE_SZ:
+                    page = page + b"\x00" * (PAGE_SZ - len(page))
+                fout.write(_decrypt_page(key, page, pgno))
+
+    def _message_dbs(self) -> List[str]:
+        """返回当前所有消息分片库。微信运行中可能新建分片（如 message_5.db），
+        因此每次动态重扫磁盘并补齐新库密钥，而不是用 __init__ 时的静态缓存。
+        """
+        self._refresh_db_files()
+        return sorted(
+            rel for rel, path, _ in self._db_files
+            if re.match(r"^message[\\/]message_\d+\.db$", rel.replace(os.sep, "/"))
+        )
+
+    def _refresh_db_files(self) -> None:
+        """重扫磁盘上的 db 文件；发现新文件时补提取其密钥，避免旧缓存漏掉新分片。
+
+        性能：仅当 message 目录下的文件清单有变化（新增 message_5.db 等）或首次
+        调用时才做全量重扫，否则直接复用 __init__ 时的扫描结果。
+        """
+        msg_dir = os.path.join(self.account_dir, "db_storage", "message")
+        try:
+            cur = sorted(
+                n for n in os.listdir(msg_dir)
+                if n.endswith(".db") and not n.endswith("-wal") and not n.endswith("-shm")
+            )
+        except OSError:
+            return
+        prev = sorted(
+            os.path.basename(path)
+            for rel, path, _ in self._db_files
+            if re.match(r"^message[\\/].*\.db$", rel.replace(os.sep, "/"))
+        )
+        if cur == prev:
+            return
+        current = self._collect_db_files()
+        if current == self._db_files:
+            return
+        self._db_files = current
+        new_rels = [
+            rel for rel, path, _ in current
+            if rel not in self._keys or not self._key_works(rel)
+        ]
+        if new_rels:
+            try:
+                extracted = self.extract_keys()
+                self._keys.update(extracted)
+                self._save_keys()
+            except Exception:
+                pass
+        self.unkeyed = [
+            rel for rel, _, _ in self._db_files if not self._key_works(rel)
+        ]
+
+    def _find_msg_tables(self, user: str, conns: List[sqlite3.Connection]) -> List[Tuple[sqlite3.Connection, str]]:
+        """定位会话消息表的全部命中分片（同一 Msg_ 表可能拆分在 message_0..N）。"""
+        target = "Msg_" + _md5_hex(user.encode())
+        found = []
+        for conn in conns:
+            row = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+                (target,),
+            ).fetchone()
+            if row:
+                found.append((conn, target))
+        return found
+
+    def _invalidate_cache(self) -> None:
+        """删除 workdir 中全部解密缓存(.db/.stamp)，key 缓存除外。
+
+        下一次 _open 会对每份库全量解密重建。media 图片等副产物不受影响。
+        """
+        try:
+            names = os.listdir(self.workdir)
+        except OSError:
+            return
+        removed = 0
+        for n in names:
+            if n.endswith(".db") or n.endswith(".stamp") or n.endswith(".tmp"):
+                try:
+                    os.remove(os.path.join(self.workdir, n))
+                    removed += 1
+                except OSError:
+                    pass
+        if removed:
+            sys.stderr.write("[wechatauto] 已清 %d 个缓存文件等待重建\n" % removed)
+
+    def _msg_conns(self, user: str, _retry: bool = True) -> List[Tuple[sqlite3.Connection, str]]:
+        """打开消息库并定位用户消息表（调用方负责 close 连接）。
+
+        返回该会话**全部分片**的 (conn, table)。同一 Msg_<md5> 表可能分布在
+        多个 message_N.db 分片（按时间/容量横向切分），必须全部读齐才能
+        拿到完整消息序列。
+        """
+        conns = []
+        try:
+            conns = [self._open(rel) for rel in self._message_dbs()]
+            found = self._find_msg_tables(user, conns)
+        except sqlite3.DatabaseError as exc:
+            for c in conns:
+                c.close()
+            if _retry and _is_malformed(exc):
+                sys.stderr.write("[wechatauto] 消息库损坏(%s)，清缓存重建并重试\n" % exc)
+                self._invalidate_cache()
+                return self._msg_conns(user, _retry=False)
+            raise
+        except Exception:
+            for c in conns:
+                c.close()
+            raise
+        if not found:
+            for c in conns:
+                c.close()
+            return []
+        # 只保留命中的连接，其余分片库立即关闭，避免 Windows 下删除缓存被占用
+        keep = {id(c) for c, _ in found}
+        for c in conns:
+            if id(c) not in keep:
+                c.close()
+        return found
+
+    def _run_msg_query(self, user: str, build):
+        """对消息库执行只读查询；查询到库损坏时清缓存重建并重试一次。
+
+        build(tables) -> rows，其中 tables 为 List[(conn, table)]，覆盖该
+        会话的全部命中分片（跨分片由调用方合并排序）。
+        _msg_conns 已处理 schema 损坏重建，本方法兜底数据页损坏。
+        重试后仍失败则抛原始异常（Listener 捕获后跳过本轮，不阻断运行）。
+        找不到该会话返回 None。
+        """
+        for attempt in (0, 1):
+            found = self._msg_conns(user)
+            if not found:
+                return None
+            try:
+                return build(found)
+            except sqlite3.DatabaseError as exc:
+                if attempt or not _is_malformed(exc):
+                    raise
+                sys.stderr.write(
+                    "[wechatauto] 查询到库损坏(%s)，清缓存重建并重试\n" % exc
+                )
+                self._invalidate_cache()
+            finally:
+                closed = set()
+                for conn, _ in found:
+                    if id(conn) not in closed:
+                        closed.add(id(conn))
+                        conn.close()
+        return None
+
+    # 跨分片统一排序键：分片间 local_id 会重复（每片从 1 起），
+    # 必须在分片内固定 tie-break，否则同一 sort_seq 的先后会随扫描顺序漂移。
+    # 方向选 local_id ASC：实测真实库中 main 的裸扫描在重复 sort_seq 组内
+    # 一律是 local_id 升序（≈rowid 顺序），因此该方向能与旧输出逐条一致
+    # （local_id DESC 会反转这些重复组内的先后）。
+    _MSG_ORDER_DESC = "ORDER BY sort_seq DESC, local_id ASC"
+    _MSG_ORDER_ASC = "ORDER BY sort_seq ASC, local_id ASC"
+
+    def _warn_once(self, key, msg, *a):
+        """同一条告警只说一次。
+
+        这些读取路径在轮询里每秒都会走一遍，重复的分片错误如果每次都打，
+        日志会被同一条刷屏、把别的信息挤掉。
+        """
+        warned = getattr(self, "_warned_keys", None)
+        if warned is None:
+            warned = self._warned_keys = set()
+        if key in warned or len(warned) >= 500:
+            return
+        warned.add(key)
+        wxlog.warning(msg, *a)
+
+    def _shard_label(self, conn: sqlite3.Connection) -> str:
+        """分片标识：该连接对应的解密缓存库文件名（如 ``message__message_2.db``）。
+
+        ``local_id`` 只在分片内唯一，跨分片会重复（实测本账号 54 个跨分片会话里
+        有 20008 个 ``(会话, local_id)`` 在多片同时命中），因此对外必须给一个
+        能把 ``(user, local_id)`` 钉到唯一一行的字段，``shard`` 就是它。
+        """
+        try:
+            row = conn.execute("PRAGMA database_list").fetchone()
+        except sqlite3.Error:
+            return ""
+        return os.path.basename(row[2] or "") if row and row[2] else ""
+
+    def _name2id_map(self, conn: sqlite3.Connection) -> Dict[int, str]:
+        """本分片的 ``real_sender_id`` 命名空间：``Name2Id.rowid -> username``。
+
+        ``real_sender_id`` 是**消息所在分片**那张 ``Name2Id`` 的 rowid，不是
+        ``message_resource.db.SenderName2Id`` 的 rowid（issue #34）。同一个数字在
+        两张表里、在不同分片里都是不同的人：本机实测自己账号在 message_0/1/2.db 的
+        rowid 分别是 2/4/1，所以「编号 2 = 自己」这类硬编码只在其中一片成立。
+        """
+        try:
+            return {int(rid): (u or "") for rid, u in conn.execute(
+                "SELECT rowid, user_name FROM Name2Id")}
+        except sqlite3.Error:
+            return {}
+
+    def _shard_maps(self, tables) -> Dict[str, Dict[int, str]]:
+        """本次查询涉及的分片各自的发送者映射：``{分片名: {rowid: username}}``。
+
+        必须在连接还开着的时候取（``_run_msg_query`` 收尾就 close 了），所以由各
+        查询方法在同一个 build 回调里一并返回，跟随结果一起交给 :meth:`_msg_row_to_dict`。
+        """
+        out: Dict[str, Dict[int, str]] = {}
+        for conn, _ in tables:
+            lab = self._shard_label(conn)
+            if lab and lab not in out:
+                out[lab] = self._name2id_map(conn)
+        return out
+
+    def sender_username(self, shard: str, sender_id) -> str:
+        """按分片自己的 ``Name2Id`` 把 ``real_sender_id`` 换成 username。
+
+        给「行已经离开查询上下文」的调用方兜底（媒体层拿着一条行单独判断发送者）；
+        解析不到就返回空串——**不回落到别的库去猜**，那正是 issue #34 的名称错位。
+
+        Args:
+            shard: 消息行里的 ``shard`` 字段（解密缓存库名，如 ``message__message_3.db``）。
+            sender_id: 消息行的 ``real_sender_id``。
+        """
+        if not shard or sender_id in (None, ""):
+            return ""
+        try:
+            sid = int(sender_id)
+        except (TypeError, ValueError):
+            return ""
+        for rel in self._message_dbs():
+            if rel.replace(os.sep, "__") != shard:
+                continue
+            conn = self._open(rel)
+            try:
+                return self._name2id_map(conn).get(sid, "")
+            finally:
+                conn.close()
+        return ""
+
+    def _shard_rows(self, tables, sql_ext, params=(), order_ext="", per_shard_limit=None):
+        """跨分片执行统一 SELECT，返回合并后的 sqlite3.Row 列表（调用方后续排序）。
+
+        tables: _run_msg_query 传入的 [(conn, table), ...]。
+        分片间 local_id 会重复（每片从 1 起），因此跨分片排序键必须带上
+        local_id，不能用跨分片 LIMIT/OFFSET 直查。
+
+        每行额外带 ``shard`` 列（分片库文件名）：合并视图里 ``(local_id, shard)``
+        才是唯一键，调用方要回读某一行时必须带上它，否则会取到别的分片的同号行。
+
+        order_ext: 分片内 ORDER BY 子句（如 _MSG_ORDER_DESC）。
+        per_shard_limit: 分片内 LIMIT，必须与 order_ext 使用同一排序键。
+            全局前 K 行必然各自落在所属分片按同一排序键的前 K 行内（连同
+            分片顺序，合并后构成 (sort_seq, 分片序, local_id) 全序），
+            因此"先各片取前 K 再合并排序分页"与"全量取回再排序分页"逐条
+            等价，但超大群不必再把每个分片的全部行取回 Python 排序。
+            为 None 时保持原全量行为。
+        """
+        limit_sql = ""
+        if per_shard_limit is not None:
+            limit_sql = " LIMIT %d" % max(0, int(per_shard_limit))
+        rows = []
+        for conn, table in tables:
+            shard = self._shard_label(conn)
+            try:
+                rows += conn.execute(
+                    "SELECT local_id, local_type, real_sender_id, create_time, "
+                    "message_content, source, packed_info_data, compress_content, "
+                    "server_id, sort_seq, ? AS shard FROM %s %s %s%s" % (
+                        table, sql_ext, order_ext, limit_sql),
+                    (shard,) + tuple(params),
+                ).fetchall()
+            except sqlite3.DatabaseError as exc:
+                # 库损坏不能当成「这个分片没有消息」：交给 _run_msg_query
+                # 清缓存重建重试，否则读出来的会话永远少一截还看着像正常。
+                if _is_malformed(exc):
+                    raise
+                self._warn_once(("shard", shard, type(exc).__name__),
+                                "分片 %s 读取失败(%s: %s)，本轮结果不含该分片",
+                                shard or "?", type(exc).__name__, str(exc)[:120])
+                continue
+        return rows
+
+    def get_messages(self, user: str, limit: int = 20, offset: int = 0) -> List[dict]:
+        """读取指定会话（微信号/群号）的最近消息（跨分片合并后按 sort_seq 降序）
+
+        优化：分片内先 ORDER BY+LIMIT(limit+offset) 再合并排序取窗口。
+        全局第 offset..offset+limit 行必然落在各分片同一排序键的前
+        limit+offset 行内，因此结果与"全量取回再排序分页"逐条一致，
+        但超大群（数万条）不再把每个分片的全部行取回 Python。
+        合并排序保持与旧实现相同的稳定语义：重复 sort_seq 时先分片顺序、
+        再分片内 local_id 升序（已在分片内 ORDER BY 固定）。
+
+        非法入参一律**空返回**而不是回落到某个窗口：``limit<=0`` 直接空；
+        ``offset<0`` 也空——负数切片的 ``rows[-1:20]`` 在行数不足时会吐出最后
+        一条，等于把「参数错了」伪装成「查到了数据」。
+
+        每行带 ``shard``（命中的分片库文件名）：``local_id`` 只在分片内唯一，
+        跨分片会重复。要按 ``(user, local_id)`` 回读某一条（媒体下载等），把
+        ``shard`` 一起传回 :meth:`get_message_row` 才能锁定这一行。
+        """
+        limit = int(limit)
+        offset = int(offset)
+        if limit <= 0 or offset < 0:
+            return []
+        cap = limit + offset
+        got = self._run_msg_query(
+            user,
+            lambda tables: (
+                self._shard_rows(
+                    tables, "", order_ext=self._MSG_ORDER_DESC, per_shard_limit=cap),
+                self._shard_maps(tables),
+            ),
+        )
+        if not got:
+            return []
+        rows, maps = got
+        if not rows:
+            return []
+        rows.sort(key=lambda r: r["sort_seq"], reverse=True)
+        return [self._msg_row_to_dict(r, maps) for r in rows[offset:offset + limit]]
+
+    def get_voice_rows(self, user: str, limit: int = 500,
+                       local_id: Optional[int] = None) -> List[dict]:
+        """语音消息（``local_type=34``）的原始行，额外带 ``download_status``。
+
+        ``download_status`` 没放进 :meth:`_shard_rows` 的通用 SELECT：那是每条消息
+        都要走的热点，多取一列不划算；而「这条语音的音频在不在本地」只有语音消息需要
+        回答，所以单独开一条窄查询。
+
+        老版本的消息表可能没有 ``download_status`` 这一列——这时**不能**让它像通用
+        路径那样 ``except: continue`` 把整个分片的行丢掉（那会把「读不到」伪装成
+        「没有语音」），而是退化成人无此列的 None。
+
+        Args:
+            user: 会话 username（wxid 或 ``xxx@chatroom``）。
+            limit: 最多返回多少条。
+            local_id: 只取这一条时传入（跨分片同号会返回多条，由调用方挑）。
+
+        Returns:
+            按 ``sort_seq`` 降序的 dict 列表：``local_id`` / ``server_id`` /
+            ``real_sender_id`` / ``create_time`` / ``sort_seq`` /
+            ``download_status`` / ``shard``。
+        """
+        want = max(1, int(limit))
+        sql_ext = "WHERE local_type=34" + (" AND local_id=?" if local_id else "")
+        params = (local_id,) if local_id else ()
+        cols = ("local_id, server_id, real_sender_id, create_time, sort_seq")
+
+        def _run(tables):
+            out = []
+            for conn, table in tables:
+                shard = self._shard_label(conn)
+                order = " ORDER BY sort_seq DESC, local_id DESC LIMIT %d" % want
+                try:
+                    out += [dict(r, shard=shard) for r in conn.execute(
+                        "SELECT %s, download_status FROM %s %s%s"
+                        % (cols, table, sql_ext, order), params)]
+                except sqlite3.Error as exc:
+                    if _is_malformed(exc):
+                        raise
+                    # 这张表没有 download_status（版本差异）→ 退化取值，
+                    # 绝不能像通用路径那样 continue 把整个分片的行丢掉
+                    try:
+                        out += [dict(r, download_status=None, shard=shard)
+                                for r in conn.execute(
+                            "SELECT %s FROM %s %s%s"
+                            % (cols, table, sql_ext, order), params)]
+                    except sqlite3.Error as exc2:
+                        if _is_malformed(exc2):
+                            raise
+                        self._warn_once(("voice", shard, type(exc2).__name__),
+                                        "分片 %s 语音行读取失败(%s: %s)，本轮结果不含该分片",
+                                        shard or "?", type(exc2).__name__, str(exc2)[:120])
+                        continue
+            return out
+
+        rows = self._run_msg_query(user, _run)
+        if not rows:
+            return []
+        rows.sort(key=lambda r: r.get("sort_seq") or 0, reverse=True)
+        return rows[:want]
+
+    def get_image_rows(self, user: str, limit: int = 300) -> List[dict]:
+        """图片消息（``local_type=3``）的原始行，带 ``packed_info``。
+
+        图片的本地文件名取自消息内容里的 32 位 hex，而 :meth:`get_messages`
+        的通用行里没有 ``packed_info_data`` 这一列——用它去取 md5 会每行都拿不到，
+        于是「有没有原图」被误报成「不是图片」。和 :meth:`get_voice_rows` 一样开一条
+        窄查询，字段名对齐 :meth:`get_message_row` 的口径（``packed_info`` / ``content``）。
+        """
+        want = max(1, int(limit))
+        cols = ("local_id, server_id, real_sender_id, create_time, sort_seq, "
+                "packed_info_data, message_content")
+
+        def _run(tables):
+            out = []
+            for conn, table in tables:
+                shard = self._shard_label(conn)
+                try:
+                    out += [dict(r, shard=shard) for r in conn.execute(
+                        "SELECT %s FROM %s WHERE local_type=3 "
+                        "ORDER BY sort_seq DESC, local_id DESC LIMIT %d"
+                        % (cols, table, want))]
+                except sqlite3.Error as exc:
+                    if _is_malformed(exc):
+                        raise
+                    self._warn_once(("image", shard, type(exc).__name__),
+                                    "分片 %s 图片行读取失败(%s: %s)，本轮结果不含该分片",
+                                    shard or "?", type(exc).__name__, str(exc)[:120])
+                    continue
+            return out
+
+        rows = self._run_msg_query(user, _run)
+        if not rows:
+            return []
+        rows.sort(key=lambda r: r.get("sort_seq") or 0, reverse=True)
+        out = []
+        for r in rows[:want]:
+            out.append({"local_id": r.get("local_id"),
+                        "server_id": r.get("server_id"),
+                        "sender_id": r.get("real_sender_id"),
+                        "create_time": r.get("create_time"),
+                        "sort_seq": r.get("sort_seq"),
+                        "packed_info": r.get("packed_info_data"),
+                        "content": r.get("message_content"),
+                        "shard": r.get("shard", ""),
+                        "type": "图片"})
+        return out
+
+    def get_message_rows_for_media(self, user: str, local_id: int) -> List[dict]:
+        """返回跨分片 local_id 命中的全部消息行（供媒体分发判定类型）。
+
+        跨分片下 local_id 非全局唯一，同一 local_id 可能对应不同类型消息
+        （图片/语音/文本等）。媒体下载分发时需要拿到所有候选再按类型路由。
+
+        每行带 ``shard``：同号同类型也可能分属不同分片（正文不同），路由到
+        具体某个下载方法时把它原样传回，才能拿到这一行而不是别的分片。
+        """
+        row = self._run_msg_query(
+            user,
+            lambda tables: self._shard_rows(
+                tables, "WHERE local_id=?",
+                (local_id,),
+            ),
+        )
+        if not row:
+            return []
+        row.sort(key=lambda r: r["sort_seq"], reverse=True)
+        out = []
+        for r in row:
+            out.append({
+                "local_id": r["local_id"],
+                "local_type": r["local_type"],
+                "server_id": r["server_id"],
+                "sender_id": r["real_sender_id"],
+                "create_time": r["create_time"],
+                "content": r["message_content"],
+                "source": r["source"],
+                "packed_info": r["packed_info_data"],
+                "compress_content": r["compress_content"],
+                "sort_seq": r["sort_seq"],
+                "shard": _row_get(r, "shard", ""),
+            })
+        return out
+
+    def get_message_row(self, user: str, local_id: int,
+                        local_type: Optional[int] = None,
+                        shard: Optional[str] = None) -> Optional[dict]:
+        """按 local_id 读取一条消息的完整原始字段（媒体下载用，含 server_id/packed_info）。
+
+        Args:
+            local_id: 消息行号。注意跨分片下 local_id 非全局唯一，
+                同一 local_id 可在不同分片对应不同类型消息。
+            local_type: 可选，调用方已知消息类型时传入以精确过滤，
+                避免命中其它分片中的同号异类型消息。**类型相同照样会撞**：
+                实测本账号有 10477 组「同号 + 同类型 + 不同正文」，只靠类型
+                筛不掉，需要唯一就用 ``shard``。
+            shard: 可选，分片库文件名——把消息行里的 ``shard`` 字段原样传回
+                即可锁定那一个分片，结果必然唯一。传错名字不会瞎猜：直接返回
+                ``None`` 并告警。
+
+        未指定 ``shard`` 且命中多片时，取 ``sort_seq`` 最新的一条并告警
+        （保持旧行为），因为调用方此刻没法知道自己拿到的是哪一条同号行。
+        """
+        sql = "WHERE local_id=?"
+        params = [local_id]
+        if local_type is not None:
+            sql += " AND local_type=?"
+            params.append(local_type)
+
+        def _build(tables):
+            if shard:
+                tables = [t for t in tables if self._shard_label(t[0]) == shard]
+            return (self._shard_rows(tables, sql, tuple(params)),
+                    self._shard_maps(tables))
+
+        got = self._run_msg_query(user, _build)
+        row = got[0] if got else None
+        maps = got[1] if got else {}
+        if not row:
+            if shard:
+                self._warn_once(("shard-miss", user, local_id, shard),
+                                "按 shard=%s 定位 local_id=%s 没命中（会话 %s）："
+                                "分片名写错或该分片没这条消息", shard, local_id, user)
+            return None
+        if len(row) > 1:
+            self._warn_once(("amb", user, local_id),
+                            "local_id=%s（会话 %s）在 %d 个分片都有：%s —— 取 sort_seq "
+                            "最新的一条，可能不是你要的那条；要精确请带 shard=",
+                            local_id, user, len(row),
+                            ",".join(sorted({_row_get(r, "shard", "") or "?" for r in row})))
+        # 跨分片下 local_id 可能重复（各分片独立计数），取 sort_seq 最新者
+        row.sort(key=lambda r: r["sort_seq"], reverse=True)
+        row = row[0]
+        sender_id = row["real_sender_id"]
+        sender_username = ""
+        if sender_id:
+            # 同 :meth:`_msg_row_to_dict`：按本行所在分片的 Name2Id 解析
+            try:
+                sender_username = ((maps or {}).get(
+                    _row_get(row, "shard", "") or {}) or {}).get(int(sender_id), "") or ""
+            except (TypeError, ValueError):
+                sender_username = ""
+        return {
+            "local_id": row["local_id"],
+            "local_type": row["local_type"],
+            "server_id": row["server_id"],
+            "sender_id": sender_id,
+            "sender_username": sender_username,
+            "create_time": row["create_time"],
+            "content": row["message_content"],
+            "source": row["source"],
+            "packed_info": row["packed_info_data"],
+            "compress_content": row["compress_content"],
+            "sort_seq": row["sort_seq"],
+            "shard": _row_get(row, "shard", ""),
+        }
+
+    def _find_media_rows(self, user: str, types: set) -> List[int]:
+        """按 local_type 直接查该会话全部媒体 local_id（降序），不受总消息分页限制。
+
+        供批量下载场景使用（如一次性拉取某群全部图片）。
+        """
+        placeholders = ",".join("?" * len(types))
+        rows = self._run_msg_query(
+            user,
+            lambda tables: self._shard_rows(
+                tables,
+                "WHERE local_type IN (%s)" % placeholders,
+                tuple(sorted(types)),
+            ),
+        )
+        if not rows:
+            return []
+        rows.sort(key=lambda r: r["sort_seq"], reverse=True)
+        return [r["local_id"] for r in rows]
+
+    def get_new_messages(self, user: str, since_seq: int = 0, limit: int = 200) -> List[dict]:
+        """返回 sort_seq > since_seq 的新消息（升序），供轮询监听使用
+
+        优化：分片内先 ORDER BY+LIMIT 再合并取前 limit 条。排序键同
+        get_messages：分片内 local_id 升序固定 tie-break，跨分片保持
+        稳定合并（先分片顺序），与旧实现逐条一致。
+        """
+        want = max(0, int(limit))
+        got = self._run_msg_query(
+            user,
+            lambda tables: (
+                self._shard_rows(
+                    tables, "WHERE sort_seq > ?",
+                    (since_seq,),
+                    order_ext=self._MSG_ORDER_ASC, per_shard_limit=want),
+                self._shard_maps(tables),
+            ),
+        )
+        if not got:
+            return []
+        rows, maps = got
+        if not rows:
+            return []
+        rows.sort(key=lambda r: r["sort_seq"])
+        return [self._msg_row_to_dict(r, maps) for r in rows[:want]]
+
+    def _msg_row_to_dict(self, r, maps: Optional[Dict[str, Dict[int, str]]] = None) -> dict:
+        content = r["message_content"]
+        mtype = WeChatDB._msg_type_name(r["local_type"])
+        if isinstance(content, bytes):
+            content = WeChatDB._friendly_content(content, mtype)
+        # 如果内容是占位符且有 compress_content，尝试使用 compress_content
+        placeholder = "[%s]" % mtype
+        if isinstance(content, str) and not content.strip():
+            content = placeholder   # 空正文（表情/贴纸类）给类型占位，避免看起来“丢消息”
+        if content == placeholder:
+            try:
+                cc = r["compress_content"]
+            except (KeyError, IndexError):
+                cc = None
+            if isinstance(cc, bytes) and cc:
+                cc_text = WeChatDB._friendly_content(cc, mtype)
+                if cc_text != placeholder:
+                    content = cc_text
+        sender_id = r["real_sender_id"]
+        sender_username = ""
+        if sender_id:
+            # 按**本行所在分片**的 Name2Id 解析（issue #34：以前拿
+            # message_resource.SenderName2Id 解析，同一个数字解析成无关的人）。
+            # 解析不到就留空，不拿别的库的编号猜。
+            try:
+                mp = (maps or {}).get(_row_get(r, "shard", "") or {}) or {}
+                sender_username = mp.get(int(sender_id), "") or ""
+            except (TypeError, ValueError):
+                sender_username = ""
+        return {
+            "local_id": r["local_id"],
+            "type": mtype,
+            "sender_id": sender_id,
+            "sender_username": sender_username,
+            "create_time": r["create_time"],
+            "content": content,
+            "sort_seq": r["sort_seq"],
+            "shard": _row_get(r, "shard", ""),
+        }
+
+    @staticmethod
+    def _friendly_content(content: bytes, mtype) -> str:
+        try:
+            text = content.decode("utf-8")
+        except UnicodeDecodeError:
+            if content[:4] == b"\x28\xb5\x2f\xfd":
+                # zstd 压缩的文本消息
+                zstd = _get_zstd_module()
+                if zstd is not None:
+                    text = _zstd_decompress(zstd, content)
+                    if text:
+                        return text
+                # 回退到 blob 提取（无法 zstd 解压时尝试直接剥离容器头）
+                text = _extract_text_from_blob(content)
+                if text:
+                    return text
+            if mtype == "图片":
+                md5 = re.search(rb'md5="([0-9a-fA-F]{32})"', content)
+                if md5:
+                    return "[图片 md5=%s]" % md5.group(1).decode()
+            return "[%s]" % mtype
+        # 去除二进制填充
+        cleaned = text.strip()
+        if cleaned:
+            # 尝试提取文本（处理容器头+明文+填充的格式）
+            if b"\x01\x00" in content:
+                parts = cleaned.split("\x01")
+                cleaned = parts[0].strip()
+            return cleaned if cleaned else "[%s]" % mtype
+        return "[%s]" % mtype
+
+    def get_sessions(self, limit: int = 100) -> List[dict]:
+        """会话列表（来自 session.db）"""
+        sessions = []
+        for rel, path, _ in self._db_files:
+            if os.path.basename(path) != "session.db":
+                continue
+            conn = self._open(rel)
+            try:
+                rows = conn.execute(
+                    "SELECT username, unread_count, summary, last_timestamp, "
+                    "last_msg_sender, last_sender_display_name "
+                    "FROM SessionTable WHERE is_hidden=0 "
+                    "ORDER BY sort_timestamp DESC LIMIT ?",
+                    (limit,),
+                ).fetchall()
+            finally:
+                conn.close()
+            for r in rows:
+                sessions.append({
+                    "username": r["username"],
+                    "unread": r["unread_count"],
+                    "summary": r["summary"],
+                    "last_time": r["last_timestamp"],
+                    "last_sender": r["last_sender_display_name"] or r["last_msg_sender"],
+                })
+            break
+        return sessions
+
+    def search_contact(self, keyword: str) -> List[dict]:
+        """按昵称/备注/微信号搜索联系人"""
+        results = []
+        for rel, path, _ in self._db_files:
+            if os.path.basename(path) != "contact.db":
+                continue
+            conn = self._open(rel)
+            try:
+                rows = conn.execute(
+                    "SELECT username, nick_name, remark FROM contact "
+                    "WHERE nick_name LIKE ? OR remark LIKE ? OR username LIKE ? "
+                    "OR alias LIKE ? LIMIT 50",
+                    ("%" + keyword + "%",) * 4,
+                ).fetchall()
+            finally:
+                conn.close()
+            for r in rows:
+                results.append({
+                    "username": r["username"],
+                    "nick_name": r["nick_name"],
+                    "remark": r["remark"],
+                })
+            break
+        return results
+
+    def get_nickname(self, user: str) -> str:
+        """通过微信号查昵称（用于显示）"""
+        for rel, path, _ in self._db_files:
+            if os.path.basename(path) != "contact.db":
+                continue
+            conn = self._open(rel)
+            try:
+                row = conn.execute(
+                    "SELECT nick_name, remark FROM contact WHERE username=? LIMIT 1",
+                    (user,),
+                ).fetchone()
+            finally:
+                conn.close()
+            if row:
+                return row["remark"] or row["nick_name"] or user
+            break
+        return user
+
+    def username_by_nickname(self, nickname: str) -> Optional[str]:
+        """通过昵称/备注反查微信号（contact.db）。
+
+        返回第一个 remark 或 nick_name 与给定昵称**精确相等**的 contact
+        username；找不到返回 None。
+        """
+        nickname = (nickname or '').strip()
+        if not nickname:
+            return None
+        conn = self._contact_conn()
+        if not conn:
+            return None
+        try:
+            rows = conn.execute(
+                "SELECT username, nick_name, remark FROM contact "
+                "WHERE remark=? OR nick_name=?",
+                (nickname, nickname),
+            ).fetchall()
+        finally:
+            conn.close()
+        for row in rows:
+            disp = row["remark"] or row["nick_name"]
+            if disp == nickname:
+                return row["username"]
+        return None
+
+    # ------------------------------------------------------------------
+    # 群成员（contact.db 读取，无需 UI）
+    # ------------------------------------------------------------------
+    def _contact_conn(self) -> Optional[sqlite3.Connection]:
+        """打开 contact.db（调用方负责 close）；失败返回 None。"""
+        for rel, path, _ in self._db_files:
+            if os.path.basename(path) != "contact.db":
+                continue
+            try:
+                return self._open(rel)
+            except Exception:
+                return None
+        return None
+
+    # ------------------------------------------------------------------
+    # 联系人标签（contact.db 的 contact_label 表，无需 UI）
+    # ------------------------------------------------------------------
+    def list_labels(self) -> List[dict]:
+        """读「标签」定义：[{label_id, name, sort_order}]，按 sort_order 排。
+
+        表名/列名带下划线后缀（``contact_label(label_id_, label_name_,
+        sort_order_)``，本机 4.1.15.13 实测 2 行）。整表读不出来时返回 ``[]``
+        而不是抛——标签列表是校验用的旁路，不该让主流程挂在这上面。
+        """
+        conn = self._contact_conn()
+        if conn is None:
+            return []
+        try:
+            rows = conn.execute(
+                "SELECT label_id_, label_name_, sort_order_ FROM contact_label "
+                "ORDER BY sort_order_, label_id_").fetchall()
+        except Exception:
+            # 老版本没这张表 / 微信正在 checkpoint：退化，不抛
+            return []
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        out = []
+        for r in rows:
+            try:
+                out.append({
+                    "label_id": r["label_id_"],
+                    "name": r["label_name_"] or "",
+                    "sort_order": r["sort_order_"],
+                })
+            except Exception:
+                continue
+        return out
+
+    def label_names(self) -> List[str]:
+        """所有标签名（给「这个标签存不存在」这类判断用）。"""
+        return [x["name"] for x in self.list_labels() if x.get("name")]
+
+    def get_groups(self) -> List[dict]:
+        """列出所有群聊。
+
+        Returns:
+            List[dict]，每条：username(群 wxid), name(群名), owner(群主 wxid),
+            member_count(成员数), members(List[dict] 成员详情，见 get_group_members)。
+        """
+        conn = self._contact_conn()
+        if not conn:
+            return []
+        try:
+            rooms = conn.execute(
+                "SELECT id, username, owner FROM chat_room"
+            ).fetchall()
+            room_by_id = {r["id"]: r for r in rooms}
+            if not room_by_id:
+                return []
+            placeholders = ",".join("?" * len(room_by_id))
+            members = conn.execute(
+                "SELECT room_id, member_id FROM chatroom_member "
+                "WHERE room_id IN (%s)" % placeholders,
+                tuple(room_by_id.keys()),
+            ).fetchall()
+            member_ids = sorted({m["member_id"] for m in members})
+            contact = {}
+            if member_ids:
+                mp = ",".join("?" * len(member_ids))
+                rows = conn.execute(
+                    "SELECT id, username, nick_name, remark FROM contact "
+                    "WHERE id IN (%s)" % mp, tuple(member_ids),
+                ).fetchall()
+                contact = {r["id"]: r for r in rows}
+            # 群 wxid -> 群名（contact 表里 @chatroom 行的 nick_name）
+            room_names = {}
+            for r in conn.execute(
+                    "SELECT username, nick_name FROM contact "
+                    "WHERE username LIKE '%@chatroom'").fetchall():
+                room_names[r["username"]] = r["nick_name"] or r["username"]
+        finally:
+            conn.close()
+        groups = []
+        for rid, room in room_by_id.items():
+            ms = []
+            for m in members:
+                if m["room_id"] != rid:
+                    continue
+                c = contact.get(m["member_id"])
+                if c is None:
+                    continue
+                ms.append({
+                    "username": c["username"],
+                    "nick_name": c["nick_name"],
+                    "remark": c["remark"],
+                    "is_owner": c["username"] == room["owner"],
+                })
+            groups.append({
+                "username": room["username"],
+                "name": room_names.get(room["username"], room["username"]),
+                "owner": room["owner"],
+                "member_count": len(ms),
+                "members": ms,
+            })
+        return groups
+
+    def group_name_to_id(self, name: str) -> Optional[str]:
+        """按群名查找群 wxid（形如 ``xxx@chatroom``）；找不到返回 None。
+
+        精确匹配优先，其次做「子串包含」的宽松匹配（可能返回多个，取第一个）。
+        """
+        conn = self._contact_conn()
+        if not conn:
+            return None
+        try:
+            rows = conn.execute(
+                "SELECT username, nick_name FROM contact "
+                "WHERE username LIKE '%@chatroom'").fetchall()
+        finally:
+            conn.close()
+        exact = None
+        fuzzy = []
+        for r in rows:
+            nm = r["nick_name"] or r["username"]
+            if nm == name:
+                exact = r["username"]
+            elif name and name in nm:
+                fuzzy.append(r["username"])
+            elif nm == r["username"] and name in nm:  # 无群名时按 username 兜底
+                fuzzy.append(r["username"])
+        return exact or (fuzzy[0] if fuzzy else None)
+
+    def group_id_to_name(self, chatroom_wxid: str) -> Optional[str]:
+        """按群 wxid 查群名；找不到返回 None。"""
+        conn = self._contact_conn()
+        if not conn:
+            return None
+        try:
+            r = conn.execute(
+                "SELECT nick_name, username FROM contact "
+                "WHERE username=? LIMIT 1", (chatroom_wxid,),
+            ).fetchone()
+        finally:
+            conn.close()
+        if not r:
+            return None
+        return r["nick_name"] or r["username"]
+
+    def get_group_members(self, chatroom_wxid: str) -> List[dict]:
+        """枚举指定群聊的成员列表（静态读库，可轮询）。
+
+        Args:
+            chatroom_wxid: 群 wxid（形如 ``xxx@chatroom``）。
+
+        Returns:
+            List[dict]，每条：username(wxid/微信号), nick_name, remark,
+            is_owner(是否群主)。按 username 排序。
+        """
+        conn = self._contact_conn()
+        if not conn:
+            return []
+        try:
+            room = conn.execute(
+                "SELECT id, owner FROM chat_room WHERE username=? LIMIT 1",
+                (chatroom_wxid,),
+            ).fetchone()
+            if not room:
+                return []
+            rows = conn.execute(
+                "SELECT m.member_id, c.username, c.nick_name, c.remark "
+                "FROM chatroom_member m "
+                "LEFT JOIN contact c ON c.id = m.member_id "
+                "WHERE m.room_id=? AND c.username IS NOT NULL",
+                (room["id"],),
+            ).fetchall()
+        finally:
+            conn.close()
+        members = []
+        for r in rows:
+            members.append({
+                "username": r["username"],
+                "nick_name": r["nick_name"],
+                "remark": r["remark"],
+                "is_owner": r["username"] == room["owner"],
+            })
+        members.sort(key=lambda x: x["username"])
+        return members
+
+    def get_group_member_watcher(self, chatroom_wxid: str) -> "GroupMemberWatcher":
+        """为指定群创建成员变动监测器（见 GroupMemberWatcher）。"""
+        return GroupMemberWatcher(self, chatroom_wxid)
+
+    # ------------------------------------------------------------------
+    # 历史消息全量导出
+    # ------------------------------------------------------------------
+    def _build_md5_index(self) -> Dict[str, str]:
+        """会话 md5 → 用户名 反查表（来自 contact/session）"""
+        idx: Dict[str, str] = {}
+        for rel, path, _ in self._db_files:
+            base = os.path.basename(path)
+            if base not in ("contact.db", "session.db"):
+                continue
+            conn = self._open(rel)
+            try:
+                # 有意全表枚举（需全部 username 建 md5 反查表）：走游标逐行
+                # 迭代、不 fetchall，内存占用与表大小无关，故不加 LIMIT。
+                if base == "contact.db":
+                    rows = conn.execute("SELECT username FROM contact")
+                else:
+                    rows = conn.execute("SELECT username FROM SessionTable")
+                for (u,) in rows:
+                    if u:
+                        idx.setdefault(_md5_hex(u.encode()), u)
+            finally:
+                conn.close()
+        return idx
+
+    def _nickname_index(self) -> Dict[str, str]:
+        idx = {}
+        for rel, path, _ in self._db_files:
+            if os.path.basename(path) != "contact.db":
+                continue
+            conn = self._open(rel)
+            try:
+                for u, n, r in conn.execute(
+                    "SELECT username, nick_name, remark FROM contact"
+                ):
+                    idx[u] = r or n or u
+            finally:
+                conn.close()
+            break
+        return idx
+
+    def nickname_map(self, refresh: bool = False) -> Dict[str, str]:
+        """``username(wxid) -> 备注或昵称`` 的映射，带进程内缓存。
+
+        监听回调里每条消息都要把发送者 wxid 换成能看的名字，逐条查 contact.db 太贵；
+        微信运行期间昵称基本不变，所以进程内缓存一次。
+        需要拿最新值时传 ``refresh=True``。
+        """
+        if refresh or getattr(self, '_nick_cache', None) is None:
+            self._nick_cache = self._nickname_index()
+        return self._nick_cache
+
+    def _resolve_sender(self, sender_id, maps, shard, nicks, self_nick,
+                        own_wxid: str = "") -> str:
+        """``real_sender_id`` → 可显示名字，按**消息所在分片**的 Name2Id 解析。
+
+        issue #34 的两处硬假设都错过：编号 2 不一定是自己（本机各分片里自己账号的
+        rowid 实测是 2/4/1），而全局 ``SenderName2Id`` 里同一个数字是另一个人。
+        解析不到返回空串（未知），不把编号本身当名字吐出去。
+        """
+        if not sender_id:
+            return ""
+        try:
+            sid = int(sender_id)
+        except (TypeError, ValueError):
+            return ""
+        who = ((maps or {}).get(shard) or {}).get(sid, "") or ""
+        if not who:
+            return ""
+        if own_wxid and who == own_wxid:
+            return self_nick
+        return nicks.get(who, who)
+
+    @staticmethod
+    def _msg_type_name(t: int):
+        """消息类型显示名；兼容微信 4.x 的资源包装类型（低字节为真实类型）"""
+        if t in MSG_TYPE_NAMES:
+            return MSG_TYPE_NAMES[t]
+        if isinstance(t, int) and t > 0xFFFF:
+            # 4.x 复合码：低 32 位才是真实类型
+            # （例：57<<32|49 → 49；17<<32|11000 → 11000 动画表情）
+            base = t & 0xFFFFFFFF
+            if base in MSG_TYPE_NAMES:
+                return MSG_TYPE_NAMES[base]
+            if (base & 0xFF) in MSG_TYPE_NAMES:
+                return MSG_TYPE_NAMES[base & 0xFF]
+        return t
+
+    def _export_row(self, r, mtype_names) -> dict:
+        content = r["message_content"]
+        mtype = mtype_names.get(r["local_type"], self._msg_type_name(r["local_type"]))
+        md5 = None
+        if isinstance(content, bytes):
+            content = self._friendly_content(content, mtype)
+        pi = r["packed_info_data"]
+        if pi:
+            try:
+                md5 = re.search(rb"([0-9a-fA-F]{32})", pi)
+                md5 = md5.group(1).decode().lower() if md5 else None
+            except TypeError:
+                md5 = None
+        return {
+            "local_id": r["local_id"],
+            "type": mtype,
+            "type_code": r["local_type"],
+            "sender_id": r["real_sender_id"],
+            "create_time": r["create_time"],
+            "content": content,
+            "server_id": r["server_id"],
+            "md5": md5,
+            "sort_seq": r["sort_seq"],
+        }
+
+    def list_message_chats(self) -> List[dict]:
+        """所有含消息的会话（md5、用户名、昵称、消息数）"""
+        tables: Dict[str, int] = {}
+        for rel in self._message_dbs():
+            conn = self._open(rel)
+            try:
+                rows = conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'Msg_%'"
+                )
+                for t in rows:
+                    key = t[0][4:]
+                    try:
+                        cnt = conn.execute(
+                            "SELECT count(*) FROM %s" % t[0]
+                        ).fetchone()[0]
+                        tables[key] = tables.get(key, 0) + cnt
+                    except sqlite3.DatabaseError:
+                        continue
+            finally:
+                conn.close()
+        idx = self._build_md5_index()
+        nicks = self._nickname_index()
+        out = []
+        for md5, cnt in tables.items():
+            user = idx.get(md5, md5)
+            out.append({
+                "md5": md5,
+                "username": user,
+                "name": nicks.get(user, user),
+                "message_count": cnt,
+            })
+        out.sort(key=lambda x: -x["message_count"])
+        return out
+
+    def export_history(
+        self,
+        out_path: str,
+        fmt: str = "json",
+        users: Optional[List[str]] = None,
+        limit_per_chat: Optional[int] = None,
+        progress: Optional[callable] = None,
+    ) -> dict:
+        """导出历史消息到 JSON 或 SQLite。
+
+        :param out_path: 输出文件路径（json 或 .db/.sqlite）
+        :param fmt: "json" 或 "sqlite"
+        :param users: 指定会话（用户名或 md5），None 导出全部
+        :param limit_per_chat: 每会话最多导出条数（按 sort_seq 升序保留最新）
+        :param progress: 回调 (chat_index, total_chats, chat_name)
+        :return: {"chats": n, "messages": total, "out": out_path}
+        """
+        if fmt not in ("json", "sqlite"):
+            raise ValueError("fmt 仅支持 json/sqlite")
+        idx = self._build_md5_index()
+        nicks = self._nickname_index()
+        self_info = self.get_self_info()
+        target_md5s = None
+        if users:
+            target_md5s = {
+                u if re.fullmatch(r"[0-9a-f]{32}", u) else _md5_hex(u.encode())
+                for u in users
+            }
+
+        # md5 -> [(conn, table), ...] 按消息库聚合（会话跨分库分片）
+        buckets: Dict[str, list] = {}
+        all_conns: List[sqlite3.Connection] = []
+        for rel in self._message_dbs():
+            conn = self._open(rel)
+            all_conns.append(conn)
+            tabs = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'Msg_%'"
+            ).fetchall()
+            for (t,) in tabs:
+                md5 = t[4:]
+                if target_md5s is not None and md5 not in target_md5s:
+                    continue
+                buckets.setdefault(md5, []).append((conn, t))
+        try:
+            total = 0
+            chat_info = []
+            order = sorted(buckets.keys())
+            for i, md5 in enumerate(order):
+                user = idx.get(md5, md5)
+                name = nicks.get(user, user)
+                if progress:
+                    progress(i, len(order), name)
+                rows = []
+                maps = {}
+                for conn, table in buckets[md5]:
+                    try:
+                        lab = self._shard_label(conn)
+                        maps.setdefault(lab, self._name2id_map(conn))
+                        rows += conn.execute(
+                            "SELECT local_id, local_type, server_id, real_sender_id, "
+                            "create_time, message_content, packed_info_data, sort_seq, "
+                            "? AS shard FROM %s" % table, (lab,)
+                        ).fetchall()
+                    except sqlite3.DatabaseError:
+                        continue
+                if not rows:
+                    continue
+                rows.sort(key=lambda r: (r["sort_seq"], r["local_id"]))
+                if limit_per_chat:
+                    rows = rows[-limit_per_chat:]
+                own_wxid = self.wxid or ""
+                msgs = [
+                    dict(
+                        self._export_row(r, MSG_TYPE_NAMES),
+                        sender_name=self._resolve_sender(
+                            r["real_sender_id"], maps, _row_get(r, "shard", ""),
+                            nicks, self_info.get("nick_name", "我"), own_wxid,
+                        ),
+                    )
+                    for r in rows
+                ]
+                total += len(msgs)
+                chat_info.append({
+                    "md5": md5,
+                    "username": user,
+                    "name": name,
+                    "messages": msgs,
+                })
+            if fmt == "json":
+                payload = {
+                    "wxid": self.wxid,
+                    "nick_name": self_info.get("nick_name", ""),
+                    "exported_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "chats": [],
+                    "messages": [],
+                }
+                for c in chat_info:
+                    payload["chats"].append({
+                        "md5": c["md5"],
+                        "username": c["username"],
+                        "name": c["name"],
+                        "message_count": len(c["messages"]),
+                    })
+                    for m in c["messages"]:
+                        payload["messages"].append(
+                            dict(m, chat=c["username"])
+                        )
+                with open(out_path, "w", encoding="utf-8") as f:
+                    json.dump(payload, f, ensure_ascii=False, indent=1)
+            else:
+                conn = sqlite3.connect(out_path)
+                try:
+                    conn.execute(
+                        "CREATE TABLE chats(md5 TEXT PRIMARY KEY, username TEXT, "
+                        "name TEXT, message_count INT)"
+                    )
+                    conn.execute(
+                        "CREATE TABLE messages(username TEXT, local_id INT, "
+                        "type TEXT, type_code INT, sender_id TEXT, sender_name TEXT, "
+                        "create_time INT, content TEXT, server_id INT, md5 TEXT, "
+                        "sort_seq INT)"
+                    )
+                    for c in chat_info:
+                        conn.execute(
+                            "INSERT INTO chats VALUES(?,?,?,?)",
+                            (c["md5"], c["username"], c["name"], len(c["messages"])),
+                        )
+                        conn.executemany(
+                            "INSERT INTO messages VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                            [(
+                                c["username"], m["local_id"], m["type"], m["type_code"],
+                                str(m["sender_id"]), m["sender_name"], m["create_time"],
+                                m["content"], m["server_id"], m["md5"], m["sort_seq"],
+                            ) for m in c["messages"]],
+                        )
+                    conn.commit()
+                finally:
+                    conn.close()
+            return {"chats": len(chat_info), "messages": total, "out": out_path}
+        finally:
+            for conn in all_conns:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+
+def list_accounts(db_dir: Optional[str] = None) -> List[dict]:
+    """扫描数据目录下的所有微信账号目录。
+
+    返回: [{"account": "wxid_xxx_abcd", "wxid": "wxid_xxx",
+            "path": ..., "last_activity": mtime, "self_nick": 昵称或空}]
+    """
+    db_dir = db_dir or auto_detect_db_dir()
+    if not db_dir:
+        return []
+    out = []
+    for d in _find_account_dirs(db_dir):
+        recent = max(
+            (
+                os.path.getmtime(os.path.join(root, f))
+                for root, _, files in os.walk(os.path.join(d, "db_storage"))
+                for f in files
+                if f.endswith(".db") and not f.endswith("-wal")
+            ),
+            default=0,
+        )
+        account = os.path.basename(d)
+        out.append({
+            "account": account,
+            "wxid": re.sub(r"_\w{4}$", "", account),
+            "path": d,
+            "last_activity": recent,
+        })
+    out.sort(key=lambda x: -x["last_activity"])
+    return out
+
+
+class GroupMemberWatcher:
+    """群成员变动监测器（只读，基于 contact.db 的 chatroom_member 关联）。
+
+    记录一次成员快照，之后每次调用 ``poll()`` 对比当前成员，输出
+    「新增 / 离群」差异。适合轮询监听群成员变动。
+
+    用法::
+
+        w = db.get_group_member_watcher("xxx@chatroom")
+        snapshot = w.capture()          # 保存基线快照
+        ...
+        diff = w.poll()                 # 返回 {"joined": [...], "left": [...]}
+        # diff 均空 => 无变动；否则可据此处理，并用 w.capture() 更新基线
+    """
+
+    def __init__(self, db: "WeChatDB", chatroom_wxid: str):
+        self.db = db
+        self.chatroom_wxid = chatroom_wxid
+        self._baseline = None  # username set
+
+    def _current(self) -> set:
+        return {m["username"] for m in self.db.get_group_members(self.chatroom_wxid)}
+
+    def capture(self) -> set:
+        """读取当前成员并保存为基线快照；返回成员 username 集合。"""
+        self._baseline = self._current()
+        return set(self._baseline)
+
+    @property
+    def members(self) -> List[dict]:
+        """当前成员列表（含昵称/备注/是否群主）。"""
+        return self.db.get_group_members(self.chatroom_wxid)
+
+    def poll(self) -> dict:
+        """对比上次基线返回成员变动。
+
+        Returns:
+            dict: {"joined": [...], "left": [...]}，元素为成员 username。
+        - 首次调用（无基线）时先建立基线并返回空差异。
+        - 返回后不自动改基线；如需推进，显式调用 ``capture()``。
+        """
+        cur = self._current()
+        if self._baseline is None:
+            self._baseline = cur
+            return {"joined": [], "left": []}
+        joined = sorted(cur - self._baseline)
+        left = sorted(self._baseline - cur)
+        return {"joined": joined, "left": left}
+
+
+_LISTENER_STOP = object()
+
+
+class Listener:
+    """新消息轮询监听器（只读，基于合并了 -wal 的消息库视图）。
+
+    用法::
+
+        listener = Listener(db, interval=1.0)
+        listener.add_listener("filehelper", on_new_msg)
+        listener.start()
+        ...
+        listener.stop()
+
+    watermark 可持久化（json），下次启动不会重复推送。
+
+    回调在独立工作线程中执行：每个被监听对象（会话）对应一条串行工作
+    线程，保证同一会话内消息按序处理、不同会话间并行。轮询线程只负责
+    读取数据库并分派任务，不会被慢回调（AI 调用/图片识别等）阻塞。
+    """
+
+    def __init__(self, db: "WeChatDB", interval: float = 1.0,
+                 watermark: Optional[Dict[str, int]] = None,
+                 watermark_file: Optional[str] = None,
+                 max_retries: int = 3, retry_delay: float = 1.0,
+                 persist_interval: float = 1.0):
+        self.db = db
+        self.interval = interval
+        self.max_retries = max(0, int(max_retries))
+        self.retry_delay = max(0.0, float(retry_delay))
+        self.persist_interval = max(0.0, float(persist_interval))
+        # 水位持久化文件：默认写入 db.workdir/listener_watermark.json（回调成功
+        # 后节流落盘，重启不丢进度）；传 "" 可显式关闭落盘。
+        if watermark_file is None:
+            try:
+                watermark_file = os.path.join(db.workdir, "listener_watermark.json")
+            except Exception:
+                watermark_file = ""
+        self.watermark_file = watermark_file or ""
+        self._watermark: Dict[str, int] = dict(watermark or {})
+        if self.watermark_file:
+            self._load_watermark()
+        self._callbacks: Dict[str, List[callable]] = {}
+        self._stop = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        # 每会话一条串行工作线程：跨会话并行 + 会话内保序
+        self._worker_queues: Dict[str, queue.Queue] = {}
+        self._worker_threads: Dict[str, threading.Thread] = {}
+        self._workers_lock = threading.Lock()
+        # 已分派但回调尚未确认的边界（单调递增）：回调成功前不推进水位、
+        # 也不重复分派同一条消息
+        self._inflight: Dict[str, int] = {}
+        self._wm_lock = threading.Lock()
+        self._last_persist = 0.0
+
+    def _load_watermark(self) -> None:
+        """从持久化文件加载水位（与显式传入的水位取较大值，避免重复推送）。"""
+        path = self.watermark_file
+        if not path or not os.path.exists(path):
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            return
+        if not isinstance(data, dict):
+            return
+        for k, v in data.items():
+            try:
+                v = int(v)
+            except (TypeError, ValueError):
+                continue
+            if v > self._watermark.get(k, 0):
+                self._watermark[k] = v
+
+    def save_watermark(self, force: bool = False) -> None:
+        """把当前水位原子落盘（默认节流；force=True 立即写）。"""
+        path = self.watermark_file
+        if not path:
+            return
+        now = time.time()
+        if not force and now - self._last_persist < self.persist_interval:
+            return
+        with self._wm_lock:
+            payload = dict(self._watermark)
+            self._last_persist = now
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=0)
+            os.replace(tmp, path)
+        except OSError:
+            pass
+
+    def _commit_watermark(self, user: str, seq: Optional[int]) -> None:
+        """回调确认（成功或重试耗尽）后单调推进该会话水位并落盘。"""
+        if seq is None:
+            return
+        with self._wm_lock:
+            if int(seq) <= self._watermark.get(user, 0):
+                return
+            self._watermark[user] = int(seq)
+        self.save_watermark()
+
+    def add_listener(self, user: str, callback: callable) -> None:
+        """注册新消息回调：callback(msg: dict, listener)"""
+        self._callbacks.setdefault(user, []).append(callback)
+        if user not in self._watermark:
+            msgs = self.db.get_messages(user, limit=1)
+            self._watermark[user] = msgs[0]["sort_seq"] if msgs else 0
+
+    def remove_listener(self, user: str, callback: callable) -> None:
+        try:
+            self._callbacks[user].remove(callback)
+        except (KeyError, ValueError):
+            pass
+
+    def add_all(self, callback: callable, discover: bool = True) -> None:
+        """注册全局回调：监听所有已知会话的新消息。
+
+        Args:
+            callback: 回调函数，签名 callback(msg: dict, listener)。
+                msg 包含 local_id / type / sender_id / create_time /
+                content / sort_seq / username（会话原始 username）字段。
+            discover: 为 True 时，轮询过程中自动发现新出现的会话并注册
+                回调（无需重复调用 add_all）。默认 True。
+
+        与 add_listener 的区别：add_listener 只监听指定的单个会话，
+        add_all 监听所有会话（含后续新建的群聊等）。
+        """
+        self._all_callback = callback
+        self._discover_new = discover
+        for s in self.db.get_sessions(limit=500):
+            self._add_global(s["username"])
+
+    def _add_global(self, user: str) -> None:
+        """把全局回调挂到某个会话上。
+
+        注意**不能**因为「这个会话已经有回调」就跳过：``add_listener`` 是往列表
+        里追加，一个会话本来就可以同时挂「单会话回调」和「全局回调」。以前用
+        ``if username not in self._callbacks`` 判重，结果先 ``AddListenChat`` 过的
+        会话永远不会再收到 ``AddListenAll`` 的回调——全局监听漏掉了最活跃那批会话。
+        真正要防的是同一个回调被挂两次。
+        """
+        cb = self._all_callback
+        if cb is None:
+            return
+        existing = self._callbacks.get(user)
+        if existing is not None and cb in existing:
+            return
+        self.add_listener(user, cb)
+
+    @property
+    def watermark(self) -> Dict[str, int]:
+        return dict(self._watermark)
+
+    def start(self) -> None:
+        if self._thread and self._thread.is_alive():
+            return
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._run, name="wxdb-listener", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout=5)
+        with self._workers_lock:
+            queues = list(self._worker_queues.values())
+            threads = list(self._worker_threads.values())
+        for q in queues:
+            q.put(_LISTENER_STOP)
+        for t in threads:
+            t.join(timeout=5)
+        self.save_watermark(force=True)
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            try:
+                self._poll_once()
+            except Exception as exc:  # 单次轮询失败不终止监听
+                sys.stderr.write("listener poll error: %r\n" % exc)
+            self._stop.wait(self.interval)
+
+    def _poll_once(self) -> None:
+        # 自动发现新会话（add_all 的 discover 模式）
+        if getattr(self, '_discover_new', False) and getattr(self, '_all_callback', None):
+            try:
+                for s in self.db.get_sessions(limit=500):
+                    self._add_global(s["username"])
+            except Exception:
+                pass
+        for user, callbacks in list(self._callbacks.items()):
+            # 起读点 = 已确认水位 与 已分派未确认边界 的较大值：
+            # 回调成功前既不推进水位，也不重复分派同一条消息
+            since = max(self._watermark.get(user, 0), self._inflight.get(user, 0))
+            msgs = self.db.get_new_messages(user, since_seq=since)
+            if not msgs:
+                continue
+            last_seq = msgs[-1]["sort_seq"]
+            with self._wm_lock:
+                if last_seq > self._inflight.get(user, 0):
+                    self._inflight[user] = last_seq
+            if not callbacks:
+                self._commit_watermark(user, last_seq)
+                continue
+            self._dispatch(user, msgs)
+
+    def _dispatch(self, user: str, msgs: List[dict]) -> None:
+        """把新消息交给该会话的工作线程处理，不阻塞轮询线程。"""
+        with self._workers_lock:
+            q = self._worker_queues.get(user)
+            if q is None:
+                q = queue.Queue()
+                self._worker_queues[user] = q
+                t = threading.Thread(target=self._worker_run, args=(user,),
+                                     name="wxmsg-%s" % user, daemon=True)
+                self._worker_threads[user] = t
+                t.start()
+        cbs = tuple(self._callbacks.get(user, ()))
+        for m in msgs:
+            m["username"] = user
+            q.put((m, cbs))
+
+    def _worker_run(self, user: str) -> None:
+        q = self._worker_queues.get(user)
+        if q is None:
+            return
+        while True:
+            task = q.get()
+            if task is _LISTENER_STOP:
+                break
+            try:
+                m, cbs = task
+                ok = self._run_callbacks(cbs, m)
+                if not ok:
+                    sys.stderr.write(
+                        "listener message dropped after %d attempts: "
+                        "user=%s seq=%s\n"
+                        % (self.max_retries + 1, user, m.get("sort_seq"))
+                    )
+                # 回调成功后推进水位；重试耗尽后同样推进（已记录，避免永久阻塞）
+                self._commit_watermark(user, m.get("sort_seq"))
+            except Exception as exc:  # 工作线程不因单条消息异常而退出
+                sys.stderr.write("listener worker error: %r\n" % exc)
+
+    def _run_callbacks(self, cbs, m: dict) -> bool:
+        """执行某条消息的全部回调；失败按 max_retries/retry_delay 重试。
+
+        返回 True 表示回调全部成功；False 表示重试耗尽仍然失败。
+        """
+        for attempt in range(self.max_retries + 1):
+            try:
+                for cb in cbs:
+                    cb(m, self)
+                return True
+            except Exception as exc:
+                if attempt >= self.max_retries:
+                    sys.stderr.write(
+                        "listener callback error after %d attempts: %r\n"
+                        % (attempt + 1, exc)
+                    )
+                    return False
+                time.sleep(self.retry_delay)
+        return False
+
+
+def _extract_path_from_config(content: str) -> Optional[str]:
+    """从配置内容中提取数据目录路径，兼容 JSON 字段 / 纯路径 / 任意文本。
+
+    微信 4.x 不同版本配置文件格式不一：有的是纯路径，有的是 JSON
+    （字段如 dataDir / fileSavePath）。这里统一兜底提取第一个 Windows 路径。
+    """
+    content = (content or "").strip().lstrip("\ufeff")
+    if not content:
+        return None
+    try:
+        obj = json.loads(content)
+        if isinstance(obj, dict):
+            for key in ("dataDir", "data_dir", "fileSavePath", "savePath",
+                        "path", "defaultFileSavePath"):
+                v = obj.get(key)
+                if isinstance(v, str) and v.strip():
+                    return v.strip()
+        elif isinstance(obj, list):
+            for item in obj:
+                if isinstance(item, str) and re.match(r"^[A-Za-z]:[\\/]", item):
+                    return item
+    except Exception:
+        pass
+    if re.match(r"^[A-Za-z]:[\\/]", content):
+        return content
+    m = re.search(r"[A-Za-z]:[\\/][^\s\x00-\x1f\"']+", content)
+    if m:
+        return _abs_root(m.group(0))        # 不能用 rstrip：'d:\\' 会变成 'd:'（盘符相对）
+    return None
+
+
+def _config_candidates() -> List[str]:
+    """可能的微信 4.x 配置目录（按新旧版本与 32/64 位安装差异）。"""
+    out = []
+    for env in ("APPDATA", "LOCALAPPDATA"):
+        base = os.environ.get(env, "")
+        if base:
+            out.extend([
+                os.path.join(base, "Tencent", "xwechat"),
+                os.path.join(base, "Tencent", "xwechat", "config"),
+                os.path.join(base, "Tencent", "WeChat"),
+            ])
+    return out
+
+
+def _registry_data_dirs() -> List[str]:
+    """从注册表读取可能指向数据目录的值（用户自定义保存位置时补充来源）。"""
+    import winreg
+    dirs = []
+    for hive, sub in (
+        (winreg.HKEY_CURRENT_USER, r"Software\Tencent\xwechat"),
+        (winreg.HKEY_CURRENT_USER, r"Software\Tencent\xwechat\config"),
+        (winreg.HKEY_CURRENT_USER, r"Software\Tencent\WeChat"),
+    ):
+        try:
+            key = winreg.OpenKey(hive, sub)
+        except OSError:
+            continue
+        try:
+            i = 0
+            while True:
+                try:
+                    name, data, _ = winreg.EnumValue(key, i)
+                except OSError:
+                    break
+                i += 1
+                if not isinstance(data, str) or not data.strip():
+                    continue
+                low = name.lower()
+                if "path" in low or "dir" in low or "save" in low:
+                    dirs.append(data.strip())
+        finally:
+            winreg.CloseKey(key)
+    return dirs
+
+
+def _abs_root(path: str) -> str:
+    """把目录路径规范化成绝对路径，尤其修好「盘符根目录」这一类。
+
+    以前这里用 ``rstrip("\\\\/")`` 去掉尾分隔符，于是 ``d:\\`` 变成 ``d:`` ——
+    而 ``d:`` 在 Windows 上是**盘符相对路径**（相对该盘当前目录），
+    ``os.path.join('d:', 'xwechat_files')`` 得到 ``d:xwechat_files``，会按进程在
+    D 盘的当前目录解析：从 ``D:\\`` 启动恰好对，从 ``D:\\某个子目录`` 启动就找错地方
+    （issue #32）。normpath 保留根目录语义；再补一手「只写了盘符没写分隔符」的输入。
+    """
+    p = os.path.normpath(path or "")
+    if re.match(r"^[A-Za-z]:$", p):          # "d:" 这种盘符相对写法
+        p = p + os.sep
+    return p
+
+
+def _locate_account_root(root: Optional[str]) -> Optional[str]:
+    """在候选根目录下定位「包含账号目录」的目录。
+
+    账号目录以含 db_storage 子目录为准（微信号不一定以 wxid_ 开头）。
+    兼容两种布局：
+      <root>/xwechat_files/<account>/db_storage
+      <root>/<account>/db_storage
+    返回的目录即 WeChatDB.db_dir（账号目录的父目录）。
+    """
+    if not root or not os.path.isdir(root):
+        return None
+    root = _abs_root(root)
+    candidates = [root]
+    for name in ("xwechat_files", "WeChat Files", "xwechat_files_data"):
+        candidates.append(os.path.join(root, name))
+    seen = set()
+    for cand in candidates:
+        cand = _abs_root(cand)
+        if cand in seen or not os.path.isdir(cand):
+            continue
+        seen.add(cand)
+        try:
+            dirs = os.listdir(cand)
+        except OSError:
+            continue
+        if any(
+            os.path.isdir(os.path.join(cand, d, "db_storage"))
+            for d in dirs
+        ):
+            return cand
+    return None
+
+
+def auto_detect_db_dir() -> Optional[str]:
+    """自动定位微信 4.x 数据目录（不同电脑存储位置不同）。
+
+    探测顺序：
+      1. 微信配置文件（%APPDATA%/%LOCALAPPDATA%，支持 JSON/纯路径/任意文本）；
+      2. 注册表；
+      3. 常见默认目录（Documents / 用户主目录）。
+    """
+    # 1) 配置文件
+    for cfg_dir in _config_candidates():
+        if not os.path.isdir(cfg_dir):
+            continue
+        for fp in glob.glob(os.path.join(cfg_dir, "*")):
+            if os.path.isdir(fp):
+                continue
+            try:
+                raw = open(fp, "r", encoding="utf-8").read(8192)
+            except (UnicodeDecodeError, OSError):
+                try:
+                    raw = open(fp, "r", encoding="gbk").read(8192)
+                except (UnicodeDecodeError, OSError):
+                    continue
+            path = _extract_path_from_config(raw)
+            if not path:
+                continue
+            hit = _locate_account_root(path)
+            if hit:
+                return hit
+    # 2) 注册表
+    for p in _registry_data_dirs():
+        hit = _locate_account_root(p)
+        if hit:
+            return hit
+    # 3) 常见默认目录兜底
+    userprofile = os.environ.get("USERPROFILE", "")
+    for base in (os.path.join(userprofile, "Documents"), userprofile):
+        hit = _locate_account_root(base)
+        if hit:
+            return hit
+    return None

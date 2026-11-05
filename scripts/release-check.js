@@ -65,7 +65,7 @@ mustInclude('bridge/engine.py', [
   ['失败原因解释', 'explain_uia_failure'],
   ['中文路径提醒', '路径里有中文'],
 ]);
-check('tools/uia-diag.py 存在', fs.existsSync(path.join(root, 'tools/uia-diag.py')));
+check('scripts/tools/uia-diag.py 存在', fs.existsSync(path.join(root, 'scripts', 'tools', 'uia-diag.py')));
 
 // 4) 包里不该有隐私/运行数据（只有 --release 时才检查；在开发目录里这些本来就有）
 const release = argv.includes('--release');

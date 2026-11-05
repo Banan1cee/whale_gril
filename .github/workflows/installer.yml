@@ -271,13 +271,13 @@ jobs:
       - name: 准备 Inno Setup 7（仓库自带编译器，不跑安装程序）
         shell: pwsh
         run: |
-          # 仓库带的是编译器本体（tools\innosetup\compiler），直接调 ISCC.exe。
+          # 仓库带的是编译器本体（installer\innosetup\compiler），直接调 ISCC.exe。
           # 不要再跑 innosetup-*.exe 安装程序：GitHub runner 上它要 6 分钟才装完
           # （实测 359 秒，/VERYSILENT 下没有任何输出），纯粹浪费时间。
-          # 官方 license 允许二进制再分发，见 tools\innosetup\license.txt。
-          $iscc = Join-Path $PWD 'tools\innosetup\compiler\ISCC.exe'
+          # 官方 license 允许二进制再分发，见 installer\innosetup\license.txt。
+          $iscc = Join-Path $PWD 'installer\innosetup\compiler\ISCC.exe'
           if (-not (Test-Path $iscc)) {
-            Write-Output '::error title=缺编译器::tools\innosetup\compiler\ISCC.exe 不存在'
+            Write-Output '::error title=缺编译器::installer\innosetup\compiler\ISCC.exe 不存在'
             exit 1
           }
           & $iscc --help 2>&1 | Select-Object -First 1

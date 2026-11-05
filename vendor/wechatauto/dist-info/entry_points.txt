@@ -1,0 +1,2 @@
+[console_scripts]
+wechatauto = wechatauto.cli:main

@@ -32,19 +32,19 @@ const g = (text, extra = {}) => ({
 
 test('句尾叫名字也算在叫她：你好响呀鲸鲸', () => {
   const { cleanup } = makeBot();
-  const r = persona.cleanIncoming('你好响呀鲸鲸', DEFAULT_CONFIG);
+  const r = persona.cleanIncomingForPersona('你好响呀鲸鲸', DEFAULT_CONFIG);
   assert.equal(r.hadAlias, true);
   assert.equal(r.text, '你好响呀');
   cleanup();
 });
 
 test('句中说名字也算：鲸鲸你别装了', () => {
-  const r = persona.cleanIncoming('鲸鲸你别装了', DEFAULT_CONFIG);
+  const r = persona.cleanIncomingForPersona('鲸鲸你别装了', DEFAULT_CONFIG);
   assert.equal(r.hadAlias, true);
 });
 
 test('「小鲸鱼」不能误判成「小鲸」叫她', () => {
-  const r = persona.cleanIncoming('@小鲸鱼 你好', DEFAULT_CONFIG);
+  const r = persona.cleanIncomingForPersona('@小鲸鱼 你好', DEFAULT_CONFIG);
   assert.equal(r.hadAlias, false);
 });
 
@@ -52,14 +52,14 @@ test('「大肥鱼人工智能」这种连写也要认出来', () => {
   // 名字后面直接跟汉字，也要算叫到她
   const cfg = JSON.parse(JSON.stringify(DEFAULT_CONFIG));
   cfg.persona.aliases = ['鲸鲸', '大肥鱼'];
-  assert.equal(persona.cleanIncoming('大肥鱼人工智能是吧', cfg).hadAlias, true);
-  assert.equal(persona.cleanIncoming('这大肥鱼是不是人工智能', cfg).hadAlias, true);
+  assert.equal(persona.cleanIncomingForPersona('大肥鱼人工智能是吧', cfg).hadAlias, true);
+  assert.equal(persona.cleanIncomingForPersona('这大肥鱼是不是人工智能', cfg).hadAlias, true);
   // 但更长的昵称不能被截断
-  assert.equal(persona.cleanIncoming('大肥鱼儿来了', cfg).hadAlias, false);
+  assert.equal(persona.cleanIncomingForPersona('大肥鱼儿来了', cfg).hadAlias, false);
 });
 
 test('图片描述里出现名字不算叫她', () => {
-  const r = persona.cleanIncoming('（对方发了一张图片，图里是：有人 @鲸鲸 骂了一句）', DEFAULT_CONFIG);
+  const r = persona.cleanIncomingForPersona('（对方发了一张图片，图里是：有人 @鲸鲸 骂了一句）', DEFAULT_CONFIG);
   assert.equal(r.hadAlias, false);
 });
 

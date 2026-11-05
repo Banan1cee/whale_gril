@@ -19,6 +19,7 @@
  */
 const fs = require('node:fs');
 const path = require('node:path');
+const { readJson } = require('../infra/jsonFile');
 const { chatHash, personHash } = require('./hash');
 const { LIMITS, DAY_MS } = require('./constants');
 const { estimateTokens, messageTokens } = require('./tokens');
@@ -27,14 +28,6 @@ const relations = require('./relations');
 
 const META_SAVE_DEBOUNCE_MS = 400;
 const MESSAGE_FSYNC_EVERY = 1;
-
-function readJson(file) {
-  try {
-    return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
-  } catch {
-    return null;
-  }
-}
 
 function writeJsonAtomic(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true });

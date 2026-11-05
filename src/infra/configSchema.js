@@ -1,5 +1,7 @@
 'use strict';
 
+const { getByPath } = require('./objpath');
+
 /**
  * 配置校验：一张纯数据的表 + 两个函数。
  *
@@ -125,15 +127,6 @@ const FIELDS = {
 };
 
 const BOOLISH = new Set(['true', 'false', '1', '0', 'yes', 'no', 'on', 'off', '开', '关']);
-
-function getByPath(obj, dotted) {
-  let cur = obj;
-  for (const key of String(dotted).split('.')) {
-    if (cur === null || typeof cur !== 'object') return undefined;
-    cur = cur[key];
-  }
-  return cur;
-}
 
 function describe(expected) {
   switch (expected.type) {
