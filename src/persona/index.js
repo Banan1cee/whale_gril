@@ -1324,7 +1324,7 @@ function aliasList(config) {
  * 清洗收到的消息：去掉 @提及 和她自己的名字前缀，判断是否点名。
  * @returns {{text: string, atMe: boolean, hadAlias: boolean}}
  */
-function cleanIncoming(text, config) {
+function cleanIncomingForPersona(text, config) {
   let s = String(text || '').replace(/\u2005/g, ' ').replace(/\u200b/g, '');
   const aliases = aliasList(config);
   let hadAlias = false;
@@ -1474,7 +1474,7 @@ module.exports = {
   buildSystem,
   buildLegacySystem,
   mockReply,
-  cleanIncoming,
+  cleanIncomingForPersona,
   splitBubbles,
   aliasList,
   emojiChanceFor,

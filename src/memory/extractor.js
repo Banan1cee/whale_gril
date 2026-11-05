@@ -11,17 +11,10 @@
 const personCard = require('./personCard');
 const { LIMITS } = require('./constants');
 const { describeError } = require('../infra/errors');
+const { cleanIncoming } = require('./text');
 
 const QUESTION_RE = /[?？]|(?:吗|呢|吧)\s*$|如果|要是|假如|假设|开玩笑|哈哈|呵呵|不是吧/;
 const THIRD_PERSON_RE = /^(?:他|她|他们|她们|别人|人家|我朋友|我同事|我同学|我妈|我爸|我哥|我姐|我弟|我妹|我家那位)/;
-
-function cleanIncoming(text) {
-  return String(text || '')
-    .replace(/^[A-Za-z0-9_-]{4,}:\s*/, '')
-    .replace(/^@\S+\s*/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
 
 function clampText(value, max) {
   const s = String(value == null ? '' : value).replace(/\s+/g, ' ').trim();

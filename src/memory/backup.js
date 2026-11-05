@@ -8,6 +8,7 @@
  */
 const fs = require('node:fs');
 const path = require('node:path');
+const { readJson } = require('../infra/jsonFile');
 
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 
@@ -31,14 +32,6 @@ function stampMs(date = new Date()) {
 function stamp(date = new Date()) {
   const p = (n) => String(n).padStart(2, '0');
   return `${date.getFullYear()}${p(date.getMonth() + 1)}${p(date.getDate())}-${p(date.getHours())}${p(date.getMinutes())}${p(date.getSeconds())}`;
-}
-
-function readJson(file) {
-  try {
-    return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
-  } catch {
-    return null;
-  }
 }
 
 function dataDir(root) {

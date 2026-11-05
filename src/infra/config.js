@@ -9,6 +9,7 @@
  */
 const fs = require('node:fs');
 const path = require('node:path');
+const { readJson } = require('./jsonFile');
 
 /**
  * 模型服务预设。needsKey 表示必须填 API Key；本地地址（localhost/内网）会自动免 Key。
@@ -323,14 +324,6 @@ function deepMerge(base, extra) {
     else if (v !== undefined && v !== null) out[k] = v;
   }
   return out;
-}
-
-function readJson(file, fallback = null) {
-  try {
-    return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
-  } catch {
-    return fallback;
-  }
 }
 
 function projectRoot(from = __dirname) {

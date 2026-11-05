@@ -22,6 +22,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 
 const { toBool } = require('../infra/features');
+const { clean } = require('../infra/text');
 
 const MAX_TOTAL = 500;
 const MAX_ACTIVE_PER_CHAT = 20;
@@ -29,10 +30,6 @@ const RETRY_DELAY_MS = 5 * 60 * 1000;
 const CLAIM_TIMEOUT_MS = 2 * 60 * 1000;
 const ACTIVE = new Set(['pending', 'retrying', 'sending']);
 const DONE = new Set(['done', 'failed', 'expired', 'cancelled']);
-
-function clean(value, max) {
-  return String(value == null ? '' : value).replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, max);
-}
 
 /**
  * 提醒的「规则」：和主动搭话同语义（每天上限 / 刚聊过先跳过），但配置独立

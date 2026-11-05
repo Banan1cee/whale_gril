@@ -10,6 +10,8 @@
  *   4. 关掉开关 = 回到旧行为，不能关了就崩。
  */
 
+const { getByPath } = require('./objpath');
+
 const REGISTRY = [
   {
     key: 'stickers',
@@ -113,15 +115,6 @@ const REGISTRY = [
 ];
 
 const BY_KEY = new Map(REGISTRY.map((f) => [f.key, f]));
-
-function getByPath(obj, dotted) {
-  let cur = obj;
-  for (const part of String(dotted || '').split('.')) {
-    if (!cur || typeof cur !== 'object') return undefined;
-    cur = cur[part];
-  }
-  return cur;
-}
 
 /** 开关是否打开（读配置；没配就用默认值） */
 function toBool(value, fallback = false) {

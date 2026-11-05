@@ -31,6 +31,7 @@ const personCard = require('./personCard');
 const { shortId } = require('./hash');
 const { estimateBudgetTokens } = require('./tokens');
 const { sanitizeForModel } = require('../core/text');
+const { cleanIncoming } = require('./text');
 
 /** 每个 chat 最多留多少条关系边（超了淘汰 updatedAt 最旧的） */
 const MAX_RELATIONS = 200;
@@ -252,14 +253,6 @@ function looksLikeName(value) {
   if (VERB_HEADS.test(s)) return false;
   if (NAME_TAILS.test(s)) return false;
   return true;
-}
-
-function cleanIncoming(text) {
-  return String(text || '')
-    .replace(/^[A-Za-z0-9_-]{4,}:\s*/, '')
-    .replace(/^@\S+\s*/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
 }
 
 /**

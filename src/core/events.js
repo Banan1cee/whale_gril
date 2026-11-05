@@ -37,7 +37,7 @@ const MAX_TYPE = 20;
 const MAX_DETAIL = 200;
 const MAX_STATUS = 20;
 
-function clean(value, max) {
+function clipControl(value, max) {
   return String(value == null ? '' : value)
     .replace(/[\u0000-\u001f\u007f]/g, ' ')
     .replace(/\s{2,}/g, ' ')
@@ -50,11 +50,11 @@ function clean(value, max) {
  */
 function clampEvent(event, ts = Date.now()) {
   if (!event || typeof event !== 'object') return null;
-  const type = clean(event.type, MAX_TYPE).toLowerCase();
+  const type = clipControl(event.type, MAX_TYPE).toLowerCase();
   if (!TYPE_LABEL.has(type)) return null;
-  const detail = clean(event.detail, MAX_DETAIL);
+  const detail = clipControl(event.detail, MAX_DETAIL);
   if (!detail) return null;
-  const status = clean(event.status, MAX_STATUS).toLowerCase() || 'ok';
+  const status = clipControl(event.status, MAX_STATUS).toLowerCase() || 'ok';
   return {
     ts: Number(event.ts) || ts,
     type,

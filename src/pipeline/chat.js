@@ -396,7 +396,7 @@ class Bot {
     // "Note: xxx" 也被截断，残缺文本进了提示词/搜索/记忆。wxid 前缀后面本来就有换行/空格，
     // 改成 \s+ 就够了（H8）。
     const rawText = String(msg.text || '').replace(/^[A-Za-z0-9_\-]{4,}:\s+/, '');
-    const clean = persona.cleanIncoming(rawText, this.config);
+    const clean = persona.cleanIncomingForPersona(rawText, this.config);
     msg.cleanText = clean.text;
     let atMe = msg.atMe || clean.atMe;
     const isGroup = msg.chatType === 'group';

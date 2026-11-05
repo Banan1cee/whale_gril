@@ -20,21 +20,21 @@
  */
 function describeError(err, { maxDetail = 300 } = {}) {
   if (err == null) return '无错误对象';
-  if (typeof err !== 'object') return 'msg=' + clean(err, maxDetail);
+  if (typeof err !== 'object') return 'msg=' + clipWithEllipsis(err, maxDetail);
 
   const bits = [];
   const name = err.name || (err.constructor && err.constructor.name) || 'Error';
   bits.push('type=' + name);
-  if (err.code) bits.push('code=' + clean(err.code, 60));
+  if (err.code) bits.push('code=' + clipWithEllipsis(err.code, 60));
   if (Number(err.status)) bits.push('status=' + Number(err.status));
   if (err.retryable === true) bits.push('retryable');
 
-  const detail = clean(err.detail, maxDetail);
+  const detail = clipWithEllipsis(err.detail, maxDetail);
   if (detail) {
     bits.push('detail=' + detail);
   } else if (name !== 'LlmError' && err.message) {
     // 普通 Error 的 message 就是真相（文件系统错误会带 EPERM/ENOSPC 和路径）
-    bits.push('msg=' + clean(err.message, maxDetail));
+    bits.push('msg=' + clipWithEllipsis(err.message, maxDetail));
   } else if (name === 'LlmError') {
     // LlmError 没有 detail 时，message 是给用户看的话术，不能当日志证据
     bits.push('detail=(无)');
@@ -42,7 +42,7 @@ function describeError(err, { maxDetail = 300 } = {}) {
   return bits.join(' ');
 }
 
-function clean(value, max) {
+function clipWithEllipsis(value, max) {
   const s = String(value == null ? '' : value).replace(/\s+/g, ' ').trim();
   return s.length > max ? s.slice(0, max) + '…' : s;
 }

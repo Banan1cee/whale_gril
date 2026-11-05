@@ -120,18 +120,18 @@ test('深夜心情自动变困', () => {
 });
 
 test('能识别 @ 和名字，并清洗掉提及', () => {
-  assert.deepEqual(persona.cleanIncoming('@鲸鲸 在吗', config), { text: '在吗', atMe: true, hadAlias: true });
-  assert.equal(persona.cleanIncoming('鲸娘，今天好累', config).atMe, true);
-  assert.equal(persona.cleanIncoming('鲸娘，今天好累', config).text, '今天好累');
-  const plain = persona.cleanIncoming('今天好累', config);
+  assert.deepEqual(persona.cleanIncomingForPersona('@鲸鲸 在吗', config), { text: '在吗', atMe: true, hadAlias: true });
+  assert.equal(persona.cleanIncomingForPersona('鲸娘，今天好累', config).atMe, true);
+  assert.equal(persona.cleanIncomingForPersona('鲸娘，今天好累', config).text, '今天好累');
+  const plain = persona.cleanIncomingForPersona('今天好累', config);
   assert.equal(plain.atMe, false);
   assert.equal(plain.text, '今天好累');
   // 名字出现在句子中间也算在叫她（群里常见说法）
-  assert.equal(persona.cleanIncoming('我觉得鲸娘很可爱', config).atMe, true);
-  assert.equal(persona.cleanIncoming('我觉得鲸娘很可爱', config).text, '我觉得 很可爱');
+  assert.equal(persona.cleanIncomingForPersona('我觉得鲸娘很可爱', config).atMe, true);
+  assert.equal(persona.cleanIncomingForPersona('我觉得鲸娘很可爱', config).text, '我觉得 很可爱');
   // 但不能把更长昵称吞掉
-  assert.equal(persona.cleanIncoming('@小鲸鱼 你好', config).atMe, false);
-  assert.equal(persona.cleanIncoming('小鲸鱼今天好可爱', config).atMe, false);
+  assert.equal(persona.cleanIncomingForPersona('@小鲸鱼 你好', config).atMe, false);
+  assert.equal(persona.cleanIncomingForPersona('小鲸鱼今天好可爱', config).atMe, false);
 });
 
 test('演示台词：命中意图、不会为空、群聊更短', () => {
@@ -203,10 +203,10 @@ test('默认人设也能识别缩写，并避免英文子串误命中', () => {
 });
 
 test('别名是其他昵称的前缀时不能误删', () => {
-  const atOther = persona.cleanIncoming('@小鲸鱼 你好', config);
+  const atOther = persona.cleanIncomingForPersona('@小鲸鱼 你好', config);
   assert.equal(atOther.atMe, false);
   assert.equal(atOther.text, '@小鲸鱼 你好');
-  const plainOther = persona.cleanIncoming('小鲸鱼好可爱', config);
+  const plainOther = persona.cleanIncomingForPersona('小鲸鱼好可爱', config);
   assert.equal(plainOther.atMe, false);
   assert.equal(plainOther.text, '小鲸鱼好可爱');
 });
