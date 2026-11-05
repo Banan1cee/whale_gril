@@ -1,6 +1,5 @@
 # 统一换行：.ps1 必须是 CRLF（PowerShell 5.1 对混合换行更挑剔）
 *.ps1   text eol=crlf
-*.cmd   text eol=crlf
 
 # 其余文本按 LF 存，跨平台友好
 *.js    text eol=lf
