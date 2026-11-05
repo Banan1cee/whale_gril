@@ -122,6 +122,11 @@ test('桥接会热更新配置（调试台改完不用重启）', () => {
   assert.match(bridge, /def config_watch/, '要有盯 config.json 的线程');
   assert.match(bridge, /Thread\(target=config_watch/, '线程要真的启动');
   assert.match(bridge, /配置已热更新/, '要写日志，让人知道生效了');
+  // 基线必须在进程启动时（模块导入）取：开库 + 预热要十几秒，这期间切的账号
+  // 要是等到线程起来才取基线，就会被当成「初始值」吞掉，桥接一直连着旧号。
+  assert.match(bridge, /CONFIG_MTIME_AT_START\s*=\s*os\.path\.getmtime\(CONFIG_PATH\)/, '基线要在导入时取');
+  assert.match(bridge, /last = CONFIG_MTIME_AT_START/, 'config_watch 要用启动时的基线');
+  assert.match(bridge, /if mt == last:/, 'mtime 一变就要重载（用 == 判，别只认变新）');
   // 关键开关必须在热更新里被重新赋值（global 声明）
   const fn = bridge.slice(bridge.indexOf('def reload_config'));
   const body = fn.slice(0, fn.indexOf('\n# 系统 / 公众号'));
