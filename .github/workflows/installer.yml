@@ -511,6 +511,87 @@ jobs:
           Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
           Write-Output '安装/卸载烟测通过'
 
+      # 覆盖升级：不卸载旧版，直接双击新包装到原目录。装完不能留着旧版本才有的文件，
+      # 用户数据（data\ / config.json）一个字节都不能动。
+      - name: 覆盖升级烟测（先装新包 → 伪造 4.0.1 残留 → 不卸载再装 → 断言）
+        shell: pwsh
+        run: |
+          $setup = (Get-ChildItem artifacts/setup/*.exe | Select-Object -First 1).FullName
+          if (-not (Test-Path $setup)) { Write-Output '::error title=产物缺失::找不到安装包'; exit 1 }
+          $dir = Join-Path $env:RUNNER_TEMP 'whale-smoke'
+
+          # 安装器是 GUI 子系统程序：必须 Start-Process + 显式超时，卡住时能杀进程并留证据。
+          function Invoke-Setup([string]$label, [string]$logPath) {
+            $p = Start-Process -FilePath $setup -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-',"/DIR=$dir","/LOG=$logPath") -PassThru
+            if (-not $p.WaitForExit(900000)) {
+              try { $p.Kill() } catch { }
+              Write-Output "::error title=$label 超时::900 秒没结束，已杀进程；日志见 $logPath"
+              exit 1
+            }
+            if ($p.ExitCode -ne 0) {
+              Write-Output "::error title=$label 失败::退出码 $($p.ExitCode)"
+              if (Test-Path $logPath) { Get-Content $logPath -Tail 40 }
+              exit 1
+            }
+          }
+
+          if (Test-Path $dir) { Remove-Item $dir -Recurse -Force }
+          Write-Output '覆盖烟测：第 1 步，装一次新包'
+          Invoke-Setup '首次安装' (Join-Path $env:RUNNER_TEMP 'whale-upgrade-install.log')
+
+          # 新包不会再生成这些，手工造出来模拟 4.0.1 的老目录。
+          Write-Output '覆盖烟测：第 2 步，伪造 4.0.1 残留与用户数据'
+          foreach ($d in @("$dir\personas", "$dir\resources", "$dir\runtime\vb-cable")) {
+            New-Item -ItemType Directory -Force -Path $d | Out-Null
+          }
+          Set-Content -LiteralPath "$dir\personas\old.json" -Value '{"old":true}' -Encoding utf8
+          Set-Content -LiteralPath "$dir\resources\old.txt" -Value 'old resources' -Encoding utf8
+          Set-Content -LiteralPath "$dir\runtime\vb-cable\VBCABLE_Setup_x64.exe" -Value 'old exe' -Encoding utf8
+          Set-Content -LiteralPath "$dir\src\http\static.js" -Value '// old static' -Encoding utf8
+          Set-Content -LiteralPath "$dir\src\adapters\bilibili.js" -Value '// old adapter' -Encoding utf8
+          Set-Content -LiteralPath "$dir\data\keep-me.txt" -Value 'keep' -Encoding utf8
+          if (-not (Test-Path "$dir\config.json")) {
+            Set-Content -LiteralPath "$dir\config.json" -Value '{"apiKey":"probe","custom":123}' -Encoding utf8
+          }
+          $configHash = (Get-FileHash "$dir\config.json" -Algorithm SHA256).Hash
+
+          Write-Output '覆盖烟测：第 3 步，不卸载，直接再跑同一个安装包'
+          Invoke-Setup '覆盖安装' (Join-Path $env:RUNNER_TEMP 'whale-upgrade-reinstall.log')
+
+          Write-Output '覆盖烟测：第 4 步，断言'
+          $problems = @()
+          foreach ($old in @("$dir\personas", "$dir\resources", "$dir\runtime\vb-cable")) {
+            if (Test-Path $old) { $problems += "旧目录还在：$old" }
+          }
+          foreach ($f in @("$dir\src\http\static.js", "$dir\src\adapters\bilibili.js")) {
+            if (Test-Path $f) { $problems += "旧文件还在：$f" }
+          }
+          if (-not (Test-Path "$dir\VB-CABLE虚拟声卡\VBCABLE_Setup_x64.exe")) {
+            $problems += '新位置没有声卡安装程序：VB-CABLE虚拟声卡\VBCABLE_Setup_x64.exe'
+          }
+          if (-not (Test-Path "$dir\data\keep-me.txt")) {
+            $problems += '覆盖安装把 data\ 里的文件删了'
+          }
+          if (-not (Test-Path "$dir\config.json")) {
+            $problems += '覆盖安装把 config.json 删了'
+          } elseif ((Get-FileHash "$dir\config.json" -Algorithm SHA256).Hash -ne $configHash) {
+            $problems += '覆盖安装改动了 config.json'
+          }
+          if ($problems) {
+            Write-Output "::error title=覆盖升级烟测失败::$($problems -join '；')"
+            exit 1
+          }
+          Write-Output '覆盖升级烟测通过'
+
+          Write-Output '覆盖烟测：第 5 步，静默卸载并清理'
+          $unins = Join-Path $dir 'unins000.exe'
+          if (Test-Path $unins) {
+            $u = Start-Process -FilePath $unins -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART') -PassThru
+            if (-not $u.WaitForExit(180000)) { try { $u.Kill() } catch { } }
+          }
+          Start-Sleep -Seconds 2
+          Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
+
       - name: 产物摘要与校验值
         id: artifact
         shell: pwsh

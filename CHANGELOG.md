@@ -4,8 +4,9 @@
 
 ### 修复 · 安装包
 
-- 装完的 VB-CABLE 安装程序从 `runtime\vb-cable` 挪到安装目录根部的 `VB-CABLE虚拟声卡` 文件夹，用户能直接找到；升级安装会清掉旧位置残留。
-- 安装包烟测新增位置断言，并断言不再重复装进 `runtime`。
+- 覆盖安装：升级时自动关闭正在运行的鲸鲸再继续；沿用原安装目录；`data\` 与 `config.json` 原样保留。
+- 升级清理：删掉 4.0.1 遗留的 `personas\`、`resources\`、`src\http\static.js`、`src\adapters\bilibili.js` 与旧位置的 `runtime\vb-cable`。
+- VB-CABLE 安装程序改到安装目录根部 `VB-CABLE虚拟声卡\`，并加 CI 断言防回退。
 
 ## 4.0.4
 
