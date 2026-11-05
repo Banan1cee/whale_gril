@@ -663,10 +663,32 @@ jobs:
         run: |
           $setup = (Get-ChildItem artifacts/setup/*.exe | Select-Object -First 1).FullName
           $sums = (Get-ChildItem artifacts/setup/SHA256SUMS.txt).FullName
+
+          # 客户端的四个源里有一个读 Release 资产；不发这份清单，用户装完也永远看不到「有新版本」。
+          # manifest_version 必须递增：多源并存时客户端取序号最大的那一份。
+          $manifestPath = 'artifacts/setup/release-manifest.json'
+          $manifest = Get-Content 'release-manifest.json' -Raw -Encoding utf8 | ConvertFrom-Json
+          $manifest.latest = $env:version
+          $manifest.released_at = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+          $manifest.manifest_version = [int]$manifest.manifest_version + 1
+          $manifest.message = "鲸鲸 $env:version 已发布：下载安装包覆盖安装即可，data 与 config.json 不受影响。"
+          $manifest | ConvertTo-Json -Depth 4 | Set-Content -Path $manifestPath -Encoding utf8NoBOM
+          Get-Content $manifestPath
+
           $notes = "- 由 GitHub Actions 在 $env:RUNNER_OS 上构建`n- 内置 Node 与 CPython 3.12（含桥接依赖），用户端零网络`n- .NET 10 桌面运行时随包，目标机缺失时安装器会请求管理员授权后静默安装`n- 安装包签名状态见本次运行摘要"
-          gh release create $env:TAG $setup $sums --title "鲸鲸 $env:TAG" --notes $notes
+          gh release create $env:TAG $setup $sums $manifestPath --title "鲸鲸 $env:TAG" --notes $notes
           if ($LASTEXITCODE -ne 0) {
             Write-Output '::warning::Release 可能已存在，改为覆盖上传资产'
-            gh release upload $env:TAG $setup $sums --clobber
+            gh release upload $env:TAG $setup $sums $manifestPath --clobber
             if ($LASTEXITCODE -ne 0) { Write-Output '::error title=Release 上传失败::gh release upload 退出码非 0'; exit 1 }
           }
+
+          # 回读资产列表：少传一个文件，客户端就有一半人更新不了，不能只信 gh 的退出码。
+          $assets = @(gh release view $env:TAG --json assets --jq '.assets[].name')
+          $need = @((Split-Path $setup -Leaf), 'SHA256SUMS.txt', 'release-manifest.json')
+          $missing = @($need | Where-Object { $assets -notcontains $_ })
+          if ($missing.Count -gt 0) {
+            Write-Output "::error title=Release 资产不全::缺 $($missing -join '、')，现有 $($assets -join '、')"
+            exit 1
+          }
+          Write-Output "Release $env:TAG 资产齐全：$($assets -join '、')"

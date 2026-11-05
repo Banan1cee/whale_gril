@@ -8,6 +8,16 @@
 - 升级清理：删掉 4.0.1 遗留的 `personas\`、`resources\`、`src\http\static.js`、`src\adapters\bilibili.js` 与旧位置的 `runtime\vb-cable`。
 - VB-CABLE 安装程序改到安装目录根部 `VB-CABLE虚拟声卡\`，并加 CI 断言防回退。
 
+### 修复 · 更新
+
+- 安装版点更新不再报「没找到 `scripts\update.ps1`」：改为下载官方安装包、校验 SHA256 后静默覆盖安装。
+- 下载允许走系统代理，国内挂代理的环境不再必然失败。
+- 源码版仍走 `scripts\update.ps1`。
+
+### 改进 · 发版
+
+- Release 现在自动携带 `release-manifest.json`，并回读校验资产齐全。
+
 ## 4.0.4
 
 ### 其他 · 根目录与模块收敛
