@@ -101,7 +101,7 @@ namespace WhaleLauncher.Views
             new SectionSpec { Title = "高级", Note = "改完要重启的项都在这里（对话预算例外，改完立刻生效）；管理员口令也归这一组，平时不用碰。", Fields =
             {
                 new FieldSpec { Path = "memory.dialogueBudget", Label = "对话预算(token)", Kind = "sliderInput", Min = 2000, Max = 20000, InputMin = 1000, Hint = "每轮带多少对话内容（不含人设）：默认 5,500。记忆和原文按比例分，预算越大带得越多；滑块 2,000–20,000，下面四个胶囊是一键跳档，右边输入框可以填到 1,000 以上。" },
-                new FieldSpec { Path = "server.host", Label = "监听地址", Kind = "text", Hint = "只给本机用就 127.0.0.1；0.0.0.0 = 同 WiFi 也能连（改完重启）" },
+                new FieldSpec { Path = "server.host", Label = "监听地址", Kind = "text", Hint = "只建议 127.0.0.1；同 WiFi 访问只对桥接和接口有效，没有网页界面（改完重启）" },
                 new FieldSpec { Path = "server.port", Label = "本机端口", Kind = "selectnum", Options = new[] { "8787", "9191", "1919", "7878" }, Hint = "默认 8787；只在这四个里选，改完重启内核生效" },
                 new FieldSpec { Path = "log.level", Label = "日志级别", Kind = "select", Options = new[] { "debug", "info", "error" }, Hint = "界面 / 控制台用哪一档；日志文件始终记 debug 全量（data/whale.log、data/wechat-bridge-4x.log），改完重启生效" },
                 new FieldSpec { Path = "storage.mediaKeepDays", Label = "媒体缓存保留几天", Kind = "num", Min = 0, Max = 90 },
@@ -1062,7 +1062,7 @@ namespace WhaleLauncher.Views
             var model = new ComboBox { Height = 28, IsEditable = true, MinWidth = 320, HorizontalAlignment = HorizontalAlignment.Left };
             var key = new PasswordBox();
             var mock = new CheckBox();
-            // 深度思考：和网页设置共用 data/settings.json 的 thinking（保存走 ModelRequest）。
+            // 深度思考：和 /api/settings 共用 data/settings.json 的 thinking（保存走 ModelRequest）。
             // 只在这里声明，Click 处理器等 AutoSaveChatAsync 定义好之后再挂（否则编译器会报
             // 「未赋值的局部变量」——那个函数捕获了后面才声明的控件）。
             var thinking = new CheckBox { VerticalAlignment = VerticalAlignment.Center };
@@ -1344,9 +1344,9 @@ namespace WhaleLauncher.Views
             chatPanel.Children.Add(TwoCol(
                 BuildField(new FieldSpec { Path = "deepseek.timeoutMs", Label = "请求超时(ms)", Kind = "num", Min = 1000, Max = 600000 }, true),
                 null));
-            // 深度思考：和网页设置共用 data/settings.json 的 thinking，走 /api/settings 保存。
-            // 以前这里是「语音」页签里的 deepseek.thinking：网页一保存 settings.thinking 就把它盖掉，
-            // 在 exe 里改了也不生效。现在它属于聊天设置，位置和网页一致。
+            // 深度思考：和 /api/settings 共用 data/settings.json 的 thinking，走 /api/settings 保存。
+            // 以前这里是「语音」页签里的 deepseek.thinking：接口一保存 settings.thinking 就把它盖掉，
+            // 在 exe 里改了也不生效。现在它属于聊天设置，和接口写的是同一个值。
             thinking.Click += async (s, e) =>
             {
                 if (_loading) return;
@@ -1549,7 +1549,7 @@ namespace WhaleLauncher.Views
             voicePanel.Children.Add(TwoCol(
                 BuildField(new FieldSpec { Path = "voice.timeoutMs", Label = "识别超时(ms)", Kind = "num", Min = 1000, Max = 300000 }, true),
                 BuildField(new FieldSpec { Path = "voice.maxSeconds", Label = "最长语音(秒)", Kind = "num", Min = 1, Max = 600 }, true)));
-            // 「深度思考」已经挪到聊天页签（和网页设置共用 thinking），这里不再重复放一个配置项。
+            // 「深度思考」已经挪到聊天页签（和 /api/settings 共用 thinking），这里不再重复放一个配置项。
 
             _loadModel = (set, provs) =>
             {

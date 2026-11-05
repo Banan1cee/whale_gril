@@ -2,7 +2,6 @@
 
 const { json } = require('./util');
 const { checkRequest, applySecurityHeaders } = require('./security');
-const { serveStatic } = require('./static');
 
 /**
  * 极简声明式路由：精确路径 + 正则模式，无依赖。
@@ -71,7 +70,6 @@ class Router {
 
       if (hit === 'method_miss') return json(res, 405, { ok: false, error: 'method not allowed' });
 
-      if (method === 'GET' || method === 'HEAD') return serveStatic(runtime, req, res, pathname);
       return json(res, 404, { ok: false, error: 'not found' });
     } catch (err) {
       const status = err.statusCode || 500;

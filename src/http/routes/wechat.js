@@ -10,7 +10,7 @@ const { json, readBody } = require('../util');
 
 module.exports = function register(router) {
   // ---- 微信多账号：列账号 / 刷新昵称 / 选账号 ----
-  // 启动器「微信桥接」页的账号卡用这三条（网页调试台的账号字段也走这里）。选账号 = 把
+  // 启动器「微信桥接」页的账号卡用这三条。选账号 = 把
   // config.json 的 wechat.account 改成目标账号目录；桥接发现这个值变了会自己 exit 7 让 bridge_loop 拉起来。
   router.get('/api/wechat/accounts', (runtime, req, res) => {
     return json(res, 200, wechatAccountsPayload(runtime));

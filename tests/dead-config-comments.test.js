@@ -47,7 +47,6 @@ test('源码与调试台里不再提「主动分享 / 消息汇总」', () => {
   };
   walk('src');
   walk('bridge');
-  files.push('web/debug.html');
 
   const hits = [];
   for (const rel of files) {
@@ -68,7 +67,7 @@ test('桥接不再留 digest worker 和它的死参数', () => {
 });
 
 test('限流口径统一写「每分钟」，别再有每小时上限的旧说法', () => {
-  const files = ['web/debug.html', 'src/pipeline/chat.js', 'src/pipeline/trigger.js'];
+  const files = ['src/pipeline/chat.js', 'src/pipeline/trigger.js'];
   for (const rel of files) {
     let text;
     try {

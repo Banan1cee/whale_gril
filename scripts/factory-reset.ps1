@@ -40,7 +40,7 @@ Say '    · config.json      主人名单、网关令牌、各项设置' 'Yellow
 Say '    · wechatauto_db\   微信数据库快照' 'Yellow'
 Say '    · wechatauto_logs\ 桥接日志' 'Yellow'
 Say ''
-Say '  会保留：程序本体（src / web / runtime / examples ...），以及一份自动备份' 'Gray'
+Say '  会保留：程序本体（src / runtime / examples ...），以及一份自动备份' 'Gray'
 Say ''
 
 if (-not $Yes) {

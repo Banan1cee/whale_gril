@@ -114,12 +114,6 @@ test('设置面板里存的旧默认温度也会被归一（1.15 / 1.25 → 0.95
   assert.equal(rt.temperature, 1.3, '用户自己调的温度不该被动');
 });
 
-test('设置面板滑块的默认值不再是 1.25', () => {
-  const page = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
-  assert.doesNotMatch(page, /id="temperature"[^>]*value="1\.25"/, '滑块默认值不能还是 1.25');
-  assert.match(page, /id="temperature"[^>]*value="0\.95"/, '滑块默认值应是 0.95');
-});
-
 test('迁移会写回 config.json（用户打开文件看到的也是新值）', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-mig-'));
   fs.writeFileSync(

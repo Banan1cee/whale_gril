@@ -6,7 +6,7 @@ const stickers = require('../adapters/stickers');
 const probe = require('../infra/probe');
 const ACTIVE = new Set(['queued', 'reserved', 'sending']);
 const TERMINAL = new Set(['confirmed', 'unconfirmed', 'failed', 'cancelled']);
-// status 结果缓存：启动器 2s、网页 3s 拉一次，1.5s 内直接复用上一次扫描结果
+// status 结果缓存：启动器 2s 拉一次，1.5s 内直接复用上一次扫描结果
 const STATUS_CACHE_MS = 1500;
 function fail(message, statusCode = 400) { return Object.assign(new Error(message), { statusCode }); }
 
@@ -308,7 +308,7 @@ class StickerService {
       if (!key) continue;
       emotions.push(list(key, label, true));
     }
-    // 探针：status 的 RTT（启动器每 2s、网页每 3s 拉一次，这条就是它们等的时间）
+    // 探针：status 的 RTT（启动器每 2s 拉一次，这条就是它等的时间）
     const total = emotions.reduce((sum, e) => sum + e.count, 0);
     const cost = probe.now() - t0;
     probe.emit(this.logger, cost > 300 ? 'warn' : 'debug',

@@ -4,12 +4,12 @@
  * 3.57「安全小修」那三条的回归测试 —— 当年改完只在 CHANGELOG 里写了，
  * 一行测试都没有，所以后来谁动 http 层都没人拦。
  *
- *   1) 静态文件防穿越：以前用 `filePath.startsWith(webDir)` 判断，
- *      兄弟目录 `web-evil/` 也满足前缀 → `/..%2fweb-evil%2fsecret.txt` 能读到库外文件。
- *      现在改成 `path.relative(webDir, filePath)`，跑出 webDir 一律 403。
- *   2) 每个响应都要挂安全头（nosniff / 禁止被 iframe 嵌套 / no-referrer / CSP）。
+ *   1) 每个响应都要挂安全头（nosniff / 禁止被 iframe 嵌套 / no-referrer / CSP）。
+ *   2) 跨站写请求一律拒绝（CSRF 闸），远程访问必须带 token。
  *   3) token 比较走恒定时间（`crypto.timingSafeEqual`），别用 `===` 靠响应时间泄密；
  *      长度不同、非字符串、null 都不能抛异常。
+ *
+ * 静态文件那一组（web/ 目录防穿越）随网页界面一起删除了 —— 现在根路径一律 404 JSON。
  *
  * 这些是「架构一改就悄悄失效」的典型：它们都不影响正常功能，
  * 只在被人构造请求时才看得出来。
@@ -24,24 +24,12 @@ const path = require('node:path');
 const { startServer } = require('../server');
 const { safeEqual, remoteAuthorized } = require('../src/http/security');
 
-const SECRET = 'PWNED-BY-TRAVERSAL';
-const CONFIG_MARKER = 'TOP-SECRET-CONFIG-MARKER';
-
-/** 起一个临时站点：<root>/web 是站点根，<root>/web-evil 是同前缀的兄弟目录 */
+/** 起一个临时站点（没有 web/ 目录：内核已经不提供静态文件） */
 function makeSite() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-hardening-'));
-  fs.mkdirSync(path.join(root, 'web'), { recursive: true });
-  fs.mkdirSync(path.join(root, 'web-evil'), { recursive: true });
-  fs.writeFileSync(path.join(root, 'web', 'index.html'), '<h1>ok</h1>', 'utf8');
-  fs.writeFileSync(path.join(root, 'web-evil', 'secret.txt'), SECRET, 'utf8');
   fs.writeFileSync(
     path.join(root, 'config.json'),
-    JSON.stringify({
-      server: { port: 0, openBrowser: false },
-      watchConfig: false,
-      log: { level: 'error' },
-      note: CONFIG_MARKER,
-    }),
+    JSON.stringify({ server: { port: 0, openBrowser: false }, watchConfig: false, log: { level: 'error' } }),
     'utf8'
   );
   return root;
@@ -82,46 +70,13 @@ async function boot(t) {
   return { inst, root, port: portOf(inst) };
 }
 
-/* ---------------- 静态文件防穿越 ---------------- */
-
-test('静态文件：编码后的 ../ 穿到兄弟目录（web-evil）必须 403，且读不到内容', async (t) => {
-  const { port } = await boot(t);
-  // 服务端先按 URL 归一化、再 decodeURIComponent，所以 %2f 是真正能穿过归一化的那一种写法
-  const res = await rawGet(port, '/..%2fweb-evil%2fsecret.txt');
-  assert.equal(res.status, 403, '兄弟目录前缀 ≠ 站点目录，必须拒绝');
-  assert.equal(res.body.includes(SECRET), false, '绝不能把站点目录外的文件读出来');
-});
-
-test('静态文件：编码后的 ../ 穿到 config.json 必须 403，配置内容不泄漏', async (t) => {
-  const { port } = await boot(t);
-  for (const rawPath of ['/..%2fconfig.json', '/..%2f..%2fconfig.json', '/%2e%2e%2fconfig.json']) {
-    const res = await rawGet(port, rawPath);
-    assert.equal(res.status, 403, `${rawPath} 应该被 403 挡掉（实际 ${res.status}）`);
-    assert.equal(res.body.includes(CONFIG_MARKER), false, `${rawPath} 泄漏了配置文件内容`);
-  }
-});
-
-test('静态文件：正常的页面照旧能取到（别把防穿越做成全站 404）', async (t) => {
-  const { port } = await boot(t);
-  const res = await rawGet(port, '/index.html');
-  assert.equal(res.status, 200);
-  assert.match(res.body, /ok/);
-});
-
-test('静态文件：绝对路径 / 盘符写法不会绕过站点根', async (t) => {
-  const { port } = await boot(t);
-  for (const rawPath of ['/C%3A%2FWindows%2Fwin.ini', '/%5C..%5Cconfig.json']) {
-    const res = await rawGet(port, rawPath);
-    assert.notEqual(res.status, 200, `${rawPath} 不该返回 200`);
-    assert.equal(res.body.includes(CONFIG_MARKER), false);
-  }
-});
+/* ---------------- 畸形请求不拖垮服务 ---------------- */
 
 test('畸形 URL 不会把服务搞挂，下一个请求照样能用', async (t) => {
   const { port } = await boot(t);
   const bad = await rawGet(port, '/%E0%A4%A');
   assert.ok([400, 500].includes(bad.status), `畸形 URL 应该给出 4xx/5xx，实际 ${bad.status}`);
-  const after = await rawGet(port, '/index.html');
+  const after = await rawGet(port, '/api/status');
   assert.equal(after.status, 200, '出过一次畸形请求之后，正常请求必须还能用');
 });
 
@@ -138,15 +93,16 @@ function assertSecurityHeaders(headers, where) {
   assert.equal(/unsafe-eval/.test(csp), false, `${where} 的 CSP 不该放开 unsafe-eval`);
 }
 
-test('安全响应头：API 响应 / 静态页面 / 404 都要带上', async (t) => {
+test('安全响应头：API 响应 / 根路径 404 / 未知路径 404 都要带上', async (t) => {
   const { inst, port } = await boot(t);
 
   const api = await fetch(`${inst.url}/api/status`);
   assert.equal(api.status, 200);
   assertSecurityHeaders(Object.fromEntries(api.headers), 'API 响应');
 
-  const page = await rawGet(port, '/index.html');
-  assertSecurityHeaders(page.headers, '静态页面');
+  const rootPath = await rawGet(port, '/');
+  assert.equal(rootPath.status, 404);
+  assertSecurityHeaders(rootPath.headers, '根路径 404');
 
   const missing = await rawGet(port, '/definitely-not-here.js');
   assert.equal(missing.status, 404);

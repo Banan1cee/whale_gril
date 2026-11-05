@@ -31,7 +31,7 @@ const RULES = [
   { from: 'persona', deny: ['pipeline', 'services', 'http'] },
   { from: 'pipeline', deny: ['http'] },
   // 服务层可以拿 HTTP 协议工具（json/readBody/sseSend），但不能碰服务器实现
-  { from: 'services', deny: ['http/router', 'http/security', 'http/static', 'http/util'] },
+  { from: 'services', deny: ['http/router', 'http/security', 'http/util'] },
 ];
 
 const ALLOW = ['core -> infra/features'];

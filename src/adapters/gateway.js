@@ -115,7 +115,7 @@ class Gateway {
     this.bot = bot;
     this.logger = logger;
     this.stats = { received: 0, replied: 0, sent: 0, failed: 0, lastMessageAt: 0, lastError: '' };
-    // 本地桥接的存活信息：桥接每 20 秒来一次心跳，网页据此显示「桥接在线 / 离线」
+    // 本地桥接的存活信息：桥接每 20 秒来一次心跳，状态接口据此报告「桥接在线 / 离线」
     this.bridge = {
       lastSeen: 0, uia: null, rest: false, listener: null, ffmpeg: null,
       // 多账号：桥接当前用的是哪个号、窗口认没认出来
@@ -125,7 +125,7 @@ class Gateway {
     };
   }
 
-  /** 桥接心跳：带 UIA / ffmpeg 状态，方便在网页上一眼看出「能不能发出去」 */
+  /** 桥接心跳：带 UIA / ffmpeg 状态，方便在状态接口里一眼看出「能不能发出去」 */
   heartbeat(info = {}) {
     const now = Date.now();
     this.bridge = {
@@ -146,7 +146,7 @@ class Gateway {
 
   /**
    * 桥接当前的可用状态：在线 / UIA 能不能用 / ffmpeg 找没找到。
-   * 复用心跳里已有的字段，不另存一份，免得网页显示和提示词里的说法对不上。
+   * 复用心跳里已有的字段，不另存一份，免得界面显示和提示词里的说法对不上。
    * 20 秒一次心跳，45 秒没动静就算掉线（和 status() 同一口径）。
    */
   bridgeStatus() {
@@ -322,7 +322,7 @@ class Gateway {
       enabled: Boolean(this.options.enabled),
       outboundConfigured: Boolean(this.options.outboundUrl),
       inboundPath: `/webhook/${this.platform}`,
-      // 网页据此显示「桥接在线 · UIA 正常 / 桥接离线」，以及「当前用的是哪个号」
+      // 启动器据此显示「桥接在线 · UIA 正常 / 桥接离线」，以及「当前用的是哪个号」
       bridge: {
         online,
         lastSeenSec: ageSec,

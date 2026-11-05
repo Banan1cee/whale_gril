@@ -568,7 +568,7 @@ card.chatId === source.chatId
 - 删除 Web 记忆页、卡片、侧栏入口。
 - `GET /api/memory` → 404/403。
 - 不新增 memory items / explain 接口。
-- 调试台最多显示计数，不显示正文。
+- 管理接口最多返回计数，不返回正文。
 - 日志只记 `memory.used=3`、`retrieval.hit=2`，不打印内容。
 - 用户问「你记得我什么」→ 角色语气回一句，不列清单。
 - 保留「忘掉这个」的自然语言删除，但不展示列表。

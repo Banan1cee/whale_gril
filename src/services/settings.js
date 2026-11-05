@@ -31,14 +31,14 @@ function getSettings(runtime) {
     model: llm.model,
     baseUrl: llm.baseUrl,
     temperature: llm.temperature,
-    // 深度思考开关 + 两档预算：网页设置里要能回显，日志里要能对上实际发的 max_tokens
+    // 深度思考开关 + 两档预算：设置接口里要能回显，日志里要能对上实际发的 max_tokens
     thinking: llm.thinking === true,
     chatThinkingTokens: Number(llm.chatThinkingTokens) || 2000,
     thinkingMaxTokens: Number(llm.thinkingMaxTokens) || 5000,
     keyMasked: maskKey(rt.apiKey),
     hasKey: Boolean(rt.apiKey),
     userName: String(saved.userName || config.persona.ownerName || ''),
-    // 看图（视觉）状态：网页设置里要能看出「填没填、填的是哪把」
+    // 看图（视觉）状态：设置接口里要能看出「填没填、填的是哪把」
     vision: vision.status(config),
     providers,
     group: {
@@ -217,7 +217,7 @@ async function applySettings(runtime, body) {
     patch.model = model;
   }
   // 看图（视觉模型）的 Key：单独一把，存在 data/settings.json 的 visionApiKey，
-  // 留空表示「不改」；以前网页没有这个字段，填了也没地方存，于是永远提示未配置
+  // 留空表示「不改」；以前设置里没有这个字段，填了也没地方存，于是永远提示未配置
   if (typeof body.visionApiKey === 'string') {
     const vk = body.visionApiKey.trim();
     if (vk && (/\s/.test(vk) || vk.length < 8 || vk.length > 300)) {
@@ -251,7 +251,7 @@ async function applySettings(runtime, body) {
   // 只要这次填了 Key，就默认关闭演示模式（防止「有 Key 还在说内置台词」）
   if (patch.apiKey) patch.mock = false;
   // 目标服务本来就不需要 Key（本地 Ollama / 本机 / 内网自建）时，演示模式一律关掉。
-  // 网页每次都会把开关一起提交，新装用户默认就勾着 —— 以前这里被 body.mock 覆盖回 true，
+  // 设置页每次都会把开关一起提交，新装用户默认就勾着 —— 以前这里被 body.mock 覆盖回 true，
   // 于是「选好本地模型、保存、测试连接」全程一次请求都没发到本地服务。
   {
     const nextProvider = patch.provider || current.provider;
@@ -266,7 +266,7 @@ async function applySettings(runtime, body) {
   if (typeof body.temperature === 'number' && Number.isFinite(body.temperature)) {
     patch.temperature = Math.max(0, Math.min(2, body.temperature));
   }
-  // 深度思考：只接受布尔值（网页开关）；落进 data/settings.json，resolveRuntime 优先读它。
+  // 深度思考：只接受布尔值（界面开关）；落进 data/settings.json，resolveRuntime 优先读它。
   // 思考 token 计入 max_tokens，开着会明显变慢、变贵，所以默认关。
   if (typeof body.thinking === 'boolean') patch.thinking = body.thinking;
   if (body.group && typeof body.group === 'object') {
@@ -296,7 +296,7 @@ async function applySettings(runtime, body) {
     }
   }
   saveSettings(config, patch);
-  // 称呼：网页设置和调试台改的是同一份数据，写进 config.json，重启也不会被旧值盖回来
+  // 称呼：设置界面和接口改的是同一份数据，写进 config.json，重启也不会被旧值盖回来
   if (typeof body.userName === 'string') {
     // 清空 = 恢复默认称呼，不是「不改」（以前清空后依然叫旧称呼）
     const name = String(patch.userName || '').trim() || '主人';

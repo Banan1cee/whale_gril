@@ -100,8 +100,6 @@ if ($PrevZip) {
 Step '5/5 从 zip 里读文件复核（不信任磁盘）'
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $checks = @(
-  @{ entry = 'web/index.html'; needle = 'visionApiKey'; label = '看图 API 字段' },
-  @{ entry = 'web/index.html'; needle = 'btnVisionTest'; label = '测试看图按钮' },
   @{ entry = 'src/http/routes/vision.js'; needle = '/api/vision/test'; label = '看图测试接口' },
   @{ entry = 'src/core/master.js'; needle = 'matchMaster'; label = '主人判定' },
   @{ entry = 'tools/uia-diag.py'; needle = 'QACCESSIBLE_ACTIVE_RVA_BY_VERSION'; label = 'UIA 诊断工具' }

@@ -112,8 +112,10 @@ test('配置里的 dbDir 是错的（用户填错路径）时不会卡死，会�
   assert.ok(value === '' || fs.existsSync(value), '要么空串，要么是真实存在的目录：' + last);
 });
 
-test('调试台有「微信文件保存位置」字段，且说明要重启桥接', () => {
-  const page = fs.readFileSync(path.join(root, 'web', 'debug.html'), 'utf8');
-  assert.match(page, /'wechat\.dbDir'/, '调试台要有这个字段');
+test('启动器有「微信文件保存位置」字段，且说明要重启桥接', () => {
+  // 调试台已删除，这个字段现在只在启动器「设置」页里；断言它的源码位置，
+  // 防止有人把字段从界面里删掉、用户再也没法手动指定微信目录。
+  const page = fs.readFileSync(path.join(root, 'launcher', 'Views', 'SettingsPage.xaml.cs'), 'utf8');
+  assert.match(page, /"wechat\.dbDir"/, '启动器要有这个字段');
   assert.match(page, /微信文件保存位置/, '字段要用人话写');
 });

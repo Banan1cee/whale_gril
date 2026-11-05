@@ -145,7 +145,6 @@ function printBanner(runtime, url) {
     '  🐋  鲸鲸 · 深海聊天机器人  ',
     `  版本：       v${runtime.version}`,
     '  ────────────────────────────────────────────',
-    `  网页聊天：   ${url}`,
     `  运行模式：   ${llm.isMock ? '演示模式（还没配置模型，用内置台词）' : `${llm.providerLabel} · ${llm.model}`}`,
     `  模型服务：   ${llm.providerLabel}${llm.needsKey ? (llm.apiKey ? '（Key 已配置）' : '（未填 Key）') : '（本地/免 Key）'}`,
     `  记忆文件：   ${config.paths.storeFile}`,
@@ -168,7 +167,6 @@ function runDoctor() {
   const push = (name, ok, detail) => checks.push({ name, ok, detail });
 
   push('Node 版本', parseInt(process.version.slice(1), 10) >= 18, process.version);
-  push('web 目录', fs.existsSync(path.join(root, 'web', 'index.html')), path.join(root, 'web', 'index.html'));
   push('config.json', fs.existsSync(config.paths.configFile), config.paths.configFile);
   push(
     '模型服务',
@@ -195,7 +193,7 @@ function runDoctor() {
   }
   console.log('\n🐋 鲸鲸 · 环境自检\n');
   for (const c of checks) console.log(`  ${c.ok ? '✅' : '⚠️ '} ${c.name.padEnd(12, ' ')} ${c.detail}`);
-  console.log('\n提示：没有 Key 也能启动——网页里可以选免费的智谱 GLM-4-Flash，或本地 Ollama，全程不花钱。\n');
+  console.log('\n提示：没有 Key 也能启动——启动器「设置」里可以选免费的智谱 GLM-4-Flash，或本地 Ollama，全程不花钱。\n');
   return checks.every((c) => c.ok);
 }
 

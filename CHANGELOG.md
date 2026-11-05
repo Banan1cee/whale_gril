@@ -1,5 +1,19 @@
 # 更新记录
 
+## 4.0.2
+
+### 改进 · 删掉网页控制台，只留 HTTP API
+
+- 删除 `web/`（聊天页 / 人设页 / 调试台，5 个文件）与 `src/http/static.js`：`GET /`、`/debug`、`/assets/*` 一律返回 404 JSON，不再有任何 HTML 响应。
+- `src/http/router.js` 去掉静态兜底；`loadConfig().paths` 去掉 `webDir`；`node server.js --doctor` 不再有「web 目录」这项自检；启动横幅去掉「网页聊天：http://…」那行。
+- 接口一个没删：启动器与桥接继续走 `/api/*`。只给网页用的 `POST /api/reset` 随聊天页一起下线（全仓 grep 过，桥接没有调用方）。
+- CSP 去掉 `script-src` / `style-src` 的 `'unsafe-inline'`：已无内联脚本，剩下的是纯 JSON API；CSRF / Origin 闸与远程 token 鉴权原样保留。
+- 删掉 `打开调试台.bat`（它只会打开已经 404 的地址）；`installer/whale.iss`、`scripts/deploy.ps1`、`scripts/build-release.ps1`、`scripts/release-check.js` 里针对 web 的注释、复制项与出包校验同步移除。
+- 启动器「设置 → 高级」的监听地址说明改成「只建议 127.0.0.1；同 WiFi 访问只对桥接和接口有效，没有网页界面」；明确与 `src/infra/features.js` 的开关说明改成走接口。
+- 新增门禁 `tests/no-web.test.js`：`web/` 与 `static.js` 不存在、`paths` 没有 `webDir`、`GET /` 是 404 JSON、`/api/status` 与 `/api/features` 照常。
+- 测试清理：删 `debug-console` / `sticker-ui` / `persona-preset` 三个整文件里的网页用例；其中不依赖网页的部分原样保留在 `tests/persona-preset-logic.test.js`（人设预设/清空自定义提示词/恢复默认 8 条）与 `tests/bridge-config-hotreload.test.js`（桥接配置热更新的源码约束）。`http-hardening` 去掉「静态文件防穿越」一组（CSRF / 远程访问用例一条没动），`local-api` / `sampling` / `care` / `db-dir` / `dead-config-comments` 改成读源码或删掉网页断言。
+- 文档同步：`docs/架构总览.md` 从「四个运行体」改成三个并删掉 Web 控制台一节，`README.md` / `docs/设置说明.md` / `docs/接入微信.md` / `docs/维护手册.md` / `docs/4.0/03-界面与功能归位.md` / `AGENTS.md` / `CONTRIBUTING.md` 里「网页设置 / 调试台」的说法一并改写。
+
 ## 未发布（fix/sticker-freeze-and-folder）
 
 ### 修复 · 切账号「没重启成功」，回复从大号发出去

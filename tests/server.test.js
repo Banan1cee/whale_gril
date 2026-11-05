@@ -243,12 +243,14 @@ test('设置接口：能改模型和演示开关；非法 Key 会被拒绝', asy
   assert.equal(settings.model, 'deepseek-chat');
   assert.equal(settings.mock, true);
 
+  // 网页控制台删除后，只给网页用的 /api/reset 也一起下线；API 里不该再有这个口子
   const reset = await fetch(app.url + '/api/reset', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ sessionId: 's1', mode: 'private' }),
   });
-  assert.equal((await reset.json()).ok, true);
+  assert.equal(reset.status, 404);
+  assert.equal((await reset.json()).ok, false);
   await app.close();
 });
 

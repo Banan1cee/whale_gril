@@ -138,7 +138,7 @@ const DEFAULT_CONFIG = {
     maxTokens: 700,
     timeoutMs: 45000,
     // 通义千问这类模型：false = 关掉「思考」直接出字（快，默认）；
-    // true = 先想一遍再回答（慢 1~3 秒，难问题更稳）。网页设置和启动器共用这一个开关。
+    // true = 先想一遍再回答（慢 1~3 秒，难问题更稳）。设置接口和启动器共用这一个开关。
     thinking: false,
     // 开思考时的聊天预算（关思考只给 700：思考 token 也计入 max_tokens，给多了会被思考吃光）
     chatThinkingTokens: 2000,
@@ -206,7 +206,7 @@ const DEFAULT_CONFIG = {
     fightQuoteCheck: true,
     mediaCleanup: true,
     memorySnapshot: true,
-    // 群聊关系加载（A 提到 B）：默认开，可在调试台关
+    // 群聊关系加载（A 提到 B）：默认开，可在「实验开关」里关
     relations: true,
   },
 
@@ -267,7 +267,7 @@ const DEFAULT_CONFIG = {
     accountGuard: true,
     windowHwnd: 0,
     // 零焦点发送通道（bridge/bg_sender.py）。桥接自己也会解析这一块，
-    // 这里放默认值是为了：调试台能看到、configSchema 能校验、/api/status 能展示。
+    // 这里放默认值是为了：启动器能看到、configSchema 能校验、/api/status 能展示。
     bgSend: {
       enabled: true,
       charGapMs: 40,
@@ -378,7 +378,7 @@ function normalizeBaseUrl(url) {
  * 新默认：temperature 0.95、两个惩罚项归零、max_tokens 700
  */
 const LEGACY_SAMPLING = { temperature: 1.15, frequencyPenalty: 0.35, presencePenalty: 0.25, maxTokens: 320 };
-// 网页设置面板（「俏皮程度」滑块）以前默认就是 1.25，存过设置的人会被它盖住
+// 以前设置面板（「俏皮程度」滑块）默认就是 1.25，存过设置的人会被它盖住
 const LEGACY_TEMPERATURES = [1.15, 1.25];
 
 function migrateSampling(cfg, log) {
@@ -447,7 +447,6 @@ function loadConfig({ root = projectRoot(), env = process.env } = {}) {
       settingsFile: path.join(root, 'data', 'settings.json'),
       storeFile: path.join(root, 'data', 'store.json'),
       logFile: path.join(root, 'data', 'whale.log'),
-      webDir: path.join(root, 'web'),
     },
     env: mergedEnv,
     configExists,
@@ -582,7 +581,7 @@ function resolveRuntime(cfg) {
   }
   const local = isLocalUrl(baseUrl);
   const needsKey = provider === 'ollama' ? false : preset.needsKey && !local;
-  // 深度思考：网页设置（data/settings.json）优先，其次 config.json 的 deepseek.thinking，默认关。
+  // 深度思考：设置接口（data/settings.json）优先，其次 config.json 的 deepseek.thinking，默认关。
   // 思考 token 计入 max_tokens，默认开会让 700 的输出预算全被思考吃掉（空响应根因）。
   const thinking = typeof settings.thinking === 'boolean'
     ? settings.thinking

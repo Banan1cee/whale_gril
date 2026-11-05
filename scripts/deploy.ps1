@@ -1,7 +1,7 @@
 ﻿<#
 把「开发目录」的代码同步到「运行目录」，并可选重启服务。
 
-为什么需要它：手工 Copy-Item 会在目标里套出一层同名目录（web\web、src\src），
+为什么需要它：手工 Copy-Item 会在目标里套出一层同名目录（src\src），
 或者把 data\、config.json 一起覆盖 —— 这两件事都真实发生过，代价是配置和聊天记忆丢了。
 
 它做的事：
@@ -40,7 +40,6 @@ if ($LASTEXITCODE -ge 8) { throw "robocopy 失败，退出码 $LASTEXITCODE" }
 # 2) 校验关键文件（防止「改了但没过去」）
 $must = @(
   'server.js', 'package.json',
-  'web\index.html', 'web\assets\app.js', 'web\assets\style.css',
   'src/pipeline/chat.js', 'src/adapters/vision.js', 'src/core/master.js', 'src/persona/index.js',
   'src/app.js', 'bridge/engine.py', 'tools/uia-diag.py', 'scripts/release-check.js'
 )
