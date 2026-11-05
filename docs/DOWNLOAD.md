@@ -11,21 +11,11 @@
 
 ## 代码签名
 
-Windows 发行包使用 **SignPath Foundation** 提供的免费代码签名：
+当前发行包**尚未签名**，Windows 会提示「未知发布者」。签名申请与策略见 [docs/CODE_SIGNING_POLICY.md](CODE_SIGNING_POLICY.md)。
 
-> Free code signing provided by [SignPath.io](https://about.signpath.io),
-> certificate by [SignPath Foundation](https://signpath.org).
-
-- 签名的文件：`WhaleLauncher.exe`（启动器）与 `whale-girl-<版本>-setup.exe`（安装包）
-- 只有由本仓库 GitHub Actions 构建出来的产物才会被签名（每个发版都人工批准一次）
-- 完整的签名策略见 [docs/CODE_SIGNING_POLICY.md](CODE_SIGNING_POLICY.md)；
-  隐私声明见 [docs/PRIVACY.md](PRIVACY.md)
-
-### 验证签名
+### 校验下载
 
 ```powershell
-Get-AuthenticodeSignature .\whale-girl-4.0.0-setup.exe |
-    Format-List Status, SignerCertificate
 Get-FileHash .\whale-girl-4.0.0-setup.exe -Algorithm SHA256   # 对照 SHA256SUMS.txt
 ```
 

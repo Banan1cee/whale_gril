@@ -455,23 +455,23 @@
       "lines": 96
     },
     {
-      "file": "tools/dev_kill.py",
+      "file": "scripts/tools/dev_kill.py",
       "lines": 39
     },
     {
-      "file": "tools/elev_uia_check.py",
+      "file": "scripts/tools/elev_uia_check.py",
       "lines": 80
     },
     {
-      "file": "tools/uia-check.py",
+      "file": "scripts/tools/uia-check.py",
       "lines": 47
     },
     {
-      "file": "tools/uia-diag.py",
+      "file": "scripts/tools/uia-diag.py",
       "lines": 154
     },
     {
-      "file": "tools/uia_probe.py",
+      "file": "scripts/tools/uia_probe.py",
       "lines": 102
     },
     {

@@ -29,7 +29,7 @@
 1. 缺 .NET 10 桌面运行时不再自动安装 —— 干净机器要先自己装好桌面运行时，否则 `WhaleLauncher.exe` 只会弹一句英文错误。
 2. 不再自动下载 Node / Python 运行时 —— 只支持发行包自带的 `runtime\`；源码版要自己准备 Node 18+ 与 Python 3.12。
 3. 不再有清残留进程的图形入口 —— 8787 被占用时只能用任务管理器，或关掉启动器后跑 `scripts\stop-all.ps1`。
-4. 不再有「真的发一条消息」的自检入口 —— 诊断页只剩只读的 `python tools\uia-check.py`；要真发测试消息得自己跑 `python examples\uia_selftest.py`。
+4. 不再有「真的发一条消息」的自检入口 —— 诊断页只剩只读的 `python scripts\tools\uia-check.py`；要真发测试消息得自己跑 `python examples\uia_selftest.py`。
 5. 不再修 Python 目录的 Low 完整性标签 —— zip 解压后被系统标成 Low 的机器，UIA 会整个不可用（微信进程模块枚举失败、SetWindowPos 拒绝访问），只能手动改目录权限。
 
 ### 其他 · 清掉网页界面留下的 openBrowser
@@ -600,6 +600,12 @@ secrets 就能签，不用改代码。
   → 发前 + 落键前两次 guard。找不到唯一联系人就 fail closed，不发
 - 其他：`config.example.json` 清掉上述废弃键；`scripts/prepare-sticker-runtime.py` 增加
   `wechatauto/db.py` 补丁（密钥失败提示的元组解包崩溃），并已应用到便携运行时
+
+### 文档：目录结构对齐仓库跟踪内容
+
+- 目录树改为「与 GitHub 仓库跟踪内容一致」：补上 `vendor/`、`bridge/`、`docs/`、`assets/`、`installer/innosetup/`、`scripts/tools/`，删掉已不存在的 `src/bot.js` 等历史条目
+- 运行期的 `data/`、`runtime/`、`artifacts/`、`config.json` 移出目录树，改成树外单独说明
+- README 首页做了精简：历史更新交给 CHANGELOG，接入微信、管理员命令、人设预设、配置明细交给 docs/
 
 ## 4.0.0
 

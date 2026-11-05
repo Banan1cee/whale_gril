@@ -1,480 +1,277 @@
-# 🐋 鲸鲸 · DeepSeek 鲸鱼娘聊天机器人
+[English](README.md) | [中文](README.zh-CN.md)
 
-> **想直接跑？点右边的 [Releases](https://github.com/Banan1cee/whale_gril/releases/latest)，下 `whale-girl-3.9.zip`（117 MB）。**
-> 里面已经带好 Node 22 和 Python 3.12，解压双击就能用，**不用装任何环境**。
->
-> ## 更新怎么不丢记忆（记住这一句就够）
->
-> **解压到原来那个文件夹，选「覆盖」。** 包里的 `data\`（聊天记忆 / Key / 称呼）和 `config.json`（主人名单 / token）都不会被覆盖，所以记忆一直在。
->
-> 已经解压到新文件夹了？跑 **`powershell -File scripts\update.ps1`**：它发现这个目录还没有记忆，会先找旧安装（同级 / 上级 / 桌面 / 下载 / 各盘根目录），把 `data\` 和 `config.json` 搬过来再更新（搬之前先备份当前数据）。
->
-> 想手动备份也行：`node scripts\memory-tool.js export <文件>` 导出 json，`restore <文件>` 放回去（启动器诊断页「数据维护」也是同一套）。详见下面的「3.51 更新」。
->
-> **旧版（3.x）的 `data\store.json` 会被自动识别并转成 4.0 格式**：直接把旧 `data\` 合并进来启动即可，
-> 导入完启动器会弹一次「记忆已导入并转换格式」（原文件留在 `data\memory\legacy\`）。也可以随时在
-> 「设置 → 高级 → 旧版记忆」点「一键识别转换记忆」，重复点不会重复导入。
->
-> ---
->
-> 这里的 `Code → Download ZIP` 只有 **400 KB 源码**（不含运行时，也不含你本地的 Key 和聊天记录）。从源码跑有两条路：
-> 1. 跑 **`powershell -File scripts\setup-runtime.ps1`** —— 自动下载 Node + Python 并把微信依赖装进 `runtime\`，之后和发行包一样用；
-> 2. 或者自己装 Node 18+（`npm start` 启动内核），接微信再装 Python 3.12 + `pip install -r requirements.txt`。
->    （wechatauto 由仓库 `vendor/wechatauto` 提供，pip 不需要装它；源码直跑桥接时把 `vendor` 加进 `PYTHONPATH` 即可）
+# 🐋 Whale Girl — a DeepSeek-powered WeChat companion bot
 
-一个能真正聊天的「鲸鱼娘」：**微信群自动回复 + B 站热搜/视频信息 + 联网查资料**，设置与诊断全在启动器里。
+[![GitHub release](https://img.shields.io/github/v/release/Banan1cee/whale_gril)](https://github.com/Banan1cee/whale_gril/releases/latest)
+[![License: MIT](https://img.shields.io/github/license/Banan1cee/whale_gril)](LICENSE)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D18-339933)](https://nodejs.org/)
+![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D4)
+[![GitHub stars](https://img.shields.io/github/stars/Banan1cee/whale_gril)](https://github.com/Banan1cee/whale_gril/stargazers)
 
-人设是一个蓝发鲸鱼娘，说话短、有情绪、会撒娇也会毒舌；接 OpenAI 兼容的大模型（DeepSeek / 智谱 GLM / 通义 / Ollama 本地等），零 npm 依赖。
+> **Just want to run it?** Grab the latest package from [Releases](https://github.com/Banan1cee/whale_gril/releases/latest),
+> extract it to a path without Chinese characters, double-click **`WhaleLauncher.exe`** and press **Start** in the top-right corner.
+> The release bundle ships its own Node.js and Python runtimes — nothing else needs to be installed.
+
+Whale Girl is a blue-haired companion bot with an actual personality: short replies, real moods, sweet one moment and savage the next.
+
+She **joins WeChat group conversations** on her own, brings in Bilibili/Weibo trending topics and live web lookups, and keeps up with group slang, abbreviations and banter. Everything — settings, diagnostics, switches — lives in one desktop launcher, so you can run her without hand-editing config files.
+
+Under the hood she talks to any OpenAI-compatible model (DeepSeek / Zhipu GLM / Qwen / local Ollama…); switching providers is a one-line change, and the kernel has **zero npm runtime dependencies**.
 
 ---
 
-## 实验性表情包
+## Features
 
-在启动器「表情包」页打开总闸（默认关闭）。分类由模型在回复末尾写 `[[sticker:分类]]` 决定：写哪个分类就发那一类，标记会被剥掉，用户看不到；没写标记、分类不存在或该分类没有图就**不发**，程序不猜情绪、不按概率配图。内置傲娇 / 炸毛 / 开心三类，也可以自己新增分类；启动器里管理分类、上传/删除图片、打开文件夹，支持 GIF、PNG、JPEG、WebP（单张不超过 4 MB）。上传只保存原图，不发送微信消息，不转码 GIF。
-
-自定义分类**按名字理解**：名字起得越具体越好用（例如「阴阳怪气」「委屈」），模型会从当前有图的分类里挑；名字看不出用途的分类它不会硬选。没有图的分类不会出现在提示词里。
-
-启动器「表情包」页可以直接调频率（0–100%）和「没写标记也补一张（必发）」；也可以改 `config.json` 的 `sticker.demandChance`（默认 0.7）和 `sticker.ensureSend`（默认关）。`demandChance` 决定这一轮要不要在尾部提醒她带一张，0 = 只靠模型自觉，1 = 每轮都提醒；只开它时，1.0 也不保证真发，因为模型仍可能不写标记。打开 `ensureSend` 后，命中提醒的轮次即使模型没写标记，程序也会按回复语气补一张（炸毛/傲娇/开心，挑不到用开心）——所以 **1.0 + 必发才约等于每轮都发**。对方在难过、求助、说正事时，严肃窗口仍然不发（15 分钟 / 连续 4 条普通消息 / 说“没事了”“哈哈”提前恢复）。明确索要仍然 100% 发。
-
-可选的「排队测试发送」是真实微信操作，**排队不代表送达**。桥接可能短暂切换到目标微信会话，完成后还原；请先清空输入框。证据不足时跳过，不盲按回车、不自动重试。结果显示「未确认」时不要重复点发送；如果出现附件草稿，请手动清空后继续使用，不会自动删除你的草稿。同会话同一时间只有一个待处理任务，确认后无冷却，超过 90 秒的任务失效而不重放。
-
-只有数据库出现新的本人发送图片记录才记为「确认」；数据库不可用或没有新记录一律记为「未确认」，不是成功。关闭无法撤回已经按下发送的消息。重启服务后不会重放旧任务。
-
-## 3.9 更新
-
-**联网更聪明、汇总能关、不打扰的功能删掉、桥接不再一闪而过。**
-
-- **联网改由模型判断**：不再只认「查一下 / 最新 / 多少钱」这类关键词，词库外的说法（「小蓝鲸是什么梗」）也会查；模型不可用时才回退关键词表。
-- **热榜按站点分流**：问 B 站热搜走 B 站官方接口、问微博热搜走微博，其它仍用头条榜；问具体视频/事件时不会再硬塞一份榜单，指定平台失败也不会拿别站榜单冒充。
-- **修了一个吞结果的 bug**：补搜路径对 `Set` 调用数组方法会抛错，把已经搜到的那条也一起丢掉——问到冷门内容时会「明明搜到了却说没有」。
-- **总超时**：路由最多 2 秒并取消底层请求，抓网页有墙钟截止/跳转上限/体积上限，不会一步等满一个超时。
-- **不再乱改检索词**：你写的型号、版本号、中文专名不会被清洗掉，也不会硬塞年份。
-- **提示词不再装懂**：用运行日期代替写死的「现在是 2026 年」；区分「查到资料」和「查了但没结果」，并注明网页摘要是外人写的、抓取时间不等于发布时间。
-
-**消息汇总（默认关闭）**
-
-- 人设页「实验开关」里一行同时有总开关和「每隔（分钟）」，默认关闭。**关掉 = 不采集、不轮询、不推送，接口 404**，并清空本轮内容；重新打开只收新消息。
-- 只收微信里**没接话**的普通消息：已回复的、重复的、系统通知、主人的话、静音会话、接口测试聊天都不收。
-- 只发给 `persona.master.wxids` 里**唯一明确**的主人；不按昵称猜人，填了多个或只填昵称就不推。
-- 发送前后会重新核对开关、代次、会话、账号、前台和焦点；已粘贴但取消时隔离该会话草稿，不自动删你的草稿，也不会让普通回复把草稿发出去。
-- 一批超过上限时游标只推进到真正发出去的最后一条，剩下的留到下一轮；送达不确定的窗口不重试、不补发。
-
-**删掉的功能**
-
-- 打游戏自动进「休息模式」、离开/回来打招呼、忙时排队补发 —— 全删，控制台里的对应设置项也删。
-- 机器人里「我去玩了 / 我回来了」的命令分支和休息状态文件副作用一并删除。
-- 「群里常说话的就这些：A(87)…」这种发言次数排行删除；群聊上下文仍保留说话人名字，但不再统计次数。
-- 旧配置里残留的 `gameWhitelist`、`awayNotice`、`returnNotice`、`queuedMax*`、`digestMinutes` 不再起作用，也不会显示在控制台。
-
-**桥接启动崩溃**
-
-- 修随包三方库的缺陷：密钥诊断把 PID 列表当三元组解包，只要有一个微信进程读不了内存（微信以管理员运行、多开选错号）就抛 `TypeError: cannot unpack non-iterable int object`，把本该显示的排查提示顶掉，桥接直接退出。
-- 现在读不到数据库会输出能照做的步骤：管理员运行桥接、在启动器「微信桥接」页里选对账号、确认微信已登录——不再甩一大段 traceback。
-
-## 3.54 更新
-
-**装不上 / 看不了 / 连不上，这一版全修了。**
-
-- **Windows Server**：以前一律提示「pip install wechatauto-replica」，其实是缺 VC++ 运行库 → 现在直接给 vc_redist 下载链接
-- **看图自带 ffmpeg**：微信 4.x 图片是 wxgf/HEVC，包内已带 `runtime\ffmpeg\bin\ffmpeg.exe`（包体积约 117MB）
-- **「重启了但不监听」**：打开微信数据库加 90 秒超时 + 就绪文件 `data\bridge-ready.json` + 重启上限 4 次
-- **「积极拒绝」**：等服务就绪再监听、本机请求不走代理、服务端口写 `data\server-port.txt`
-- **新增按顺序启动的引导**：先起服务再起桥接（现已合并进启动器，点一次「启动」即可）
-- **移除**：全局热键（PageUp 终止 / PageDown 恢复那套已下线）
-
-## 3.53 更新
-
-**群里终于分得清「你」在说谁了。** 以前 A 叫过她，A 转头骂 B「你个傻逼」，她冲 A 开火；别人聊「你吃饭没」，她插嘴。
-
-- **触发层收紧**：这条消息 @ 了别人、出现「他/她/楼上」、或提到其他成员 → 判定在跟别人说话，不接话
-- **「机器人」不再裸算点名**：要带指代（这个/那个/你/破/臭/傻）才算叫她
-- **提示词**：群里先判断「在跟谁说话」，判断不出就当别人；被 @ 的名单直接写进提示词
-- **兜底**：没点名却自动开火、又说不清对方骂了啥 → 降级成「？」，不再乱喷
-
-**功能开关体系**：人设页「实验开关」里 5 个开关可开可关（群聊分清对象 / 开怼需原话 / 媒体清理 / 记忆快照 / 引用回复），关掉即回到旧行为；开关写在 `config.json` 的 `features.*`，接口 `POST /api/features`。
-
-**引用回复默认关闭**：一开每条多走一遍 UI，回复明显变慢。
-
-**三件顺手的事**：日志节流（没配看图 Key 时不再刷屏）、媒体缓存启动清理（7 天 / 500MB）、搜索时效过滤（问「最新」时不再拿 2010 年的文章当现状）。
-
-## 3.52 更新
-
-**更新不再丢记忆。** 根因不是程序删数据，是大家把新版本解压到**新文件夹**——新目录没有 `data\`，看起来就是记忆全没了。这一版：
-
-- 发行包里**不再带 `config.json`**：解压覆盖到原文件夹时，`data\` 和 `config.json` 都不受影响，记忆自然还在（第一次运行会自己生成 config.json）
-- 新增「升级到新版本」入口（现在并进 `scripts\update.ps1`）：已经解压到新文件夹的，跑一次就自动找旧版本搬 `data\` + `config.json`（搬前先备份）
-
-正确姿势：**解压到同一个文件夹，选覆盖。**
-
-## 3.51 更新
-
-
-**记忆能带走了。** 以前更新是把整个文件夹换成新版，新目录里没有 `data\`，看起来就是「记忆全没了」。现在：
-
-- 每次启动自动快照到 `data\backups\`（留最近 20 份）
-- `node scripts/memory-tool.js backup` 立刻备份；HTTP 记忆接口已关闭（不能再用 `GET /api/memory/export`），要导出请用 `node scripts/memory-tool.js export <文件>`，或启动器诊断页「数据维护 → 备份记忆」
-- `node scripts/memory-tool.js restore <文件>` 把导出的 json 放回去；启动器诊断页「数据维护 → 恢复记忆」也能看快照列表
-- 恢复前会自动把当前记忆另存一份（`before-restore`），手滑也能回滚
-
-```bash
-node scripts/memory-tool.js info     # 现在有几段会话、几条消息
-node scripts/memory-tool.js backup   # 立刻备份
-node scripts/memory-tool.js export "D:\鲸鲸记忆.json"
-node scripts/memory-tool.js restore "D:\鲸鲸记忆.json"
-node scripts/memory-tool.js import "D:\旧版\data\store.json" --dry-run   # 3.x 旧记忆先预览
-node scripts/memory-tool.js import "D:\旧版\data\store.json"             # 真导入（同 chat 会合并）
-```
-
-旧版（3.x）记忆可以在 4.0 里直接读：`data\store.json`（含 `.journal`）、`data\memory.json`
-和旧备份包都能导。已有 chat 不会被整段跳过——消息按时间合并、重排 `seq`，notes 去重；
-导入前自动留 `before-import` 快照。
-
-## 3.50 更新
-
-- **称呼**：设置界面与 `data/settings.json` 改的是同一份 `persona.ownerName`；清空 = 恢复默认「主人」；老设置只迁移一次，不会重启又被盖回去。
-- **状态播报降权**：以前每条消息都告诉她「你此刻在泡脚」，于是句句「我刚泡完脚，手还湿着呢」。现在只给时间，「在干嘛」按小时抽样且明确要求别主动说。
-- **抢屏修复**：`restore_win_state()` 少了 `import ctypes`，每次发完消息都抛 `NameError`，微信窗口被抬到前台就不还原了。
-- **安全闸**：`server.host` 不是回环地址时强制改回 `127.0.0.1`；真要远程访问必须 `server.allowRemote=true` 且带 `x-bot-token`。
-- **看图**：接口按 URL 协议选 http/https 并传端口，本地/自建视觉服务能用了。
-- **语音**：改 Key / 超时不用重启桥接；Key 查找链补上 `config.deepseek.apiKey`。
-- **数据库目录**：兼容「直填账号目录 / 拍平的 db_storage」，盘符不再写死 C..K（L 盘、网络盘都行）。
-
-完整列表见 [CHANGELOG.md](CHANGELOG.md)，每个 bug 的根因和回归测试见 [BUGS.md](BUGS.md)。
+- **One entry point** — the WPF launcher is the only GUI. Port `8787` serves the HTTP API only; there is no web console any more.
+- **WeChat auto-reply** — she answers when @-mentioned or called by name, keeps chatting while the thread is alive, and goes quiet when the topic dies. She will snap back at insults aimed at her, but never butts into other people's arguments.
+- **Human-like pacing** — one reply is split into 2–3 short bubbles, without trailing tildes or full stops. If someone sends a bare `？`, she answers with a `？` too.
+- **Memory** — facts people state about themselves in DMs are stored; older group chats are compressed into a summary. If image/sticker recognition fails, she stays silent instead of guessing.
+- **No parroting** — if the model repeats itself (identical text, text plus a question mark, "no, *you* are…"), the reply is rewritten once.
+- **Internet slang** — `kskbl` → `zdjd`, `xswl` → she echoes it back; the lexicon lives in `assets/abbrev.txt`.
+- **Clapbacks** — when she or her owner is insulted she fires back with a 9-tier line library (`assets/clapback.txt`, extensible). Soft replies get replaced; sexual, family, discriminatory and real-world threats are never used.
+- **Little helper** — in a DM from her owner she can report her own WeChat ID; after the owner authorises "you may roast me", she may roast them in three sentences.
+- **Voice input** — incoming voice messages are transcribed to text before she replies; she only ever *sends* text.
+- **Web access** — the model decides whether a lookup is needed; Bing plus Bilibili/Weibo trending, Toutiao hot list and link-body extraction, all under a global timeout, with the current date injected into the prompt.
+- **Group management** — mute, unmute, switch model, change tone, clear memory, and an automatic "good night" when the battery is low.
+- **Stop everything** — the launcher's **Stop** button (or `scripts\stop-all.ps1`) stops kernel and bridge and writes a pause marker.
+- **WeChat bridge** — `examples/wechatauto_bridge.py`: read-only database access plus window automation, no injection into WeChat.
+- **No `npm install`** — the release bundle carries `runtime\`; this repository is the source edition.
 
 ---
 
-## 3.0 更新
+## Quick start (Windows release package with `runtime\`)
 
-**「主人识别」这一块基本重写了。** 之前典型症状是：在调试台改了主人名单，微信里她还是不认你。三个原因现在都修掉了：
-
-1. **判定只有一份。** 以前 `src/bot.js`（真正跑消息）和调试台预览各写一套规则 —— 调试台显示「识别为主人」，微信里却当陌生人。现在统一走 `src/master.js` 的 `matchMaster()`，两边不会再打架。
-2. **只填微信号会静默失效。** `master.wxids` 填成自己设的微信号（比如 `abc12345`，不是 `wxid_xxx`）时，旧逻辑会顺带关掉昵称兜底，等于谁都认不出来。现在会认出「这不像 wxid」并在调试台/日志告警；没有任何真 wxid 时退回按昵称认。
-3. **认了之后还得「认账」。** 认证成功了，但那个会话历史里已经有几十条「你不是主人」，模型会顺着历史继续否认（实测 51 轮历史连问两遍都还是「不是」）。现在提示词里加【身份纠错】，并且**喂给模型的历史会剔除这些身份争执**（记忆文件不动）；万一回复仍然是否认，`finalize()` 兜底改成认下来。
-4. 每条微信私聊在 `data/whale.log` 留一行 `[master] … → 主人（wxid）`，排查不用猜。
-5. 调试台「身份 / 主人」卡片新增：名单告警 +「最近说过话的人（真实 senderId）」—— 不知道自己的 wxid，照着抄就行。
-
-其他修复：`npm test` 只跑 `tests/`（不再把 `runtime/python` 里 Python 包自带的 `.js` 当测试）；修 `providers.test.js` 误写真实 `data/settings.json` 的问题；`saveSettings` 不再丢掉别的服务商的 Key；自检入口脚本的换行统一成 CRLF。
-
-### 3.0.2 看图
-
-- **微信图片是 wxgf（HEVC）容器**，以前桥接按扩展名当 JPEG 发出去，视觉接口一直回「图片输入格式/解析错误」—— 所以会出现「有时能认、有时不能」。现在按文件头判格式，wxgf 先转 JPEG 再发。
-- 桥接启动时自动找 fmpeg（C:\ffmpeg\bin、
-untime\ffmpeg\bin 等）；**没有 ffmpeg 就看不了图**，日志里会写清楚。
-- 长截图（高宽比 > 2.2）自动切成 2~3 段识别再拼接。
-- 修正智谱 max_tokens 上限（1024），提示词放宽到 900 字并要求逐条转写不省略。
-
-完整列表见 [CHANGELOG.md](CHANGELOG.md)。
-
----
-
-## 功能
-
-- **一个入口**：界面只有启动器（WPF + .NET 10），浏览器不再有控制台；`127.0.0.1:8787` 只留 HTTP API 给启动器与桥接
-- **微信群自动回复**：只认 @ / 叫名字；被叫到后接着聊，冷场 6 分钟或换话题自动闭嘴
-- **像真人**：一句话拆成 2~3 条短消息发，不带波浪号和句号；任何人单发一个 `？` 她也回一个 `？`
-- **会记事**：私聊里自报的事实（名字、住哪、喜欢什么、忌口）自动记下，之后不用重说；更早的群聊会被压成一句摘要，不会凭空丢失
-- **不学舌**：不会把别人刚说的话原样发回去；发现模型复读（原样重复、只加问号、「你才X」偷懒句）会自动重写一次，还复读就换成正常回应
-- **叫名字也算叫她**：群里不一定非要 @，「你好响呀鲸鲸」「鲸鲸你别装了」这种带名字的都会接话；被人骂了但没 @，只要她刚说过话也会回怼（别人之间互骂她不插嘴）
-- **看不懂就不说**：图片/表情包识别失败时保持沉默，不瞎编
-- **懂缩写**：`kskbl` → 回 `zdjd`，`xswl` → `我也xswl`；词表在 `assets/abbrev.txt`
-- **会回怼**：被骂或主人被骂时按「贴吧老哥」火力回：对方爆粗就带脏字、自称你爹、扣帽子（急了/破防/贵物/收收味/典），六成概率打两连击（先反问或扣帽子，再补一刀），连骂三轮自动收尾走人。台词库 `assets/clapback.txt` 分 9 档：`重`、`爹味`、`反问`、`典`、`急了`、`轻`、`叫滚`、`收尾`、`一般`，可自己加
-- **回怼不认输**：模型要是说「别生气」「我理解你」「没必要吵」这类软话，会被直接换成库里的狠话
-- **回怼有底线**：不碰性、不咒对方家人死、不搞地域性别疾病歧视、不威胁线下现实；主人被骂豁免，不会反打主人
-- **小助手**：主人私聊问「我微信多少」回自己的号；说「可以损我」授权后，主人才可以点名让他被损三句（以前「问群里都有谁就列发言次数排行」的功能已删）
-- **听得懂语音**：别人发语音会先转成文字再正常接话（`config.json` 的 `voice`，默认 qwen3-asr-flash）；她自己只发文字，不发语音条
-- **联网**：由模型判断该不该查，Bing 搜索 + B站/微博热搜（按站点分流）+ 头条热榜 + 链接正文抓取；有总超时，会把「查到什么」和「没查到」分开告诉模型，提示词自带当前日期
-- **群管理**：禁言群、解禁、改模型、切语气、清记忆、低电量自动发晚安
-- **一键终止所有**：`scripts\stop-all.ps1`，服务、桥接全部停掉并写暂停标记（启动器里点「停止」也是同一套）
-- **微信桥接**：`examples/wechatauto_bridge.py`，基于 `wechatauto-replica` 的 UI 自动化（只读数据库 + 窗口操作，**不注入微信**）
-- **零 npm 依赖**：不用 `npm install`；带 `runtime\` 的发行包连 Node 都不用装（本仓库是源码版，不带 `runtime\`）
-
----
-
-## 快速开始（Windows · 带 `runtime\` 的发行包）
-
-> 本仓库是**源码版，不含 `runtime\`**，请直接看下一节。只有带 `runtime\` 的发行包才用这一节（解压即用，不需要装 Node / Python）。
+> This repository is the **source edition and does not include `runtime\`**. Use the section below only with a release bundle, which runs without installing Node or Python.
 >
-> **解压到纯英文路径**（例如 `D:\whale-girl-3.0`）。放在带中文的目录里，微信那侧的自动发送会失败并一直报「拒绝访问」，原因见下面「接入微信群」里的说明。
+> **Extract to an ASCII-only path** (for example `D:\whale-girl-4.0`). Inside a path containing Chinese characters the WeChat automation fails with "access denied".
 
-1. 解压压缩包
-2. 双击 **`WhaleLauncher.exe`**，点右上角「启动」——内核和桥接都由它拉起（`8787` 只给启动器与桥接调用，没有网页界面）
-3. 在「状态」页看到内核、桥接都亮起就能用
+1. Extract the archive.
+2. Double-click **`WhaleLauncher.exe`** and press **Start**. The launcher brings up the kernel and the bridge; `8787` is only used by the launcher and the bridge.
+3. Once the **Status** page shows both kernel and bridge as running, you are good to go.
 
-包里已经带了 **Node 运行时**（`runtime\node.exe`）和 **Python 运行时**（`runtime\python`），两个都不需要你装。启动器优先用包内的，找不到才回退系统 PATH。
+The bundle contains a **Node.js runtime** (`runtime\node.exe`) and a **Python runtime** (`runtime\python`). The launcher prefers the bundled ones and only falls back to `PATH`.
 
-桥接同理：启动器点「启动」时会一起拉起，用的是包内那套 Python（已经装好 wechatauto-replica、pywin32、uiautomation、Pillow、cryptography、pysilk 等依赖）。
+The same applies to the bridge: the launcher starts it with the bundled Python, which already has `wechatauto-replica`, `pywin32`, `uiautomation`, `Pillow`, `cryptography`, `pysilk` and friends installed.
 
-唯一还需要你的东西：**一个登录着的微信小号**，和**一个模型 API Key**（DeepSeek / 智谱 / 千问任选）。
+The only things you must supply: **a logged-in secondary WeChat account** and **one model API key** (DeepSeek / Zhipu / Qwen, your pick).
 
-## 更新到新版本
+## Updating
 
-不用再手动下载解压。在启动器里点「检查更新」，或跑 `powershell -File scripts\update.ps1`，
-它会自己查最新 release、下载、校验、覆盖；`data\`（聊天记忆）和 `config.json`（Key）全程不动。
+Use **Check for updates** in the launcher, or run `powershell -File scripts\update.ps1`. It finds the latest release, downloads it, verifies it and overwrites the installation; `data\` (memory) and `config.json` (keys) are never touched.
 
-```
-[回车] 现在更新     [r] 回滚上次更新     [q] 退出
-```
+- **Verification** — the `sha256` published by the GitHub API is checked; a mismatch aborts the update instead of installing half a package.
+- **Automatic rollback** — after overwriting, the version, memory count and `config.json` hash are re-checked; any failure restores the backup.
+- **Mirrors** — if GitHub is unreachable, a mirror is tried (`ghfast.top` / `gh-proxy.com` / `gh-proxy.org` / `ghproxy.net`, transport only, never verification).
+- **Offline** — `scripts\update.ps1 <path-to-zip>` installs a package you downloaded yourself.
+- **Check only** — `scripts\update.ps1 -Check`; **rollback manually** — `scripts\update.ps1 -Rollback`.
 
-- **校验**：按官方 API 给的 `sha256` 比对，对不上直接中止，不会装半个包。
-- **失败自动回滚**：覆盖后自检版本号 / 记忆条数 / `config.json` 哈希，任一项不过就用备份还原。
-- **官方连不上**：自动换镜像（`ghfast.top` / `gh-proxy.com` / `gh-proxy.org` / `ghproxy.net`，只搬运、不参与校验）；查版本接口被墙时先走 `gh-proxy.com`、`gh-proxy.org` 的 API 转发，全都挂了再从镜像页面抠版本号。
-  也可以自己下 zip，跑 `scripts\update.ps1 <zip 路径>` 离线装。
-- **只看版本**：`scripts\update.ps1 -Check`；**手动回滚**：`scripts\update.ps1 -Rollback`。
-- **第一次用（换过文件夹）**：目录里没有 `data\` 时会先找旧安装，按「最后保存时间」从新到旧列出（带会话数/条数），回车即搬、输序号换一个、`s` 跳过；
-  也可以直接指定：`scripts\update.ps1 -Migrate -FromDir "D:\whale-girl-3.50"`。
-- **Low 完整性标签**：安装目录带 Low 标签时 node 写不了 `%TEMP%`（报 `EPERM`），更新前会自动把
-  `runtime\node.exe` / `python.exe` 标回 Medium；修不动就改用安装目录里的临时目录，更新照样能跑。
+> If you modified the source, note that updates overwrite everything: the script lists locally modified files and asks for confirmation (`-Force` skips the prompt).
 
-> 自己改过源码要注意：更新是整包覆盖，会把你改过的文件换掉。检测到本地有自定义功能时，
-> 脚本会列出来并要求确认（`-Force` 可跳过确认）。
+## When the launcher won't open
 
-## 没有图形入口时怎么办
+The repository root has exactly one double-click entry, `WhaleLauncher.exe`; everything else is a command-line script.
 
-仓库根目录只剩 `WhaleLauncher.exe` 一个双击入口，其余全是命令行脚本。启动器打不开、
-或者要在一台没有图形界面的机器上自救时，用这几条：
-
-| 场景 | 命令 |
+| Situation | Command |
 | --- | --- |
-| 装 Node / Python 和桥接依赖 | `powershell -File scripts\setup-runtime.ps1` |
-| 清残留进程（8787 被占、桥接赖着不走） | 先关掉启动器，再 `powershell -File scripts\stop-all.ps1` |
-| 恢复出厂（清空记忆与配置） | 启动器「诊断」页「重置全部」，或 `powershell -File scripts\factory-reset.ps1 -Yes` |
-| 更新到新版本 | 启动器「检查更新」，或 `powershell -File scripts\update.ps1` |
-| 只读诊断 UIA（不改任何东西） | `python scripts\tools\uia-check.py` |
-| 往文件传输助手发一条真实测试消息 | `python examples\uia_selftest.py` |
-## 快速开始（源码版 / 命令行 / macOS / Linux）
+| Install Node / Python and bridge dependencies | `powershell -File scripts\setup-runtime.ps1` |
+| Clean up stuck processes (8787 occupied, bridge won't die) | close the launcher, then `powershell -File scripts\stop-all.ps1` |
+| Factory reset (wipe memory and config) | launcher → **Diagnostics** → **Reset everything**, or `powershell -File scripts\factory-reset.ps1 -Yes` |
+| Update | **Check for updates** in the launcher, or `powershell -File scripts\update.ps1` |
+| Read-only UIA diagnostics (changes nothing) | `python scripts\tools\uia-check.py` |
+| Send one real test message to File Transfer | `python examples\uia_selftest.py` |
+
+## Quick start (source / CLI / macOS / Linux)
 
 ```bash
-# 1. 需要 Node.js 18+
+# 1. Node.js 18+
 node -v
 
-# 2. 直接启动（不需要 npm install）
+# 2. Start the kernel (no npm install needed)
 npm start
 ```
 
-没填 API Key 时会用内置台词演示；在启动器「设置」里选服务商、填 Key 即可接真模型。
+Without an API key the kernel runs in demo mode with built-in lines; pick a provider and paste a key in the launcher's **Settings**.
 
-首次启动会自动把 `config.example.json` 复制成 `config.json`；**`config.json` 和 `data/` 里是你的 Key、聊天记录和主人名单，已在 `.gitignore` 里排除，别提交**。
+On first start `config.example.json` is copied to `config.json`. **`config.json` and `data/` hold your keys, chat history and owner list — both are git-ignored, never commit them.**
 
-支持的 provider：`deepseek` / `zhipu` / `siliconflow` / `qwen` / `ollama`（本地）/ `custom`（任何 OpenAI 兼容接口）。
-
----
-
-## 接入微信群（Windows）
-
-微信桥接是独立的 Python 脚本，需要 Windows + 已登录的微信 4.x：
-
-```bash
-py -3.12 -m pip install -r requirements.txt
-# wechatauto 不在 requirements 里：它由仓库 vendor/wechatauto 提供（见 vendor/README.md）
-set PYTHONPATH=%CD%\vendor
-python examples/wechatauto_bridge.py
-```
-
-然后：
-
-1. 在 `config.json` 里配置 `gateway.wechat.inboundToken`（桥接和服务器共用的密钥）
-2. 双击 `WhaleLauncher.exe` 点「启动」：内核与桥接都由它拉起，桥接崩溃会按 10 分钟窗口刹车重启
-3. 用你的微信给机器人账号发一句话，启动器「状态」页能看到回复
-
-> 详细说明见 [docs/接入微信.md](docs/接入微信.md)。桥接依赖 `wechatauto-replica` 的 UI 自动化能力，微信升级可能导致失效，请自行评估风险。
-
-> **⚠ 装到纯英文路径，否则微信发送一定是坏的。**
-> 微信的 Qt accessibility 只能在纯 ASCII 路径下热激活成功。整个文件夹放在
-> `C:\Users\张三\Desktop\whale-girl-3.0`（含中文用户名）、`D:\我的程序\…` 这类路径下时，
-> 桥接会 `ensure_window() = False`，之后每条回复都报
-> `error(5, 'SetWindowPos', '拒绝访问')`、退到 OCR 兜底、发不出去，日志一直刷。
-> 正确做法：**`D:\whale-girl-3.0`、`C:\whale-girl-3.0` 这种纯英文路径**。
-
-### 一键终止所有（`scripts\stop-all.ps1`）
-
-先关掉启动器，再跑 `powershell -File scripts\stop-all.ps1`，它会依次停掉：
-
-- 鲸鲸服务（占用 8787 的进程）
-- 微信桥接（`wechatauto_bridge.py`）
-- 启动器窗口（不关的话它会把桥接重新拉起来）
-
-同时会写 `data\PAUSED`，防止任何自动重启。脚本会多扫三遍，因为杀父进程时可能正好有子进程在启动；最后会打印结果，停干净了显示绿色，没停干净会列出残留 pid。
-
-恢复：重新打开 `WhaleLauncher.exe` 点「启动」（启动器会清掉 `PAUSED`）。
+Supported providers: `deepseek` / `zhipu` / `siliconflow` / `qwen` / `ollama` (local) / `custom` (any OpenAI-compatible endpoint).
 
 ---
 
-## 谁可以当管理员
+## WeChat bridge (Windows)
 
-开源版不写死任何人的微信 ID，部署者自己决定：
+Requirements: Windows, a logged-in WeChat 4.x, administrator rights. Double-click `WhaleLauncher.exe` and press **Start**; kernel and bridge come up together.
+
+Running from source: `py -3.12 -m pip install -r requirements.txt`, put `vendor` on `PYTHONPATH`, then run `python examples/wechatauto_bridge.py`.
+
+Details (UIA elevation, multiple accounts, ASCII-only paths, error codes) are in the WeChat integration guide under [`docs/`](docs/).
+
+### Stop everything (`scripts\stop-all.ps1`)
+
+Close the launcher first, then run `powershell -File scripts\stop-all.ps1`. It stops, in order:
+
+- the kernel (whatever holds port 8787),
+- the WeChat bridge (`wechatauto_bridge.py`),
+- the launcher window (if left open it would restart the bridge).
+
+It also writes `data\PAUSED` so nothing is restarted automatically, scans three extra times because a child process may spawn while its parent is being killed, and finally prints a green "clean" line or the list of leftover PIDs.
+
+To resume: open `WhaleLauncher.exe` and press **Start** (the launcher clears `PAUSED`).
+
+---
+
+## Who can be an admin
+
+The open-source edition hard-codes nobody's WeChat ID — the deployer decides:
 
 ```json
 "persona": {
-  "master": { "names": ["你的昵称"], "wxids": ["wxid_xxx"] }
+  "master": { "names": ["your-nickname"], "wxids": ["wxid_xxx"] }
 },
 "admin": {
-  "spell": "设一个只有你知道的暗号",
+  "spell": "a passphrase only you know",
   "minutes": 30,
   "allowAll": false
 }
 ```
 
-- `master.names` / `master.wxids`：填谁，谁就是主人（可以填多个）
-- `admin.spell`：私聊发这个暗号获得 30 分钟管理员权限；留空则关闭
-- `admin.allowAll: true`：**任何人不发暗号也能直接用管理员命令**（适合自己人小群，公开群慎用）
+- `master.names` / `master.wxids` — everyone listed here is an owner (multiple entries allowed).
+- `admin.spell` — sending this passphrase in a DM grants 30 minutes of admin rights; leave it empty to disable.
+- `admin.allowAll: true` — **anyone** can use admin commands without the passphrase. Fine for a small private group, dangerous in public ones.
 
-### 管理员命令（私聊机器人）
+### Admin commands (DM the bot)
 
-```
-状态
-上下文 30
-人味 高|中|低
-情绪 开|关 / 主动 开|关 / 观点 开|关
-语气 温柔|活泼|高冷|毒舌|正经
-语态 <一句话描述>
-长度 私聊 120 / 回复 短一点
-颜文字 少|多|关
-能力 链接 开|关 / 能力 主动接话 开|关
-禁言 鼠标 / 别在鼠标群说话 / 解除禁言 鼠标
-改模型 deepseek-reasoner
-演示模式 开|关
-重置记忆 / 清空所有记忆 / 恢复默认
-退出管理
-```
+Admin commands are sent in private chat. The full list (status, tone, length, mute, switch model, reset memory…) is in the settings reference under [`docs/`](docs/).
 
-群里被叫到后，她会接着聊 6 分钟；听到「没你事了 / 滚 / 走吧 / 闭嘴」会回一句「好的主人，我走了」然后闭嘴。时长在 `config.json` 的 `group.engagedMinutes` 调。
+### How context is assembled
 
-### 上下文怎么给模型
+- Group history is fed to the model as **events**: every line keeps its speaker, time and @ target, so several people's messages are not squashed into one, and someone else's "you" is never mistaken for an address to the bot.
+- If a message @-mentions somebody else and then says "you", the bot does not jump in; if it @-mentions both the bot and another person, that person is recorded as a mention.
+- DM context is 100 messages by default, group context 60 (`chat.historyTurns` / `chat.groupHistoryTurns`, capped at 120/100). `memory.maxMessages` must be at least the largest window, otherwise messages cannot be stored.
 
-- 群聊历史按「事件」喂给千问：每条带发言人、时间和 @ 对象，不再把多个群友的话捏成一条，也不会把别人之间的「你」当成在叫鲸鲸。
-- 显式 @ 了别人（没 @ 鲸鲸）之后接着说「你」，鲸鲸不会抢答；同时 @ 鲸鲸 和另一个人时，会记下另一个人作为提及对象。
-- 私聊默认 100 条、群聊 60 条消息（`chat.historyTurns` / `chat.groupHistoryTurns`，上限 120/100）；`memory.maxMessages` 必须 ≥ 最大窗口，否则存不下。面板里的「条数」指消息条数，不是问答轮数。
+### Persona presets (one file per version)
 
-### 人设预设（一个版本一个文件）
-
-`assets/personas/` 下每一版人设单独一个文件，**升级时新增、不覆盖旧的**：
-
-```
-assets/personas/persona-v1.json   # 通用版，已去掉主人的微信号和群里的人名
-assets/personas/persona-v2.json   # 下一版
-```
-
-三种用法：
-
-- 启动器「人设」页底部「人设预设」→ 选一个 → 导入
-- 接口：`POST /api/persona/preset`，body `{"id":"persona-v1"}`
-- 直接把人设内容粘进面板的「自定义提示词」
-
-导入只改人设和上下文条数，不动模型、Key、群配置和记忆。`assets/personas/` 会跟着发行包发出去，所以里面不能写任何私密信息。
+`assets/personas/` holds one file per persona version; upgrades add files and never overwrite old ones. Import them from the bottom of the launcher's **Persona** page. Conventions and privacy rules are in [assets/personas/README.md](assets/personas/README.md).
 
 ---
 
-## 一键终止 / 继续
+## Pause and resume
 
-关掉启动器（或跑 `scripts\stop-all.ps1`）停掉服务 + 桥接（不发任何消息）并写 `data/PAUSED`；
-重新打开 `WhaleLauncher.exe` 点「启动」即恢复（它会清掉暂停标记）。
+Close the launcher (or run `scripts\stop-all.ps1`): kernel and bridge stop without sending anything, and `data/PAUSED` is written. Open `WhaleLauncher.exe` and press **Start** to resume — the pause marker is cleared.
 
-## 配置
+## Configuration
 
-复制示例配置再改（`config.json` 已被 `.gitignore` 忽略）：
+Copy the example and edit it (`config.json` is git-ignored): `cp config.example.json config.json`
 
-```bash
-cp config.example.json config.json
-```
-
-常用字段：
-
-| 字段 | 说明 |
+| Field | Meaning |
 | --- | --- |
-| `provider` / `deepseek.apiKey` | 模型服务商与 Key（启动器「设置」里改的是同一份） |
-| `persona.master.names` / `wxids` | 主人名单，决定谁有特权 |
-| `admin.spell` / `admin.allowAll` | 管理员暗号 / 是否人人可管理 |
-| `chat.privateMaxChars` / `groupMaxChars` | 回复长度上限 |
-| `group.requireAt` | 群里是否必须先 @ 才回 |
-| `group.engagedMinutes` | 被叫到后继续接话的分钟数 |
-| `group.cooldownSec` | 群回复冷却（0 = 不冷却） |
-| `wechat.lowBatteryPercent` | 电量低于多少自动发晚安 |
-| `gateway.wechat.inboundToken` | 桥接与服务器共享的 token，务必改掉 |
+| `provider` / `deepseek.apiKey` | model provider and key |
+| `persona.master.names` / `wxids` | who counts as the owner |
+| `gateway.wechat.inboundToken` | bridge token — change it |
+| `group.requireAt` | must a group message @ the bot first? |
+| `chat.privateMaxChars` | reply length limit |
+
+Everything else is documented in the settings reference under [`docs/`](docs/).
 
 ---
 
-## 目录结构
+## Project structure
 
 ```
-whale-girl/
-├─ server.js                 # HTTP + SSE + webhook（没有静态页面）
-├─ src/
-│  ├─ bot.js                 # 触发判断、管理员命令、回复编排
-│  ├─ persona.js             # 人设提示词、词库注入、语气规则
-│  ├─ llm.js                 # OpenAI 兼容客户端
-│  ├─ memory.js              # 会话/记忆存储
-│  ├─ presets.js             # 人设预设的读取与导入
-│  ├─ links.js               # 链接正文抓取
-│  ├─ websearch.js           # Bing 搜索 / 天气 / B站·微博·头条热榜（含总超时）
-│  ├─ searchRouter.js        # 让模型判断「这条要不要联网」并改写检索词
-│  └─ config.js / personaStore.js
-├─ launcher/                 # WPF 启动器（.NET 10，单文件框架依赖）
-├─ installer/                # Inno Setup 安装脚本（安装包由 GitHub Actions 构建）
-├─ assets/                   # 人设预设（personas 子目录）+ 词库（abbrev / clapback / slang）
-├─ examples/
-│  ├─ wechatauto_bridge.py   # 微信桥接（UI 自动化）
-│  └─ wechaty-bridge.js      # 另一种桥接示例
-├─ scripts/                  # 启动/守护脚本
-├─ tests/                    # node:test 单元测试
+whale-girl/                        # same layout as the repository; runtime data is never committed
+├─ server.js                       # HTTP server + webhooks
+├─ WhaleLauncher.exe               # the only GUI entry point
+├─ package.json
+├─ release-manifest.json
+├─ requirements.txt
 ├─ config.example.json
-└─ data/                     # 运行时数据（Key、记忆、词库、日志）— 不入库
+├─ README.md                       # this file (English)
+├─ README.zh-CN.md                 # Chinese README
+├─ CHANGELOG.md
+├─ BUGS.md
+├─ CONTRIBUTING.md
+├─ AGENTS.md
+├─ LICENSE
+├─ .gitignore
+├─ .gitattributes
+├─ .github/                        # CI and releases
+├─ src/                            # kernel
+│  ├─ adapters/                    # outbound integrations
+│  ├─ core/                        # decision making and parsing
+│  ├─ http/                        # routes and security gates
+│  ├─ infra/                       # config and infrastructure
+│  ├─ llm/                         # model client
+│  ├─ memory/                      # memory and token budget
+│  ├─ persona/                     # persona
+│  ├─ pipeline/                    # message orchestration
+│  └─ services/                    # stateful services
+├─ bridge/                         # Python bridge
+├─ launcher/                       # launcher source
+├─ installer/                      # Inno Setup (bundled compiler)
+├─ scripts/                        # build/maintenance (tools/ holds UIA diagnostics)
+├─ assets/                         # persona presets and lexicons
+├─ examples/                       # bridge entry and media fallbacks
+├─ docs/                           # documentation
+├─ vendor/                         # pinned copy of wechatauto
+├─ tests/                          # tests
 ```
+
+Not committed, generated at runtime: `data/` (keys, memory, logs), `runtime/` (bundled Node and Python),
+`artifacts/` (build output) and `config.json` (local configuration).
 
 ---
 
-## 开发与测试
+## Development and testing
 
 ```bash
-npm test          # node --test "tests/*.test.js"（只跑 tests 目录，别扫到 runtime\python 里自带的 .js）
-node server.js --doctor   # 自检
+npm test                  # node --test "tests/*.test.js" (tests/ only, never runtime\python)
+node server.js --doctor   # self-check
 ```
 
-- 人设 / 词库：`data/persona.json`、`data/slang.txt`（启动器「人设」页改的是同一份）
-- 想改触发逻辑：`src/bot.js` 的 `computeTrigger`
-- 想改提示词：`src/persona.js` 的 `buildSystem`
+- Persona / lexicon: `data/persona.json`, `data/slang.txt` (the launcher's **Persona** page edits the same files).
+- Trigger logic: `computeTrigger` in `src/bot.js`.
+- Prompt building: `buildSystem` in `src/persona.js`.
 
 ---
 
-## 安全与合规
+## Security and compliance
 
-- 默认只监听 `127.0.0.1:8787`，**不要直接暴露到公网**（没有登录鉴权）
-- `data/`、`config.json` 已被 `.gitignore` 忽略；**不要把自己的 API Key、聊天记录提交到仓库**
-- 微信桥接是 UI 自动化，不改微信客户端、不注入、不读内存，但**仍可能违反微信使用条款**，账号风险自负
-- 机器人说的话由大模型生成，请在公开群谨慎开启 `admin.allowAll` 和自动分享
-
----
-
-## 下载（Download）
-
-安装包只从 **GitHub Releases** 下载：<https://github.com/Banan1cee/whale_gril/releases>
-
-Windows 发行包使用 **SignPath Foundation** 提供的免费代码签名
-（Free code signing provided by SignPath.io, certificate by SignPath Foundation），
-签名覆盖 `WhaleLauncher.exe` 与 `whale-girl-<版本>-setup.exe`。
-校验值与验证命令见 **[docs/DOWNLOAD.md](docs/DOWNLOAD.md)**。
+- The server binds to `127.0.0.1:8787` by default — **never expose it to the internet** (there is no authentication).
+- `data/` and `config.json` are git-ignored. **Never commit API keys or chat history.**
+- The WeChat bridge is UI automation: it does not patch the client, inject code or read process memory, but it **may still violate WeChat's terms of service**. Use it at your own risk.
+- Replies are generated by a large language model — be careful with `admin.allowAll` and auto-sharing in public groups.
 
 ---
 
-## 代码签名（Code signing policy）
+## Download
 
-发行包的 Windows 签名由 SignPath 提供：
+Only download installers from **GitHub Releases**: <https://github.com/Banan1cee/whale_gril/releases>.
+Checksums and verification commands are in [docs/DOWNLOAD.md](docs/DOWNLOAD.md).
 
-> Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org).
+## Code signing policy
 
-签名覆盖 `WhaleLauncher.exe` 和 `whale-girl-<版本>-setup.exe`，只对由本仓库
-GitHub Actions 构建出来的产物签名（每个发版签名都要人工批准）。
+Current release builds are **not signed yet**, so Windows shows "Unknown publisher". Verify `SHA256SUMS.txt` from the release before installing.
+The signing policy is in [docs/CODE_SIGNING_POLICY.md](docs/CODE_SIGNING_POLICY.md); the privacy statement is in [docs/PRIVACY.md](docs/PRIVACY.md).
 
-**完整的代码签名策略**（签哪些文件、谁批准、隐私声明、怎么验证签名）见
-**[docs/CODE_SIGNING_POLICY.md](docs/CODE_SIGNING_POLICY.md)**。
-隐私声明单独一份：**[docs/PRIVACY.md](docs/PRIVACY.md)**。
+## Acknowledgements
 
-验证方法：
+This project's WeChat support stands entirely on the shoulders of others. Special thanks to:
 
-```powershell
-Get-AuthenticodeSignature .\whale-girl-4.0.0-setup.exe | Format-List Status, SignerCertificate
-Get-FileHash .\whale-girl-4.0.0-setup.exe -Algorithm SHA256   # 对照 Release 里的 SHA256SUMS.txt
-```
+- **[wechatauto-replica](https://github.com/fanyuantaier/wechatauto-replica)** (`wechatauto-replica` v1.2.9, **Apache-2.0**, by fanyuantaier, [PyPI](https://pypi.org/project/wechatauto-replica/))
+  — a Windows WeChat 4.x automation library (a wxauto replica): SQLCipher database decryption plus hybrid UIA / coordinate-OCR sending.
+  The WeChat bridge (`examples/wechatauto_bridge.py`) is built directly on top of it.
+  - The source is vendored as a pinned copy in `vendor/wechatauto/` (including the original `dist-info/licenses/LICENSE`), with a manifest and checksums in `vendor/MANIFEST.sha256` and notes in `vendor/README.md`.
+  - The build copies it into `runtime/` only after verifying every file against the manifest, and **never edits the upstream source**; behaviour changes belong in the build-time patch `scripts/prepare-sticker-runtime.py`, and runtime compatibility patches are applied from `examples/uia_compat.py` without touching the vendored files. Both are documented in `vendor/README.md`.
+  - The upstream README says "for personal study and automation research only". That is the author's wish, not a licence term; the actual rights come from Apache-2.0 (see below).
+- **[wxauto](https://github.com/cluic/wxauto)** (Apache-2.0) — the pioneer of Windows WeChat automation; `wechatauto-replica` is its 4.x replica and inherits its design.
+- **[VB-CABLE](https://vb-audio.com/Cable/)** (VB-Audio, donationware) — the virtual audio cable used for voice sending; the installer only ships the official installer.
+
+### Third-party licence and redistribution
+
+- `wechatauto-replica` is licensed under **Apache-2.0**, which permits private and commercial use, modification and redistribution **provided the licence and copyright notices are kept, your changes are stated, and you do not imply endorsement by the upstream project**.
+- This repository satisfies those terms by shipping the licence text at `vendor/wechatauto/dist-info/licenses/LICENSE`, keeping the upstream source unmodified (patches happen at build time only, verified by `vendor/MANIFEST.sha256`), and crediting the project here and in `vendor/README.md`.
+- This project's own code is **MIT** (see [LICENSE](LICENSE)); it is compatible with the upstream Apache-2.0.
 
 ## License
 
-MIT，见 [LICENSE](LICENSE)。欢迎 fork、改人设、接自己的模型。
+MIT — see [LICENSE](LICENSE). Fork it, rewrite the persona, plug in your own model.
