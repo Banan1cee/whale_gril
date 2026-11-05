@@ -36,6 +36,14 @@
 
 - 删网页后清掉 `server.openBrowser` 与启动自动开浏览器的逻辑，避免全新安装时弹出一个 404 页面：`server.js` 去掉 `openBrowser()`、`--no-browser` 参数和 `node:child_process` 导入，`configSchema` 与默认配置去掉这个字段，`config.example.json` 不再提网页/浏览器；`tests/no-web.test.js` 补两条门禁。
 
+### 改进 · wechatauto 1.2.9 源码入库，构建不再联网拉取
+
+- `vendor/wechatauto` 固定上游 PyPI 包 `wechatauto-replica==1.2.9` 的完整源码（71 个 `.py` + 资源文件 + `dist-info` 许可证与元数据），附 `MANIFEST.sha256`；原因不只是离线——`scripts/prepare-sticker-runtime.py` 直接改它的 `uia_driver.py` / `accessibility.py`，上游布局一变就会在构建期 `raise`。
+- `scripts/build-runtime.ps1` 删掉 `$Packages` 里的 `wechatauto-replica`，改为「按 MANIFEST 逐文件校验 → 从 `vendor/` 复制 → 断言版本 1.2.9」；缓存指纹带上 vendor 清单哈希，vendored 源码一变就重建。其余依赖精确锁定：`psutil==7.2.2`、`pywin32==312`、`requests==2.34.2`、`uiautomation==2.0.29`、`comtypes==1.4.17`、`colorama==0.4.6`、`Pillow==13.0.0`、`pyperclip==1.11.0`、`cryptography==50.0.2`、`winsdk==1.0.0b10`、`imageio-ffmpeg==0.8.1`、`zstandard==0.25.0`、`opencv-python==5.0.0.93`、`pyautogui==0.9.54`——这些以前都靠 `wechatauto-replica` 的传递依赖带进来，现在必须显式列（含 7 个只发 sdist 的包，构建时用 `--no-binary` 抓源码、安装时现场构建）。
+- `requirements.txt` 去掉 `wechatauto-replica`，其余依赖全部改用 `==` 精确版本；源码直跑桥接时把 `vendor` 加进 `PYTHONPATH`。
+- 新增门禁 `tests/vendor-wechatauto.test.js`：清单与实际文件完全一致、无 `.pyc` / `__pycache__`、`dist-info` 许可证齐全、`requirements.txt` 不再装它、构建脚本不再对它 `pip download`、vendored `.py` 里没有 `http(s)://` / `github.com` / `pypi.org`。
+- 打包边界：源码 zip 带 `vendor/`；完整包与安装包不带（`runtime\python` 里已经装了同一份，构建时校验过）。
+
 ## 未发布（fix/sticker-freeze-and-folder）
 
 ### 修复 · 切账号「没重启成功」，回复从大号发出去

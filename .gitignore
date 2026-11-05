@@ -28,7 +28,10 @@ release/
 Thumbs.db
 
 # 微信安装包 / 本地工具（tools/ 是项目自己的热键脚本，要入库）
-vendor/
+# vendor/ 下是固定进仓库的上游源码（见 vendor/README.md），只忽略下载包与临时目录
+vendor/*.zip
+vendor/*.tar.gz
+vendor/tmp/
 scripts/node-path.local
 
 # 桥接 OCR 的临时截图

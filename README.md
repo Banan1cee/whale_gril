@@ -20,6 +20,7 @@
 > 这里的 `Code → Download ZIP` 只有 **400 KB 源码**（不含运行时，也不含你本地的 Key 和聊天记录）。从源码跑有两条路：
 > 1. 跑 **`powershell -File scripts\setup-runtime.ps1`** —— 自动下载 Node + Python 并把微信依赖装进 `runtime\`，之后和发行包一样用；
 > 2. 或者自己装 Node 18+（`npm start` 启动内核），接微信再装 Python 3.12 + `pip install -r requirements.txt`。
+>    （wechatauto 由仓库 `vendor/wechatauto` 提供，pip 不需要装它；源码直跑桥接时把 `vendor` 加进 `PYTHONPATH` 即可）
 
 一个能真正聊天的「鲸鱼娘」：**微信群自动回复 + B 站热搜/视频信息 + 联网查资料**，设置与诊断全在启动器里。
 
@@ -264,6 +265,8 @@ npm start
 
 ```bash
 py -3.12 -m pip install -r requirements.txt
+# wechatauto 不在 requirements 里：它由仓库 vendor/wechatauto 提供（见 vendor/README.md）
+set PYTHONPATH=%CD%\vendor
 python examples/wechatauto_bridge.py
 ```
 

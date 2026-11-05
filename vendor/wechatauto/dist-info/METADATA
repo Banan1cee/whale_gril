@@ -1,0 +1,1671 @@
+Metadata-Version: 2.4
+Name: wechatauto-replica
+Version: 1.2.9
+Summary: 微信 4.x Windows 客户端自动化库（wxauto 复刻版）：SQLCipher 数据库解密读取 + UIA/坐标-OCR 混合发送，支持消息监听、媒体下载、朋友圈读取
+Author: wechatauto-replica
+License: Apache-2.0
+Project-URL: Homepage, https://github.com/fanyuantaier/wechatauto-replica
+Project-URL: Repository, https://github.com/fanyuantaier/wechatauto-replica
+Project-URL: Issues, https://github.com/fanyuantaier/wechatauto-replica/issues
+Keywords: wechat,weixin,wechat4,wxauto,wechatauto,uiautomation,sqlcipher,ocr,rpa,automation,wechat-automation
+Classifier: Development Status :: 4 - Beta
+Classifier: Environment :: Win32 (MS Windows)
+Classifier: Natural Language :: Chinese (Simplified)
+Classifier: Operating System :: Microsoft :: Windows
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Topic :: Communications :: Chat
+Classifier: Topic :: Software Development :: Libraries :: Python Modules
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: uiautomation>=2.0.18
+Requires-Dist: pywin32>=305
+Requires-Dist: pyperclip>=1.8.2
+Requires-Dist: Pillow>=9.0.0
+Requires-Dist: psutil>=5.9.0
+Requires-Dist: colorama>=0.4.6
+Requires-Dist: cryptography>=41.0.0
+Requires-Dist: winsdk>=1.0.0b10
+Requires-Dist: imageio-ffmpeg>=0.4.9
+Requires-Dist: zstandard>=0.19.0
+Requires-Dist: pyautogui>=0.9.53
+Requires-Dist: opencv-python>=4.8.0
+Provides-Extra: moments
+Requires-Dist: pyautogui>=0.9.53; extra == "moments"
+Requires-Dist: opencv-python>=4.8.0; extra == "moments"
+Provides-Extra: guia
+Requires-Dist: winsdk>=1.0.0b10; extra == "guia"
+Requires-Dist: pypinyin>=0.48.0; extra == "guia"
+Dynamic: license-file
+
+﻿# wechatauto-replica — 微信 4.x Windows 自动化 / WeChat 4.x Automation
+
+> **中文版** 在下方 · **English version below**
+
+## 独立窗口 UIA / Standalone-window UIA
+
+显式指定 `WeChatGUI(hwnd=chat_hwnd)` 或 `WeChatUIA(hwnd=chat_hwnd)` 可绑定已物化的
+`mmui::ChatSingleWindow`。会话名取根窗口标题，`open_chat()` 接受精确标题或根节点
+AutomationId 中的原生 username；不同目标失败，不跨窗口搜索或回退 OCR。文本走 UIA，
+附件输入坐标取同窗口的 `chat_input_field`。
+
+`mmui::SearchMsgUniqueChatWindow` 只支持绑定、诊断和消息列表定位，不支持发送；搜索框
+不会被当作聊天输入框。无 HWND 的 UIA 自动发现仍只选主窗，原有 HWND/PID 绑定保护保留。
+
+An explicitly bound, materialized `mmui::ChatSingleWindow` supports UIA text
+sending and input geometry. Its exact title or native AutomationId username must
+match the requested target; a different target fails without OCR or searching
+another window. `mmui::SearchMsgUniqueChatWindow` supports binding, diagnostics
+and message-list lookup only; its search box cannot send messages. Automatic UIA
+discovery still selects main windows, with existing HWND/PID checks preserved.
+
+---
+
+## 🇨🇳 中文版
+
+### wechatauto —— 微信 4.x Windows 客户端自动化（wxauto 复刻版）
+
+![PyPI version](https://img.shields.io/pypi/v/wechatauto-replica)
+![PyPI downloads](https://img.shields.io/pypi/dw/wechatauto-replica)
+![Python](https://img.shields.io/pypi/pyversions/wechatauto-replica)
+![License](https://img.shields.io/github/license/fanyuantaier/wechatauto-replica)
+![GitHub stars](https://img.shields.io/github/stars/fanyuantaier/wechatauto-replica)
+
+> [!NOTE]
+> **📢 维护状态 / Maintenance Notice**
+> 本人因今年升高一，开学后几乎没有时间继续更新本项目（如果有时间，争取周日更新）。遇到问题请自行在 Issues 区讨论，或询问 AI 协助解决。感谢支持！
+>
+> I'm starting senior high school and will register tomorrow (Aug 23). After school starts I'll have almost no time to keep updating (Sundays if possible). Please discuss issues in the Issues section or ask an AI. Thanks for your support!
+
+
+> [!NOTE]
+> **📢 维护状态 / Maintenance Notice**
+> 本人因今年升高一，开学后几乎没有时间继续更新本项目（如果有时间，争取周日更新）。遇到问题请自行在 Issues 区讨论，或询问 AI 协助解决。感谢支持！
+>
+> I'm starting senior high school and will register tomorrow (Aug 23). After school starts I'll have almost no time to keep updating (Sundays if possible). Please discuss issues in the Issues section or ask an AI. Thanks for your support!
+
+
+
+本项目复刻上游 wxauto 项目，目标是实现对当前微信 4.x Windows 客户端的自动化
+（读取消息、发送消息、媒体下载、朋友圈），非网页版，直接操作本机客户端。
+
+> 当前版本：1.2.9
+>
+> **兼容范围**：Windows 10/11 ｜ Python 3.9+（已在 3.12 验证）｜ 微信 **4.1.12+**（已在 4.1.15.53 / 4.2.0.11 验证）
+> （数据库读取路线对微信版本不敏感；坐标+OCR 发送路线依赖 4.1.12+ 自绘渲染
+> 布局，UIA 控件树随小版本变化——4.1.15 起搜索入口改为收起式，已适配；
+> 其它小版本可能需校准 `guia.py` 布局常量与 gate RVA 表）。
+
+![解密读取微信 4.x 加密数据库](docs/demo_db_files.gif)
+
+*直接解密读取 `xwechat_files/.../db_storage/` 下的 `contact.db` / `message_*.db` / `sns.db` 加密库——纯本地，无 Web API。*
+
+---
+
+## ⚡ 一条命令
+
+不想写 Python 的话，装完直接敲命令（issue #31 提的需求；**原有 Python 接口一字未改**，
+下面这些命令只是同一批接口的调用方）。
+
+**最省事的一条**：直接敲 `wechatauto`（或 `python -m wechatauto`），它先做一次体检，再把
+「看消息 / 导出 / 下载图片 / 发消息 / 监听 / 朋友圈」列成菜单让你按序号选——不用记任何参数。
+
+```bash
+wechatauto                          # 跟着提示走（在终端里运行才会进菜单）
+wechatauto 体检                     # 账号 / 数据库密钥 / 图片密钥 / 控件树，一眼看清哪一步没通
+wechatauto 会话                     # 列出会话
+wechatauto 消息 文件传输助手        # 最近消息（--type image 只看图片，--json 出结构化）
+wechatauto 导出 文件传输助手        # 导出成 UTF-8 文本
+wechatauto 图片 某群 --out D:\img   # 下载本机已有的图片
+wechatauto 发 你好 --to 文件传输助手 --verify    # 发消息（会驱动微信窗口）
+wechatauto 听 某群                  # 监听新消息，Ctrl+C 退出
+wechatauto 朋友圈 --me              # 看自己发的朋友圈
+```
+
+子命令**中英文都行**（`消息` = `messages`、`导出` = `export`、`图片` = `images`、
+`发` = `send`、`听` = `listen`、`体检` = `doctor`、`会话` = `sessions`）。会话怎么称呼都行：
+昵称、备注、wxid、群号——命令会先把显示名补成读库要用的 `username`（把 wxid 直接填进微信
+搜索框是新手最常见的坑：搜不到，白等几十秒才报一句 `None`）。`图片` 会先确认图片 AES 密钥，
+缺了会说清怎么办而不是一堆 `None`；只有 `--original` 才驱动微信界面去下载原件
+（**真的会动你的窗口**）。
+
+---
+
+## 🤝 致谢
+
+> 感谢 [vesio](https://github.com/vesio) 在 [issue #1](https://github.com/fanyuantaier/wechatauto-replica/issues/1) 提供微信 4.1.12 的 UIA 控件树代码与思路，促成了 v1.0.8 的 UIA 混合驱动。
+>
+> 感谢 [nanshanjack](https://github.com/nanshanjack) 发现 UI 锁的可重入问题（v1.1.2 修复）。
+>
+> 感谢 [maozhitao12450](https://github.com/maozhitao12450) 报告 WXAM (wxgf) 图片下载问题（v1.1.3 修复）。
+>
+> 感谢 [uiharukazari0105](https://github.com/uiharukazari0105) 发现语音数据分片存储（`media_1.db` 等）从未被搜索的问题（v1.1.4 修复）。
+>
+> 感谢 [wenjiavv](https://github.com/wenjiavv) 报告 [issue #28](https://github.com/fanyuantaier/wechatauto-replica/issues/28)（1.2.2.5 缺失 `import threading`，布局校准必抛 `NameError`）与 [issue #29](https://github.com/fanyuantaier/wechatauto-replica/issues/29)（发送回读校验接受包含额外正文的历史消息），两份都附了复现步骤、宽屏/竖屏的不同症状和修复建议（v1.2.2.6 修复）。
+>
+> 感谢 [dhz1145](https://github.com/dhz1145) 报告 [issue #32](https://github.com/fanyuantaier/wechatauto-replica/issues/32)：微信存储位置设在盘符根（`d:\`）时自动检测依赖启动目录。附了逐条复现步骤（换启动目录的对照输出）、成因定位、`GetFullPathNameW` 的路径解析复核和修复建议（v1.2.5.1 修复）。
+>
+> 感谢 [WrenZephyrSol](https://github.com/WrenZephyrSol) 在 [issue #20](https://github.com/fanyuantaier/wechatauto-replica/issues/20) 里的复查：同一个会话他拿 `list_message_chats()` 数出 2654 条、走 `get_messages()` 只有 763 条，并贴出逐行源码对照，还给出「下载那一步不能走 `get_message_row`、要自己带 server_id 去语音库捞」的绕行方案。那份分析读的是 v1.2.1，但顺着它挖出了 `local_id` 跨分片重复这个真洞（v1.2.6 修复）。
+>
+> 感谢 [tryqylz](https://github.com/tryqylz) 报告 [issue #34](https://github.com/fanyuantaier/wechatauto-replica/issues/34)：在实际使用中发现「消息发送者编号映射错误，导致名称错位」。人工观察 + 逐处源码定位，两条都成立：`_sender_id_index()` 拿资源库的 `SenderName2Id` 解析本应属于分片 `Name2Id` 的编号，`_resolve_sender()` 把编号 2 固定当成本机账号；给出的改法建议（按消息所在分片以 `Name2Id.rowid` 关联、缺失时保留未知状态）被完整采纳（v1.2.6.1 修复）。
+>
+> 感谢 [dhz1145](https://github.com/dhz1145) 在 [issue #38](https://github.com/fanyuantaier/wechatauto-replica/issues/38)–[#43](https://github.com/fanyuantaier/wechatauto-replica/issues/43) 与 [PR #37](https://github.com/fanyuantaier/wechatauto-replica/pull/37)、[PR #44](https://github.com/fanyuantaier/wechatauto-replica/pull/44) 里的这轮修复：六个问题（输入框定位偏移、引用/回复目标失效、改备注误写相似联系人、多开错窗、校验库错账号、重复发送）每个都带三轮真机复现、独立数据库回读和修复前后对照，修复 PR 含 76 项新离线回归并在 4.1.15.55 双账号真机上验收（v1.2.8.1 修复）。
+
+---
+
+## 版本记录
+
+### v1.2.9（2026-10-31）
+
+- ⚠️ **图片密钥校验修复（[PR #46](https://github.com/fanyuantaier/wechatauto-replica/pull/46)，issue #45）**：密钥验证改用本次目标的密文首块，不再错拿缓存目录首个 `.dat` 当样本——此前有效密钥会被误判无效并落入长时间内存扫描（修复后真机提取 76/78/70ms）。
+- **新增 wxauto4 式独立聊天窗**：`wx.ChatWindow("张三").SendMsg("你好")` —— 双击会话行开独立窗并自动绑定，发消息走同一条 rhythm 节流链；`wx.CloseChatWindow` 关窗（前台校验后才发 Alt+F4）。
+- **微信 4.2.0.11 兼容**：附件粘贴改 UIA SendKeys + U+FFFC 草稿判据；朋友圈新 cell 类名；转发右键按内容重心定位；会话定位右缘过滤；预览窗树退化自愈。详细清单见 [README.zh-CN](https://github.com/fanyuantaier/wechatauto-replica/blob/main/README.zh-CN.md)。
+- **密钥缓存 DPAPI 加密**（按 Windows 用户加密，旧明文缓存兼容）；主窗失联自愈；EmojiMessage 截图后滚回底部。
+
+### v1.2.8.1（2026-10-25）
+
+- ⚠️ **重要修复（六项，来自 [PR #37](https://github.com/fanyuantaier/wechatauto-replica/pull/37)，报告人 [dhz1145](https://github.com/dhz1145)，issue #38–#43）：发送链路的目标定位与多开安全。** 每项均附三轮真机复现 + 独立数据库回读 + 修复前后对照。
+  - **输入框定位**（#38）：探测失败时回退「窗口高度比例」估算矩形，最高偏离真实输入框 73px，`send_file` 返回「已发送」实际没发；现在优先读真实 UIA 编辑控件矩形，删比例兜底，失败即报失败。
+  - **重复发送**（#38 评论）：回车后确认失败会重新粘贴再提交——一次调用发出两条相同消息；现在回车只提交一次，「已投递未确认」明确失败、绝不自动重发。
+  - **引用/回复**（#39、#41）：OCR 删 ASCII 空格而 `target_text` 带空格 → 引用必失败；`reply_msg` 的 `target_text` 此前根本没被使用（循环变量还覆盖了正文）。现在与 OCR 同步去空格，0 个或多个候选都明确失败，`reply_msg` 复用 `quote_msg`。
+  - **改备注错人**（#40）：目标不在屏、屏内有相似名时旧代码**改掉相似联系人的备注**，`verify=True` 也是误写后才失败；现在写入前唯一解析联系人 + 精确匹配行 + 编辑窗旧值核对，三层闸全在写入之前。
+  - **多开错窗**（#42）：`WeChatGUI(hwnd=B)` 内部 UIA 仍按面积全局挑窗、操作 A；现在 `WeChatUIA(hwnd=)` 显式绑定，查找/热激活/登录探测限定该 HWND + 原进程，目标失效明确失败。
+  - **校验库错账号**（#43）：校验库按目录 mtime 自动选账号，绑 B 读 A，消息已发出却报「未确认」；现在按窗口进程实际打开的 `db_storage` 路径唯一确认账号，确认不了就失败。
+- **新增：独立窗口 UIA**（[PR #44](https://github.com/fanyuantaier/wechatauto-replica/pull/44)）：显式绑定支持 `mmui::ChatSingleWindow`（独立聊天窗，可发文本/附件）；`mmui::SearchMsgUniqueChatWindow`（聊天记录窗）只读——可绑定/诊断/读消息列表，发送与输入一律拒绝，搜索框不会当作发送框。目标不一致明确失败，不跨窗、不降级 OCR；新增 `window_kind()`。自动发现仍只认主窗。
+- **内部修复（`6a3d63e`）：连接泄漏 / 监听假成功 / 密钥提取中断 / OCR 竞态。** `get_self_info()` 补 `try/finally` 关连接（监听高频路径句柄泄漏锁缓存目录）；密钥提取页 1 读取容忍 `OSError`（checkpoint 期间单文件失败跳过、不再中断整轮）；`AddListenChat()` 的失败判据原来恒为 False，拼错昵称会**静默假成功**，现在注册前按联系人库精确反查；OCR 固定临时文件改 `mkstemp` 唯一名（并发互相覆盖）；`ShutDown` 的 `os.system` 改 `subprocess.run`。新增 `tests/test_pure.py` 24 例纯函数单测（不碰微信）。
+- 判定：合并树新增 76 项离线回归全绿，既有套件零回归，`tools/selftest.py` 560/0。
+
+### v1.2.8.0（2026-10-23）
+
+- **新增：群成员加好友——`wx.AddFriendFromGroup("群名", "小明")` / `wechatauto 加好友 群名 成员名`。** 界面路径：打开群 → 右上角「聊天信息」→「搜索群成员」→ 点结果卡片 →「添加到通讯录」→「发送」。
+  - **搜索结果按屏幕位置取第一行，不按控件树顺序。** 一个名字可能命中多行，而 Qt 回收列表的子节点顺序和肉眼看到的顺序不一致；旧写法会打开最下面那张卡。现在按 `BoundingRectangle.top` 排序后取最上面一行。
+  - **「添加到通讯录」同时是好友判据**：非好友的资料卡只有这一颗按钮；已是好友的卡片是「发消息 / 语音聊天 / 视频聊天」，不会给通讯录里已有的人重复发申请。
+  - 好友申请框**不写死类名**：点完「添加到通讯录」后按「新出现的顶层窗 + 提交按钮」定位。2026-10-23 真机跑通完整流程：申请框是 `mmui::VerifyFriendWindow`（标题「申请添加朋友」），**提交按钮叫「确定」而不是「发送」**，两个都认；发完在 `general.db:FMessageTable` 新增一行 `is_sender_=1`、`scene_=14` 的记录，已独立回读确认。`dry_run=True` / `--dry-run` 仍只走到资料卡，一颗按钮都不点。
+- **修复：`open_chat` 会把词打进错误的「搜索」框。** 4.1.15 树里最多同时有三颗 `Name='搜索'` 的输入框（会话搜索、聊天内搜索、群成员搜索）；现在按祖先类名优先会话搜索框，遍历时撞上失效元素也不再打断 `open_chat`。客户端停在朋友圈页时追加一次直接点击「微信」tab 的兜底（仍走拟人随机落点 + 曲线轨迹）。
+- **修复：微信 4.1.15.56 起图片气泡改用独立类名 `mmui::ChatImageItemView`，旧版 `mmui::ChatBubbleReferItemView` 也继续认**（否则 `MediaDownloader` 会把图片行整片判成「看不见」），`tools/selftest.py` 已加回归。
+- 判定：新增 30 项离线自检，原有测试全绿；真机对 1 名非好友群成员完整发出好友申请并在 `FMessageTable` 回读确认。
+
+### v1.2.7.0（2026-10-17）
+
+- **新增：改联系人备注——`wx.RenameMember("小明", "高中同学")` / `wechatauto 备注 小明 --to "高中同学"`。** 这是第一个会**写账号数据**的功能，所以有三处是刻意的：
+  - 路径是「通讯录 → 点开联系人 → 资料页『更多』→『设置备注和标签』」，与通讯录标签功能共用同一套窗口层脚手架（`wechatauto/remark.py`，`RemarkOps` 继承 `LabelOps`）：抬窗、落点归属校验、独立小窗枚举全部复用。
+  - 改完按**这个联系人的 username** 回读 `contact.db` 的 `remark` 字段确认；回读不通过就报失败，绝不报成功。
+  - 清空备注必须显式 `--clear` / `allow_empty=True`，免得漏个参数就把人家的备注抹掉。`wechatauto 备注 小明 --probe` 走同一条路、打开编辑窗后立刻关掉、不写任何东西——微信界面改版时用它定位断在哪一步。
+- **新增：发送后回读数据库的间隔可调。** `WxParam.DB_VERIFY_INTERVAL`（默认 1.0 秒）与 `WxParam.DB_VERIFY_TIMEOUT`（默认 8.0 秒，设 0 = 只读一次），命令行对应 `send` / `labels send` / `forward` 的 `--verify-interval` 与 `--verify-timeout`。默认值就是这轮之前写死的那两个数，行为不变。失败文案现在会说明等了多久（`数据库未确认（等了 8s）`）。
+- **新增：`tools/wake_uia.py`——不依赖本库，单独热激活/关闭 UIA 控件树。** `--status` 只报告，`--off` 把字节写回 0，`--rva 0x…` 跳过扫描。与库共用同一份 RVA 缓存文件，扫描成本只付一次。
+- **内部：Qt 无障碍闸门独立成模块**（`wechatauto/accessibility.py`），`uia_driver` 保留同名转发，调用方无需改动。同时修掉两个一直在**静默破坏热激活**的问题：
+  - `_HAS_WIN32` 与 `uiautomation` 别名在搬家时没跟过去，被外层 `except` 吞掉，表现为「扫到微信窗口但定位不到 Weixin.dll」和「N 个候选均未使 mmui 树物化」——等于每次激活都在把自己写进去的字节回滚。
+  - 系统「屏幕阅读器」标志用的 SPI 常量是错的（`0x0046/0x0047` 是键盘首选项那一对），**而且**值放在了错误的实参位置；Windows 直接返回 `FALSE` + err=87，也就是说这个标志从来没有真正设上过。六臂换进程对照实测：树只跟 gate 字节走，所以现在只在字节那条路走不通时才碰它。
+- **新增：微信 4.1.15.53 适配**——版本表补上 gate RVA `0x0B3959D8`（真机扫描得出并验证：写 1 树变 `mmui::MainWindow`，写 0 掉回 `Qt51514QWindowIcon`）。
+- 判定：`561` 项离线自检 + 标签 `98` + 转发 `59` 全绿；改备注在真机上跑通两轮完整回环（设备注 → 落库确认 → 清空 → 落库确认为空）。
+
+### v1.2.6.1（2026-10-10）
+
+- ⚠️ **重要修复：群消息的发送者会被换成无关联系人——`real_sender_id` 必须按「消息所在分片」的 `Name2Id` 解析。**（[issue #34](https://github.com/fanyuantaier/wechatauto-replica/issues/34)）
+  - 现象（实际使用中人工发现）：读取消息时发送者名称错位，显示成无关的联系人或群名称。
+  - 成因一（编号空间用错了表）：`real_sender_id` 是**消息所在分片** `message_N.db` 里
+    `Name2Id` 的 rowid，而代码一直拿 `message_resource.db` 的 `SenderName2Id` 去解析。
+    这两张表的编号互不相干，同一个数字解析成的就是另一个人。
+  - 成因二（「编号 2 就是自己」不成立）：本机自己账号在 `message_0/1/2.db` 里的 rowid
+    实测是 **2/4/1**，写死 `== 2` 只在其中那一片成立；1.2.4 为了绕开它加的
+    「查不到就兜底按 1」在另外两片上同样必错。
+  - 判据（不依赖任何 id 表）：群聊文本行的正文里，微信自己写了 `发送者:` 前缀。本机 12 个群
+    3662 条可比对的行——**按分片解析 3662 条全对，按旧的全局表 0 条对**（3656 条指到别人身上、
+    6 条落空）。文件传输助手 856 行全是这台机器发的：新口径 855 行给出本机 wxid（另 1 行的
+    发送者确实就是 `filehelper` 本身），旧口径会把其中 **639 行**说成某个常联系的好友或一个群。
+  - **影响范围：v1.0.0 ~ v1.2.6 全部版本**（按错表解析的 `_sender_id_index()` 在初始提交里就有，
+    最早带标签的 1.0.3 已含）。可见面随版本变宽：`export_history` 的 `sender_name` 一直受影响；
+    `get_messages` / 监听回调里的 `sender_username` 自 v1.1.8 起走这条解析；群消息
+    「非文本也能认出人」自 v1.2.4.1 起也是它。
+  - 修法：查询时把**每个分片自己的** `Name2Id` 一并取出（`_name2id_map()` / `_shard_maps()`），
+    `_msg_row_to_dict`、`get_message_row` 和导出的 `_resolve_sender` 都按该行的 `shard` 查本片映射；
+    删掉 `_sender_id_index()`；新增公开口 `WeChatDB.sender_username(shard, sender_id)`；
+    `wx._db_row_to_message` 的方向判定与 `MediaDownloader._sent_by_self` 改成
+    「解析出来的 username 等不等于本机 wxid」，去掉 `sender_id == 2` 和「兜底按 1」。
+    解析不到就返回空串（未知），**不回落到别的库去猜**——这正是报告的建议。
+  - 行为变化：`sender_username` 以前几乎每行都有值（其中很多是错的），现在本机 60243 行里约
+    **0.2%（129 行，集中在同一个分片）** 是空串；同一个 `sender_id` 在不同分片可以解析成不同的
+    人（这才是正确行为）；解析不到时 `_sent_by_self` 按「不是本机发的」处理并打一条 debug。
+  - 判据：新增 `tools/test_sender_namespace.py` **36 项**——两片库的 `Name2Id` 对同一个编号刻意
+    给出不同的人、行还故意撞号，所以这些断言只有「按行所在分片解析」才可能全绿；带**反向验**
+    （把命名空间退回「两片共用一张全局表」，`sid=2` 立刻变成同一个陌生人）；真机段要求文件传输
+    助手的发送者 ⊆ {本机, `filehelper`} 且 ≥95% 是本机，群聊按分片解析与正文前缀判据的不一致数
+    必须为 0。
+
+- 其余内容同 v1.2.6（跨分片消息的 `shard` 可寻址 + 分片读失败不再被静默当成「这个分片没消息」）。
+
+### v1.2.6（2026-10-09）
+
+- ⚠️ **重要修复：跨分片会话里 `(会话, local_id)` 不唯一，按号回读会拿到别的分片的另一条消息。**（[issue #20](https://github.com/fanyuantaier/wechatauto-replica/issues/20)）
+  - 背景：微信把一个会话的历史**横向拆进多个 `message_N.db`**（分片），而 `local_id` 是
+    **每个分片各自从 1 开始计数**的。合并读取（v1.2.2 起）之后，`(user, local_id)` 就不再是唯一键了。
+  - 本机实测：200 个会话表中 54 个跨多片；**20008 组** `(会话, local_id)` 同时命中多个分片，
+    其中 **10477 组连 `local_type` 都相同**而正文/图片不同（抽样里光图片就有 **35 组**同号但 md5 不同）。
+  - 后果：`get_message_row()` 以前不打任何日志，直接取 `sort_seq` 最新的那一条。语音/图片/文件/视频
+    下载全以它为入口，于是表现为"**按 A 那条的号，下到了 B 那张图**"。
+  - 修法：消息行统一带上 **`shard`**（分片库文件名），合并视图里 `(local_id, shard)` 才是唯一键；
+    `get_message_row(user, local_id, local_type=…, shard=…)` 可以钉死某一片；不指定 `shard` 而命中
+    多片时**先告警**再按旧口径取最新；`shard` 写错返回 `None` 并告警，不瞎猜。
+  - 顺带铺开：`list_voice_status()` / `list_image_status()` 的行也带 `shard`；`image_status` /
+    `download_image` / `download_image_original` / `download_voice` / `download_video` /
+    `download_file` 全部接受 `shard`，`download_media()` 分发时自动带上候选行自己的 `shard`。
+  - 兼容性：只给返回 dict **增加** `shard` 键、给方法增加**可选**关键字参数，旧调用形状一字不变。
+  - 判据：新增 `tools/test_db_shard.py` **46 项**——双分片临时库夹具验合并读取、`shard` 寻址、
+    新加的 `? AS shard` 不挤掉 WHERE 参数、以及分片读失败的可见性；真机部分逐片回读一个真实的
+    「同号 + 同类型 + 跨分片」行（不带 `shard` 拿到的是最新那片，带上之后各拿本片那一行），
+    并核对 `get_messages()` 条数 = 各分片 `count(*)` 之和、覆盖分片数 = 该会话的分片数。
+
+- **修复：某个分片查询报 `database disk image is malformed` 时被当成"这个分片没有消息"。**
+  损坏现在抛给 `_run_msg_query` 走解密缓存重建重试；其它错误仍跳过该片，但会点名是哪个分片
+  （同一条只说一次，轮询里不刷屏）。这是"读不全"的另一个静默来源——少了一半还返回成功。
+
+- **删除：`_find_msg_table()` / `_msg_conn()` 两个单分片桩函数**（零调用者，docstring 写着
+  "只返回第一个命中分片"）。[issue #20](https://github.com/fanyuantaier/wechatauto-replica/issues/20) 里那份逐行对照就是照着它们断定 `get_messages()` 只读
+  一片——那段代码自 v1.2.2 起已经没人调用了，但墓碑还挂在文件里。
+
+- 其余内容同 v1.2.5.1（微信数据目录设在盘符根时的自动检测修复、回车前回读校验、
+  `WxParam.ENABLE_OCR` 总开关、通讯录标签 + 右键转发）。
+
+### v1.2.5.1（2026-10-07）
+
+- ⚠️ **重要修复：微信数据目录设在盘符根（配置里写 `d:\`）时，自动检测开始依赖启动目录。**（[issue #32](https://github.com/fanyuantaier/wechatauto-replica/issues/32)）
+  - 现象：同一个 Python、同一份依赖、同一个微信配置，**只换个工作目录**就从"能读"变成
+    `RuntimeError: 未找到微信数据库目录，请通过 db_dir 参数手动指定`。
+  - 原因：`_locate_account_root()` 用 `rstrip("\/")` 去掉尾分隔符，把 `d:\` 变成了 `d:`；
+    而 `d:` 在 Windows 上是**盘符相对路径**，`os.path.join('d:', 'xwechat_files')` 得到
+    `d:xwechat_files`，会按**该盘自己的当前目录**解析（不是进程工作目录，更反直觉）。
+  - **影响范围：v1.0.0 ~ v1.2.5 全部版本**（这行代码从初始提交就是现在这个写法，不是回归）。
+  - 为什么多数人没遇到：需要两个条件同时成立——① 存储位置选成了裸盘根（选 `E:\xwechat_files`
+    这类"盘符+子目录"的，rstrip 什么都不改）；② 恰好在那个盘的非根目录里工作（数据放 E 盘
+    而一直在 C 盘跑 Python 的人，E 盘的该盘当前目录还停在 `E:\`，畸形路径反而解析正确）。
+    所以它表现为"我没改任何东西，昨天能读今天读不到"。
+  - 修法：新增 `_abs_root()`，用 `os.path.normpath` 保留盘根语义，并把只写盘符没写分隔符的
+    输入（`d:`）补成 `d:\`；`_locate_account_root()` 与 `_extract_path_from_config()` 里三处
+    同族写法全部改用它，候选保证是绝对路径。UNC 根不受影响。
+  - **暂时不能升级的绕法**：给 `WeChatDB(db_dir=...)` 显式传账号目录的父目录（绝对路径），
+    或不要把微信存储位置设在裸盘根。
+  - 判据：新增 `tools/test_db_path_root.py` **40 项**——假文件系统下以 `d:\` 为 root 必须定位到
+    `d:\xwechat_files`（**含反向验**：把实现换回旧 `rstrip`，同一用例必须返回 `None`，证明断言真能
+    咬住回归）；A–F 与 Z 六个盘符逐个验规范行为；本机真实盘上做「该盘当前目录漂移」对照，
+    证明旧写法在两个启动目录下解析到不同位置；本机真库在 4 个启动目录下结果一致。
+- 其余内容同 v1.2.5（通讯录标签 + 右键转发、发送前回读校验、`WxParam.ENABLE_OCR` 总开关、
+  会话名占位符尾巴、置顶/前台锁/剪贴板三处静默失效）。
+
+### v1.2.5（2026-10-07）
+
+- **新增：通讯录标签 + 右键转发。** 走法按 4.1.15.13 真机实测的锚点实现（通讯录 → 通讯录管理 → 标签）。
+  - `WeChat` 增 12 个方法：`ListLabels(prefer='db'/'ui')` / `CreateLabel` / `RenameLabel` / `AddLabelMembers` / `RemoveLabelMembers` / `DeleteLabel` / `LabelMembers` / `SendToLabel` / `ForwardMessage` / `ProbeLabels`；`wxid` 自动换成界面显示名，`RenameLabel` 只改名字不动成员和 `label_id`。
+  - **先预演再真发**：`SendToLabel(text, label, dry_run=True)` 只解析收件人、一次界面都不碰，`limit=1` 先试一个人；`WeChatDB().list_labels()` 是纯读库。`ProbeLabels` 只导航不写，报断在哪一步。
+  - CLI 加 `labels` / `forward` 两个子命令和菜单两项（`9` 标签、`10` 转发），中英都收（`标签`/`打标签`、`转发`/`转给`）。指南新增 §10.5 通讯录标签、§10.6 右键转发。
+- **新增：发送前回读校验 `WxParam.SEND_CONTENT_RATIO`（默认 0.6，`<=0` 关闭）。** `Ctrl+V` 有可能整个落空（微信不在前台、焦点没落到输入框上），这时按键照样打下去，发出去的是空消息或上一轮残留的内容——老代码还把那个异常吞了、照样返回成功。现在 UIA 主路径与 OCR/坐标路径两条都在回车前回读输入框比对，判不达标就不回车、清空输入框、返回失败让上层重试，并且不占用 `rhythm` 的写动作额度。
+  - 阈值为什么不照抄更高的 0.9：真机实测一条带表情码的正常消息只有 **0.884**，8 字中文差一个字是 **0.875**——定 0.9 会把好消息拦死；而读回空是 0.0、残留内容是 0.11，0.6 都拦得住。
+  - 表情码口径（实测）：`[微笑]` 在输入框里是 1 个 `U+FFFC`，落库正文才是原样 `[微笑]`（发送时才转）。比对前两侧折算，折算后 1.0。**代价**：折算后 `[微笑]` 与 `[发怒]` 不可分辨，表情码打错不会被这道闸拦下。
+- **新增：`WxParam.ENABLE_OCR`（默认 `True`，行为不变）。** OCR 识别不准时一键停用。总闸放在引擎入口 `ScreenOCR.recognize()`（`ocr()` / `ocr_zoomed()` 额外在截图前短路，连抓屏都省掉）——调用点散在 `guia` / `moment` / `uia_driver` 三个模块共 20 处，逐处加开关迟早漏，所以另加一条静态断言锁住「全库只有 `guia.py` 直接引用 `OcrEngine`」。关掉后能走 UIA 的改走 UIA，**没有 UIA 等价物的操作明确失败而不是盲点坐标**：侧栏查找、搜索下拉点选、「发送」按钮兜底、朋友圈元素、转发/多选菜单。像素探针类（输入框定位、面板非空白、高亮行检测）不是 OCR，照常工作。
+- **新增：前台收尾 API。** `ensure_visible(keep_topmost=…)` 参数化；`_minimize_blockers()` 现在给被它最小化的遮挡窗口记账，新增 `restore_blockers()`（只还原自己按下去的那些，且用不抢前台的方式）和 `release_foreground()`（取消置顶 + 还原遮挡）。
+- **修复：`current_chat()` 一直带着输入框的占位符尾巴。** 微信把「会话名 + 占位符」拼在控件 `Name` 里（本机实测「文件传输助手」→ `文件传输助手按住鼠标 语音输入文字`），于是全库 `current_chat() == who` **一次都没成立过**：会话明明已经打开，`open_chat` 照样返回 False，发送被推去走慢且更易错的坐标路径，连续发送的快速路径也永不触发。现在剥掉已知尾巴；未收录的尾巴原样返回（行为同旧版）。
+- **修复：置顶在 64 位 Python 下从来没生效过。** `SetWindowPos(hwnd, -1, …)` 把 `-1` 当 32 位整数塞进 `HWND` 参数，调用直接返回 0（`last_error 1400`），改用 `ctypes.c_void_p(-1)` / `c_void_p(-2)`。⚠️ **行为变化**：置顶现在真的会生效——`ensure_visible()` 默认 `keep_topmost=True`，批量发送期间微信会压在桌面上所有窗口之上，收尾请调 `release_foreground()`。
+- **修复：前台锁设成 0 之后不再还原。** `SPI_SETFOREGROUNDLOCKTIMEOUT` 是**全机**设置，一直留着 0 会削弱所有程序的前台保护（不只微信）。现在先读原值、结束时恢复；顺带发现数值必须放在 `pvParam` 才写得进去（放 `uiParam` 直接返回 FALSE、值不变）。
+- **修复：剪贴板被别的进程占用时异常冒出 `send_msg` 变成 traceback**（真机撞到过一次 `PyperclipWindowsException: Error calling OpenClipboard`）。`set_clipboard()` 改为返回 `bool` 并兜住异常，调用方按「这次输入失败」重试或明确失败。
+- **改进：`_chat_is_open` 改为 UIA 优先、OCR 兜底**——UIA 命中时不再多花一次放大 OCR 和一次截图。
+- **兼容性**：接口签名一字未改；`set_clipboard()` 返回值从 `None` 变成 `bool`，调用点判据写的是 `is False` 而不是 `not …`，所以覆盖它、仍返回 `None` 的老代码不会被误判成失败。无新增依赖。
+- **回归**：`tools/selftest.py` **496 项 0 失败**。新增 4 个离线套件——`test_send_verify` 21、`test_ocr_send_gate` 26、`test_ocr_switch` 21、`test_chat_identity` 21；标签/转发沿用 `test_labels` 98、`test_forward` 59。真机：UIA 路径与 UIA-only（`ENABLE_OCR=False`）各发一条，数据库回读**逐字一致**；模拟「送给空气」→ 读回 `''`、相似度 0.000、一次都没回车；置顶设置与解除闭环真机验过。
+- **未测（如实说明）**：① 其它微信版本的占位符尾巴（未命中就退回旧行为，不会崩）；② `ENABLE_OCR=False` 时朋友圈 / 转发的实际降级表现，离线只证明了「不会去调 OCR」；③ `SendToLabel` 的批量真发（`--go`），会发给别人，没跑过；④ 闸持续判不符时 `send_msg` 要跑满 3 次尝试（实测 56.9s）才失败，没做提前短路；⑤ `bring_to_front` 中途抛异常时前台锁不恢复（包 `try/finally` 要给整段循环改缩进，风险大于收益）。
+
+### v1.2.4.4（2026-10-03）
+
+- **新增：一条命令的入口 `wechatauto` / `python -m wechatauto`**（issue #31「能不能把代码调用搞简单一点？太麻烦了真的不会，比如一条命令」）。**原有 Python 接口一字未改**——命令行只是 `WeChatDB` / `MediaDownloader` / `guia.quick_send` / `MomentDB` 的调用方，不想用它的人照旧写 Python。
+  - **只记一条**：装完直接敲 `wechatauto`（不带任何参数）。它先做一次体检（账号 / 数据库密钥 / 图片密钥 / 控件树——哪一项是 0 就直说下一步干什么），再给编号菜单：看消息 / 导出 / 下载图片 / 发消息 / 监听 / 朋友圈 / 列会话 / 体检。挑会话时列出最近 10 个（昵称 + 未读数）按序号选，**不需要知道 `username` 长什么样**。菜单只在终端里进；脚本/管道里 `python -m wechatauto` 照旧打帮助退 2，不会把 CI 挂在 `input()` 上。
+  - 子命令**中英都认**：`消息`=`messages`、`导出`=`export`、`图片`=`images`、`发`=`send`、`听`=`listen`、`体检`=`doctor`、`会话`=`sessions`、`朋友圈`=`moments`。只是一层查表翻译，参数定义仍然只有 argparse 那一份。
+  - 它替新手吸收的三个坑，正是以前「麻烦」的来源：① 读库要 `username`、驱动界面要显示名——`resolve_chat()` 让昵称/备注/wxid/群号随便传，同名多人时明确要你用 wxid 而不随便挑一个（把 wxid 填进微信搜索框是「搜不到 → 白等几十秒 → 返回一个 `None`」的头号原因）；② 下载图片前先确认图片 AES 密钥，缺了会说清怎么办，而不是一排 `None` 看着像库坏了；③ Windows 控制台默认 GBK，中文正文直接 `UnicodeEncodeError`——入口第一件事把 stdout/stderr 重设 UTF-8，`export` 永远写 UTF-8 文件。
+  - 显示层两条：视频/文件/引用这类正文是整段 XML，刮成 `[非文本正文] playlength=151 length=4211669` 一行提示（要看原文用 `--json`）；`--type` 中英文都收（库里类型名是中文，只收中文会让人以为「这个会话没有图片」）。
+  - `pyproject.toml` 加了 `[project.scripts]`，装完就有 `wechatauto` 这个命令，不必敲 `python -m`。发消息默认带 `--verify`（发完自己回读数据库确认）。
+- **未测（如实说明）**：菜单的真实按键路径——自动化里只能用脚本喂输入，真键盘那一路没跑过；`send` 子命令的真机发送（会驱动窗口，需要真人客户端和 `rhythm` 闸）。其余都有离线回归：`tools/selftest.py` 全量 **490 项 0 失败**，其中 `cli` 组 41 项（含「cli 顶部不许 import 界面栈」这条——把 `guia` 提到顶层它就会报红，反向验过）。
+
+
+### v1.2.4.3（2026-10-01）
+
+- **修复：「我发的图片提示找不到原图」/「点开了还在瞎点，最后报失败」/「下到的还是预览图」**——同一批反馈，四个互相独立的原因，**没一个是解密问题**：
+  - **「是不是我发的」以前写死 `real_sender_id == 2`。`real_sender_id` 是 `message_resource.db` 里 `SenderName2Id` 的 rowid，本机账号落在哪个 rowid 每台机器不一样**——那个 2 是 1.1.8 从别人机器上带来的取值。本机实测自己是 1（文件传输助手 400 条全是 1），2 反而是某个常联系的好友（图片消息 512 条）。按常数判的代价很直接：自己发的图被当成别人发的，先去点左边，永远点不中气泡。现在按「解析出来等不等于本机 wxid」判，索引查不到时才兜底。
+  - **`download_image_original()` 从此只认原件 `_h.dat`，本机没有就一定驱动界面去下载。** 中间那一档 `.dat` 不再当成果：它是「微信下发的那一份」，可能是完整图也可能**本身就是预览版**——实机例：一条 `.dat` 44,002 字节、预览图 2,961 字节，那张仍是预览图。本机三档里没有任何一档能证明「这张不是预览版」，所以也不再假装有 `has_full` 这种答案（改成 `has_mid`：有没有 `.dat` 这一份是事实，它是不是完整图本机答不了）。只想「本机有什么就交什么」的用 `download_image(tier='full'/'best')`，那条路一次界面都不碰。
+  - **微信写盘比我们的判定晚**：「报错说取不到，下一轮同一句又说已在本地」和「明明已经拿到了还在一张一张瞎点，最后报下载失败」是同一个因。现在每个决策点（进门 / 点下一张之前 / 等档超时之后 / 判失败之前）都回查一次本机，查到就交文件并停止后续界面动作。
+  - **预览窗那颗下载键弹的是 Windows 通用保存对话框**（标题是「保存」而不是「另存为」），而且**第一遍「保存」写出的可能就是当前显示的那幅预览图**（用户实测「UI 点下载存下来的仍然是预览图，要重新下载才得到原图」）。现在按本机档位核产物尺寸，判为预览版就先点「图片原始大小」再存一遍，几遍里取最大的那份；挑按钮会再验 `ControlTypeName` 真是按钮（那颗「选择文件格式」下拉框在 UIA 里的 Name 也叫「保存」，实机点到过一次），点完要确认对话框真的关掉（没关就是没点中），任何失败路径都会点「取消」把模态框收掉。
+- **新增：目标图片不在可视区时按数据库算出的行差滚过去**（`download_image_original(..., scroll=True, max_scrolls=6)`）。「哪一行才是这条图」用可视区 UIA 行序列和数据库「文本/图片」序列滑窗对齐来认，三道门槛缺一不可：至少两条文本锚点且吻合度 ≥0.6（可视区只剩一行时「吻合度 1.00」是假高分）、并列最优偏移必须给出唯一答案、对齐结果那一行在 UIA 里确实是图片行。每格滚几行是滚完看实际推进修正出来的，不预设 DPI/窗口高度常量。滚动的硬前提是**拿得到微信进程 id**——滚轮是按光标出队那一刻的位置投递的，落点无法校验时可能打进压在微信上面的别的程序，所以拿不到 pid 就退化成「只认当前屏、绝不滚」并警告。滚不动报 `scroll-stuck`、滚满报 `scroll-limit`、认不出退回「数它下面压了几张更新的图」，再不行逐个试——**不会无限滚、不会一直瞎点**。
+- **修复两处窄窗口（竖屏）下的点击**：
+  - **点一次导航栏「微信」栏退不出会话。** 窄窗口是单栏布局，开着会话时 `session_list` 和搜索框**整片不在树里**，第一下只把主窗带回聊天页、会话还开着，要再点一次才退出。只点一下的旧写法让紧接着找搜索框的 `open_chat()` 必然落空——报出来就是「会话打不开」。现在 `back_to_chat_tab()` 改成点一下 → 查聊天页那一片出来没有 → 没出来且还有额度就再点一次（`max_clicks=2`）；**本来就出来就一点都不点**（那一下正好把用户正在看的会话切走）。
+  - **点不中图片气泡。** 气泡位置不随行宽等比缩放（头像列加边距是固定像素）：宽窗口行宽 2598 时气泡在行左 +44..+632，「行宽 12%」= +311 命中；竖屏行宽 720 时气泡在 +141..+459，同样算法只有 +86，落在底色上。改成「离发送方那一侧边缘 300px 的绝对锚点 → 旧的 12%」两个候选，宽窗口里两者重合、**行为与已发布版本逐字一致**。
+  - 顺带两条同一路径上的形状：**预览窗有两种**（桌面直接子节点就是 `mmui::PreviewWindow`，或顶层是 `Qt51514QWindowIcon` 标题「图片和视频」而 `mmui::PreviewWindow` 在里面一层，只按顶层筛第二种永远找不到）；**那颗缩放键的 `Name` 会随显示状态在「图片原始大小」⇄「图片适应窗口大小」之间变**，只写死一个名字找不到就提前返回，于是「保存」兜底根本没机会跑。
+- **修复：`demo_original_image.py` 里那道已经删掉的判据还留着**——它用 `> 100KB` 当「原图已经下载」的前置判断，会把压缩版报成原图。
+- **本轮仍未做真机复验**（如实说明）：点气泡 → 预览窗 → 按钮 → `_h.dat` 这一段需要真人客户端和 `rhythm` 闸；竖屏**自发图**那一侧的气泡区间目前只有镜像推算。它上面的所有逻辑（档位判据、认行与对齐、滚动决策、对话框点选、点击点几何）都有离线回归。
+- **回归覆盖**：`tools/selftest.py` 全量 **449 项 0 失败**（`image` 组 196、`tree` 组 25）。纹身验证：`media.py` 69 刀 + `uia_driver.py` 6 刀，本轮实跑 15 刀全部报红（把 `_harvest` 放宽到接受 `.dat` → 5 红；自发图又提前返回 → 1 红；`has_mid` 恒真 → 1 红；等档等的是 `.dat` → 1 红；进门那次查盘取消 → 1 红；气泡点击退回纯百分比 → 2 红；去掉行宽上限 → 1 红（极窄行会点到 x=0）；不分发送方 → 5 红；候选不去重 → 1 红；导航栏补点那一组 6 刀各 1–5 红）。
+
+### v1.2.4.2（2026-09-30）
+
+- **修复：「只能下到缩略图，下不到原图」**（附了机器人日志：「只要原图，先不用缩略图」后面是一轮一轮不收敛的重试）。三个互相独立的因，**没一个是解密问题**：
+  - **`download_image()` 压根不看 `_h.dat`**（那才是真原图），而且拿到压缩版时文件名和原图一模一样（`<user>_<local_id>.jpg`），只要原图的调用方只能靠文件大小猜，于是永远在重试。现在档位由 `tier=` 明说：`'original'`（本机没有原图就返回 `None`，**不悄悄降级**）、`'best'`（原图 → 压缩 → 缩略图）、`'mid'`、`'thumb'`，并且把档位写进文件名（`_h` / 无 / `_thumb`）；不传 `tier` 与旧版逐字一致。
+  - **`download_image_original()` 里那道绝对门槛 `getsize(_h.dat) > 102400`**——它是用来判「压缩版还没下完」的。本机 705 个 `_h.dat` 实测：最小 575B、p10 4.3KB、**p50 91.5KB**、p75 563KB、最大 18MB，也就是说**51.3% 的真原图被当成「没下完」拒掉了**。判据改为相对的（非空、≥1KB、不比压缩版小 10% 以上），并且公开成 `MediaDownloader.original_ready()`，调用方可以用同一条规则。同一个函数的 `timeout` 参数原本是摆设：点完固定 `sleep(3)` 取一次。现在轮询到「可用且大小不再变化」或到 `timeout` 为止；而**本机已经有合格 `_h.dat` 时直接从磁盘解密落盘，一步界面都不碰**。
+  - **档位报告在撒谎，因为查询少了一列**：图片的本地文件名来自正文里的 32 位 hex，而通用的消息 `SELECT` 不带 `packed_info_data`，于是每一行都被判成「不是图片」。新增 `WeChatDB.get_image_rows()`——`local_type=3` 的窄查询，字段名对齐 `get_message_row()`。
+  - **新增 `image_status(user, local_id)` / `list_image_status(user, limit)`**，和 1.2.4.1 的语音报告同一个形状：每条图片报本机有哪几档的字节、最高一档是什么、以及 `reason`（`ok` / `mid_only` / `only_thumbnail` / `original_partial` / `no_local_copy` / `no_md5` / `no_message_row`）；消息表只查一次、附件目录按同一 md5 只扫一次。本机 **211 个会话 4271 条图片**实测：`mid_only` 2210、`only_thumbnail` 1428、`ok` 626、`original_partial` 5、`no_local_copy` 2——**大约 7 条里只有 1 条本机真有原图**，多数反馈是微信的存储策略而不是库坏了，先问一句就省掉一整轮重试。
+  - **真机路线现在会说清是哪一步失败**：预览窗里没有「图片原始大小」按钮（这张本来就是原图／微信没给入口）单独警告并指向 `tier='best'`；目标气泡不在可视区时明确报告而不是瞎猜；可视区里有多张图时，按「这条下面压了几张更新的图」把最可能的气泡排在第一个试，**每点一张都回来核对 md5**，所以点错不可能冒充成功。
+  - **本轮没做真机复验**：点气泡 → 预览窗 → 按钮需要真人客户端和 `rhythm` 闸，因此那一段保持未测；它上面的所有逻辑（档位判据、路由、等待、排序、消息库查询）都有离线回归。
+- **修复：拿不到控件树时一片沉默**（反馈为「控件树被屏蔽」）。`uia_driver` 会把「取不到 `Weixin.dll` 模块」的窗口全部过滤掉，`ensure_materialized()` 遇到空列表直接 `return False`，`ensure_window()` 悄悄改走「设读屏标志 + wake」——**一句日志都不打**。而「窗口全被过滤光」恰恰是 32 位解释器枚举 64 位进程模块的特征（`TH32CS_SNAPMODULE` 从 32 位打 64 位只会得到 `ERROR_PARTIAL_COPY`），用户看不到任何线索，只能说「被屏蔽」。新增 `gate_block_hint(diag, bits=None)`（纯函数，便于离线自检）与 `_warn_gate_blocked()`，分成四种可执行的说法：没扫到可见窗口（没启动／没登录／在托盘）、扫到但模块拿不到（按位数分开：32 位让换 64 位 Python，64 位指向权限与安全软件白名单）、pywin32 缺失，以及**有窗口留下时完全不打扰**。每种原因一个进程只警告一次——长驻监听每轮都会扫，刷屏比不说更糟。过滤逻辑与返回值一字未改，老调用方不受影响。
+- **回归覆盖**：`tools/selftest.py` 新增 `image` 组（39 项，纯离线：临时目录 + 假 db——90% 线的两侧、七种 `reason`、五种 `tier` 路由与文件名、不许悄悄降级、气泡排序、轮询等待、`get_image_rows` 字段对齐、同 md5 不重复扫盘）与 `tree` 组（16 项，假 `win32gui` + 假 pid/模块枚举：计数、四种文案、健康场景零输出、去重、两条真实路径确实都过了诊断）。整套 **282 项 0 失败**。变异验证七刀都会咬：把 `>102400` 绝对门槛放回去 → 5 项红；去掉比例判据 → 2 项红；原图文件名不标 `_h` → 2 项红；排序不看「比这条新几张」→ 3 项红；`tier='original'` 允许悄悄降级 → 1 项红；同一 md5 重复扫盘 → 1 项红；去掉 `ensure_materialized` 的诊断调用 → 2 项红。
+
+### v1.2.4.1（2026-09-25）
+
+- **修复：群消息除了文本，都看不出是谁发的。** `real_sender_id` 是数字 rowid，`wechatauto/db.py` 早就通过 `message_resource.db` 的 `SenderName2Id` 把它换成了真 wxid 放在 `sender_username` 里——但 `wx.py:_db_row_to_message` 从没往下传，`msg.wxid` 存的还是那个数字，唯一能用的路子是从**文本**正文里刮 `wxid_xxx:\n` 前缀，于是图片/语音/文件/表情全是匿名的。现在 `msg.sender_wxid` 给真 wxid（解析不到时退回正文前缀，再退回原来的数字，保证老代码可见值不变），`msg.sender` / `sender_remark` 给备注或昵称，自己发的消息 `msg.wxid` 是真实 wxid 而不是常量 `2`。新增 `Chat.GetGroupMembers()`（`{username, nick_name, remark, is_owner}`）与 `WeChatDB.nickname_map()`（带缓存的 wxid→名字），覆盖不在你通讯录里的人。实测 8 个真实群 / 1249 条历史消息：带发送者身份 **95.8%**，**非文本消息从 0% 变成 99.6%**（451/453）。剩下 4.2% 是微信自己没留身份——`SenderName2Id` 只有 655 条、不含那些 id，抽查 20 条的 `source` 里也没有任何用户名标签；造不出来的就不造，`sender_wxid` 保持空串。顺手删掉一条陈旧兜底：拿数字 rowid 去查 `contact.username`（永远查不到，`get_nickname` 又把数字原样返回，冒充成用户名）。
+- **修复：`download_voice()` 只返回 `None`，没有任何线索**（issue #20「26 条语音只识别到 19 条」）。复现了，而且**不是查找键错**：独立实现与库在 **958/958** 条语音上逐条一致，「`svr_id` 存在但挂在别的 `chat_name_id` 下」为 **0** 条。真因是微信只在界面上播放/接收过之后才把 `voice_data` 写进 `media_*.db`，所以多数取不到其实是音频从来没落盘，而沉默的 `None` 让人分不清这是本地没有还是库坏了。判据其实一直躺在消息表里：**`download_status`**。975 条语音上相关性精确——`download_status != 0` ⇔ 「音频在本地」（`ds=1` 515 条 + `ds=5` 400 条，0 例外），`ds=0` 的 60 条全部确实不在。新增 `MediaDownloader.list_voice_status(user)` / `voice_status(user, local_id)`，返回 `available` / `bytes` / `download_status` / `self_sent` / `reason`，`reason` 取 `ok`、`audio_not_downloaded`（本地确实没有，去微信里播放一次即可）、`audio_missing_from_media_db`（状态说该有却没有，**这种才值得开 issue**）、`session_not_in_media_index`、`no_server_id`、`no_voice_row`。`download_voice()` 签名与行为不变，失败时把原因写进日志。本机可用率 **93.7%**（898 可取 / 54 未落盘 / 6 会话无 media 索引）。新查询还防住一个真陷阱：`download_status` 故意**不**放进通用的消息 `SELECT`；当某张消息表没有这一列时改为退化取值并对该列返回 `None`——若沿用通用路径的 `except: continue`，会**静默丢掉那个分片的每一行**，把「读不到」伪装成「没有语音」，比要修的 bug 更糟。
+- **需要知道的行为变更**：群里 `msg.sender` 以前是正文里刮出来的原始 `wxid_xxx`，现在是备注/昵称；要原始 id 请读 `msg.sender_wxid`。
+- **回归覆盖**：`tools/selftest.py` 新增 `sender` 组（22 项：数字冒充、正文前缀兜底、自己发的、无 db 与昵称查询失败两条降级路径、缓存语义、群成员三种失败路径，以及两条监听路径确实都把 db 传了下去）与 `voice` 组（28 项，基于真实的内存/临时文件 SQLite 消息库与 media 库，含「缺列必须不丢行」）。整套 **226 项 0 失败**。变异验证两组都会咬：把发送者身份解析退回老写法 → 5 项红；把假数字兜底放回去 → 源码级检查红；把语音查询的缺列退化改成通用的 `continue` → 「不丢行」那条红（只回来 0 条）并连带崩组。
+
+### v1.2.4（2026-09-24）
+
+- **适配微信 4.1.15.13**（本轮进行到一半客户端自动升级；`Weixin.dll` 从 198,060,584 涨到 201,552,944 字节）。这里其实是三件独立的事，而且从外面看长得一模一样：
+  - **搜索入口改成了默认收起。** 原来的输入框现在只剩一个名叫「搜索」的 `mmui::XButton`（实测 `[314,84,370,140]`），点了它之后 `mmui::XValidatorTextEdit` 才会出现。`_search_box(expand=True)` 会先点一次再等输入框；`search_box_rect()` 在收起状态下仍然给得出坐标（返回按钮矩形，作为**只读锚点**，故意不点——取坐标不该有副作用），`open_chat()` 则显式要求展开。老版本输入框本来就常驻，这时一步都不多点。4.1.13.x 照常可用，走的是哪条分支由离线自检钉住。
+  - **gate RVA 挪到了 `0xb135c38`**，已进版本表，常用路径不必再跑 1.2.3 那套向量化扫描（未收录的版本仍然要扫，结果照旧落盘 `~/.wechatauto/gate_cache.json`）。
+  - **进朋友圈需要显式唤醒。** `mmui` 树还没物化时，`_switch_to_moments_new_style` 报的是「找不到导航按钮」——这句话听起来跟「这个版本不支持」一模一样，我第一时间就被带偏了。现在会先检查树的就绪状态，调 `ensure_materialized(timeout=6.0)`，**并且唤醒之后重新锚定根控件**（旧句柄指向的是唤醒前的空壳）。
+- **修复：朋友圈滚动从来没真的滚过——`find_moment` 只是看起来能用。** `_send_scroll()` 把 `MOVE` 和 `WHEEL` 两个 `SendInput` 连着发，**中间零停顿**。滚轮事件是在**出队那一刻**按光标所在位置投递的，所以它落在了旧坐标上、也就是完全错误的窗口；而且微信不是前台窗口时，mmui 时间线根本不接收滚轮。现在先用 `SetCursorPos` + `GetCursorPos` 轮询确认光标真的落位（最多 8 次约 0.4 秒），再停 0.3 秒，`_scroll()` 之前还会把窗口提到前台。实机：`find_moment` 连跑两次都命中（51.4 秒 / 14.2 秒），后来一次 17.2 秒——改之前是碰运气，而且运气好时看起来像时序抖动。
+- **朋友圈点赞/评论合并成一条实现。** 之前有两条并行路线，而演示里真正跑通的那条（定位 「…」 按钮 → 点浮层里的 赞/评论）并不是 `LikeMoment` / `CommentMoment` 走的路。现在 `Like` / `Comment` 先走浮层路线，只有失败才退回老的反向菜单右键；`LikeMoment` / `CommentMoment` 改为委托，不再各自留一份副本。老评论窗口（`MomentCommentDialog.send`：点输入框 → `Ctrl+A` → 粘贴 → 点「发送」）**还漏在 1.2.3 的节流之外**，现在补上了，并且放在所有前置校验之后（前置校验没过就不该占用写动作额度）。实机验证：点赞、评论都落地了，从本地朋友圈库回读也能看到那条新评论。**留下的教训：一个功能两份实现，被审过的那份往往不是正在跑的那份。**
+- **修复：`find_moment` 会把一条点不动的 cell 交出去。** cell 滚出视口后 UIA 会回收它的句柄，回收后的节点 `BoundingRectangle` 是 `(0,0,0,0)`，在它上面做任何坐标动作都会抛 `Can not move cursor`——表现出来就是「明明定位成功了，却报未能打开朋友圈操作菜单」。现在命中之后先验再返回：`_rect_usable()`（读不到/退化矩形都算不可用）、`_reattach_item()` 用「昵称 + 正文前缀 + 时间」在当前可见 cell 里重新认领同一条，**原地换 control**（调用方手里的对象继续有效，不必重新拿返回值），`_settle_item()` 在同屏没有可用分身时先把它滚回视野再试一次。认领刻意保守：**绝不会**认领同一个人的另一条（那就等于给别的动态点赞），而既没正文又没时间的只剩昵称、直接拒绝。正文比对用「前 10 字互相包含」而不是精确签名——UIA 摘要会截断正文，DB 校正过的正文反而更长，用精确签名会连自己那条都认不出来（这条是自检先暴露的）。`find_moment` 的两个命中点、`_locate_more_click`（每轮重试前）、`_invoke_action_menu`（动手前）全部过这道检查。
+- **修复：全局监听时的一个真实并发崩溃。** 两个线程同时打开同一份库会写到同一个 `dst.tmp` 中间文件，从监听线程里抛出 `FileNotFoundError`（`os.replace`）。`db._open()` 现在按库加构建锁，中间文件名带进程号和线程号（`dst.<pid>.<thread-id>.tmp`），并且清理被杀进程留下的残留（超过 600 秒的 scratch）。
+- **修复：`get_messages()` 的分页入参不是失败即空的。** `limit=0` 会返回一整页，`offset=-1` 会返回**最后一条**（Python 切片的行为，不是数据库报错），于是本该报错的调用拿到了一个看似合理的答案——是在实机监听短会话时发现的。现在 `limit <= 0` 或 `offset < 0` 一律返回 `[]`。
+- **新增：`AddListenAll()` 真的监听到所有会话了。** 全局回调过去是**按会话**注册的，所以任何已经单独 `AddListenChat` 过的会话都被跳过、永远收不到全局回调；现在按回调去重，轮询中新出现的会话会自动纳管，交给回调的那个伪会话可用了（`nickname` 能取到、`chat` 懒建、`SendMsg` 能发），监听器重启后全局回调会重新挂上，`RemoveListenAll()` 也真的摘得掉。写进 `GUIDE.md` §4.3。**已知代价**（本轮未修）：200 个会话左右的账号上注册约 11 秒、每轮轮询约 10 秒，因为每个会话都要打开再读；这也让它成为 issue #25「IO 偏高」报告的头号嫌疑。
+- **实机复验**（真实客户端，`calm` 节奏档，逐项拉开间隔）：向文件传输助手发送并逐字回读通过两次（新 `sort_seq` 精确命中）；`back_to_chat_tab()` + `open_chat()` 端到端通过（整窗像素变化 7.2% / 8.3%，作为「页面确实切了」的客观判据）；朋友圈定位 → 点赞 → 评论，界面与库两侧都确认到位。
+- **回归覆盖**：`tools/selftest.py` 新增 `moment` 组 30 项（假控件 **和** 真 `MomentItem` 实例各跑一遍，纯离线、不碰微信也不点击），外加本轮补的 `click`（8）、`listen`（7）两组，整套 **175 项 0 失败**（这一项修复之前同一条命令读到 147 项；sessions / messages 两组会随账号数据多几项少几项）。两处变异验证新组真的会咬：把 `_rect_usable` 改成永远返回 `True` → 15 项红；认领时只比昵称 → 5 项红，而且红的正是「不许认领另一条」那几条。
+
+### v1.2.3（2026-09-22）
+
+- **新增：拟人节奏层 `wechatauto/rhythm.py`，默认开启，会改变默认可见行为。** 本机账号在 2026-09-21 触发过一次风控（会话中途被要求重新登录），此后凡是驱动真实微信界面的动作都必须按真人节奏走，而且要做进库里——做进测试脚本等于只对一份脚本生效。风控看到的是**动作的时间分布**而不是坐标：固定间隔、光标瞬时传送、永远命中控件正中、逐字匀速键入、几秒内连发多条。现在 `nap()` 给所有等待加抖动（倍率下限固定 1.0，只加长不缩短，所以原来靠固定 `time.sleep()` 撑住的渲染稳定性不会被破坏）；`move_to()` 让光标沿二次贝塞尔曲线走过去，`point()` 在控件四边内缩后的区域内随机取落点（不再每次都打在 `BoundingRectangle` 正中）；`type_gap()` / `key_hold()` 打破匀速键入；`gate()` 只管**对外可见的写动作**（发消息、发文件、点赞、评论、撤回、拍一拍、语音通话）的最小间隔 + 滚动窗口突发上限。读路径（读库、截图、OCR、定位控件）一律不节流。档位 `natural`（默认）/ `calm` / `fast` / `off`，`off` 精确还原这层之前的取值，只用于对照实验；环境变量 `WECHATAUTO_RHYTHM`、`WECHATAUTO_WRITE_GAP`、`WECHATAUTO_WRITE_BURST` 单项覆盖。节流状态落盘到 `~/.wechatauto/rhythm.json`，因此**跨进程也生效**：一个演示脚本就是一个新的 Python 进程，纯内存限速对这种用法等于没有。默认档下两次发送之间至少隔 2.5–6 秒，120 秒窗口内第 7 次写动作先进 30–75 秒冷却。跨进程是「最后写入者赢」，两个进程同时 `gate` 时可能都少等一点，这层故意没上命名互斥量。
+- **修复：UIA gate 扫描能把 `quick_send` 卡住约 8 秒，还能把整个调用打断。** 有用户反馈卡在 `_rip_xrefs_to_rva` 的逐字节循环里（198 MB 的 `Weixin.dll`，本机实测 6.6–9.8 秒，慢机上像死锁），而这条路径上没有兜底：扫描里任何异常都会一路冒出 `ensure_window`，把 `quick_send` 整个打断。现在扫描改成 numpy 向量化——真实 DLL 上候选与逐字节实现完全相同（`0xae2b0c8`），耗时 0.56–0.77 秒（约 12 倍）；老实现保留，作为缺 numpy 时的回退路径（`numpy` 随 `opencv-python` 一起来，正常装包走不到，真缺了只是慢，不能让 UIA 整条路消失）。扫描结果按 DLL 身份（版本目录 + 大小 + mtime）落盘 `~/.wechatauto/gate_cache.json`，**包含「扫过了、没有候选」这种负结果**（不支持的版本每次都重扫最浪费），同进程二次扫描 0.000 秒；已验证的 gate RVA 也从这里恢复并顶到候选序列首位。读不到文件 / 不是 PE 现在返回空序列而不是 `None`（调用方是直接迭代的），且这类瞬时失败不写盘。热激活里的异常改成「本轮跳过、回落 OCR/坐标」，不再打断发送；`KeyboardInterrupt` 属于 `BaseException`，仍然照常中断，Ctrl+C 不会被吞。
+- **修复：朋友圈评论的老路径完全没过节流。** 评论有两条并行实现，上一轮只给新的模板匹配路径（`_click_comment_send`）加了 `gate('comment')`，而 `Moment.Comment` 走的仍是老的 UIA 评论窗口（`MomentCommentDialog.send`）：点输入框 → `Ctrl+A` → 粘贴 → 点「发送」，一步都没节流。现在这条补上了，且放在所有前置校验之后（窗口不存在、正文为空、找不到输入框这些情况不占用写动作额度）。**教训是审计必须按「做了什么」而不是按函数名**：`tools/selftest.py` 现在扫的是动作本身（`SendKeys('{Enter}')` / `press_enter` / `keybd_event` / 点击「发送」），命中却没有 `rhythm.gate` 就报错，另附显式白名单说明哪些只是引用了发送按钮或不产生对外消息（找按钮、拼音候选、OCR 匹配、回车开会话）。把这条 gate 删掉，自检立刻 3 项红并点名 `moment.py:MomentCommentDialog.send`。其余写入口已逐个跟到底：`quick_send`→`send_msg`→`click_send`、`quick_quote`/`at_member`→`click_send`、`send_text_to`→`send_text`、`ReplyCommentMoment`→`ReplyComment`→`_click_comment_send`、`wx.SendMsg`→`send_msg`、`sender.send_to`→`send`，全部落在已有的 gate 之后。
+- **实机复验（2026-09-22，真实客户端，`calm` 档，逐项拉开间隔）**：向文件传输助手发送并逐字回读通过（库里新 `sort_seq` 精确命中，节流台账记下一次写动作，混合路径日志显示 UIA 驱动已启用）；`back_to_chat_tab()` + `open_chat('文件传输助手')` 端到端通过。
+- **已知问题（本轮未修，并更正 1.2.2.6 的说法）**：1.2.2.6 写的「临时清掉 `WS_EX_TRANSPARENT` 之后 UIA 点击生效」在本机**没有复现出效果**。实测：样式确实被清掉了（`ex=0x80000`），但 `WindowFromPoint` 在导航栏那一点仍然返回主窗口 `Qt51514QWindowIcon` 而不是渲染子窗，点击之后页面纹丝不动（整窗像素变化 0.0%）；`Control.Click()` 与 `Invoke()` 同样无效。而把该样式跨进程长期摘掉时，同一个点又能切页（15.3%）——所以真正的命中测试判据不止 `WS_EX_TRANSPARENT` 一位（`MMUIRenderSubWindowHW` 是分层窗口，很可能还有逐像素 alpha 在起作用）。基于搜索框 / `ValuePattern` 的路径不受影响，因此发送、搜索、打开会话都正常；**导航栏的坐标点击待查**，本轮没有改这段代码，也没有把「已修复」这句话留在文档里。
+- **回归覆盖**：`tools/selftest.py` 新增 `gate` 组 35 项（合成 PE 片段 + 临时缓存文件 + 假窗口句柄，纯离线不碰微信），`rhythm` 组扩到 42 项（含按动作的节流审计），整套 131 项。三处变异验证：删掉缺 numpy 的回退分支 → 该组崩溃；去掉位移的符号扩展 → 6 项失败；删掉评论节流 → 3 项红并点名函数。
+
+### v1.2.2.6（2026-09-21）
+
+- **修复：`calibrate_layout()` 在已发布的 1.2.2.5 里必抛 `NameError`**。`guia.py` 的超时包装 `_run_with_timeout` 用了 `threading.Thread`，模块顶部却没有 `import threading`（对照 1.2.2.5 的 wheel 实测：`threading.Thread` 在、`import threading` 不在）。布局校准是 UIA 路线的入口路径，pip 安装的用户第一次校准就会撞上；本机开发副本因为单独同步过，所以看不出来。**两档的症状并不相同**（这也是为什么必须报两次）：`wide` 下校准直接返回 `False` 且不生成布局文件，`portrait` 下发送按钮探针把同一个异常吞掉，照样返回 `True` 并用默认比例。把已同步副本里的模块属性删掉后，两种症状都复现了。现在探针内部出错会留一行日志，外层 `except` 把「代码缺陷」（`NameError`/`UnboundLocalError`/`AttributeError`/`TypeError`/`ImportError` → `wxlog.error`，控制台可见）和「这次没测出来」（OCR 没认到锚点 → debug，按设计回落默认比例）分开——补上 import 并不保证 OCR 能认到锚点，那是回落而不是失败。
+- **修复：发送回读校验可以确认一条其实没发出去的消息**（`_verify_sent`）。两个独立缺口：一是**子串匹配**，聊天输入框里留着草稿时实际发出去的正文是 `校准wechatauto 部署自检 OK`，而调用参数是 `wechatauto 部署自检 OK`，库里查得到、内容却是错的；二是**没有水位**，只要最近几条里存在一条含目标文字的旧消息就能通过——UI 返回成功只会转入轮询、不会重发，所以旧消息在第一次检查就被接受。现在普通文本要求**逐字相等**（`strip()` 不等于逐字一致），引用/回复/@ 保留包含匹配（微信会把正文包装，只能包含匹配），并且每个调用点都显式写明口径；每次校验发送前先给目标会话拍一个**落库水位**：最大 `sort_seq` **加上**顶部若干行的 `(sort_seq, local_id)` 身份集合——真实 `sort_seq` 大量并列（同会话实测最多 8 行同值），只比 `>` 会把刚发出去那条判成旧消息。回读还会先把显示名解析成 `username`：消息表按 `username` 键，名字错了**静默返回空**，群聊的校验此前是以错误的理由失败。拍不到水位（新会话、DB 不可用）时退回不带水位的检查，宁可不加门槛也不误报失败。
+- **回归覆盖**：`tools/selftest.py` 新增离线 `verify` 组（假 DB，14 项）和离线两档 `calibrate_layout` 组（假窗口，含锚点命中路径，8 项），离线合计 36 项通过、整套 gate 55 通过 0 失败；校验口径另外在**真实解密库上只读**复跑过（未发送任何消息），端到端实机发送镜头仍待补。
+- **修复：UIA 的点击会落到微信背后那个窗口上**。微信内容窗口 `MMUIRenderSubWindowHW` 带 `WS_EX_TRANSPARENT`（实测 `exStyle=00080020`），裸 `mouse_event` 在该坐标会被命中测试跳过、投递到它后面那个普通 `Qt51514QWindowIcon` 主窗口——4.1.13 之后「点了没反应」就是这里来的。`uia_driver` 现在在事件前后临时清掉这个扩展样式并立刻还原（`_click_at` / `_click_ctrl`），与 `guia.wx_click` 早前的做法一致。滚轮是例外：它在那层窗口上本来就有效，未改动。
+- **修复：微信停在朋友圈页时 `open_chat` 无法自行回到聊天页**。那一页没有会话列表，基于搜索的打开路径永远不会确认成功——实测两种形状：高 CPU 空转 8 分钟以上，以及约 90 秒后放弃、返回 `None` 且屏幕上看不出任何原因（整掉了一镜录制）。新增 `WeChatUIA.back_to_chat_tab()`，点 `mmui::MainTabBar` 里的「微信」。它**不判断当前在哪一页**：该 build 的 `XTabBarItem` 完全不暴露选中态（`ButtonControl`、无 `SelectionItem` 模式、`LegacyIAccessible.State` 恒为 0），而且切页后各页控件仍常驻树中，所以只能无条件点一次——已经选中时再点只会把会话列表滚回顶部。
+- **修复：搜索框校准比例会把会话名粘进当前打开会话的输入框**。旧的 `SEARCH_BOX_RATIO` 算出的点击中心已经偏出真实搜索框（算得 212,120，实测框在 250,152–412,192），于是粘贴落到了上一个会话的输入区。`_search_chat` 现在优先取 UIA 的 `search_box_rect()`，粘完还会自查：文字若进了聊天输入框，就用 `ValuePattern.SetValue('')` 清空并放弃搜索兜底——不会把任何东西发出去。
+- **UIA 驱动新增**：`search_box_rect()`、`_set_text()`。`ValuePattern.SetValue` 不需要按键也不动剪贴板就能触发微信的实时搜索，但它**不会**让 Qt 控件获得焦点，所以只用于搜索框；发送那一路仍然必须依赖聚焦后的输入框和 `{Enter}`。
+- **隐私修复**：`media.py` 不再往 stdout 打 12 条裸 `[DBG]`，其中一条带着含账号 **wxid** 的 `.dat` 绝对路径。现在统一走 `wxlog.debug`（控制台默认 INFO），另有两处静默 `return None` 的出口改成 warning。
+- **本轮未做实机复验**：`_click_ctrl` 与 `back_to_chat_tab` 的点击是否真的落到微信内容区（重登录打断了这一步）。`WS_EX_TRANSPARENT` 的测量和搜索框矩形是实测的，两条新点击路径的端到端效果尚未演示。
+- **感谢 [wenjiavv](https://github.com/wenjiavv)** 报告上述两条（[#28](https://github.com/fanyuantaier/wechatauto-replica/issues/28)、[#29](https://github.com/fanyuantaier/wechatauto-replica/issues/29)），并给出了复现、宽屏/竖屏症状区分和修复建议。
+- **修复：`RecallGuard` 一条撤回都抓不到 —— 两层独立故障**。
+  1. **撤回行永远不会被投递**。微信撤回是**原地改写**原文那一行（本机 208 个会话里的 64 条 `revokemsg`：`revoketime - create_time` 落在 1-30s 的 10 条、31-300s 的 54 条、等于 0 的 0 条），改写后 `local_id` 和 `create_time` 都还是原文的；而 `Listener` 的增量判据是 `sort_seq > watermark`，`sort_seq` 没变，撤回事件根本不下发。现在 `watch()` 自带一条 `wxrecall-scan` 守护线程，每 `scan_interval`（默认 2.0s）重读各会话最近 `scan_limit`（默认 30）条，拿 `local_id` 跟镜像比对：镜像里是正常消息、现库已是 `revokemsg`，即一次撤回；另有 `scan_now()` 供脚本手动触发。
+  2. **就算投递了也查不到原文**。`_find_original` 的条件是 `create_time < revoke_time`，而 `revoke_time` 取的正是这条撤回行自己的 `create_time`（= 原文时间），严格小于把自己排除了。现在先按 `(chat, local_id)` 精确取（被改写的就是这一行，同 `local_id` 的镜像行必然是原文），时间窗只作兜底且放宽成 `<=`。
+  3. `on_msg` 遇到撤回行**不再写镜像**，否则一存就把要救的原文覆盖掉。
+  4. 撤回时刻改为解析 `<revoketime>`（原来打出来的是原文的发送时间）；`(chat, revoke_time)` 同时作去重键，Listener 路径与轮询路径不会各记一笔，重启也不会把历史撤回再报一遍。
+  5. `close()` 现在会停掉轮询线程。
+  实测：离线 3/3 条真实撤回行（local_id 62/64/88）还原出原文，二次 `scan_now()` 返回 0 条（去重生效），`close()` 后只剩 `MainThread`；活体链路（发送 → 镜像 20→21 条 → 撤回 → 还原）同样跑通。
+- **安全修复：`demo_media.py --list` 会把媒体消息的 XML 原样打到屏上**，其中含 `aeskey`、`cdnthumbaeskey`、`cdnthumburl`、`md5` 等密钥与 CDN 取回字段。现在只输出尺寸、字节数、时长和文件名。
+- **新增：微信 4.1.13 合并布局下朋友圈点赞/评论的 OCR 兜底**（`Moment._read_comment_cell_ocr`）。该版本的点赞与评论落在兄弟 cell `mmui::TimelineCommentCell` 且不进 UIA 树，正文 cell 的 UIA 解析必然为空；现在检测到空结果时自动兜底为「评论区矩形截图 + OCR」。同时把评论框的检索区按新布局改为从视口底边往上 320px（旧代码找 `bottom+8` 以下，在 4.1.13 上落到任务栏、永远匹配不到）。
+- **清理**：`demo_send.py` 的 `pick_default_image` docstring 改为 raw string，消除 `\W` 转义告警。
+
+### v1.2.2.5（2026-09-19）
+
+- **修复：朋友圈缓存图片解密后解不开**。同一条 `.dat` v2 路径上的两个独立问题：
+  1. **缓存容器用错了单字节 XOR 密钥**。这个密钥就是账号配置 dword 的低字节，但原实现是**逐文件从明文最后两字节反推**（`tail ^ 0xFF == FF D9`）。微信会在 Sns 缓存容器的图片结束标记**之后再追加 24 字节页脚**（本机实测 189/295），判据因此失效并静默退回到兜底密钥，尾部一段全成乱码。现在按 **配置 dword（权威）→ 缩略图统计 → 兜底** 的顺序解析，并按账号缓存一次。
+  2. **页脚被当成图片数据留下**。解密后按 JPEG/PNG 结束标记裁剪，严格解码器不再因为几个尾巴字节判整张图无效。
+  实测：Sns 缓存容器过 `MediaDownloader.decrypt_image()` 从 **118/295 → 295/295**；朋友圈缓存索引的解密失败 **177 → 0**；15577 个聊天图片抽样 **429 张 JPEG + 171 个 wxgf、0 失败**（聊天媒体无回归，wxgf/WXAM 容器不受影响）。
+- **修复：`MomentDB.find_local_media` 的尺寸校验在最常见分支上根本没跑**。「尺寸偏差过大即拒绝冒充」只写在**多个**同尺寸候选那一路；只有 1 个候选时代码直接返回、完全没比对，所以 66KB 的偏差静默放行。现在会记录偏差，但**仍然不否决**：库里声明的 `totalSize` 是 CDN 原图尺寸、缓存里是微信重编码后的副本，偏差大是常态，不能当「认错图」的证据（多候选那一路的判据保持不变）。
+
+### v1.2.2.4（2026-09-18）
+
+- **修复：密钥形式错误会让整个消息分片读不出来**。密钥缓存里可能存成 48 字节（32B key + 16B 显式 salt）形式，而解密按**密钥长度**选分支——48 字节会走「明文头库」分支，解出的文件头不是 SQLite（`file is not a database`），该分片（实测 96MB 的 `message_0.db`）整库不可读、读消息全部失败。现三重防护：**存储时先按标准形式校验**（通过即存 32 字节裸密钥，仅明文头库才存 48 字节）、**读取时归一化判定**、**缓存加载时自动纠正历史条目**。
+- **修复：微信持续写入时「数据库合并失败」直接报错**。原实现把解密结果直接写在缓存文件上，合并失败即抛 `RuntimeError`，且会毁掉上一份可用副本。现在：先做**主库自洽快照**当底线（解密后 `quick_check`，失败自动重读最多 4 次）→ 再在副本上尝试合并 WAL（失败降级为「仅主库快照」并告警）→ 全程写临时文件、**成功才原子替换**，任何失败都不破坏上一份可用副本。
+- **修复：缓存残留已不存在的库条目会让构造整体崩**（`KeyError`）——现已整体容错。
+- **布局：新增手机式竖屏（双档位 `wide` / `portrait`）**，按窗口长宽比自动选档、两档独立校准并存于布局文件（旧格式自动迁移）；同时修复**竖屏下会话定位失效**（名字列过滤把整列会话名当成头像区滤掉 → `find_session` 恒返回 None）。
+- **清理**：删除 10 处未使用 import；8 处「吞异常」补 debug 日志（不再把探测失败伪装成正常结果）；`demo_send.py` 去掉他人用户名与本机路径、默认图片改为自动探测 RWTemp；README 中真实 wxid 改占位。
+- **新增 `tools/selftest.py`**：只读自检（layout / keys / sessions / messages），`python tools/selftest.py` 一次跑完。
+
+### v1.2.2.3（2026-09-16）
+
+- **修复：库运行期间磁盘持续约 50MB/s 读写**。解密缓存的 stamp 判定用**精确浮点相等**比较 mtime，而写盘用 `%f`（只 6 位小数）、Windows 的 mtime 有 7 位小数 → 每轮查询（约 1s）都被判定为“库已变化”，于是反复全量解密 + 合并 WAL + 重写缓存。现改为 `STAMP_VERSION 3` + `%r`（完整往返精度），升级后重建一次即稳定。
+- **消息读取改为“分片内先 LIMIT 再合并”**（48k 条大群实测 **5.5×**：1.053s → 0.191s；`get_new_messages` 约 6×）。超大群不再把每个分片的全部行物化进 Python；`get_messages` / `get_new_messages` / `get_message_row(..., local_type=)` / `get_message_rows_for_media` 等**公开 API 签名与结果均不变**（6 个会话 × 71 个用例逐条比对一致）。
+- **修复 UTF-8 模式下“取不到密钥”**：4 处 `tasklist` 调用未指定编码，在 `python -X utf8` / `PYTHONUTF8=1` 下解码 GBK 输出失败 → `stdout` 变成 None → `AttributeError`，整个取密钥流程崩掉。现统一 `encoding="gbk", errors="replace"` 并对 stdout 兜底。
+- **`WeChatUIA.is_running()` 改为多判据**：原来单判据 + `except → False`，任何异常都会变成“微信未运行”的**假报错**；现为 tasklist / 主窗口标题 / psutil 三判据，且只有所有判据都**出错失败**时才写 stderr 说明原因。
+- **演示脚本与文档中的真实联系人/群名清理**：统一改为「文件传输助手」（示例默认值「兔仔仔」「送你挖银子」保留）。
+
+### v1.2.2.2（2026-09-13）
+
+- **密钥问题根除（不再“每次微信更新都复发”）**：三层修复。
+  - **缓存不再被写空**：`_save_keys()` 空结果不落盘（原子写 + 保留 `.bak`）。此前提取偶发失败（选错账号/权限）会把**好缓存覆盖成空文件**，之后每次启动都报“0 把密钥”——故障现场的 `keys cached: 0` 即由此而来。
+  - **稳定密钥副本**：自动在 `%LOCALAPPDATA%\wechatauto_keys\<账号>.json` 保留一份（可用环境变量 `WECHATAUTO_KEYS_DIR` 指定目录，例如项目工作区），跨 TEMP 清理与微信更新复用。启动时按「稳定副本 → 工作缓存 → `.bak` → 其它账号缓存」**多位置合并**，并逐条页1 HMAC 校验，只保留真能用的。
+  - **账号选择改由密钥校验决定**：不再按“最近修改的 .db”猜账号（微信每次更新会重写 .db，mtime 全变 → 选错账号 → 0 密钥）。现在一次内存扫描收集候选密钥，对**每个账号目录**分别做页1 HMAC 打分，选能解开的那一个并自动切换（日志：`已按密钥校验选定账号目录: …`）。
+- **cfg 主密钥告警**：cfg 路径在微信 4.1.13+ 会返回**不可信的主密钥**（v1.1.9 起已降级为回退路径）；现在它复现不出任何库密钥时会**明确告警**，不再静默当作成功。
+- **诊断增强（`diagnose_keys`）**：新增微信客户端 **FileVersion**、逐账号「缓存可用 / 主密钥派生」计数、**主密钥一致性检查**（判断“密钥属于哪个账号”）；`_open` 报错文本直接列出三条经典原因（32 位 Python / 权限与微信不一致 / 多账号选错）+ `account=` 提示。
+
+### v1.2.2.1（2026-09-12）
+
+- **兼容微信新版界面（4.1.13.65 实测）**：新版把 `AutomationId` 从短名改成了**点分路径**（旧 `session_list` / `chat_input_field` → 新 `MainView.main_tabbar`、`MainView….main_window_sub_splitter_view…`），原来按短名精确等值匹配会失配。现在 AID 一律按「精确 / 点分段相等 / 结尾匹配」判定（`_aid_hit()`），旧版短名与新版路径都能命中。
+- **窗口标题匹配放宽**：新版主窗口标题为 `Weixin`、带未读数时变成 `微信(3)`；`_title_is_main()` 改为包含匹配，`WeChat` 等其它窗口不会误匹配。
+- **锚点候选 + 结构兜底**：主窗口 / 登录窗 / 搜索框改为候选元组匹配（单值常量保留，兼容外部引用）；搜索框、聊天输入框、搜索结果列表各自增加结构兜底（Name 含「搜索」的 EditControl / 聊天区 EditControl / 根节点属性搜索），日后新版改类名或 AID 时不至于整体失效。
+- **新增布局自检 `WeChatUIA.describe_layout()`**：一次调用返回主类名、标题、布局类型（`merged` 合并布局 / `legacy` 独立朋友圈窗 / `chat`）与各锚点解析结果（main_window / search_box / session_list / chat_input / main_tabbar / sns_list）。微信再改界面时先跑它，即可定位是哪个锚点失配。
+- 说明：朋友圈相关锚点本身已是双布局分支（独立 `mmui::SNSWindow` / 合并 `mmui::SNSContentView`），4.1.13.65 实测类名未变，无需调整。
+
+### v1.2.2（2026-09-12）
+
+- **修复跨分片消息读取（消息/语音不全）**：同一会话的 `Msg_<md5>` 表实际横跨多个 `message_*.db` 分片，而 `get_messages` 只命中第一个分片——实测某会话真实 8904 条消息（24 条语音）此前只返回 1 条。新增 `_find_msg_tables()` / `_msg_conns()` / `_shard_rows()`，跨全部分片合并后按 `sort_seq` 排序；`get_messages`、`get_new_messages`、`_find_media_rows` 均改用合并视图。`get_message_row` 新增 `local_type` 过滤（`local_id` 跨分片**不唯一**），并新增 `get_message_rows_for_media()` 返回全部分片命中行；媒体下载各方法传入类型码以选中正确分片行。
+- **监听可靠投递（行为变更）**：水位改为**回调成功后才推进**（新增 `_inflight` 分派边界，回调未确认前不重复分派同一消息），回调失败按 `max_retries`（默认 3 次）重试后再记丢弃；水位自动落盘 `listener_watermark.json`。进程停机期间到达的消息会在下次启动时补投，不再被静默跳过。传 `watermark_file=""` 可关闭落盘。
+- **文本还原不再要求含中文**：纯英文 / 纯数字 / URL / Emoji 的容器格式消息不再退化成 `[文本]`（改为可打印率 + 字符类别双重判定）。
+- **`Chat.GetNewMessage()` 不再丢积压**：单批 200 条以上时连续分批拉取直到追平，水位只推进到**实际取回**的最后一条，不再直接跳到库内最新位置。
+- **UIA 物化自愈（微信重启/升级后子控件全扫不到）**：微信重启或升级后 Qt accessibility gate 字节归零，`mmui::` 树退化为 Qt 空壳（`Qt51514QWindowIcon` + 2 个节点，扫不到任何控件）。现在会热写 gate → **校验 `mmui::` 是否真的出现** → 失败自动换候选 RVA 重试（真正生效过的 RVA 按 DLL 身份缓存）；`_get_uia()` 增加 30s 节流自愈，不再「一次唤醒失败就永久降级 OCR」，也不再需要人工 `refresh=True`。兜底表补 `4.1.13.65 → 0x0AE2B0C8`。
+- **朋友圈滚动定位修复**：加入反向上限（每轮最多反向 1 次，之后单向向下）与卡死检测（顶部指纹改为含包围盒几何——合并布局整屏复用 ListItem、同名 cell 不再误判「卡死」而中途放弃）；DB 标尺判断目标在下方时**跳过「先滚到顶部」**；停止判据改为**下一条朋友圈 UIA 出现即停**；方向与距离修正（被裁像素换算滚轮格数）+ 底部余量，解决「翻的距离不够、够不到 … 按钮」。
+- **消息类型表**：支持微信 4.x 复合 `local_type`（按低 32 位分解真实类型）；新增 `50 音视频通话`（`<voipmsg>` 气泡）、`11000 动画表情`、`8594229559345 红包`（库侧此前被低 8 位映射误标为「文件/链接/卡片」）；空正文（表情/贴纸类）显示 `[动画表情]` 占位；`demo_group_messages` 对所有类型统一 zstd 解压并输出一行摘要。
+- **`demo_listen.py --all`** 自动发现新会话（此前只取启动时最近 30 个，之后新建会话不会加入监听）。
+- **新增防撤回监听 `RecallGuard`（测试版）**：`watch(listener)` 后把每条新消息写入独立镜像 sqlite 库、附件（图片/语音/视频/文件）增量备份到 `media/`；收到 `revokemsg` 系统消息时终端打印 `[撤回] 撤回者 → 原文` 并写入 `recall_events` 表。**未充分实机验证，按测试版发布。**
+- **新增 `MomentObserver`（测试版）**：朋友圈缓存 key 的「观察即固化」——`snapshot()` / `diff()` 快照与轮询导出（缓存 key 与 feed md5 之间无可推导映射且缓存易失，故观察即可固化）。**未充分实机验证，按测试版发布。**
+
+### v1.2.1（2026-09-06）
+
+- **新增「引用消息并发送」（测试版）**：`WeChatGUI.quote_msg(text, who, target_text=None, verify=False)` 右键定位消息 → 弹出菜单选择「引用」→ 输入内容并发送；`target_text` 省略时引用最近一条。`quick_quote()` 提供一行式入口，示例脚本 `wechatauto/demo_quote.py`。
+  - **测试版说明**：引用功能走「坐标 + OCR + SendInput」模拟点击路线，依赖微信 4.1.x 自绘渲染布局；随窗口尺寸/DPI/会话内容不同可能存在定位偏差。右键采用 `SendInput` 注入（微信渲染窗口对 `mouse_event` 右键不响应），光标先 `SetCursorPos` 移至目标再注入，避免“只移动不点击 / 只点击不移动”的错位。使用中发现定位不准时请调整会话内消息布局后重试。
+- **移除 `desktop_available()` 桌面白屏判定**：控件定位已全面走 UIA，不再依赖整窗截图白色占比采样——该判定在微信窗口正常时曾误报「窗口不可见」。`ensure_visible()` 现以窗口句柄存活判定可见性，保留「最小化遮挡窗口 + 置顶微信」的前置动作。
+
+### v1.2.0.3（2026-08-31）
+
+- **修复 WAL 合并后数据库解密缓存损坏导致死循环**：`_check_merged` 之前用 `SELECT count(*) FROM sqlite_master` 只查 schema 树，数据页损坏仍能通过校验，缓存 stamp 标记为"最新"后每秒轮询复用坏缓存，反复抛 `database disk image is malformed` 形成死循环。改用 `PRAGMA quick_check` 全库校验（含数据页/索引页）；新增 `_invalidate_cache()` 清空解密 `.db`/`.stamp` 缓存；查询统一入口 `_run_msg_query`：命中 malformed 时清缓存→重建→自动重试一次；`_msg_conn` 及时关闭分片库连接避免 Windows 文件占用。
+
+### v1.2.0（2026-08-30）
+
+> 注：本版本合并了 1.1.10.2 之后、此前尚未发布的全部改动（1.1.10.3 → 1.1.10.7 的内容）。
+
+- **朋友圈智能定位与自动点赞**：`Moment.find_moment(publisher, keyword, ...)` 采用 **数据库路线计算目标偏移 + UIA 路线滚动定位** 的混合方案——先用本地 `sns.db` 标尺算出目标动态相对当前可见条目的索引偏移，再按偏移方向动态滚动（自适应步长），最终定位到指定作者/关键词的朋友圈，摆脱了“盲目往下翻”和“过早判定未找到”的问题。
+- **“…”浮层识别**：`Moment._locate_more_click` / `_find_more_button` 通过模板匹配（深浅两套模板，随包打包进 `assets/`）定位朋友圈右下角“…”按钮并点击，未识别到时自动微调滚动重试，弹出点赞/评论浮层。
+- **一键点赞**：`Moment.LikeMoment(publisher, keyword, ...)` 一键完成“定位 → 点…→ 浮层内点赞”；浮层内“赞/评论”按钮通过从 UIA 根节点向下做全局深度遍历按名称匹配后按其中心坐标点击。
+- **朋友圈点赞/评论（UIA 控件路线）**：`WeChat` 现暴露 `Moment` 属性与 `SwitchToMoments()`，通过热激活 `mmui` UIA 树并点击导航栏“朋友圈”。`Moment.Like(item, cancel=False)` 与 `Moment.Comment(item, content, reply_to=None)` 基于 UIA 控件对动态条目操作——点赞/评论属服务端行为，只能走界面（数据库路线保持只读）。UIA 树不可用时 `WeChat.Moment` 为 `None`。示例 `wechatauto/demo_moments_interact.py`。
+- **朋友圈图片/视频下载**：新增 `MomentDB.download_media(media, save_dir, kind)`——优先从本地缓存原样复制（离线、秒级），缓存缺失时回退到 CDN url 下载；`MomentDB.download_moment_media(feed, save_dir, ...)` 批量把一条动态的图片/视频落地到目录。`find_local_media(md5, kind, size)` 按 md5 定位缓存文件，对视频按 `totalSize` 跨整个 `Sns/Video` 树按大小近似匹配（视频缓存文件名是内容哈希、与朋友圈记录里的 md5 无关，故用大小找回真实 MP4）。`parse_feed` 现通过 `videomd5` / `videoDuration` / `type` 区分图片与视频，并记录每条媒体的 `size`。示例 `wechatauto/demo_moments_download.py`。
+- **朋友圈读取 API（数据库路线）**：`MomentDB.get_moments()` 新增 `since` / `until`（Unix 秒时间过滤）与 `keyword`（正文过滤），并支持 `limit=0` 全量返回。新增增量同步 `latest_tid()` / `get_moments_since()`，便于轮询检测「有新朋友圈」。新增互动通知 `get_interactions()` / `interactions_unread_count()`，读取「他人对我朋友圈的赞/评论」表（`SnsMessage_tmp3`）。新增 `comment_tree()` / `comment_reply_to()`，按 `comment_id` / `ref_comment_id` 将评论组织成回复树。
+- **新增群名 ↔ 群ID 互查**：`get_groups()` 现在返回每个群的真实 `name`（来自 contact 表，无群名时回退 wxid）。新增 `group_name_to_id(name)`（先精确匹配，再子串/模糊匹配）与 `group_id_to_name(chatroom_wxid)`，可按群显示名反查群 wxid（及反向），便于与 `get_group_members()`、`at_member()` 配合使用。
+- **新增群成员枚举与变动监测（只读，无需 UI）**：新增 `WeChatDB.get_groups()` / `get_group_members(chatroom_wxid)`，读取 `contact.db` 的 `chat_room` + `chatroom_member` + `contact` 三表关联，返回每个群的成员。新增 `GroupMemberWatcher`（经 `get_group_member_watcher` 创建）：先 `capture()` 存基线快照，之后 `poll()` 对比当前成员输出 `joined` / `left` 差异，实现轮询式群成员变动监测。可与现有 UI 自动化的 `at_member()` 配合使用。
+- 新增可运行示例 `wechatauto/demo_moment_find.py`、`demo_moment_more.py`、`demo_moment_like.py`；新增依赖 `pyautogui`、`opencv-python`。
+
+### v1.1.10.2（2026-08-30）
+
+- **修复全新安装后长文本仍显示 `[文本]`：新增必需依赖 `zstandard`**。微信4.x 将长文本的 `message_content` 存为 zstd 压缩帧，由 `_friendly_content` 通过 `import zstandard` 解压。但 `zstandard` 此前不在必需依赖中，用户机器未安装时该 import 被静默吞掉，长文本退化为 `[文本]` 占位符（监听本身正常，故难定位）。现已将 `zstandard` 加入必需依赖；`_friendly_content` 同时新增惰性双包名导入（`zstandard`/`zstd`，见 `_get_zstd_module()` / `_zstd_decompress()`）。
+
+### v1.1.10.1（2026-08-29）
+
+- **修复消息读取的 `AttributeError: 'sqlite3.Row' object has no attribute 'get'`**：`_msg_row_to_dict` 对 `sqlite3.Row` 调用了 `.get("compress_content")`，而该对象只支持下标 `[]` 访问。当消息内容解压后仍为占位符（如表情等特殊类型）时走此分支，导致实时 `Listener` 轮询循环崩溃。现改为下标访问并容错，`get_messages` / `get_new_messages` / `get_message_row` 均修复。
+
+### v1.1.10（2026-08-27）
+
+- **新增原图下载功能**：`MediaDownloader.download_image_original()` 通过UI自动化点击图片消息，触发微信下载原图。解决了群聊图片只有缩略图可用的限制。
+- **修复长文本消息内容提取**：添加zstd解压支持、`compress_content`回退，修复换行符处理问题。
+
+### v1.1.9（2026-08-27）
+
+- **修复微信4.1.13+密钥提取**：调整密钥提取优先级，将`Config.Cipher`内存扫描置于`extract_master_key_from_cfg`之前。cfg提取方式在微信4.1.13.12上返回错误的主密钥，而Config.Cipher扫描（从XOR解码的blob中读取原始`enc_key`值）工作正常。此修复解决了新版微信"0/24密钥验证通过"的问题。
+
+### v1.1.8（2026-08-25）
+
+- **修复 MediaDownloader 缺失 `_derive_xor_key` 方法**：v1.1.7 发布时意外遗漏了 `_derive_xor_key()` 方法，但代码路径（`_decrypt_v2`、`detect_image_key`）仍引用它，导致图片解密时出现 `AttributeError`。已恢复该方法，用于从缩略图 `_t.dat` / `_h.dat` 文件反推 XOR 密钥。
+- **修复群聊 `sender_id` → `sender_username` 映射**：`Listener` 回调现在会在消息字典中返回 `sender_username`（wxid 格式），通过 `message_resource.SenderName2Id` 映射表将数字 `sender_id` 转换为可直接用于 `search_contact()` 的用户名。
+- **感谢 [uiharukazari0105](https://github.com/uiharukazari0105)** 报告 v1.1.7 版本缺失 `_derive_xor_key` 方法的 bug。
+
+### v1.1.6.1（2026-08-20）
+
+- **PyPI 描述修复**：1.1.6 发布时漏同步 `README_pypi.md`（描述停留在 1.1.5.1），本补丁版补全 v1.1.6 更新记录并同步版本号。
+
+### v1.1.6（2026-08-20）
+
+- **缺密钥报错自动诊断**：`数据库无可用密钥` 报错前会自动检测三项最常见根因——Python 位数（32 位读不了 64 位微信内存）、逐个微信进程的 `OpenProcess`/`ReadProcessMemory` 读取权限、多账号目录与所选账号对比（提示用 `WeChatDB(account=...)` 显式指定），无需先手动运行 `diagnose_keys`。
+- **新增诊断工具**：`wechatauto/diagnose_keys.py`（微信登录后运行 `python -m wechatauto.diagnose_keys`）输出库版本、Python 位数、微信进程 PID 及逐个进程的读取权限检测、磁盘全部账号与所选账号对比、已缓存密钥、进程内存重新提取结果与密钥校验情况——报密钥提取问题时把输出完整发给维护者即可定位。
+- **跳过 `migrate\unspportmsg.db`**：该库是微信保留的「未支持消息」库，进程内存中无对应密钥、代码也从不会访问；此前它会让每次初始化都触发一次全进程内存扫描。
+
+### v1.1.5.1（2026-08-18）— 测试版 / beta
+
+- **修复实时监听不触发**：`WeChatDB.get_new_messages()` 引用了未定义的 `found`（NameError 被 `Listener._poll_once` 吞掉），导致消息回调从未触发——包括从未聊过天的联系人的首条消息。
+- **动态消息分片**：`_message_dbs()` 现在会重新扫描磁盘，微信运行中新建的分片（如 `message_5.db`）会被自动发现并提取密钥。
+
+### v1.1.5（2026-08-18）
+
+- **版本号规范化**：语音跨库下载修复后整理补丁版本号（1.1.4.2 → 1.1.5）。
+
+### v1.1.4.2（2026-08-18）
+
+- **PyPI 描述清理**：移除 v1.1.4 版本记录中关于 demo 默认群改动的条目。
+
+### v1.1.4.1（2026-08-18）
+
+- **PyPI 页面中英双语**：PyPI 描述合并中文（`README.zh-CN.md`）与英文（`README.md`）两个版本，中文版在包页面可见。
+
+### v1.1.4（2026-08-18）
+
+- **跨全部媒体库下载语音**：`download_voice()` 现在搜索所有 `media_*.db`（不再只查 `media_0.db`）——微信把语音分片存到多个媒体库；此前存在 `media_1.db` 等的语音无法找到（感谢 uiharukazari0105）。
+- **群聊图片缩略图回退**：群聊的图片原图只有被点开（查看）后才会落盘本地；原图未点开不下发时，`download_image` 自动回退到缩略图（`_t.dat`），保存为带 `_thumb` 后缀的文件。
+- **`WeChatDB._find_media_rows(user, types)`**：新增批量查媒体接口——返回某会话指定 `local_type` 集合的全部媒体 `local_id`（用于批量下载）。
+- **`demo_media.py --images N`**：按 `local_type` 直接从数据库下载某会话最近 N 张图片，绕过总消息数 `--limit` 的限制——群聊消息上万条时不再「只列出几张图」。
+
+### v1.1.3（2026-08-17）
+
+- **WXAM (wxgf) 图片解码**：微信 4.x 现在把**普通图片**（不仅是动图贴纸）也存进 WXAM 容器
+  （内部为 HEVC 比特流）。`MediaDownloader.download_image` 新增 wxgf 处理：提取 HEVC
+  Annex-B 流，用 ffmpeg 转码为 JPG（优先用 `imageio-ffmpeg` 内置二进制，其次 PATH 上的
+  ffmpeg）；ffmpeg 不可用时不再丢弃数据，改为保存原始解密数据为 `.wxgf` 兜底。
+- 新增依赖：`imageio-ffmpeg>=0.4.9`。
+
+### v1.1.2（2026-08-16）
+
+- **UIA 驱动线程安全**：`WeChatUIA` 实例化时在当前线程初始化 COM（`CoInitializeEx`，幂等）——修复后台线程/宿主进程（如 WeChatBot）实例化报「尚未调用 CoInitialize / 无法加载 UIAutomationCore.dll」。
+- **主窗口过滤**：只认加载了 `Weixin.dll` 的主进程窗口，过滤无 DLL 的辅助进程窗口（其热激活必然失败，不再刷噪音警告）。
+- **转发语音修复**：`Chat.ForwardVoiceMessage` 未指定目标时用 `self`（原 `_cur()` 可能误取会话）。
+- **UI 锁可重入**：`LockManager` 同线程可重入——`@uilock` 函数互相调用（如 `ForwardVoiceMessage` → `VoiceMessage.forward_to`）不再死锁。
+
+### v1.1.1（2026-08-16）
+
+- **撤回消息**（`Chat.RecallLastMessage` / `uia_driver.recall_last_message`）：右键最新一条自己发的消息 → UIA 优先
+  （主窗口树内 `mmui::XMenuView` 菜单项定位「撤回」，Invoke/Select 或鼠标点击），OCR 兜底（全屏识别「撤回」
+  文字定位点击）；菜单只剩「删除」（超过 2 分钟撤回时限）时返回失败。
+- **UIA 健壮性**：菜单项查找限定在主窗口子树内（避免触发 Windows UIA 根遍历的系统挂起 bug）；移除脆弱的
+  `WindowControl(ClassName=...)` 兜底定位。
+- **媒体修复**：视频 id bytes→str 解码（`MediaDownloader`），修复视频文件定位。
+- `demo_media.py` `--photos` 默认 3 → 10。
+
+### v1.1.0（2026-08-15）
+
+- **图片 AES 密钥自动监控捕获**（`media.py`）：微信 4.x 的 V2 图片 AES 密钥仅在
+  查看图片大图时短暂驻留进程内存（实测约 5 分钟后释放）。`_scan_aes_key()` 新增
+  `monitor` 模式——首次扫描未命中时自动持续轮询并提示去微信点开一张图片看大图，
+  密钥进入内存后自动捕获并持久化到 `image_keys.json`，之后免扫描直接解密。
+  首次用户无需手工找密钥，看图一次即可完成配置。
+- **修复进程排序扫描 bug**：移除 `_scan_aes_key` 中按内存占用排序进程的逻辑
+  （`GetProcessMemoryInfo` 结构体大小传错导致工作集全为 0，`reverse` 排序反而把
+  主进程排到最后，错过密钥驻留窗口），恢复按微信进程原顺序扫描（主进程优先命中）。
+- **语音/视频/文件不受影响**：仅图片 `.dat` 为 V2 AES 加密需密钥；语音（SILK）、
+  视频（MP4）、文件均为明文直接读取。
+
+### v1.0.9（2026-08-14）
+
+- **open_chat 账号/微信号搜索修复**（`uia_driver.py`）：微信搜索框不认 wxid
+  （系统账号），`open_chat` 传入 username 时自动通过本地 DB 映射为昵称/备注/
+  微信号再搜索（`_resolve_search_keyword`），并清空搜索框残留重试；
+  实测 `open_chat('wxid_xxxxxxxxxxxx')` 成功。
+- **UIA 表情包精确读取**（`msgs/mtype.py` + `uia_driver.py`）：热激活后消息
+  列表暴露 `mmui::RecyclerListView`，新增 `find_in_message_list()` 用鼠标滚轮
+  驱动虚拟化列表滚动，按 ClassName/Name 定位表情行并取 BoundingRectangle
+  精确坐标；`EmojiMessage.capture()` 优先走 UIA 定位 + 方向感知气泡裁剪
+  （`_crop_bubble_from_row`），实测 1.1s 裁出 271×271 表情，替代原先
+  「截图全消息区 + 连通域猜气泡」的脆弱方案；失败自动回退原连通域逻辑。
+- **语音通话**（`uia_driver.voice_call` + `Chat.VoiceCall`）：标题栏暴露
+  `mmui::ChatVoIPView.voip_button`（Name=语音通话），控件树动态重建需重试
+  定位；video=True 尝试找视频通话按钮（当前版本未暴露，通常失败）。
+- **拍一拍**（`uia_driver.poke` + `Chat.Poke`）：微信 4.x 拍一拍只能通过
+  右键对方头像触发，菜单为自绘不暴露 UIA；实现为「内容重心定位 friend
+  消息行 → 右键头像 → 全屏 OCR 定位「拍一拍」→ 点击」，实测 3.2s 发出
+  （网络正常时对方收到，网络异常时微信显示失败提示，链路本身正确）。
+- `EmojiMessage.capture()` / `voice_call` / `poke` 失败均自动回退或返回
+  WxResponse 失败，不影响既有 OCR 发送路径。
+
+### v1.0.8（2026-08-13）
+- 🎉 **特别感谢 [vesio](https://github.com/vesio)**：在 issue #1 中提供了微信 4.1.12 可出 UIA 控件树的代码与调试思路，本版 UIA 混合驱动由此而来；
+- **UIA 混合驱动**（`uia_driver.py`，微信 4.1.12.26 实测）：
+  - 新增 `WeChatUIA` 引擎：冷启动时 `Qt51514QWindowIcon` 只是空壳（Qt
+    无障碍门未激活），通过写 Weixin.dll 内的 Qt accessibility gate
+    （RVA 扫描定位）**热激活**后，锚点变为 `mmui::MainWindow`，搜索框
+    `mmui::XValidatorTextEdit` / 搜索下拉 `search_list` / 输入框
+    `chat_input_field` 全部可用；
+  - 发送链路全部走 UIA：搜索下拉选人（`search_item_*`）打开会话 →
+    `chat_input_field` 直接输入 + 回车发送，`current_chat` 校验防误配，
+    无 OCR 抖动；Windows 冷状态热激活后 UIA 树保持可用；
+  - `guia.py` 集成混合路径：`_get_uia()` 惰性启用，`open_chat` /
+    `send_msg` **UIA 优先、OCR 兜底**——UIA 树不可用（版本变更新增 RVA）
+    或失败时自动降级到坐标 + 放大 OCR 方案，首次失败本次会话内不再重试。
+  - 实测：`send_msg('文件传输助手')` 10.2s、`send_msg('某好友')` 13.2s
+    均走 UIA 并数据库确认成功（含 verify）；UIA 对生僻字会话名不再依赖
+    OCR 识别。
+- 新增依赖：`uiautomation`（UIA 客户端库）。
+
+### v1.0.7（2026-08-13）
+
+- **OCR 识别可靠性提升**（`guia.py`，针对生僻字/小字号会话名识别失败）：
+  - 新增 `ocr_zoomed()`：对区域放大 N 倍后再 OCR，坐标按 1/N 还原；实测
+    微信小字号中文在放大 3 倍时识别率最高（放大 6 倍图像过大反而整块
+    返回空），超过 5 倍即回落；
+  - `_chat_is_open` 标题检测改用放大 3 倍 + y 范围扩到 0-185（微信 4.x
+    标题实际渲染在 y≈80-180，原 15-100 的区间会漏检已打开的会话）；
+  - `_search_chat` 搜索回退排除「群聊」节标题以下行、含「包含」的群成员
+    预览行（如「00，包含：某好友」）与群名结尾行，只点联系人，修复
+    「搜索选中群聊而非联系人」的问题；
+  - `_chat_open_confirmed` 改为**优先标题命中**，标题读不到才退而用面板
+    非空白作为已打开判据，修复「点错会话也误判成功」；
+  - `open_chat` 首查 `_chat_is_open && _pane_has_content`，右侧面板已打开
+    目标会话时直接成功（不再滚动/搜索），已打开场景耗时 45s → 2.7s。
+- **OCR 多轮投票**（`find_session._scan_vote`）：WinRT OCR 对生僻字存在
+  抖动（同一行不同轮次可能读出「某好友」或「亠人五」）。对侧栏放大 3x
+  扫描 4 轮，命中行按 y 聚类（≤30px 视为同行），票数 ≥2 才返回，显著
+  降低误配；普通会话仍走单轮快速路径，无性能损失。
+- 实测：`find_session('某好友')` 连续 5 轮 4/4 票一致、稳定命中；
+  `open_chat` + `send_msg` 全链路成功。
+
+### v1.0.6（2026-08-11）
+
+- **元数据与门面优化**：README 增加徽章（PyPI 版本/下载量/Python 版本/License/Stars）、PyPI description/keywords/classifiers SEO 优化、Homepage 修正为项目 GitHub 地址。
+
+### v1.0.5（2026-08-10）
+
+- **表情截图跨机器修复**：`EmojiMessage.capture()` 表情气泡自动裁剪全面重构：
+  - 主路径改用**连通域分析**（`_crop_last_bubble`），按消息方向（左=对方/右=自己）
+    精确定位最后一条消息气泡，自动过滤细长竖条（滚动条/面板边框）、剔除头像类
+    小元素，从根源解决右缘滚动条/边框被当成内容导致的右侧大片空白；
+  - 圆形表情顶部/底部在缩放采样时因 LANCZOS 模糊丢失边缘像素：加大裁剪边距
+    （`pad = max(10, scale*5)`）并在全分辨率下**逐像素边缘扩展**找回丢失内容，
+    且扩展遇**连续空白行**（消息间分隔）即停，避免吃进相邻消息；
+  - 时间戳等居中小文字（水平居中约 50% 宽度）不再被误当成消息：方向判定加
+    阈值（左侧 <45% 宽度、右侧 >55%），居中元素两边都不匹配；
+  - 最终尺寸校验：`min(crop) < 50` 视为时间戳/文字误判，自动回退到
+    「消息分隔空白」「头像锚点」等备用定位，仍过小则判定失败返回 None；
+  - 本机与高 DPI 机器均已实测通过（完整表情、无空白、无切顶、不截时间戳）。
+
+### v1.0.4（2026-08-10）
+
+- **多特征兜底窗口定位**：主窗口定位不再只依赖类名 `Qt51514QWindowIcon`
+  （类名降级为软条件），联合 进程名 `weixin.exe` / 窗口可见 / 大尺寸
+  （≥800px）/ 标题关键词（微信/Weixin/WeChat）评分定位——Qt 升级改名
+  （`Qt51514` → `Qt6xxx`）也不失效；渲染子窗口按前缀 `MMUIRenderSubWindow`
+  匹配（兼容 `MMUIRenderSubWindowHW` / `MMUIRenderSubWindow` 等变体），
+  找不到时退回用主窗口矩形计算坐标。
+- **布局自动校准**：首次运行自动校准——OCR 检测「搜索」「发送」锚点实测
+  布局比例，保存到 `~/.wechatauto/layout-<机器标识>.json`，之后自动加载；
+  布局漂移（DPI/窗口尺寸/缩放变化）时自动重新校准。
+- **最大化状态保持**：激活窗口时先 `GetWindowPlacement` 记录状态，原为
+  最大化则用 `SW_SHOWMAXIMIZED` 恢复（原 `SW_RESTORE` 会把最大化窗口
+  缩成普通大小），最小化恢复不再破坏用户窗口布局。
+- **发送模块窗口兜底**：`find_main_window` 类名查找失败后按标题「微信」
+  兜底，适配类名不同的机器。
+
+### v1.0.3（2026-08-08）
+
+- **文本消息还原**：微信 4.x 部分文本消息 content 为「容器头 + UTF-8 明文 +
+  尾部填充」结构，此前显示为 `[文本]`/空。新增 `_extract_text_from_blob`
+  还原明文，数据库读取与 bot 均可见真实内容（含群消息 `wxid_xxx:` 前缀）。
+- **表情截图方向感知与兼容性**：`_db_row_to_message` 写入 `msg.attr`
+  （`self`/`friend`），`EmojiMessage.capture()` 按方向定位气泡（自己发的用
+  消息分隔空白、对方发的用头像锚点），避免截图前自己又发了一条消息时误截到
+  自己的气泡；裁剪阈值自适应截图尺寸，跨分辨率/DPI 可用。微信 4.x 主窗口为
+  Qt 自绘渲染，不暴露 UIA 子树，故截图定位全部基于屏幕像素分析。
+- **发送会话复用**：`send_msg` 记录 `_current_chat`，目标会话已打开时跳过
+  `open_chat`（重扫侧栏+点击），逐条连续发送不再反复点击对话框，效率提升。
+- **搜索联系人选第一条**：`_search_chat` 按视觉顺序排序并过滤「搜索网络结果/
+  搜一搜」节标题，点选第一条联系人而非网络搜索。
+- **动画表情不再落盘伪 `.gif`**：`download_image` 识别到 `wxgf` 容器（微信
+  动画表情私有格式）时返回 `None`，不再生成打不开的假图片。
+- **`Listener.stop()` 崩溃修复**：`db.py` 补 `import sys`（`_run/_poll_once`
+  使用 `sys.stderr` 却未导入）。
+
+### v1.0.2（2026-08-08）
+
+- **表情消息支持**：新增 `EmojiMessage` 消息类型（`type='emotion'`），
+  "动画表情"不再被归为 `OtherMessage`，并按收发方向提供
+  `FriendEmojiMessage` / `SelfEmojiMessage`。微信 4.x 表情消息在本地数据库中的
+  content 为加密数据，无法直接还原成图片，因此新增 `EmojiMessage.capture()`：
+  采用「打开会话 → 滚动到底 → 截取消息区 → 自动裁剪最后一条消息气泡」
+  的屏幕截图方案，返回图片路径，可直接供 AI 视觉识别使用
+  （示例见 `demo_emoji_capture.py`）。
+- **监听器并发工作线程**：`Listener` 回调移到独立工作线程执行，每个被监听
+  会话对应一条**串行**工作线程——同一会话内消息按序处理、不同会话间并行；
+  轮询线程只负责读取数据库并分派任务，不再被慢回调（AI 调用 / 图片识别等）
+  阻塞，`stop()` 优雅关闭所有工作线程。
+- **数据库消息兼容增强**：`_db_row_to_message` 支持 bytes 类型 content
+  （自动解码还原文本）、`local_type` 缺失时自动推导消息类型，
+  `_extract_group_sender` 兼容 bytes 内容。
+
+---
+
+## 一、项目状态
+
+| 能力 | 状态 | 实现方式 |
+| ---- | ---- | -------- |
+| 读取消息 | ✅ 已完成并验证 | 本地数据库解密（`wechatauto/db.py`） |
+| 消息监听（轮询） | ✅ 已完成并验证 | `Listener` + `get_new_messages` 增量回调 |
+| 表情消息识别与截图 | ✅ 已完成并验证（v1.0.3 方向感知） | `EmojiMessage` + `capture()`（屏幕截图自动裁剪） |
+| WAL 增量合并 | ✅ 已修复并验证 | 帧盐校验合并 `-wal`（见 §2.4） |
+| 历史消息全量导出 | ✅ 已完成并验证 | `export_history`（JSON / SQLite） |
+| 媒体下载（图片/语音/文件） | ✅ 已完成并验证 | `wechatauto/media.py`（图片 V2 解密） |
+| 朋友圈读取 | ✅ 已完成并验证 | `MomentDB` 直接读 `sns.db` |
+| 多账号管理 | ✅ 已完成并验证 | `list_accounts()` + `account=` 参数 |
+| 读取会话列表 | ✅ 已完成并验证 | 同上 |
+| 搜索联系人 | ✅ 已完成并验证 | 同上 |
+| 发送消息 | ✅ 已完成并验证 | UIA + 坐标+OCR 混合（`wechatauto/guia.py`） |
+| 发送文件/图片/回复/艾特 | ✅ 已完成并验证 | 剪贴板 CF_HDROP + OCR |
+| 语音通话 / 拍一拍 | ✅ 已完成并验证 | UIA 按钮 + OCR 菜单（`Chat.VoiceCall` / `Chat.Poke`） |
+| UI 自动化（UIAutomation） | ✅ 热激活后可用 | 写 Weixin.dll Qt accessibility gate，物化 `mmui::*` 树 |
+
+**结论**：微信 4.1.x 聊天界面使用自绘渲染（`MMUIRenderSubWindow*`），冷启动
+对 UIAutomation 只暴露 `Qt51514QWindowIcon` 空壳（原 wxauto 的 UI 方案因此
+失效）。本项目通过**热激活 Qt accessibility gate**（写 Weixin.dll 内读屏
+标志位，从 `qt.accessibility.core` 引用扫描 RVA）物化 `mmui::*` UIA 树，
+实现发送/语音通话/拍一拍等操作（UIA 优先、坐标+OCR 兜底）；消息读取仍走
+「**本地数据库解密**」（已全链路验证）。
+
+---
+
+## 二、读取原理
+
+微信 4.x 的数据存放在本地 SQLCipher 4 加密的 SQLite 数据库中：
+
+```
+D:\微信文件\xwechat_files\<wxid>_xxxx\db_storage\
+├── contact\contact.db            联系人（昵称、备注）
+├── session\session.db            会话列表（未读数、摘要）
+├── message\message_0..4.db       聊天消息（按会话分表 Msg_<md5>，跨分库分片）
+├── message\media_0.db            语音（VoiceInfo.voice_data，SILK 二进制）
+├── message\message_resource.db   文件原名（MessageResourceDetail.packed_info）
+├── sns\sns.db                    朋友圈（SnsTimeLine，SnsDataItem XML）
+└── ...
+```
+
+### 2.1 密钥提取（进程内存只读扫描）
+
+每个数据库有**独立的 32 字节密钥**，保存在微信进程内存中的
+`com.Tencent.WCDB.Config.Cipher` 配置对象里：
+
+1. 在 Weixin.exe 所有可读内存区域中查找该字符串；
+2. 由字符串地址定位配置对象（`[ptr][len]` 结构回溯）；
+3. 数据块与固定掩码异或后得到 `x'<64位hex密钥><32位hex盐>'` 明文配置；
+4. 用 SQLCipher 4 HMAC 校验规则验证每个候选密钥；
+5. 验证通过的密钥保存到 `%TEMP%\wechatauto_db\<账号>\keys.json` 缓存。
+
+### 2.2 数据库解密
+
+- SQLCipher 4，页大小 4096，`PBKDF2-HMAC-SHA512`（加密密钥 256000 次迭代）；
+- 解密结果按页写入临时目录，校验源 mtime/size 复用缓存；
+- 首次解密 contact.db 约 6s，之后全部秒级。
+
+### 2.3 消息查询
+
+- 会话名 → `Md5(会话微信号)` → 表名 `Msg_<md5>`（同一会话可能分片在多个
+  `message_*.db`，按 `sort_seq` 合并排序）；
+- 关键列：`local_type`、`real_sender_id`（2=自己，其他为数字 id，可通过
+  `message_resource.SenderName2Id` 反查微信号）、`server_id`、
+  `packed_info_data`（图片/视频 md5）、`sort_seq`。
+
+### 2.4 WAL 增量合并（已修复）
+
+微信 `-wal` 是预分配文件：checkpoint 时 WAL 头 salt+1 并清零写游标，但
+**旧世代帧仍留在文件中**。若合并时不过滤帧盐，会把过期页覆盖进主库导致
+`database disk image is malformed`。修复方案：
+
+- `_merge_wal` 读取 WAL 头后**仅合并 salt 与当前 WAL 头一致的帧**，
+  旧世代帧直接跳过；
+- 缓存 stamp 加入版本号 `STAMP_VERSION=2`，旧损坏缓存自动强制全量重建；
+- 合并结果用 `PRAGMA integrity_check` 校验，失败自动重试全量重建。
+
+验证：contact.db 合并后 integrity OK，2354 个联系人全部可查。
+
+### 2.5 媒体存储与解密（图片 v2 格式）
+
+- 图片：`msg\attach\<会话md5>\<YYYY-MM>\Img\<md5>.dat`（加密）；
+- 语音：`media_0.db` → `VoiceInfo.voice_data`（SILK 明文 BLOB）；
+- 文件：`msg\file\<YYYY-MM>\<原文件名>`（原名来自 message_resource）；
+- 视频：`msg\video\<YYYY-MM>\<id>.mp4`（未落盘时返回 None）。
+
+图片 `.dat` 为 **v2 格式**：`[6B sig 070856320807][4B aes_size LE][4B xor_size LE]`
++ AES-ECB 密文 + 明文段 + 异或段：
+
+- **AES 密钥**：16 字节 ASCII，账户级稳定密钥，但仅在微信查看图片时驻留
+  进程内存。`MediaDownloader` 通过内存扫描反测（AES 解首块后校验 JPEG/PNG
+  魔数）获取，**命中后持久化到 `image_keys.json`**；也支持 `image_key=` 参数
+  显式注入。本机实测：单一密钥稳定解密 35/40 张随机图片（其余为微信动画
+  表情容器 `wxgf`）。
+- **XOR 密钥**：单字节，从同图缩略图 `<md5>_t.dat` 尾部 JPEG 结束标记
+  `FF D9` 反推（`key = tail[0] ^ 0xFF`）。
+
+---
+
+## 三、快速开始
+
+### 3.1 安装
+
+```bash
+pip install -e .
+# 坐标+OCR 发送路线额外依赖：
+pip install winsdk pypinyin
+```
+
+### 3.2 示例程序
+
+```bash
+python demo_db.py
+```
+
+### 3.3 代码示例
+
+```python
+from wechatauto import WeChatDB
+
+db = WeChatDB()  # 自动检测账号与数据目录（微信需已登录）
+
+info = db.get_self_info()                     # 当前账号昵称
+for s in db.get_sessions(limit=10):           # 会话列表
+    print(db.get_nickname(s["username"]), s["unread"])
+
+hits = db.search_contact("Ayi")               # 搜索联系人
+who = hits[0]["username"]
+for m in db.get_messages(who, limit=10):      # 最近消息
+    print(m["create_time"], m["sender_id"], m["type"], m["content"])
+```
+
+### 3.4 媒体下载
+
+```python
+from wechatauto import WeChatDB, MediaDownloader
+
+db = WeChatDB()
+md = MediaDownloader(db)                      # 可传 image_key="..." 注入图片密钥
+key = md.detect_image_key()                   # 内存扫描/缓存取 AES+XOR 密钥
+print(key)
+
+for m in db.get_messages("filehelper", limit=50):
+    out = md.download_media("filehelper", m["local_id"])   # 按类型自动分发
+    if out:
+        print("已下载:", out)
+```
+
+### 3.5 朋友圈读取
+
+```python
+from wechatauto import WeChatDB, MomentDB
+
+md = MomentDB(WeChatDB())
+for feed in md.get_moments(limit=10):          # 时间线（3382 条全量可读）
+    print(feed["nickname"], feed["text"])
+    print("  图片:", [i["md5"] for i in feed["images"]])
+    print("  赞:", [l["nickname"] for l in feed["likes"]])
+    print("  评论:", [(c["nickname"], c["content"]) for c in feed["comments"]])
+    md.download_media(feed["images"][0])       # 本地缓存或 URL 拉取
+```
+
+### 3.6 消息监听
+
+```python
+from wechatauto import WeChatDB
+from wechatauto.db import Listener
+
+db = WeChatDB()
+lst = Listener(db, interval=1.0)
+lst.add_listener("filehelper", lambda msg, lst: print("新消息:", msg["content"]))
+lst.start()
+# ... 业务代码 ...
+lst.stop()
+```
+
+- 回调在**独立工作线程**中执行（v1.0.2）：每个被监听会话对应一条串行
+  工作线程，同一会话内消息按序处理、不同会话间并行；轮询线程只负责读取
+  数据库并分派任务，不会被慢回调（AI 调用 / 图片识别等）阻塞。
+
+### 3.7 历史导出
+
+```python
+db.export_history(r"D:\backup\chat.json",   fmt="json")    # 全部会话
+db.export_history(r"D:\backup\chat.db",     fmt="sqlite")
+db.export_history(r"D:\backup\one.json",    fmt="json",
+                  users=["filehelper"], limit_per_chat=1000)
+```
+
+### 3.8 多账号
+
+```python
+from wechatauto import list_accounts, WeChatDB
+for a in list_accounts():
+    print(a["account"], a["wxid"])
+db2 = WeChatDB(account="wxid_xxx_abcd")       # 显式指定账号（缓存按账号隔离）
+```
+
+### 3.9 表情消息与截图
+
+微信 4.x 的"动画表情"消息在本地数据库中 content 为加密数据，无法直接还原成
+图片。v1.0.2 起监听回调中的表情消息为独立的 `EmojiMessage` 类型
+（`type='emotion'`，`FriendEmojiMessage` / `SelfEmojiMessage` 按收发方向区分），
+并支持对屏幕上的表情气泡自动截图：
+
+```python
+# 在 Listener 回调内，把消息 dict 转成消息对象后再截图：
+def on_msg(msg, listener):
+    if msg["type"] == "动画表情":
+        from wechatauto.wx import _db_row_to_message
+        m = _db_row_to_message(msg, chat)   # chat: 当前会话
+        path = m.capture()                  # 返回 PNG 路径，供 AI 视觉识别
+```
+
+`capture(save_dir=None)` 流程：打开会话（已打开则跳过，避免刷新消息列表导致
+控件失效）→ 滚动到底 → 截取消息区 → 按消息方向定位最后一条消息气泡：
+
+- **自己发的消息**（`attr='self'`，右侧无头像）：用「消息分隔空白」定位
+  消息顶部，空白阈值按截图高度自适应（约消息区高度的 2.5%），
+  跨分辨率/DPI 保持一致；
+- **对方发的消息**（`attr='friend'`，左侧有头像）：优先检测头像圆形彩色块
+  的顶部作为消息顶部（特征跨分辨率稳定），失败时回退消息分隔空白。
+
+返回图片路径（失败返回 None）。独立示例：`python demo_emoji_capture.py`。
+调试时可保留 `~/pane_diag_raw.png`（每次截图保存的消息区原图）与
+`[CAP]` 日志行（截图尺寸、消息方向、裁剪路径、结果尺寸）用于排查。
+
+---
+
+## 四、API 参考
+
+### `WeChatDB(db_dir=None, keys_file=None, workdir=None, account=None)`
+
+| 方法 | 说明 |
+| ---- | ---- |
+| `get_self_info() -> dict` | 当前账号（username / nick_name / remark） |
+| `get_sessions(limit=100)` | 会话列表：username / unread / summary / last_time |
+| `search_contact(keyword)` | 按昵称/备注/微信号搜索 |
+| `get_messages(user, limit, offset)` | 读取指定会话消息 |
+| `get_message_row(user, local_id)` | 单条原始消息（含 server_id / packed_info，媒体用） |
+| `get_new_messages(user, since_seq)` | `sort_seq > since_seq` 的增量消息（升序） |
+| `get_nickname(user)` | 微信号 → 显示昵称 |
+| `list_message_chats()` | 所有含消息的会话（md5 / 昵称 / 消息数） |
+| `export_history(out_path, fmt, ...)` | 全量导出 JSON / SQLite |
+| `extract_keys()` | 手动触发密钥提取 |
+| `wxid` / `account` / `account_dir` | 当前账号信息 |
+| `list_accounts()`（模块级） | 扫描本机所有微信账号 |
+| `auto_detect_db_dir()`（模块级） | 自动定位数据目录（配置文件 → 注册表 → 常见默认目录） |
+
+### `MediaDownloader(db, save_dir=None, image_key=None)`
+
+| 方法 | 说明 |
+| ---- | ---- |
+| `detect_image_key(refresh)` | 取 (AES 密钥, XOR 密钥)，命中后持久化 |
+| `decrypt_image(dat_path)` | 解密单个 `.dat`（自动识别 v1/v2） |
+| `download_media(user, local_id)` | 按类型分发下载 |
+| `download_image / _voice / _video / _file` | 各类媒体下载 |
+| `copy_files_to_clipboard(paths)` | CF_HDROP 写剪贴板（发送附件用） |
+
+### `MomentDB(db)`
+
+| 方法 | 说明 |
+| ---- | ---- |
+| `get_moments(limit, offset, username)` | 朋友圈时间线（最新在前） |
+| `get_moment(tid)` / `get_my_moments(limit)` | 单条 / 我的动态 |
+| `find_local_media(md5, kind)` | 本地缓存查找（Sns\Img / Sns\Video） |
+| `download_media(media, save_dir)` | 缓存优先，否则 URL 拉取 |
+
+### `Listener(db, interval, watermark)`
+
+`add_listener(user, cb)` / `remove_listener` / `start` / `stop` / `watermark`。
+
+### `WeChatGUI`（发送，锁屏不可用）
+
+| 方法 | 说明 |
+| ---- | ---- |
+| `send_msg(text, who, verify)` | 文本发送（OCR 定位 + 剪贴板粘贴） |
+| `send_file(path, who, verify)` | 文件（CF_HDROP 粘贴 + 回车） |
+| `send_image(path, who, verify)` | 图片（同上） |
+| `reply_msg(text, who, verify)` | 回复最近消息（悬停 + OCR 回复入口） |
+| `at_member(member, text, who, verify)` | 群聊 @ 成员 |
+| `open_chat / focus_input / bring_to_front` | 基础操作 |
+
+一行式：`quick_send` / `quick_send_file` / `quick_send_image` / `quick_reply`。
+
+---
+
+## 五、已知限制
+
+1. **需要微信登录**：数据库密钥存于进程内存，首次使用需微信运行中
+   （提取后本地缓存）；重新登录后密钥变化需重新提取（自动校验失败重扫）；
+2. **图片 AES 密钥瞬态**：仅在微信查看图片时驻留内存；`MediaDownloader`
+   扫描命中后会持久化（`image_keys.json`），也可用 `image_key=` 显式传入；
+3. **发送为 GUI 操作**：锁屏/会话断开时窗口不响应，发送接口返回明确失败；
+   文件/图片/回复/艾特代码已完成但需桌面解锁后实测；
+4. **视频文件未落盘时不可下载**：视频 mp4 仅在本地存在（`msg/video`）时
+   返回，否则返回 None；
+5. **发朋友圈功能已舍弃**：4.x 的发表为自绘界面操作，不可靠自动化；
+   本库仅保留朋友圈读取/点赞/评论能力。
+6. **评论/回复功能仅供测试**：`回复某条评论`（`ReplyComment`）通过截图
+   OCR 定位评论区评论行，再驱动界面点击/粘贴/发送；朋友圈评论区为自绘、
+   布局多变，稳定性无法保证，仅建议在测试账号中验证流程，勿用于生产。
+7. **引用消息功能（BETA）仅供测试**：`quote_msg` 通过坐标 + OCR + SendInput
+   模拟右键菜单选择「引用」，依赖微信 4.1.x 自绘渲染布局，随窗口尺寸/DPI/
+   会话内容不同可能存在定位偏差，仅建议在测试账号中验证流程。
+8. **语音消息的音频可能不在本地**：微信只有在界面上播放/接收过之后才会把 `voice_data` 写进 `media_*.db`，其余语音 `download_voice()` 只能返回 `None`，而且分不清是「本地没有」还是「库读挂了」。现在 `MediaDownloader.list_voice_status()` / `voice_status()` 会给出原因：`audio_not_downloaded`（本地确实没有，去微信里播放一次即可）与 `audio_missing_from_media_db`（这才值得开 issue）。实测 20 个会话 958 条语音：898 条可取、54 条 `download_status=0` 且确实不在、6 条所在会话在 media 库里没有 Name2Id 索引；`download_status != 0` 与「音频在本地」一一对应，无一例外。
+9. **一条图片在本机最多有三档**：`<md5>_t.dat` 缩略图、`<md5>.dat` 微信默认下发的压缩版、`<md5>_h.dat` **真原图**（只有在微信里点过「查看原图 / 图片原始大小」才会落盘）。取哪一档由 `download_image(user, local_id, tier=...)` 明说：`'original'` 本机没有原图就返回 `None`（**不会悄悄给你压缩版**），`'best'` 原图 > 压缩 > 缩略图，档位写在文件名里（`_h` / 无 / `_thumb`）；不传 `tier` 与旧版逐字一致。想先摸清底细用 `image_status()` / `list_image_status()`，`reason` 取 `ok` / `mid_only` / `only_thumbnail` / `original_partial` / `no_local_copy` / `no_md5` / `no_message_row`。本机 211 个会话 4271 条图片实测：`mid_only` 2210、`only_thumbnail` 1428、`ok` 626、`original_partial` 5、`no_local_copy` 2——**大约 7 条里只有 1 条本机真有原图**，所以「下不到原图」多数是微信的存储策略，不是解密失败；先查状态再决定要不要触发下载，能省掉一整轮无效重试。
+10. **「控件树被屏蔽」现在会给原因**：`mmui` 控件树只有在 `Weixin.dll` 里那个字节被翻开之后才存在，而微信每次重启、升级、重新登录都会把它清 0。库会热写它，但写不成时以前是**静默返回空树**，用户只能描述成「被屏蔽」。现在一个进程只警告一次，并分成四种可执行的说法：没扫到可见窗口（没启动/没登录/在托盘）、扫到但读不到该进程模块（32 位 Python 换 64 位；64 位指向权限与安全软件白名单）、pywin32 缺失，以及窗口正常时**完全不打扰**。
+
+---
+
+## 六、发送消息（坐标 + OCR）
+
+微信 4.1.12+ 聊天界面自绘渲染、无无障碍节点，发送走
+「屏幕坐标 + 本地 OCR」（`wechatauto/guia.py`）：
+
+1. **多特征兜底定位**主窗口（类名 `Qt51514QWindowIcon` 只是「软条件」，
+   联合标题 / 进程名 `weixin.exe` / 可见 / 大尺寸评分，Qt 升级改名也不
+   失效），再按前缀 `MMUIRenderSubWindow` 找渲染子窗口（兼容
+   `MMUIRenderSubWindowHW` / `MMUIRenderSubWindow` 等不同版本类名；
+   找不到时回退用主窗口矩形计算坐标）；
+2. 布局用渲染子窗口相对坐标描述，运行时换算为屏幕绝对坐标；首次运行自动
+   校准（OCR 检测「搜索/发送」锚点实测比例），保存到
+   `~/.wechatauto/layout-<机器>.json`，之后自动加载、布局漂移自动重校准；
+3. OCR 识别会话列表点击目标（失败走搜索框；生僻字/小字号会话名自动放大
+   3 倍 + 多轮投票重扫，搜索回退只点联系人、自动排除群聊与群成员预览行）；
+4. 扫描输入框白色区定位并聚焦；
+5. 文字以「剪贴板 + Ctrl+V」输入（避免中文输入法拦截），失败回退拼音组合；
+6. OCR 定位「发送」按钮（找不到回退回车键）；
+7. `verify=True` 时用 `WeChatDB` 读回确认。
+
+文件/图片通过 **CF_HDROP 剪贴板 + Ctrl+V** 插入草稿再回车发送，绕开自绘
+「+ 菜单」定位；回复/艾特分别走悬停 OCR 工具栏与成员弹层 OCR。
+
+```python
+from wechatauto.guia import quick_send, quick_send_file
+quick_send('你好', '文件传输助手', verify=True)
+quick_send_file(r'D:\资料\报告.pdf', '文件传输助手')
+```
+
+> 注意：OCR 需要系统语言包含中文（`Windows.Media.Ocr`）。
+
+---
+
+## 七、后续路线
+
+1. **发送功能实测**：桌面解锁后校准 guia 各坐标常量，验证文件/图片/回复/艾特；
+2. **视频消息下载增强**：微信 4.x 聊天视频存储位置仍需确认（本机无样本）；
+3. **性能优化**：导出/首扫并行化，内存扫描增量缓存。
+
+---
+
+## 八、目录结构
+
+```
+├── wechatauto/
+│   ├── wx.py            UIA 自动化入口（4.x 受限）
+│   ├── guia.py          ★ 坐标+OCR 发送模块（文本/文件/图片/回复/艾特）
+│   ├── db.py            ★ 数据库读取（密钥提取 + 解密 + WAL 合并 + 导出 + 监听）
+│   ├── media.py         ★ 媒体下载（图片 v2 解密 / 语音 / 视频 / 文件）
+│   ├── moment.py        ★ 朋友圈（MomentDB 数据库路线 + 旧 UIA 兼容）
+│   ├── ui/              UI 控件层
+│   ├── msgs/            消息模型
+│   └── ...
+├── demo.py              UI 自动化示例（微信 4.1 上受限）
+├── demo_db.py           ★ 数据库读取示例（推荐）
+├── demo_guia.py         ★ 坐标+OCR 发送示例
+├── demo_listen.py       ★ 实时消息监听示例
+├── demo_reply_at.py     ★ 回复/@ 成员实测示例
+├── demo_emoji_capture.py ★ 表情消息截图示例
+├── docs/技术文档.md      ★ 完整技术文档（架构/原理/API/扩展）
+└── pyproject.toml
+```
+
+## 九、免责声明
+
+本项目仅用于个人学习与自动化研究，请遵守微信软件许可协议及当地法律法规，
+勿用于任何违反规定的用途。
+
+
+注：本库完全由AI（opencode+deepseek-v4-flash）生成
+
+---
+
+## 十、联系方式
+
+- 邮箱：fanyuantaier@163.com
+
+---
+
+## 🇬🇧 English
+
+### wechatauto-replica — WeChat 4.x Windows Automation (wxauto-compatible)
+
+![PyPI version](https://img.shields.io/pypi/v/wechatauto-replica)
+![PyPI downloads](https://img.shields.io/pypi/dw/wechatauto-replica)
+![Python](https://img.shields.io/pypi/pyversions/wechatauto-replica)
+![License](https://img.shields.io/github/license/fanyuantaier/wechatauto-replica)
+![GitHub stars](https://img.shields.io/github/stars/fanyuantaier/wechatauto-replica)
+
+Automate the **WeChat 4.x Windows desktop client** (not the web version): read messages, listen in real time, download media, export full history, read Moments (朋友圈), and send messages — by driving the local client directly.
+
+> **Current version:** 1.2.9 · Windows 10/11 · Python 3.9+ (verified on 3.12) · WeChat **4.1.12+** (verified on 4.1.15.13 / 4.2.0.11)
+>
+> **Why this project exists:** the classic [wxauto](https://github.com/cluic/wxauto) relies on the UI Automation tree, which WeChat 4.x broke with self-drawn rendering (no accessibility nodes). wechatauto-replica is a drop-in-style replacement: messages are read through **local database decryption** (SQLCipher 4), and sending uses a **UIA + OCR hybrid** driver that auto-falls back between engines.
+
+![Reading encrypted WeChat 4.x databases](docs/demo_db_files.gif)
+
+*Reading the encrypted `contact.db` / `message_*.db` / `sns.db` files directly from `xwechat_files/.../db_storage/` — no web API, all local.*
+
+## ✨ Features
+
+| Capability | Status | How |
+|---|---|---|
+| Read messages | ✅ verified | Local SQLCipher 4 DB decryption (`wechatauto/db.py`) |
+| Real-time message listening | ✅ verified | `Listener` incremental polling, per-chat worker threads |
+| Emoji message capture | ✅ verified | Screen capture + direction-aware bubble auto-cropping |
+| Full history export | ✅ verified | JSON / SQLite |
+| Media download (image / voice / file) | ✅ verified | `MediaDownloader`: image v2 AES decryption, SILK voice, files |
+| Moments (朋友圈) read | ✅ verified | Direct `sns.db` reads (3382 feeds verified) |
+| Multi-account | ✅ verified | `list_accounts()` + `account=` |
+| Send text / file / image / reply / @member | ✅ verified | UIA-first, coordinate + OCR fallback |
+| Voice call / Poke (拍一拍) | ✅ verified | UIA buttons + OCR menus |
+| UIAutomation tree | ✅ after hot-activation | Writes the Qt accessibility gate inside Weixin.dll |
+
+## 🚀 Quick Start
+
+```bash
+pip install -e .
+# extra deps for the OCR sending path:
+pip install winsdk pypinyin
+```
+
+### One command (CLI)
+
+No Python required — after `pip install`, just run commands (asked for in issue #31;
+**the existing Python API is unchanged**, these are plain callers of it):
+
+**Easiest one:** type `wechatauto` (or `python -m wechatauto`) with nothing else — it runs a
+health check, then shows a numbered menu (read messages / export / download images / send /
+listen / moments), so you never have to remember a flag.
+
+```bash
+wechatauto                        # follow the prompts (menu only when stdin is a terminal)
+wechatauto doctor                 # account / DB keys / image key / UIA tree at a glance
+wechatauto sessions               # session list
+wechatauto messages 文件传输助手   # recent messages (--type image, --json)
+wechatauto export 文件传输助手     # dump to a UTF-8 text file
+wechatauto images GroupName --out D:\img
+wechatauto send "hello" --to 文件传输助手 --verify    # drives the real client
+wechatauto listen GroupName       # print new messages until Ctrl+C
+wechatauto moments --me
+```
+
+Subcommands work in **Chinese or English** (`消息` = `messages`, `导出` = `export`,
+`图片` = `images`, `发` = `send`, `听` = `listen`, `体检` = `doctor`). Any handle works for a
+chat — nickname, remark, wxid, group id or display name: the command resolves the display
+name into the `username` the DB layer needs (typing a wxid into WeChat's search box is the
+classic beginner trap: no hit, ~60 s of retries, then a bare `None`). `images` checks the
+image AES key first and tells you what to do when it is missing instead of returning a wall
+of `None`. Only `--original` drives the real client (**it moves your WeChat window**).
+
+### Read messages
+
+```python
+from wechatauto import WeChatDB
+
+db = WeChatDB()  # auto-detects account & data dir (WeChat must be logged in)
+
+info = db.get_self_info()                    # current account
+for s in db.get_sessions(limit=10):          # session list
+    print(db.get_nickname(s["username"]), s["unread"])
+
+hits = db.search_contact("Ayi")              # search contacts
+for m in db.get_messages("filehelper", limit=10):   # recent messages
+    print(m["create_time"], m["sender_id"], m["type"], m["content"])
+```
+
+### Send a message
+
+```python
+from wechatauto.guia import quick_send, quick_send_file
+
+quick_send("Hello", "filehelper", verify=True)   # verify=True reads back from DB
+quick_send_file(r"D:\report.pdf", "filehelper")
+```
+
+### Real-time listening
+
+```python
+from wechatauto import WeChatDB
+from wechatauto.db import Listener
+
+db = WeChatDB()
+lst = Listener(db, interval=1.0)
+lst.add_listener("filehelper", lambda msg, lst: print("new:", msg["content"]))
+lst.start()
+# ... your code ...
+lst.stop()
+```
+
+Callbacks run on dedicated per-chat worker threads: messages in one chat are processed in order, different chats in parallel; slow callbacks (AI calls, image recognition) never block the poller.
+
+### Media & Moments
+
+```python
+from wechatauto import WeChatDB, MediaDownloader, MomentDB
+
+db = WeChatDB()
+md = MediaDownloader(db)
+md.detect_image_key()          # scan process memory for the image AES key (persisted after first hit)
+for m in db.get_messages("filehelper", limit=50):
+    out = md.download_media("filehelper", m["local_id"])
+    if out:
+        print("downloaded:", out)
+
+moments = MomentDB(db)
+for feed in moments.get_moments(limit=10):
+    print(feed["nickname"], feed["text"])
+    print("  images:", [i["md5"] for i in feed["images"]])
+    print("  likes:", [l["nickname"] for l in feed["likes"]])
+    print("  comments:", [(c["nickname"], c["content"]) for c in feed["comments"]])
+    # download this feed's pictures & videos (local cache first, then CDN url)
+    saved = moments.download_moment_media(feed, save_dir=r"D:\moments")
+    print("  saved:", saved)
+```
+
+See `wechatauto/demo_moments_download.py` for a runnable download demo
+(`python -m wechatauto.demo_moments_download [N] --out 目录`).
+
+**Like & comment** are server-side actions done through the client UI, so they
+use the UIA-tree route (not the local DB) — `WeChat` hot-activates the `mmui`
+UIA tree, clicks 朋友圈, then acts on UIA feed items:
+
+```python
+from wechatauto import WeChat
+
+wx = WeChat()
+moments = wx.Moment                 # None if the UIA tree is unavailable
+if moments is None:
+    raise SystemExit("UIA tree unavailable")
+wx.SwitchToMoments()
+items = moments.GetMoments()
+moments.Like(items[0])                            # thumb up
+moments.Like(items[0], cancel=True)               # undo
+moments.Comment(items[0], "Nice!")                # comment
+moments.Comment(items[0], "Thanks!", reply_to="张三")  # reply
+```
+
+Runnable demo: `python -m wechatauto.demo_moments_interact [--like N | --unlike N | --comment N 文字]`
+
+> **⚠️ Comment/reply automation is experimental — testing only.** The
+> reply-to-a-comment feature (`ReplyComment`) locates the comment row on screen
+> via OCR (WeChat's comment area is self-drawn) and then drives the UI to
+> click / paste / send. Layout varies across versions and it is not
+> production-grade — use it only on a test account to validate the pipeline.
+(plain run lists the latest feeds without touching the UI).
+
+## 🧠 How It Works
+
+- **Reading** — WeChat 4.x stores everything in SQLCipher 4 encrypted SQLite databases under `xwechat_files/<wxid>/db_storage/` (`contact.db`, `message_*.db`, `media_0.db`, `sns.db`, …). Each DB has its own 32-byte key living in the Weixin.exe process memory (`com.Tencent.WCDB.Config.Cipher` config objects). The library locates them with a **read-only memory scan**, validates candidates with SQLCipher HMAC rules, decrypts pages to a temp dir and caches the result (first decrypt ~6s, then instant). WAL incremental merging with frame-salt filtering prevents `database disk image is malformed` corruption.
+- **Sending** — WeChat 4.x chat UI is self-drawn (no accessibility nodes), so sending uses a hybrid driver: hot-activate the **Qt accessibility gate** inside Weixin.dll (RVA scan, writes the screen-reader flag) to materialize the `mmui::*` UIA tree — search box, `chat_input_field`, etc. Sending is **UIA-first, coordinate + OCR fallback**: auto-calibrating layout (`~/.wechatauto/layout-<machine>.json`), zoomed OCR (3x) with multi-round voting for rare Chinese characters, clipboard + Ctrl+V input to dodge IME interception.
+- **Media** — image `.dat` files are `[6B sig][4B aes_size][4B xor_size] + AES-ECB + plaintext + xor` chunks. The account-level AES key is transient (only resident in memory while viewing an image); `MediaDownloader` scans for it, validates via JPEG/PNG magic, and **persists it to `image_keys.json`** so later runs need no scanning (or pass `image_key=` explicitly). Voice is plain SILK read from `media_0.db`; files are read from `msg/file/` with original names resolved from `message_resource.db`.
+
+## ⚖️ vs wxauto
+
+| | wxauto | wechatauto-replica |
+|---|---|---|
+| WeChat 4.x | ❌ UIA tree gone → broken | ✅ DB decryption + UIA hot-activation |
+| Message reading | via UI tree | via local DB (full history, faster) |
+| Sending | UIA clicks | UIA-first + OCR fallback |
+| Media | limited | image AES decrypt, SILK voice, files |
+| Moments | read | read (posting dropped: self-drawn UI) |
+
+## ⚠️ Known Limitations
+
+1. **WeChat must be logged in** — DB keys live in process memory; cached after first extraction, re-extracted automatically after re-login.
+2. **Image AES key is transient** — only resident while viewing an image; persisted to `image_keys.json` once found, or inject via `image_key=`.
+3. **Sending is a GUI operation** — fails cleanly when the window is locked/unresponsive (operations return a clear failure).
+4. **Videos** are downloadable only when the mp4 already exists on disk (`msg/video/`).
+5. **A group-chat image exists in up to three tiers** — `<md5>_t.dat` thumbnail, `<md5>.dat` the copy WeChat pushes by default, `<md5>_h.dat` the **real original**, which is only written after the image has been opened with 「查看原图 / 图片原始大小」 in WeChat. Ask before you retry: `MediaDownloader.image_status(user, local_id)` / `list_image_status(user)` report which tiers exist and why (`ok` / `mid_only` / `only_thumbnail` / `original_partial` / …), and `download_image(user, local_id, tier='original'|'best'|'mid'|'thumb')` picks a tier explicitly — `tier='original'` returns `None` instead of quietly handing back the compressed copy, and the tier is written into the filename (`_h` / none / `_thumb`). Not passing `tier` keeps the pre-1.2.4.2 behaviour verbatim. Measured over 4271 image messages in 211 sessions here: 2210 `mid_only`, 1428 `only_thumbnail`, 626 with a real original on disk — roughly **1 in 7**, so "cannot download the original" is usually WeChat's storage policy, not a decryption failure. `download_image_original()` still exists to trigger the fetch through the UI.
+6. **Moments posting is dropped** (4.x self-drawn UI, unreliable); reading/likes/comments are supported.
+7. **Quote-message sending (BETA)** goes through a coordinate + OCR + `SendInput` pipeline that depends on WeChat 4.1.x self-drawn layout; positioning may drift with window size / DPI / chat content — test flow on a throwaway account only.
+8. **Voice messages can be missing their audio locally** — WeChat only writes `voice_data` into `media_*.db` after a voice has been played/received on that machine, so `download_voice()` returns `None` for the rest, with no way to tell "not on disk" from "library broke". `MediaDownloader.list_voice_status()` / `voice_status()` now return the reason: `audio_not_downloaded` (play it once in WeChat) vs `audio_missing_from_media_db` (worth an issue). Measured over 958 voices in 20 sessions: 898 available, 54 flagged `download_status=0` and indeed absent, 6 with no media index entry — `download_status != 0` matched "audio on disk" with no exceptions.
+9. **"The UIA tree is blocked" is usually a readable cause now, not a mystery** — the `mmui` tree only exists after one byte inside `Weixin.dll` is flipped, and that byte resets every time WeChat restarts, updates or you re-login. The library hot-writes it, but when it cannot, it used to return an *empty* tree in silence. It now names the reason once per process (no visible window / window found but its modules unreadable — with 32-bit Python called out separately, since reading a 64-bit process's module list from 32-bit always fails — pywin32 missing), so the fix is obvious instead of guesswork.
+
+## 🗺️ Roadmap
+
+- Calibrate and verify file/image/reply/@ sending on unlocked desktops
+- Video message download (4.x storage location TBD)
+- Performance: parallel export / first-scan, incremental memory-scan cache
+
+## 📝 Changelog
+
+### v1.2.9 (2026-10-31)
+
+- ⚠️ **Image-key validation fix ([PR #46](https://github.com/fanyuantaier/wechatauto-replica/pull/46), issue #45)**: key validation now uses the target's own first ciphertext block instead of the first `.dat` found in the cache — a valid key used to be rejected and fall into a minutes-long memory scan (live extraction after the fix: 76/78/70 ms).
+- **New: wxauto4-style standalone chat window**: `wx.ChatWindow("Alice").SendMsg("hi")` — double-clicks the session row, opens and rebinds the standalone window, sends through the same rhythm throttle; `wx.CloseChatWindow` closes it (Alt+F4 only after the foreground is verified switched).
+- **WeChat 4.2.0.11 compatibility**: attachment paste via UIA SendKeys + U+FFFC draft detection; new Moments cell class names; forwarding right-click on the bubble centroid; session-locating edge filters; preview-window tree self-healing. Full list in the [project README](https://github.com/fanyuantaier/wechatauto-replica).
+- **DPAPI encryption for the key cache** (bound to the current Windows user, legacy plaintext caches compatible); main-window reacquisition after WeChat restarts; EmojiMessage scrolls the list back to the bottom.
+
+### v1.2.8.1 (2026-10-25)
+
+- ⚠️ **Important fixes (six, from [PR #37](https://github.com/fanyuantaier/wechatauto-replica/pull/37), reported by [dhz1145](https://github.com/dhz1145), issues #38–#43): targeting and multi-instance safety on the send path.** Every item came with three live reproductions, an independent database read-back, and before/after comparisons.
+  - **Input-box location** (#38): the window-height-ratio fallback could sit up to 73 px above the real input, so `send_file` reported "sent" while the focus click landed in the message area. The real UIA edit-control rectangle is now preferred, the ratio fallback is gone, and a failed probe is reported as failure.
+  - **Duplicate sends** (#38 comment): a failed "input cleared" check used to re-paste and submit again — two identical messages from one call. Enter is now submitted exactly once; "submitted, unconfirmed" is an explicit failure that is never auto-resent.
+  - **Quote / reply targeting** (#39, #41): OCR drops ASCII spaces while `target_text` kept them, so quotes never matched; `reply_msg`'s `target_text` was never read at all. Space handling is now shared with OCR, zero/multiple candidates fail explicitly, and `reply_msg` reuses `quote_msg`'s locator.
+  - **Remark written to the wrong contact** (#40): with the target off-screen and a similar name on-screen, the old code rewrote the similar contact's remark and only failed after the mis-write. Three pre-write gates now apply: unique database resolution, exact on-screen matching, and editor-value confirmation.
+  - **Wrong window with multiple accounts** (#42): `WeChatGUI(hwnd=B)`'s UIA engine still picked windows globally by area. `WeChatUIA(hwnd=…)` now binds explicitly, with lookups/hot-activation/login detection confined to that HWND + original PID.
+  - **Verification database on the wrong account** (#43): send verification picked the account by newest directory mtime; it now follows the `db_storage` paths the window's process actually holds and fails when it cannot confirm uniquely.
+- **New: standalone-window UIA** ([PR #44](https://github.com/fanyuantaier/wechatauto-replica/pull/44)): explicit binding accepts a materialized `mmui::ChatSingleWindow` (text/attachment sending works); `mmui::SearchMsgUniqueChatWindow` is read-only — binding, diagnostics and message-list lookup work, sends/input are refused, its search box never becomes a send input. A mismatched target fails without searching other windows or falling back to OCR; new `window_kind()`. Auto-discovery still selects main windows only.
+- **Internal fixes (`6a3d63e`): connection leak / silent listen "success" / key extraction abort / OCR race.** `get_self_info()` closes its sqlite connection in `try/finally` (a high-frequency path during listening whose leaked handles locked the decryption cache directory); page-1 reads during key extraction tolerate `OSError` (a file replaced/locked by checkpointing is skipped instead of aborting the round); `AddListenChat()`'s failure test was always False, so a mistyped nickname **silently reported success** while never receiving messages — registration now does an exact contact lookup first; the OCR temp file becomes a unique `mkstemp` name (concurrent OCR used to overwrite each other); `ShutDown()`'s `os.system` becomes `subprocess.run`. New `tests/test_pure.py` with 24 pure-function unit tests that never touch WeChat.
+- Verified: 76 new offline regressions green on the merged tree, all existing suites unregressed, `tools/selftest.py` 560/0.
+
+### v1.2.7.0 (2026-10-17)
+
+- **New: set a contact's remark — `wx.RenameMember("Bob", "high school")` / `wechatauto 备注 Bob --to "high school"`.** This is the first feature that writes to your account data, so three things are deliberate:
+  - The path is Contacts → open a contact → profile "More" → "Remark & Tags", reusing the same window/click scaffolding as the contact-label feature (`wechatauto/remark.py`, `RemarkOps` extends `LabelOps`) — lifted windows, click-ownership checks and independent-popup enumeration all shared.
+  - The result is confirmed by reading the `remark` column back **for that contact's username** out of `contact.db`; a failed read-back is reported as failure, never as success.
+  - Clearing a remark needs an explicit `--clear` / `allow_empty=True`, so a forgotten argument cannot wipe someone's remark. `wechatauto 备注 Bob --probe` walks the same path, opens the editor and closes it without writing anything — use it to find which step broke when WeChat's UI shifts.
+- **New: the post-send database read-back interval is configurable.** `WxParam.DB_VERIFY_INTERVAL` (default 1.0 s) and `WxParam.DB_VERIFY_TIMEOUT` (default 8.0 s; 0 = single read), with `--verify-interval` / `--verify-timeout` on `send`, `labels send` and `forward`. The defaults are exactly the two numbers that used to be hard-coded, so behaviour is unchanged. The failure text now states how long it waited (`数据库未确认（等了 8s）`).
+- **New: `tools/wake_uia.py` — activate or drop the UIA control tree without depending on this library.** `--status` only reports, `--off` flips the byte back, `--rva 0x…` skips the scan. It shares the same RVA cache file, so the scan cost is paid once.
+- **Internal: the Qt accessibility gate is its own module** (`wechatauto/accessibility.py`), with same-name forwarding from `uia_driver` kept so no caller changes. Two defects that were silently breaking hot activation are fixed:
+  - `_HAS_WIN32` and the `uiautomation` alias were left behind during the move and swallowed by an outer `except`, showing up as "found a WeChat window but could not locate Weixin.dll" and "N candidates did not materialize the mmui tree" — i.e. every activation rolled its own byte back.
+  - The screen-reader system flag used the wrong SPI constants (`0x0046/0x0047` are the keyboard-preference pair) **and** passed the value in the wrong argument; Windows rejected it with `FALSE` + err=87, so the flag had never actually been set. A six-arm fresh-process A/B showed the tree follows the gate byte alone, so the flag is now touched only when the byte path fails.
+- **New: WeChat 4.1.15.53 support** — gate RVA `0x0B3959D8` added to the version table (scanned and verified on a live client: writing it flips the tree to `mmui::MainWindow`, clearing it drops back to `Qt51514QWindowIcon`).
+- Verified: 561 offline checks + 98 label + 59 forward green; the remark path completed two full live round-trips (set → confirmed in the DB → clear → confirmed empty).
+
+### v1.2.6.1 (2026-10-10)
+
+- ⚠️ **Important fix: group messages credited the sender to an unrelated contact — `real_sender_id` must be resolved through the `Name2Id` table of the shard the row lives in.** ([issue #34](https://github.com/fanyuantaier/wechatauto-replica/issues/34))
+  - Symptom (found by a user in real use): sender names come out wrong, showing an unrelated contact or a group name.
+  - Cause 1 (wrong table for the id space): `real_sender_id` is a rowid into **the `Name2Id` table of the `message_N.db` shard that holds the row**, while the code resolved it against `SenderName2Id` in `message_resource.db`. The two numbering spaces are unrelated, so the same number is a different person.
+  - Cause 2 (the hard-coded "id 2 means me" is false): on this machine the local account sits at rowid **2/4/1** in `message_0/1/2.db` respectively, so `== 2` only holds in one of them — and the "fall back to 1 when nothing resolves" rule added in 1.2.4 is wrong on the other two.
+  - Oracle (depends on no id table): WeChat writes the sender itself as a `sender:` prefix inside group text rows. Across 12 groups and 3662 comparable rows: **shard-based resolution matched 3662/3662, the old global table matched 0** (3656 attributed to someone else, 6 unresolved). All 856 文件传输助手 rows were sent from this machine: the new path returns the local wxid for 855 of them (the remaining row really is sent by `filehelper` itself), while the old path attributed **639** of them to a frequent contact or to a group.
+  - **Scope: every release from v1.0.0 through v1.2.6** (`_sender_id_index()`, which reads the wrong table, is present in the initial commit; the earliest tagged 1.0.3 already has it). What it touched widened over time: `export_history`'s `sender_name` always used it, `get_messages` / listener `sender_username` since v1.1.8, and "who sent this non-text group message" since v1.2.4.1.
+  - Fix: the per-shard `Name2Id` is now fetched together with the rows (`_name2id_map()` / `_shard_maps()`), and `_msg_row_to_dict`, `get_message_row` and the export-side `_resolve_sender` look the id up in the map of that row's `shard`; `_sender_id_index()` is deleted; new public `WeChatDB.sender_username(shard, sender_id)`; `wx._db_row_to_message` and `MediaDownloader._sent_by_self` now decide "is this mine" by comparing the resolved username with the local wxid, with no `sender_id == 2` and no "fall back to 1". When nothing resolves the field stays an empty string (unknown) instead of guessing from another database — exactly what the report asked for.
+  - Behaviour change: `sender_username` used to be populated for almost every row (often wrongly); now about **0.2% (129 of 60243 rows, concentrated in one shard)** are empty; the same `sender_id` may legitimately resolve to a different person in another shard; and when it cannot be resolved `_sent_by_self` treats the row as not-mine and logs a debug line.
+  - Tests: new `tools/test_sender_namespace.py`, **36 checks** — the two-shard fixture deliberately maps the same number to different people in each shard and collides the row ids, so the assertions can only pass if resolution follows the row's shard; includes a **negative control** (reverting to "both shards share one global table" turns `sid=2` into the same stranger in both) and a live section requiring 文件传输助手 senders ⊆ {local account, `filehelper`} with ≥95% local, plus zero disagreements against the body-prefix oracle in group chats.
+
+- Everything else carries over from v1.2.6 (addressable cross-shard rows via `shard`, and shard read failures no longer treated as "this shard has no messages").
+
+### v1.2.6 (2026-10-09)
+
+- ⚠️ **Important fix: within a sharded chat, `(chat, local_id)` is not unique, so looking a row up by id could return a message from a different shard.** ([issue #20](https://github.com/fanyuantaier/wechatauto-replica/issues/20))
+  - Background: WeChat splits one chat's history **horizontally across several `message_N.db` shards**, and `local_id` **restarts at 1 in every shard**. Once reads were merged (v1.2.2), `(user, local_id)` stopped being a unique key.
+  - Measured locally: of 200 session tables, 54 span multiple shards; **20008** `(chat, local_id)` pairs hit more than one shard, and **10477** of those share the same `local_type` while carrying different content (a sample of image rows alone contained **35** groups with the same id but different md5).
+  - Impact: `get_message_row()` used to pick the highest `sort_seq` silently. Voice, image, video and file downloads all go through it, so the observable result was "**asked for A's id, downloaded B's media**".
+  - Fix: every message row now carries **`shard`** (the shard's database file name) — in the merged view `(local_id, shard)` is the unique key. `get_message_row(user, local_id, local_type=…, shard=…)` pins one shard; when several shards match and no `shard` was given it **warns first** and then falls back to the previous behaviour; a wrong `shard` name returns `None` with a warning instead of guessing.
+  - Spread through the API: `list_voice_status()` / `list_image_status()` rows carry `shard` too, and `image_status` / `download_image` / `download_image_original` / `download_voice` / `download_video` / `download_file` all accept `shard`; `download_media()` passes the candidate row's own `shard` when it dispatches.
+  - Compatibility: only **additive** — a new `shard` key in returned dicts and new **optional** keyword arguments; every existing call shape is unchanged.
+  - Tests: new `tools/test_db_shard.py`, **46 checks** — a two-shard temporary-database fixture covers merged reads, `shard` addressing, that the new `? AS shard` placeholder cannot steal a WHERE parameter, and shard-failure visibility; the live section re-reads a real same-id, same-type, cross-shard row per shard (without `shard` you get the newest shard, with it each shard returns its own row) and asserts that `get_messages()` returns exactly the sum of the per-shard `count(*)` across all of the chat's shards.
+
+- **Fix: a shard whose query raised `database disk image is malformed` was treated as "this shard has no messages".** Corruption now propagates to `_run_msg_query`, which rebuilds the decrypted cache and retries; other errors still skip that shard but name it in a warning (logged once per key, so a poll loop doesn't flood). This was the second silent source of "incomplete reads" — returning success with half the rows missing.
+
+- **Removed: the `_find_msg_table()` / `_msg_conn()` single-shard stubs** (no callers, docstring saying "returns only the first matching shard"). The line-by-line analysis in [issue #20](https://github.com/fanyuantaier/wechatauto-replica/issues/20) was written against them — that code has been unreachable since v1.2.2, but the tombstones were still in the file.
+
+- Everything else carries over from v1.2.5.1 (the drive-root data-directory fix, the read-back gate before Enter, the `WxParam.ENABLE_OCR` master switch, contact labels + right-click forwarding).
+
+### v1.2.5.1 (2026-10-07)
+
+- ⚠️ **Important fix: when WeChat's storage location is a drive root (the config holds `d:\`), auto-detection started depending on the working directory.** ([issue #32](https://github.com/fanyuantaier/wechatauto-replica/issues/32))
+  - Symptom: same Python, same dependencies, same WeChat config — just a different working directory turns "works" into `RuntimeError: 未找到微信数据库目录，请通过 db_dir 参数手动指定`.
+  - Cause: `_locate_account_root()` stripped the trailing separator with `rstrip("\/")`, turning `d:\` into `d:`. On Windows `d:` is a **drive-relative** path, so `os.path.join('d:', 'xwechat_files')` yields `d:xwechat_files`, resolved against **that drive's own current directory** — not the process working directory.
+  - **Scope: every release from v1.0.0 through v1.2.5** (that line has been unchanged since the initial commit; this is not a regression).
+  - Why most people never hit it: two conditions must hold together — ① the storage location is a bare drive root (a value like `E:\xwechat_files` is untouched by the strip), and ② work happens somewhere on that same drive (keep the data on E: while always running Python from C: and E:'s per-drive current directory stays at `E:\`, so the malformed path happens to resolve correctly). That is why it looks like "nothing changed, but yesterday it worked".
+  - Fix: new `_abs_root()` keeps root semantics via `os.path.normpath` and also repairs a drive letter written without a separator (`d:` → `d:\`); all three sites of this pattern in `_locate_account_root()` and `_extract_path_from_config()` now use it, so candidates are always absolute. UNC roots are unaffected.
+  - **Workaround without upgrading**: pass the account directory's parent explicitly as `WeChatDB(db_dir=...)`, or don't put WeChat's storage at a bare drive root.
+  - Tests: new `tools/test_db_path_root.py`, **40 checks** — under a fake filesystem a `d:\` root must resolve to `d:\xwechat_files` (**with a negative control**: reverting the implementation to the old `rstrip` makes the same check return `None`, proving the assertions actually bite); each of drive letters A–F and Z checked individually; the per-drive-current-directory drift is demonstrated live on the real drives; the live database is detected identically from 4 working directories.
+- Everything else is as in v1.2.5 (contact labels + forwarding, the read-back gate before Enter, the `WxParam.ENABLE_OCR` master switch, the chat-name placeholder tail, and three silently-broken window behaviours).
+
+### v1.2.5 (2026-10-07)
+
+- **New: contact labels + forwarding a message**, implemented against the anchors measured on the live 4.1.15.13 client (Contacts → Contact management → Labels).
+  - 12 new `WeChat` methods: `ListLabels(prefer='db'/'ui')` / `CreateLabel` / `RenameLabel` / `AddLabelMembers` / `RemoveLabelMembers` / `DeleteLabel` / `LabelMembers` / `SendToLabel` / `ForwardMessage` / `ProbeLabels`; wxids are resolved to display names automatically and `RenameLabel` changes only the name (members and `label_id` untouched).
+  - **Rehearse before you send**: `SendToLabel(text, label, dry_run=True)` only resolves recipients and never touches the window, `limit=1` tries one person first; `WeChatDB().list_labels()` is a pure DB read. `ProbeLabels` navigates without writing and reports which step breaks.
+  - The CLI gains `labels` / `forward` subcommands plus two menu entries, accepting Chinese and English aliases alike. Guide sections §10.5 and §10.6 added.
+- **New: read-back gate before Enter — `WxParam.SEND_CONTENT_RATIO` (default 0.6, `<=0` disables).** `Ctrl+V` can miss entirely (WeChat not in the foreground, focus not on the input field), and the keystroke used to go through anyway, sending an empty message or the previous draft — while the exception was swallowed and success was reported. Both the UIA path and the coordinate/OCR path now read the input box back before pressing Enter; on a mismatch they clear the box, return failure for the caller to retry, and do not consume the `rhythm` write budget.
+  - Why 0.6 rather than a higher number: measured on the live client, an ordinary message containing an emoji codes scores **0.884**, and one wrong character in an 8-character Chinese sentence scores **0.875** — 0.9 would block good sends. An empty read-back is 0.0 and a stale draft 0.11, both caught.
+  - Emoji codes (measured): `[微笑]` becomes a single `U+FFFC` inside the input box, while the stored message keeps the literal text (WeChat converts on send). Both sides are folded before comparing, giving 1.0. **Trade-off**: after folding, `[微笑]` and `[发怒]` are indistinguishable, so a wrong emoji code is not caught by this gate.
+- **New: `WxParam.ENABLE_OCR` (default `True`, behaviour unchanged).** One switch to stop OCR when recognition is unreliable. It sits at the engine entry `ScreenOCR.recognize()` (plus short-circuits in `ocr()` / `ocr_zoomed()` that skip the screenshot itself), because 20 call sites are spread over `guia`, `moment` and `uia_driver` — a static assertion now pins that `guia.py` is the only module referencing `OcrEngine`. With it off, anything that can go through the UIA tree does; operations with **no UIA equivalent fail explicitly instead of clicking on guessed coordinates**: sidebar session lookup, search dropdown, the "send" button fallback, Moments elements, forward/multi-select menus. Pixel probes (input-box location, non-blank pane, highlighted row) are not OCR and keep working.
+- **New: foreground cleanup API.** `ensure_visible(keep_topmost=…)` is now a parameter; `_minimize_blockers()` records the foreign windows it minimized, with new `restore_blockers()` (restores only what it actually minimized, without stealing focus) and `release_foreground()` (un-topmost + restore blockers).
+- **Fixed: `current_chat()` used to carry the input box's placeholder tail.** WeChat puts "session name + placeholder" in the control's `Name` (measured: `文件传输助手` → `文件传输助手按住鼠标 语音输入文字`), so **every `current_chat() == who` comparison in the library could never be true**: an already-open chat still made `open_chat` return False, sends fell to the slow, error-prone coordinate path, and the consecutive-send fast path never triggered. Known tails are now stripped; unknown ones return the name unchanged (behaviour as before).
+- **Fixed: topmost never actually worked on 64-bit Python.** `SetWindowPos(hwnd, -1, …)` passed `-1` as a 32-bit integer into an `HWND` parameter, so the call returned 0 (`last_error 1400`); it now uses `ctypes.c_void_p(-1)` / `c_void_p(-2)`. ⚠️ **Behaviour change**: topmost now really applies — `ensure_visible()` defaults to `keep_topmost=True`, so WeChat sits above every other window during a batch; call `release_foreground()` when the batch is done.
+- **Fixed: the foreground lock was set to 0 and never restored.** `SPI_SETFOREGROUNDLOCKTIMEOUT` is a **machine-wide** setting; leaving it at 0 weakens foreground-stealing protection for all processes, not just WeChat. The original value is now read back and restored on return — and it turned out the value only takes effect in `pvParam` (passing it in `uiParam` returns FALSE and changes nothing).
+- **Fixed: a clipboard held by another process raised straight through `send_msg` as a traceback** (`PyperclipWindowsException: Error calling OpenClipboard`, hit live once). `set_clipboard()` now returns a `bool` and contains the exception; callers treat a failure as "this input attempt failed" and retry or fail cleanly.
+- **Improved: `_chat_is_open` prefers UIA and falls back to OCR** — when UIA answers, no magnified OCR pass and no extra screenshot are spent.
+- **Compatibility**: no signature changes; `set_clipboard()` returns `bool` instead of `None`, and call sites test `is False` rather than `not …`, so overrides that still return `None` are not misread as failures. No new dependencies.
+- **Regressions**: `tools/selftest.py` **496 checks / 0 failures**. Four new offline suites — `test_send_verify` 21, `test_ocr_send_gate` 26, `test_ocr_switch` 21, `test_chat_identity` 21; labels/forward keep `test_labels` 98 and `test_forward` 59. Live: one send through the UIA path and one through UIA-only (`ENABLE_OCR=False`) both read back **verbatim** from the database; the simulated "paste into thin air" scored 0.000 and pressed no Enter; the topmost set/release cycle was verified on the live window.
+- **Not verified (stated plainly)**: placeholder tails on other WeChat builds (unknown ones fall back to old behaviour, no crash); the actual degraded behaviour of Moments/forward with `ENABLE_OCR=False` (offline only proves OCR is not called); `SendToLabel` in a real batch (`--go`) because it writes to other people; `send_msg` still spends 3 attempts (measured 56.9 s) before failing when the gate keeps rejecting; the foreground lock is not restored if `bring_to_front` raises mid-loop.
+
+### v1.2.4.4 (2026-10-03)
+
+- **New: one command — `wechatauto` / `python -m wechatauto`** (issue #31: "can you make calling it simpler? it's too much, e.g. one command"). **The existing Python API is unchanged** — the CLI is just a caller of `WeChatDB` / `MediaDownloader` / `guia.quick_send` / `MomentDB`; anyone who prefers Python keeps doing exactly that.
+  - **Remember one thing only**: after installing, type `wechatauto` with no arguments. It runs a health check first (account / DB keys / image key / UIA tree — whichever one is zero is stated with the concrete next step), then shows a numbered menu: read messages / export / download images / send / listen / moments / list sessions / health check. Picking a chat lists your 10 most recent sessions (nickname + unread count) to choose by number, **so you never need to know what a `username` looks like**. The menu only opens when stdin is a terminal; in scripts and pipes `python -m wechatauto` still prints help and exits 2, so it can never hang a CI on `input()`.
+  - Subcommands work in **Chinese or English**: `消息`=`messages`, `导出`=`export`, `图片`=`images`, `发`=`send`, `听`=`listen`, `体检`=`doctor`, `会话`=`sessions`, `朋友圈`=`moments`. That is a one-line lookup table — the argument definitions still live in exactly one place (argparse).
+  - Three traps it absorbs for you, which is what "too complicated" actually was: ① the DB layer needs `username` while the UI needs the display name — `resolve_chat()` accepts nickname / remark / wxid / group id, and when two contacts share a name it asks for a wxid instead of silently picking one (typing a wxid into WeChat's search box is the number-one cause of "no hit, ~60 s of retries, then a bare `None`"); ② the image AES key is checked before downloading images, and a missing key is reported as what to do next rather than a wall of `None` that looks like a broken library; ③ the Windows console is GBK and Chinese bodies raise `UnicodeEncodeError` — the entry point reconfigures stdout/stderr to UTF-8 first, and `export` always writes UTF-8.
+  - Two display fixes: video/file/quote bodies are whole XML documents, now collapsed to one line such as `[非文本正文] playlength=151 length=4211669` (use `--json` for the raw text); `--type` accepts both English and the Chinese type names stored in the DB (Chinese-only would make people conclude "this chat has no images").
+  - `pyproject.toml` gained `[project.scripts]`, so installing gives you a real `wechatauto` command without `python -m`. Sending defaults to `--verify` (the send is read back from the database).
+- **Not verified (stated plainly)**: the menu's real keystroke path — automation can only feed scripted input, so nobody pressed keys yet; and `send` against the live client (it drives the window and needs the real client behind the `rhythm` gate). Everything else has offline regressions: `tools/selftest.py` **490 checks / 0 failures**, including a new `cli` group of 41 (one of them pins "cli must not import the UI stack at module level" — verified in reverse by hoisting `guia` up, which turns it red).
+
+
+### v1.2.4.3 (2026-10-01)
+
+- **Fixed: "it says my own images have no original" / "it keeps clicking around and then reports failure" / "what I downloaded is still the preview"** — one batch of reports, four independent causes, **none of them decryption**:
+  - **"Did I send this?" used to be hard-coded as `real_sender_id == 2`.** `real_sender_id` is a rowid into `SenderName2Id` in `message_resource.db`, and **which rowid your own account sits on differs per machine** — the `2` came from someone else's box back in 1.1.8. Measured here: self = **1** (all 400 messages in File Transfer Helper), while `2` is a frequent contact (512 image messages). The cost of the constant is direct: your own images were treated as incoming ones, the code clicked the left side first, and never hit the bubble. The check is now "does the resolved username equal my own wxid", with a fallback only when the index cannot be read.
+  - **`download_image_original()` now targets the real original `_h.dat` and drives the UI whenever it is missing.** The middle tier `.dat` is no longer accepted as a result: it is "whatever WeChat pushed", which may be a full image **or itself a preview version** — live example: a `.dat` of 44,002 bytes next to a 2,961-byte preview, and that `.dat` was still a preview. No tier on disk can prove "this is not a preview version", so we also stopped pretending there is an answer for it (`has_full` is gone; `has_mid` says only whether a `.dat` exists). Callers who want "whatever is on this machine" use `download_image(tier='full'/'best')`, which never touches the UI.
+  - **WeChat writes the file later than our judgement.** "It reported failure, then the next run said it was already local" and "it kept clicking bubbles and finally failed" are the same cause. Every decision point (on entry, before clicking the next bubble, after the tier wait times out, before declaring failure) now re-checks the disk and stops the remaining UI actions when the file is there.
+  - **The download button in the preview window opens a standard Windows Save dialog** (titled 「保存」, not 「另存为」), and **the first save may write out exactly the preview currently shown** (user report: saving from the UI still produced the preview; re-downloading produced the real image). The saved artifact is now size-checked against the local tiers; when it looks like a preview, the code clicks 「图片原始大小」 and saves again, keeping the largest of the attempts. Button selection verifies `ControlTypeName` really is a button (the file-format combo box is also named 「保存」 in UIA — hit live once), the dialog must actually close for the click to count, and every failure path clicks 「取消」 so no modal is left on screen.
+- **Added: scroll to the target image when it is off-screen** (`download_image_original(..., scroll=True, max_scrolls=6)`). "Which row is this image" is resolved by sliding-window alignment between the visible UIA rows and the database text/image sequence, with three gates: at least two text anchors and score ≥0.6 (a one-row viewport yields a fake 1.00 for every offset), tied best offsets must agree on a single answer, and the aligned row must actually be an image row in UIA. Rows-per-notch is measured after each scroll rather than hard-coded for a DPI. The hard precondition for scrolling is **knowing the WeChat pid** — the wheel is delivered at the cursor position at dequeue time, so an unverifiable landing point can hit whatever sits over WeChat; without a pid the code degrades to "current screen only, never scroll" and warns. `scroll-stuck` / `scroll-limit` are reported separately, and the fallback is counting newer images below, then trying bubbles one by one — it never scrolls or clicks forever.
+- **Two narrow-window (portrait) click fixes:**
+  - **One click on the 「微信」 nav tab does not leave the conversation.** Portrait is a single-pane layout: while a conversation is open, `session_list` and the search box are **absent from the tree entirely**, so the first click only brings the main window back to the chat page and a second click is needed to exit the conversation. The old single click made the `open_chat()` search-box lookup that follows it fail by construction — reported out as "cannot open the chat". `back_to_chat_tab()` now clicks → checks whether the chat page rendered → clicks again if not (`max_clicks=2`), and **clicks nothing when it is already there** (that click would yank the conversation the user is looking at).
+  - **Image bubbles could not be hit.** The bubble position does not scale with row width (the avatar column plus margin is a fixed pixel count): on a 2598 px row the bubble sits at +44..+632, so "12% of row width" = +311 lands inside; on a 720 px portrait row the bubble sits at +141..+459 while the same formula gives +86 — background. Candidates are now "absolute anchor 300 px from the sender's edge → the old 12%", which collapse to the same point in a wide window, so **behaviour is byte-identical to the released version there**.
+  - Two shape facts on the same path, now handled: **the preview window comes in two shapes** (either the desktop's direct child is `mmui::PreviewWindow`, or the top level is `Qt51514QWindowIcon` titled 「图片和视频」 with `mmui::PreviewWindow` one level inside — filtering only top-level children never finds the second), and **the zoom button's `Name` toggles** between 「图片原始大小」 and 「图片适应窗口大小」, so searching one hard-coded name bailed early and the 「保存」 fallback never ran.
+- **Fixed:** `demo_original_image.py` still carried the deleted `> 100KB` rule as its "already downloaded" pre-check, which would report a compressed copy as an original.
+- **Not re-verified on the live client this round** (stated plainly): the click-bubble → preview-window → button → `_h.dat` stretch needs the real client behind the `rhythm` gate, and the portrait bubble band for **self-sent** images is still a mirrored inference. Everything above it (tier judgement, row alignment, scroll decisions, dialog clicking, click geometry) has offline regressions.
+- **Regression coverage:** `tools/selftest.py` **449 checks / 0 failures** (`image` 196, `tree` 25). Mutation testing: 69 arms on `media.py` plus 6 on `uia_driver.py`; the 15 arms run this round all turned checks red (relaxing `_harvest` to accept `.dat` → 5 red; self-sent early return back → 1; `has_mid` always true → 1; waiting on `.dat` → 1; dropping the entry disk-check → 1; bubble click back to pure percentage → 2; removing the row-width clamp → 1, an extremely narrow row would click x=0; ignoring the sender side → 5; no candidate de-duplication → 1; the six nav-tab arms 1–5 red each).
+
+### v1.2.4.2 (2026-09-30)
+
+- **Fixed: "I can only download the thumbnail, never the original"** (reported with a bot log: 「只要原图，先不用缩略图」 followed by retries that never converged). Three separate causes, none of them decryption:
+  - **`download_image()` never looked at `_h.dat`** — the real original — and when it returned the compressed copy the filename was byte-for-byte the one an original would have (`<user>_<local_id>.jpg`), so a caller that only wants originals could only guess from the file size and retry forever. There is now an explicit `tier=` argument: `'original'` (returns `None` when the machine has no original — it will **not** quietly degrade), `'best'` (original → compressed → thumbnail), `'mid'`, `'thumb'`, and the tier is written into the filename (`_h` / none / `_thumb`). Omitting `tier` reproduces the old behaviour verbatim.
+  - **`download_image_original()` had an absolute size gate, `getsize(_h.dat) > 102400`,** which is how a compressed copy was judged "not downloaded yet". Measured over the 705 `_h.dat` files on this machine: min 575 B, p10 4.3 KB, **p50 91.5 KB**, p75 563 KB, max 18 MB — i.e. **51.3% of real originals were being rejected as incomplete**. The judgement is now relative (non-empty, ≥1 KB, and not more than 10% smaller than the compressed copy), and it is exposed as `MediaDownloader.original_ready()` so callers can apply the same rule. The same function's `timeout` argument was decorative: it clicked and then slept a fixed 3 s, once. It now polls until the file is both usable and no longer growing, or until `timeout` — and if a qualified `_h.dat` already exists, the file is decrypted straight from disk **without touching the UI at all**.
+  - **The tier report was lying because the query was missing a column.** An image's local filename comes from a 32-hex digest inside the message body, and the generic message `SELECT` does not carry `packed_info_data`, so every row came back "not an image". `WeChatDB.get_image_rows()` is a narrow query for `local_type=3` that does, with field names aligned to `get_message_row()`.
+  - **New `image_status(user, local_id)` / `list_image_status(user, limit)`** — same shape as the 1.2.4.1 voice report: per image, the byte size of each tier present, the best tier available, and a `reason` (`ok`, `mid_only`, `only_thumbnail`, `original_partial`, `no_local_copy`, `no_md5`, `no_message_row`), one message-table query and one directory walk per digest. Measured here over **4271 image messages across 211 sessions**: 2210 `mid_only`, 1428 `only_thumbnail`, 626 `ok`, 5 `original_partial`, 2 `no_local_copy` — **about 1 in 7 has an original on disk**, so most of these reports are WeChat's storage policy, not a library bug, and asking first removes the retry storm.
+  - **The UI path is now honest about which step failed**: no 「图片原始大小」 button in the preview window (the image already *is* the original, or WeChat offers no entry) is a distinct warning pointing at `tier='best'`, bubbles that are not in the visible area are reported instead of guessed at, and when several image bubbles are visible the one most likely to be the target is tried first — computed as "how many newer images does this one have below it in the session" — with the digest re-checked after every click, so a wrong bubble cannot pass as the right one.
+  - **Not verified live this round**: the click → preview-window → button path needs the real client and the `rhythm` gate, so it stayed untested; everything above it (tier judgement, routing, waiting, ordering, the DB query) is covered offline.
+- **Fixed: an empty UIA tree was silent** (reported as 「控件树被屏蔽」). `uia_driver` filters out windows whose process has no `Weixin.dll` module, `ensure_materialized()` returned `False` on the empty list, and `ensure_window()` quietly switched to the "set the screen-reader flag and wake" branch — **without logging a single line**. "Every window got filtered out" is precisely the signature of a 32-bit interpreter enumerating a 64-bit process's modules (`TH32CS_SNAPMODULE` returns `ERROR_PARTIAL_COPY`), but the user had no clue and could only say "blocked". Added `gate_block_hint(diag, bits=None)` (pure function, so it is testable offline) and `_warn_gate_blocked()`, which pick from four actionable wordings: no visible window at all (not started / not logged in / minimised to tray), window found but modules unreadable (split by bitness — 32-bit is told to switch to 64-bit Python, 64-bit is pointed at privileges and the security-software allow-list), pywin32 missing, and — when at least one window survives — **no output at all**. Each reason warns once per process, because a long-running listener scans every round and spam is worse than silence. Filtering logic and return values are unchanged, so existing callers are unaffected.
+- **Regression coverage**: `tools/selftest.py` gained an `image` group (39 checks, pure offline: temp attach trees + fake DBs — the 90% boundary on both sides, all seven `reason` values, all five `tier` routes and their filenames, no-silent-degrade, bubble ordering, the poll-until-stable wait, `get_image_rows` column alignment, and the one-walk-per-digest cache) and a `tree` group (16 checks with fake `win32gui` + fake pid/module enumeration: scan counts, four wordings, zero output in the healthy case, de-duplication, and that both real call sites actually consult the diagnostic). Whole suite **282 checks / 0 fail**. Mutations: restoring the `>102400` gate → 5 red; deleting the relative-size rule → 2 red; not marking `_h` in the filename → 2 red; ignoring "how many newer images" when ordering bubbles → 3 red; letting `tier='original'` silently fall back → 1 red; scanning the same digest twice → 1 red; dropping the diagnostic call in `ensure_materialized` → 2 red.
+
+### v1.2.4.1 (2026-09-25)
+
+- **Fixed: a group message could not tell you who sent it unless it was text** (issue #20 territory, reported as "who is talking"). `real_sender_id` is a numeric rowid; `wechatauto/db.py` already resolved it through `message_resource.db`'s `SenderName2Id` into a real wxid and put it in `sender_username` — but `wx.py:_db_row_to_message` never passed that on, `msg.wxid` stored the number, and the only working path was scraping the `wxid_xxx:\n` prefix out of **text** bodies, so images / voice / files / stickers were anonymous. Now `msg.sender_wxid` carries the real wxid (falling back to the body prefix, then to the old numeric value so nothing that worked breaks), `msg.sender` / `sender_remark` give the remark-or-nickname, and `msg.wxid` for your own messages is your real wxid instead of the constant `2`. New `Chat.GetGroupMembers()` (`{username, nick_name, remark, is_owner}`) and `WeChatDB.nickname_map()` (cached wxid→name) cover people who are not in your contact list. Measured over 8 real groups / 1249 stored messages: **95.8%** carry a sender identity, and **non-text messages went from 0% to 99.6%** (451/453). The remaining 4.2% have no identity anywhere in WeChat's own data — `SenderName2Id` has 655 rows and does not contain those ids, and sampling 20 of them found no username tag in `source` either. Nothing is invented: `sender_wxid` stays empty. A stale fallback that fed the numeric rowid into `contact.username` (which can never match, and made `get_nickname` echo the number back as if it were a username) is gone.
+- **Fixed: `download_voice()` returning `None` told you nothing** (issue #20, "26 voice messages but only 19 came through"). Reproduced, and the cause is **not** a broken lookup: an independent re-implementation agreed with the library on **958/958** voices, and the "svr_id exists but under a different `chat_name_id`" case was **0**. WeChat only writes `voice_data` into `media_*.db` after a voice has been played or received on that machine, so most misses mean the audio was never on disk — and the silent `None` made that indistinguishable from a library bug. The oracle was already there: the message table's **`download_status`**. Over 975 voices the correlation is exact — `download_status != 0` ⇔ "audio on disk" (515 rows `ds=1` + 400 `ds=5`, 0 exceptions), and all 60 rows with `ds=0` were genuinely absent. New `MediaDownloader.list_voice_status(user)` / `voice_status(user, local_id)` return `available` / `bytes` / `download_status` / `self_sent` / `reason`, where `reason` is `ok`, `audio_not_downloaded` (nothing on disk — play it once in WeChat), `audio_missing_from_media_db` (the flag says it should be there and it is not — *that* one is worth an issue), `session_not_in_media_index`, `no_server_id` or `no_voice_row`. `download_voice()` keeps its signature and behaviour; on failure it now logs the reason. Measured availability here: **93.7%** (898 ok / 54 not downloaded / 6 with no media index entry). The new narrow query also guards a real trap: `download_status` is deliberately **not** in the shared message `SELECT`, and where a message table lacks the column the query degrades and returns `None` for it — the shared path's `except: continue` would have silently dropped **every row of that shard**, turning "cannot read" into "there are no voices", which is worse than the bug being fixed.
+- **Behaviour change to know about**: in groups, `msg.sender` used to be the raw `wxid_xxx` scraped from the body; it is now the remark/nickname. Read `msg.sender_wxid` for the raw id.
+- **Regression coverage**: `tools/selftest.py` gained a `sender` group (22 checks: the numeric-rowid masquerade, the text-prefix fallback, your own messages, no-db and nickname-query-failure paths, cache semantics, three group-member failure modes, and both listener paths actually passing `db` through) and a `voice` group (28 checks, built on real in-memory / temp-file SQLite message and media databases, including the missing-column degradation that must not drop rows). Whole suite **226 checks / 0 fail**. Mutations confirm both groups bite: reverting the sender-identity resolution → 5 red; putting the fake numeric fallback back → source check red; making the voice query use the shared `continue` on a missing column → "does not lose rows" goes red (0 rows came back) and the group crashes.
+
+### v1.2.4 (2026-09-24)
+
+- **Adapted to WeChat 4.1.15.13** (the client auto-updated mid-round; `Weixin.dll` 198,060,584 → 201,552,944 bytes). Three separate things had to change, and each one looked like the others from the outside:
+  - **The search entry is now collapsed by default.** What used to be an edit box is a `mmui::XButton` named 搜索 (measured `[314,84,370,140]`); the `mmui::XValidatorTextEdit` only appears *after* that button is clicked. `_search_box(expand=True)` clicks it once and waits for the box; `search_box_rect()` still resolves on the collapsed button (it returns the button rect as a read-only anchor, deliberately **without** clicking — an anchor must not have side effects) while `open_chat()` asks for the expanding variant. On builds where the box is already resident, nothing extra is clicked. 4.1.13.x keeps working; which branch is taken is asserted offline.
+  - **The accessibility gate RVA moved** to `0xb135c38` and is in the version table, so the vectorised scan from 1.2.3 is not needed on the common path (it still is for unlisted versions, and results are cached in `~/.wechatauto/gate_cache.json`).
+  - **Entering Moments needed an explicit wake-up.** When the `mmui` tree had not materialised yet, `_switch_to_moments_new_style` failed with "找不到导航按钮" — which reads exactly like "this WeChat version is unsupported" and sent me down the wrong path first. It now checks tree readiness, calls `ensure_materialized(timeout=6.0)`, and **re-anchors the root control afterwards** (the old handle points at the empty shell from before the wake-up).
+- **Fixed: Moments scrolling never actually scrolled — `find_moment` only appeared to work.** `_send_scroll()` posted a `MOVE` and a `WHEEL` `SendInput` back to back with **zero pause** between them. Wheel events are delivered to whatever window is under the cursor *when they are dequeued*, so the wheel landed on the old position, i.e. on the wrong window entirely; and the mmui timeline ignores the wheel unless WeChat is the foreground window. Now cursor placement is verified (`SetCursorPos` → `GetCursorPos` poll, ≤8 tries ≈0.4 s) before a 0.3 s settle, and `_scroll()` brings the window to the foreground first. Measured on the live client: `find_moment` hit 2/2 runs (51.4 s / 14.2 s), later 17.2 s — before this it was a coin flip that looked like a timing fluke.
+- **Moments like / comment now have one implementation.** There were two parallel routes; the one actually exercised by the demos (locate the 「…」 button, then click the 赞 / 评论 in the float layer) was not what `LikeMoment` / `CommentMoment` used. `Like` and `Comment` now take the float route first and fall back to the legacy right-click menu only when it fails; `LikeMoment` / `CommentMoment` delegate instead of carrying their own copies. The legacy comment window (`MomentCommentDialog.send`: click box → `Ctrl+A` → paste → 发送) also **bypassed the 1.2.3 throttle entirely** — it is gated now, placed after the preconditions so a rejected comment does not consume a write slot. Verified on the live client: like and comment both landed, and the comment is present when the post is read back from the local Moments database. **Lesson kept: two implementations of one feature means the audited one is not the shipped one.**
+- **Fixed: `find_moment` could hand back a cell that nothing can be clicked on.** UIA recycles a cell handle once its row scrolls out of the viewport, and the recycled node reports `BoundingRectangle == (0,0,0,0)`; every coordinate action on it then raises `Can not move cursor`, which surfaced as "未能打开朋友圈操作菜单" **after a successful locate**. A hit is now checked before it is returned: `_rect_usable()` (unreadable / degenerate rect), `_reattach_item()` re-claims the same post among the currently visible cells by nickname + content prefix + time and swaps the handle **in place**, so the object the caller is holding stays valid, and `_settle_item()` scrolls it back into view once if no live twin is on screen. Re-claiming is deliberately conservative: a *different* post by the same publisher is never adopted (that would like the wrong thing), and a post with neither text nor timestamp — bare nickname — is refused outright. Content is compared by "first 10 characters contain each other" rather than by exact signature, because the UIA summary truncates the body while the DB-corrected body is longer; an exact signature would fail to recognise its own post. Both `find_moment` hit sites, `_locate_more_click` (per retry) and `_invoke_action_menu` (before it touches anything) go through this.
+- **Fixed: a real concurrency crash while watching all conversations.** Two threads reaching the same database at once wrote to the same `dst.tmp` scratch file: `FileNotFoundError` from `os.replace`, thrown out of the listener. `db._open()` now takes a per-database build lock, names its scratch files uniquely (`dst.<pid>.<thread-id>.tmp`) and sweeps scratch left behind by a killed process (older than 600 s).
+- **Fixed: `get_messages()` was not fail-closed on bad paging arguments.** `limit=0` returned a full page and `offset=-1` returned the **last** row (Python slicing, not a database error), which silently produced wrong answers instead of an empty list — found while the live listener was paging a short session. `limit <= 0` or `offset < 0` now return `[]`.
+- **Added: `AddListenAll()` really watches every session.** The global callback used to be registered **per session**, so any conversation that already had its own `AddListenChat` handler was skipped and never saw the global one; de-duplication is now by callback, newly discovered sessions are attached during polling, the pseudo-chat handed to the callback is usable (its `nickname` resolves, `chat` is created lazily, `SendMsg` works), the global callback is re-attached when the listener restarts, and `RemoveListenAll()` detaches for real. Documented in `GUIDE.md` §4.3. **Known cost** (not fixed this round): on an account with ~200 sessions, registering takes ~11 s and each poll round ~10 s, because every session is opened and read; that also makes it a suspect for the high-I/O report in issue #25.
+- **Live verification** (real client, `calm` rhythm profile, actions spaced out): send to File Transfer Helper with verbatim database read-back twice (new `sort_seq` matched exactly); `back_to_chat_tab()` + `open_chat()` end to end (7.2% / 8.3% whole-window pixel change as the objective "the page did switch" oracle); Moments locate → like → comment confirmed on screen and in the database.
+- **Regression coverage**: `tools/selftest.py` gained a `moment` group (30 checks: fake controls **and** real `MomentItem` instances, all offline — no WeChat, no clicking), plus the `click` (8) and `listen` (7) groups added during this round; the whole suite is **175 checks / 0 fail** (147 immediately before this fix; the sessions/messages groups report a few more or fewer depending on account data). Two mutations confirm the new group bites: make `_rect_usable` always return `True` → 15 checks red; make post re-claiming compare only the nickname → 5 red, and they are the "must not adopt a neighbour" ones.
+
+### v1.2.3 (2026-09-22)
+
+- **Added: a human-pacing layer, `wechatauto/rhythm.py` — on by default, and it changes default visible behaviour.** This account tripped WeChat risk control once (2026-09-21, forced re-login mid-session), so from now on every action that drives the real client has to move like a person, and it had to be enforced in the library rather than in a demo script. What risk control sees is the **time distribution of actions**, not coordinates: constant intervals, a cursor that teleports, clicks that always land dead centre, perfectly uniform typing, several writes per second. Now `nap()` jitters every wait (multiplier floor pinned at 1.0 — it only ever *lengthens* the fixed sleeps that hold render stability), `move_to()` walks the cursor along a quadratic bezier and `point()` picks a random interior target after insetting all four edges (no more `BoundingRectangle` centre hits), `type_gap()`/`key_hold()` break uniform keystrokes, and `gate()` throttles **outward-visible writes only** (send / send-file / like / comment / recall / poke / voice call) with a minimum interval plus a rolling-window burst cap. Read paths (database, screenshots, OCR, control lookup) are never throttled. Profiles `natural` (default) / `calm` / `fast` / `off`; `off` reproduces pre-rhythm values exactly and is for control experiments only. Override with `WECHATAUTO_RHYTHM`, `WECHATAUTO_WRITE_GAP`, `WECHATAUTO_WRITE_BURST`. Throttle state is persisted to `~/.wechatauto/rhythm.json` so it also holds **across processes** — every demo script is a fresh Python process, which makes in-memory rate limiting worthless. On the default profile two sends are at least 2.5–6 s apart and the 7th write inside 120 s enters a 30–75 s cool-off. Cross-process is documented last-writer-wins; no named mutex was added on purpose.
+- **Fixed: the UIA gate scan could stall `quick_send` for ~8 s and could abort it outright.** A user reported hanging inside `_rip_xrefs_to_rva`'s byte loop (198 MB `Weixin.dll`; measured 6.6–9.8 s here, which looks like a deadlock on slower machines), and nothing on that path caught errors — any exception propagated out of `ensure_window` and killed the whole `quick_send` call. The scan is now numpy-vectorised: identical candidates on the real DLL (`0xae2b0c8`) at 0.56–0.77 s (~12x), with the old byte loop kept as the no-numpy fallback (`numpy` arrives via `opencv-python`, so a normal install never takes it; if it is missing the scan is only slower, never absent). Scan results are cached on disk in `~/.wechatauto/gate_cache.json` keyed by DLL identity (version directory + size + mtime), **including negative results** ("scanned, no candidates" — unsupported versions were paying the full rescan every launch); a second scan in the same process is 0.000 s, and a verified gate RVA is restored from disk and put first in the candidate list. Unreadable file / not-a-PE now return an empty sequence instead of `None` (callers iterate directly) and are not written to disk. Exceptions during hot activation now degrade to "skip this round, fall back to OCR/coordinates" instead of breaking the send; `KeyboardInterrupt` is a `BaseException` and still propagates, so Ctrl+C keeps working.
+- **Fixed: the older Moments comment path bypassed the throttle entirely.** Comments have two parallel implementations; the previous round gated only the newer template-matching one (`_click_comment_send`), while `Moment.Comment` still went through the old UIA comment window (`MomentCommentDialog.send`): click the edit box → `Ctrl+A` → paste → click 发送, with not one step throttled. That is now gated, placed after all precondition checks so a failed precheck does not consume a write slot. **The lesson: audit outward writes by the action they perform, never by function name.** `tools/selftest.py` now scans for the action itself (`SendKeys('{Enter}')` / `press_enter` / `keybd_event` / clicking 发送) and fails if such a function has no `rhythm.gate`, with an explicit whitelist for functions that merely reference the send button or produce nothing outward (button lookup, pinyin candidate selection, OCR matching, Enter-to-open-chat). Deleting this one gate turns 3 checks red and names `moment.py:MomentCommentDialog.send`. Every remaining write entry point was traced to a gated sink: `quick_send`→`send_msg`→`click_send`, `quick_quote`/`at_member`→`click_send`, `send_text_to`→`send_text`, `ReplyCommentMoment`→`ReplyComment`→`_click_comment_send`, `wx.SendMsg`→`send_msg`, `sender.send_to`→`send`.
+- **Live re-verification (2026-09-22, real client, `calm` profile, actions spaced out)**: a send to File Transfer Helper passed with verbatim database read-back (new `sort_seq` matched exactly, throttle ledger recorded one write, hybrid-path log confirms the UIA driver was active); `back_to_chat_tab()` + `open_chat('文件传输助手')` passed end to end.
+- **Known issue (not fixed this round, and it corrects a v1.2.2.6 claim)**: v1.2.2.6 stated that clearing `WS_EX_TRANSPARENT` around the event makes UIA clicks land. **That effect did not reproduce on this machine.** Measured: the style is genuinely cleared (`ex=0x80000`), yet `WindowFromPoint` still returns the plain `Qt51514QWindowIcon` main window instead of the render sub-window at the nav-tab point, and the click changes nothing (0.0% whole-window pixel diff); `Control.Click()` and `Invoke()` are equally inert. When that style was left cleared across processes, the very same point *did* switch pages (15.3%) — so the hit-test decision involves more than the `WS_EX_TRANSPARENT` bit (`MMUIRenderSubWindowHW` is a layered window, where per-pixel alpha plausibly matters). Search-box / `ValuePattern` routes are unaffected, so sending, searching and opening chats all work; **coordinate clicks on the nav bar remain unresolved**. This round changed no code in that area, and the "fixed" claim has been removed from the record rather than left standing.
+- **Regression coverage**: `tools/selftest.py` gained a `gate` group of 35 checks (synthetic PE fragments + temporary cache files + fake window handles, fully offline, never touches WeChat) and the `rhythm` group grew to 42 with the action-based throttle audit; whole gate 131 checks. Three mutation checks confirm the tests bite: delete the no-numpy fallback → the group crashes; drop the displacement sign-extension → 6 fail; delete the comment gate → 3 fail and name the function.
+
+### v1.2.2.6 (2026-09-21)
+
+- **Fixed: `calibrate_layout()` always raised `NameError` in the published 1.2.2.5.** The timeout wrapper `_run_with_timeout` in `guia.py` uses `threading.Thread`, but the module never imported `threading` (checked against the 1.2.2.5 wheel: `threading.Thread` present, `import threading` absent). Layout calibration is the entry path of the UIA driver, so every pip-installed user hit it on the first calibration; local checkouts were synced separately and hid it. The two layout profiles failed **differently**, which is why one report was not enough: on `wide` calibration returned `False` and wrote no layout file at all, while on `portrait` the send-button probe swallowed the same error and calibration returned `True` on default ratios. Both shapes were reproduced by deleting the module attribute from a synced copy. A probe that errors inside the timeout wrapper now leaves a log line, and the outer handler separates code defects (`NameError`/`UnboundLocalError`/`AttributeError`/`TypeError`/`ImportError` → `wxlog.error`, reaches the console) from recoverable misses (OCR anchor simply not found → debug, falls back to defaults by design). Adding the import does not make OCR find the anchor — that stays a fallback, not a failure.
+- **Fixed: send verification could confirm a message that was never actually sent** (`_verify_sent`). Two independent holes: it matched on **substring**, so a draft left in the chat input (the body that actually went out read `校准wechatauto 部署自检 OK`) still verified a call for `wechatauto 部署自检 OK`; and with **no watermark**, an older self-message containing the target text among the last rows validated even when this send produced no row at all — the UI returning success only leads to polling, never to a resend, so a stale row is accepted on the first check. Plain-text sends now require a **verbatim** body match (`strip()` is not verbatim); reply / quote / `at_member` keep substring matching because WeChat wraps those bodies, and that rule is now explicit per call site. Every verified send first takes a **pre-send watermark** of the target chat: the max `sort_seq` *plus* the `(sort_seq, local_id)` identity set of the top rows, because real `sort_seq` values tie heavily (up to 8 rows in one chat) and a bare `>` would reject a genuine send. Verification also resolves the display name to a `username` before reading: message tables are keyed by `username` and a wrong one returns `[]` **silently**, so group-chat verification had been failing closed for the wrong reason. When no watermark can be taken (fresh chat, DB unavailable) verification falls back to the unwatermarked check rather than reporting failure.
+- **Regression coverage**: `tools/selftest.py` gained an offline `verify` group (14 checks against a fake DB) and an offline `calibrate_layout` group covering both profiles and the anchor-hit path (8 checks against a fake window) — 36 offline checks, full gate 55 pass / 0 fail. The verifier's rules were additionally replayed read-only against the live decrypted database (no message was sent); the end-to-end send path still needs a real take.
+- **Fixed: a UIA click could land on whichever window sits behind WeChat.** WeChat's content window (`MMUIRenderSubWindowHW`) carries `WS_EX_TRANSPARENT` (measured `exStyle=00080020`), so a raw `mouse_event` at its coordinates is skipped by hit-testing and delivered to the plain `Qt51514QWindowIcon` window behind it — this is why UIA clicks looked ignored on 4.1.13+. `uia_driver` now clears the extended style around the event and restores it immediately (`_click_at` / `_click_ctrl`), the way `guia.wx_click` already did. The mouse wheel is the exception: it works on that window unchanged.
+- **Fixed: `open_chat` could not recover when WeChat was parked on the Moments page.** The session list does not exist there, so the search-based path never resolves — measured as an 8+ minute spin at high CPU, and separately as a ~90 s give-up that returns `None` with nothing on screen explaining it (it cost a whole recording take). `WeChatUIA.back_to_chat_tab()` clicks the `mmui::MainTabBar` 「微信」 item. It cannot ask which page is showing: on this build `XTabBarItem` exposes no selection state (plain `ButtonControl`, no `SelectionItem` pattern, `LegacyIAccessible.State` always 0) and the per-page controls stay in the tree after a switch, so the tab is clicked unconditionally — clicking the already-selected tab only scrolls the session list back to the top.
+- **Fixed: the search-box calibration ratio could paste a chat name into a live conversation's input box.** The stale `SEARCH_BOX_RATIO` resolved to a click point off the real box (computed center 212,120 vs a measured box at 250,152–412,192), so the clipboard paste went to whichever chat was open. `_search_chat` now prefers the UIA `search_box_rect()` and self-checks afterwards: if the text did land in the chat input it is cleared through `ValuePattern.SetValue('')` and the search fallback is abandoned — nothing is sent.
+- **Added to the UIA driver**: `search_box_rect()` and `_set_text()`. `ValuePattern.SetValue` drives WeChat's live search with no keystrokes and no clipboard, but it does **not** give the Qt widget focus, so it is used for the search box only — the send path still needs a focused input and `{Enter}`.
+- **Privacy fix**: `media.py` no longer prints 12 bare `[DBG]` lines to stdout, one of which carried the absolute `.dat` path containing the account **wxid**. They are `wxlog.debug` now (the console handler is INFO by default), and the two silent `return None` bail-outs became warnings.
+- **Still unverified on a live client this round**: whether `_click_ctrl` and `back_to_chat_tab` actually land the click on WeChat's content area (the relogin interrupted that check). The `WS_EX_TRANSPARENT` measurement and the search-box rect numbers are real; the end-to-end effect of the two new click paths is not yet demonstrated.
+- **Thanks to [wenjiavv](https://github.com/wenjiavv)** for reporting both of the above with reproductions, a per-profile symptom split and fix proposals ([#28](https://github.com/fanyuantaier/wechatauto-replica/issues/28), [#29](https://github.com/fanyuantaier/wechatauto-replica/issues/29)).
+- **Fixed: `RecallGuard` could not see a single revoke — two independent faults.**
+  1. **Revoke rows were never delivered.** WeChat rewrites the original row in place (across 208 local sessions, 64 `revokemsg` rows: `revoketime - create_time` lands in 1-30 s for 10 of them, 31-300 s for 54, and zero for none), and `local_id` / `create_time` stay those of the original message. `Listener` increments by `sort_seq > watermark`, which never changes on a rewrite, so no revoke event is emitted. `watch()` now runs a `wxrecall-scan` daemon thread that re-reads the last `scan_limit` (default 30) rows per session every `scan_interval` (default 2.0 s) and diffs `local_id` against the mirror: normal in the mirror, `revokemsg` in the live DB = one revoke. `scan_now()` is exposed for scripts.
+  2. **Even when delivered, the original was never found.** `_find_original` used `create_time < revoke_time`, where `revoke_time` is the revoke row's own `create_time` (= the original's timestamp) — the strict `<` excluded the only matching row. Lookup is now exact by `(chat, local_id)` first (the rewritten row keeps its `local_id`, so the mirror row with that id is necessarily the original), with the time window only as a fallback and relaxed to `<=`.
+  3. `on_msg` no longer mirrors revoke rows — storing one would overwrite the original it is meant to rescue.
+  4. The revoke timestamp now parses `<revoketime>` (it used to print the original send time); `(chat, revoke_time)` is the dedup key, so the Listener and polling paths cannot double-report and a restart cannot re-report history.
+  5. `close()` now stops the polling thread.
+  Measured: offline 3/3 real revoke rows (local_id 62/64/88) restored, a second `scan_now()` returns 0 rows (dedup works), only `MainThread` left after `close()`; the live path (send → mirror 20→21 → revoke → restore) passes too.
+- **Security fix: `demo_media.py --list` printed media XML verbatim**, exposing `aeskey`, `cdnthumbaeskey`, `cdnthumburl` and `md5`. It now prints only dimensions, byte size, duration and file name.
+- **Added: OCR fallback for Moments likes/comments under WeChat 4.1.13's merged layout** (`Moment._read_comment_cell_ocr`). Likes and comments now live in a sibling `mmui::TimelineCommentCell` that never enters the UIA tree, so parsing the text cell always came back empty; an empty UIA result now falls back to "comment-box region screenshot + OCR". The comment-box search area also moved to 320 px above the viewport bottom (the old `bottom+8` band landed on the taskbar and never matched on 4.1.13).
+- **Cleanup**: `demo_send.py`'s `pick_default_image` docstring is now a raw string, silencing a `\W` escape warning.
+
+### v1.2.2.5 (2026-09-19)
+
+- **Fixed: cached Moments pictures decrypted into files nothing could decode.** Two independent causes on the same `.dat` v2 path:
+  1. **Wrong single-byte XOR key for cache containers.** That key is the low byte of the account's config dword, but the code derived it per file from the plaintext's last two bytes (`tail ^ 0xFF == FF D9`). WeChat appends a **24-byte footer after the image end marker** in Sns cache containers (189/295 measured here), so the check failed and it silently fell back to a wrong key — the whole tail segment came out garbled. Resolution order is now **config dword (authoritative) -> thumbnail statistics -> fallback**, resolved once per account.
+  2. **The footer was kept as image data.** Decrypted output is now trimmed at the JPEG/PNG end marker, so a strict decoder no longer rejects an otherwise valid picture over trailing bytes.
+  Measured: Sns cache containers passing `MediaDownloader.decrypt_image()` **118/295 -> 295/295**; the Moments cache index's decrypt failures **177 -> 0**; a 15,577-file chat-image sample **429 JPEG + 171 wxgf, 0 failures** (chat media unaffected, wxgf/WXAM containers untouched).
+- **Fixed: `MomentDB.find_local_media`'s size guard never ran on its most common path.** The "reject an impostor by size deviation" check only existed on the multi-candidate branch; with exactly one same-dimensions candidate the code returned without comparing anything, so a 66 KB mismatch passed silently. It now logs the deviation and deliberately still **does not** reject: the declared `totalSize` is the CDN original while the cache holds WeChat's re-encoded copy, so a large delta is normal and is not evidence of a wrong image (the multi-candidate rule is unchanged).
+
+### v1.2.2.4 (2026-09-18)
+
+- **Fixed: a wrong key form could make an entire message shard unreadable.** A cached key could be stored as 48 bytes (32B key + 16B explicit salt), but decryption picks its branch by **key length** — 48 bytes takes the “plaintext header” branch and produces a file whose header is not SQLite (`file is not a database`), making that shard (a 96 MB `message_0.db` in practice) completely unreadable. Three guards now: **verify the standard form first when storing** (store a bare 32-byte key unless the DB really uses a plaintext header), **normalize on read**, and **auto-correct legacy entries when loading the cache**.
+- **Fixed: “database merge failed” was raised outright while WeChat keeps writing.** The old code wrote decrypt results straight onto the cache file and raised on failure, destroying the last usable copy. Now: build a **self-consistent main-DB snapshot** as a floor (verified with `quick_check`, re-read up to 4 times) → then try merging WAL frames on a copy (fall back to the main snapshot with a warning) → all intermediate files are written to a temp path and **atomically replaced only on success**, so a failure never destroys the previous usable copy.
+- **Fixed: leftover cache entries for databases that no longer exist crashed construction** (`KeyError`) — now fully tolerated.
+- **Layout: added a phone-style portrait profile** (dual profiles `wide` / `portrait`), auto-selected by window aspect ratio, each calibrated and stored independently (old flat files migrate automatically). Also fixed **session lookup in portrait mode** (the name-column filter discarded every session name as an “avatar area”, so `find_session` always returned None).
+- **Cleanup**: removed 10 unused imports; added debug logs to 8 silently-swallowing handlers (a probe failure must not masquerade as a normal result); `demo_send.py` no longer hardcodes another user’s path or a real wxid (default image auto-discovers RWTemp); real wxids in READMEs replaced with placeholders.
+- **New `tools/selftest.py`**: read-only self-check (layout / keys / sessions / messages), run in one command.
+
+### v1.2.2.3 (2026-09-16)
+
+- **Fixed: constant ~50 MB/s disk read + write while the library runs.** The decrypt-cache stamp compared mtimes with exact float equality while writing them with `%f` (6 decimals) against Windows' 7-decimal mtimes — so every poll (~1s) looked like a changed database and re-decrypted everything (WAL merge + cache rewrite included). Now `STAMP_VERSION 3` with `%r` (exact round-trip): one rebuild after upgrading, then stable.
+- **Message reads now LIMIT inside each shard before merging** (**5.5×** on a 48k-message group: 1.053s → 0.191s; `get_new_messages` ≈6×). Huge chats no longer materialize every shard's rows in Python. Public APIs (`get_messages`, `get_new_messages`, `get_message_row(..., local_type=)`, `get_message_rows_for_media`) keep identical signatures **and** results (verified across 6 chats × 71 cases).
+- **Fixed “cannot get keys” under UTF-8 mode**: four `tasklist` calls decoded GBK output with the default codec; under `python -X utf8` / `PYTHONUTF8=1` the decode failed, left `stdout` as None and raised `AttributeError`, killing key extraction. All four now use `encoding="gbk", errors="replace"` with a None guard.
+- **`WeChatUIA.is_running()` is now multi-criterion**: it used to be one probe wrapped in `except → False`, so any error silently became “WeChat is not running”. It now checks tasklist / main-window title / psutil, and only writes an explicit stderr note when every probe *errors*.
+- **Real contact/group names removed from demos and docs** (replaced with 「文件传输助手」; 「兔仔仔」/「送你挖银子」 kept as sample defaults).
+
+### v1.2.2.2 (2026-09-13)
+
+- **Key handling hardened: no more recurring failure after every WeChat update.** Three layers:
+  - **The cache can no longer be wiped**: `_save_keys()` never persists an empty result (atomic write + `.bak` kept). Previously a transient extraction failure (wrong account / permission) **overwrote a good cache with an empty file**, so every later start reported "0 keys" — that is exactly the `keys cached: 0` seen in the field.
+  - **Durable key copy**: a copy is kept at `%LOCALAPPDATA%\wechatauto_keys\<account>.json` (override the directory with the `WECHATAUTO_KEYS_DIR` env var, e.g. your project workspace), surviving TEMP cleanup and WeChat updates. On startup the caches are **merged from several locations** (durable copy → work cache → `.bak` → other accounts' caches) and every entry is verified against page-1 HMAC, keeping only working keys.
+  - **Account selection is now decided by key verification**, not by "most recently modified .db" (a WeChat update rewrites every .db, shifting mtimes and picking the wrong account → 0 keys). One memory scan now collects candidate key material and scores **every account directory** by page-1 HMAC, switching to the one that unlocks (log: `已按密钥校验选定账号目录: …`).
+- **cfg master-key warning**: on WeChat 4.1.13+ the cfg path returns an **untrustworthy master key** (demoted to a fallback since v1.1.9); it now logs an explicit warning when it cannot reproduce any database key instead of silently succeeding.
+- **Better diagnostics (`diagnose_keys`)**: now prints the WeChat client **FileVersion**, per-account "cache / derived" availability and a **master-key consistency check** (which tells you which account the keys belong to); the `_open` error text now lists the three classic causes (32-bit Python / permission mismatch / wrong account among several) plus the `account=` hint.
+
+### v1.2.2.1 (2026-09-12)
+
+- **Compatibility with the new WeChat UI (verified on 4.1.13.65)**: the new build changed `AutomationId` from short names into **dotted paths** (old `session_list` / `chat_input_field` → new `MainView.main_tabbar`, `MainView….main_window_sub_splitter_view…`), which broke exact-equality matching. AutomationIds are now matched as exact / dotted-segment / suffix (`_aid_hit()`), so both the old short names and the new paths resolve.
+- **Relaxed window-title matching**: the new main window title is `Weixin`, and becomes `微信(3)` when there are unread counts; `_title_is_main()` now matches by containment and still rejects unrelated titles such as `WeChat`.
+- **Anchor candidate lists + structural fallbacks**: the main window / login window / search box now match against candidate tuples (single-value constants kept for backward compatibility); the search box, chat input and search-result list each gained a structural fallback (an EditControl whose Name contains 搜索, an EditControl inside the chat area, attribute-based search from the root), so a renamed class or AID in a future build no longer breaks the whole path.
+- **New layout self-check `WeChatUIA.describe_layout()`**: one call returns the main class name, window title, layout kind (`merged` / `legacy` / `chat`) and the resolution result of every anchor (main_window, search_box, session_list, chat_input, main_tabbar, sns_list). Run it first when a new WeChat build changes the UI.
+- Note: the Moments anchors were already dual-layout (standalone `mmui::SNSWindow` / merged `mmui::SNSContentView`); 4.1.13.65 keeps those class names, so no change was needed there.
+
+### v1.2.2 (2026-09-12)
+
+- **Fix cross-shard message reads (missing messages / voice)**: a conversation's `Msg_<md5>` table actually spans several `message_*.db` shards, but `get_messages` only hit the first one — e.g. a chat with 8,904 real messages (24 voice notes) reported just 1. New `_find_msg_tables()` / `_msg_conns()` / `_shard_rows()` merge reads across all shards and sort by `sort_seq`; `get_messages`, `get_new_messages` and `_find_media_rows` now use the merged view. `get_message_row` gained a `local_type` filter (a `local_id` is **not** unique across shards) and new `get_message_rows_for_media()` returns every shard row; media downloaders pass their type code so the right shard row is selected.
+- **Reliable listener delivery (behavior change)**: the watermark now advances **only after callbacks succeed** (a new `_inflight` boundary prevents re-dispatching unconfirmed messages), callbacks are retried (`max_retries`, default 3) before being logged as dropped, and the watermark is persisted to `listener_watermark.json`. Messages that arrive while your process is down are delivered on the next start instead of being skipped. Pass `watermark_file=""` to disable persistence.
+- **Text restore no longer requires CJK**: pure English / digits / URLs / emoji container-format messages are decoded instead of degrading to `[文本]`.
+- **`Chat.GetNewMessage()` no longer drops backlog**: batches are pulled until caught up (>200 messages) and the watermark only moves to the last message actually returned, instead of jumping to the newest DB position.
+- **UIA materialization self-heal (no child controls after a WeChat restart/upgrade)**: after a WeChat restart or upgrade the Qt accessibility gate byte resets to 0 and the `mmui::` tree degrades to an empty Qt shell (`Qt51514QWindowIcon` + 2 nodes). The driver now hot-writes the gate, **verifies that `mmui::` controls actually materialized**, and retries other candidate RVAs on failure (the RVA that worked is cached per DLL identity). `_get_uia()` self-heals on a 30s throttle — no more "one failed wake and OCR forever", and no manual `refresh=True`. Fallback table gained `4.1.13.65 → 0x0AE2B0C8`.
+- **Moments scroll-positioning fixes**: bounded reversals (at most one per run, then downward-only) and stall detection (the top-cell fingerprint now includes geometry — merged-layout ListItems can share the same Name, which previously looked like a stall and aborted mid-scroll); skip "scroll to top" when the DB ruler says the target is below; the stop criterion is now **"the next moment's UIA control appeared"**; direction/distance fixes (clipped pixels → wheel notches) plus a bottom margin so the "…" button is reachable.
+- **Message type table**: 4.x composite `local_type` is decomposed by its low 32 bits; added `50 音视频通话` (VoIP bubble), `11000 动画表情`, `8594229559345 红包` (the library previously mislabeled it as an appmsg/file card via the low-byte mapping); empty bodies (stickers) now show `[动画表情]` instead of a blank line; `demo_group_messages` decodes zstd for every type and prints one-line summaries.
+- **`demo_listen.py --all`** now auto-discovers new sessions (previously limited to the 30 most recent at startup).
+- **New anti-recall listener `RecallGuard` (BETA)**: after `watch(listener)` every new message is mirrored into a local sqlite DB and attachments (image/voice/video/file) are backed up to `media/`; on a `revokemsg` it prints `[撤回] <revoker> → <original text>` and records it in `recall_events`. **Not fully field-tested — shipped as BETA.**
+- **New `MomentObserver` (BETA)**: observe-and-freeze snapshots of Moments cache keys via `snapshot()` / `diff()` (cache keys have no derivable mapping to feed md5 and the cache is evictable, so observing is the only way to keep them). **Not fully field-tested — shipped as BETA.**
+
+### v1.2.1 (2026-09-06)
+
+- **New "quote & send" message feature (BETA)**: `WeChatGUI.quote_msg(text, who, target_text=None, verify=False)` right-clicks the target message → picks「引用」from the popup menu → types the content → sends; omitting `target_text` quotes the most recent message. `quick_quote()` is a one-liner entry point, demo script `wechatauto/demo_quote.py`.
+  - **BETA disclaimer**: the feature uses a coordinate + OCR + `SendInput` pipeline that depends on WeChat 4.1.x self-drawn layout; positioning may drift with window size / DPI / chat content. The right-click uses `SendInput` injection (the render window ignores `mouse_event` right-clicks), and the cursor is first moved with `SetCursorPos` before injecting the click to avoid "moves but doesn't click / clicks but doesn't move" drift.
+- **Removed the `desktop_available()` white-pixel screen check**: control targeting is fully UIA-based now, so the full-window screenshot white-ratio sampling was dropped — it could falsely report "window not visible" while WeChat was fine. `ensure_visible()` now treats a live window handle as visible and keeps its "minimize blockers + bring-to-front" actions.
+
+### v1.2.0.3 (2026-08-31)
+
+- **Fix WAL-merged database cache corruption causing infinite loop**: `_check_merged` previously used `SELECT count(*) FROM sqlite_master` which only checks the schema tree — corrupted data pages still passed validation, causing the cache stamp to mark the bad cache as "up-to-date" and every subsequent poll to reuse it, throwing `database disk image is malformed` on a dead loop. Now uses `PRAGMA quick_check` for full database validation (data + index pages). New `_invalidate_cache()` clears all decrypted `.db`/`.stamp` files. New `_run_msg_query()` unified entry point auto-retries once on `malformed` (clear cache → rebuild → retry). `_msg_conn` now closes shard connections immediately to avoid Windows file-lock issues during cache cleanup.
+
+### v1.2.0 (2026-08-30)
+> Note: this release merges all changes made after 1.1.10.2 that were not yet published (1.1.10.3 → 1.1.10.7).
+
+- **Smart Moments positioning + auto like**: `Moment.find_moment(publisher, keyword, ...)` uses a hybrid of the **DB route (computing the target offset)** + **UIA route (scrolling by offset)** — it derives how many feeds the target is from the current view using the local `sns.db` ruler, then scrolls adaptively in the correct direction to land on the moment by author/keyword, eliminating blind downward scrolling and false "not found" results.
+- **"…" overlay recognition**: `Moment._locate_more_click` / `_find_more_button` locate the "…" button (bottom-right of a feed) via template matching (light/dark templates shipped in `assets/`) and click it; if not found it keeps nudging the scroll and retrying to pop up the like/comment overlay.
+- **One-shot Like**: `Moment.LikeMoment(publisher, keyword, ...)` does "locate → tap "…" → like in the overlay"; the "赞/Comment" buttons in the overlay are found by a global deep traversal from the UIA root (matching by name) and clicked at their center.
+- **Moments like/comment via UIA controls**: `WeChat` now exposes a `Moment` property and `SwitchToMoments()` that hot-activate the `mmui` UIA tree and click the 朋友圈 nav button. `Moment.Like(item, cancel=False)` and `Moment.Comment(item, content, reply_to=None)` operate on UIA feed items — likes/comments are server-side actions, so they need the UI (the DB route stays read-only). `WeChat.Moment` is `None` when the UIA tree is unavailable. Demo `wechatauto/demo_moments_interact.py`.
+- **Moments media download**: new `MomentDB.download_media(media, save_dir, kind)` copies a single picture/video from the local cache first (byte-for-byte, offline) and falls back to the CDN url; `MomentDB.download_moment_media(feed, save_dir, ...)` fetches all pictures/videos of one feed into a folder. `find_local_media(md5, kind, size)` locates the cache file by md5 and, for videos, by `totalSize` across the whole `Sns/Video` tree (the video cache name is a content-hash unrelated to the feed md5, so size matching recovers real MP4s). `parse_feed` now distinguishes pictures vs videos via `videomd5`/`videoDuration`/`type` and records each media's `size`. Demo `wechatauto/demo_moments_download.py`.
+- **Moments read API (DB route)**: `MomentDB.get_moments()` now supports `since` / `until` (Unix-seconds time filter) and `keyword` (text filter), plus `limit=0` to return every row. New incremental-sync helpers `latest_tid()` / `get_moments_since()` make it easy to poll for new moments. New interaction notifier `get_interactions()` / `interactions_unread_count()` read the "likes/comments on my moments" table (`SnsMessage_tmp3`). New `comment_tree()` / `comment_reply_to()` organize a feed's comments into reply chains (built from `comment_id`/`ref_comment_id`).
+- **Add group name ↔ ID lookup**: `get_groups()` now returns each group's real `name` (from `contact` table, falling back to its wxid). New `group_name_to_id(name)` (exact match first, then substring/fuzzy) and `group_id_to_name(chatroom_wxid)` let you resolve a group's wxid from its display name and vice versa — handy for combining with `get_group_members()` and `at_member()`.
+- **Add group member enumeration & change watch (read-only, no UI)**: New `WeChatDB.get_groups()` / `get_group_members(chatroom_wxid)` read `chat_room` + `chatroom_member` + `contact` from `contact.db` to return each group's members (username / nick_name / remark / is_owner). New `GroupMemberWatcher` (via `get_group_member_watcher`) snapshots membership and `poll()` diffs against the baseline to report `joined` / `left` members, enabling polling-based membership-change monitoring. Useful together with the existing UI-automation `at_member()`.
+- New runnable demos `wechatauto/demo_moment_find.py`, `demo_moment_more.py`, `demo_moment_like.py`; new deps `pyautogui`, `opencv-python`.
+
+### v1.1.10.2 (2026-08-30)
+- **Fix long text still showing `[文本]` on fresh installs: add required `zstandard` dependency**: WeChat 4.x stores long-text `message_content` as a zstd-compressed frame, decoded in `_friendly_content` via `import zstandard`. That import silently failed when `zstandard` was absent (it was **not** in `pyproject.toml` required deps), so long text degraded to the `[文本]` placeholder while listening worked normally. `zstandard` is now a required dependency; `_friendly_content` also gained lazy dual-package import (`zstandard`/`zstd`) via new `_get_zstd_module()` / `_zstd_decompress()` helpers.
+
+### v1.1.10.1 (2026-08-29)
+- **Fix `AttributeError: 'sqlite3.Row' object has no attribute 'get'` in message reading**: `_msg_row_to_dict` called `.get("compress_content")` on a `sqlite3.Row`, which only supports `[]` access. Messages whose content stays a placeholder (e.g. emoji/special types) hit this branch and crashed the real-time `Listener` polling loop. Now uses `[]` access with a fallback, fixing `get_messages` / `get_new_messages` / `get_message_row`.
+
+### v1.1.9 (2026-08-27)
+- **Fix key extraction for WeChat 4.1.13+**: Prioritized `Config.Cipher` memory scan over `extract_master_key_from_cfg` for key extraction. The cfg-based extraction returns incorrect master keys on WeChat 4.1.13.12, while the Config.Cipher scan (which reads raw `enc_key` values from XOR-decoded blobs) works correctly. This fixes the "0/24 keys verified" issue reported on newer WeChat versions.
+
+### v1.1.8 (2026-08-25)
+- **Fix missing `_derive_xor_key` method in MediaDownloader**: v1.1.7 release accidentally omitted the `_derive_xor_key()` method while code paths (`_decrypt_v2`, `detect_image_key`) still referenced it, causing `AttributeError` when decrypting images. Restored the method for XOR key derivation from thumbnail `_t.dat` / `_h.dat` files.
+- **Fix group-chat `sender_id` → `sender_username` resolution**: `Listener` callbacks now receive `sender_username` (wxid format) in the message dict, resolved from `message_resource.SenderName2Id` mapping. Previously, `sender_id` was a numeric ID that could not be used directly with `search_contact()`.
+- **Thanks [uiharukazari0105](https://github.com/uiharukazari0105)** for reporting the missing `_derive_xor_key` issue in v1.1.7.
+
+### v1.1.6.1 (2026-08-20)
+- **PyPI description fix**: v1.1.6 was uploaded without the synced `README_pypi.md` (description still showed 1.1.5.1); this patch restores the full v1.1.6 changelog and bumps the version marker.
+
+### v1.1.6 (2026-08-20)
+- **Auto-diagnosis on missing key**: `数据库无可用密钥` now runs a built-in check before raising — Python bitness (32-bit can't read 64-bit Weixin memory), per-PID `OpenProcess`/`ReadProcessMemory` permission, and multi-account mismatch (all `wxid_*` dirs vs. picked account, suggesting `WeChatDB(account=...)`). No need to run `diagnose_keys` first.
+- **New diagnostic tool**: `wechatauto/diagnose_keys.py` (`python -m wechatauto.diagnose_keys`, WeChat logged in) dumps lib version, Python bitness, Weixin PIDs with per-process read-permission checks, all accounts vs. picked account, cached keys, fresh in-memory extraction, and key verification — paste the output when reporting key-extraction failures.
+- **Skip `migrate\unspportmsg.db`**: WeChat's reserved "unsupported message" DB has no in-memory key and is never queried; it was forcing a full process-memory scan on every init.
+
+### v1.1.5.1 (2026-08-18) — beta
+- **Fix real-time listening**: `WeChatDB.get_new_messages()` referenced an undefined `found` (NameError swallowed by `Listener._poll_once`), so **no** message callbacks ever fired — including first messages from contacts you had never chatted with.
+- **Dynamic message shards**: `_message_dbs()` now re-scans the disk so shards WeChat creates at runtime (e.g. `message_5.db`) are picked up and their keys extracted automatically.
+
+### v1.1.5 (2026-08-18)
+- **Version cleanup**: normalized the patch version (1.1.4.2 → 1.1.5) after the `media_*.db` voice fix.
+
+### v1.1.4.2 (2026-08-18)
+- **PyPI description cleanup**: removed the demo default-group changelog line from the PyPI description.
+
+### v1.1.4.1 (2026-08-18)
+- **PyPI readme bilingual**: merged the Chinese (`README.zh-CN.md`) and English (`README.md`) into one PyPI description so the Chinese version is visible on the package page.
+
+### v1.1.4 (2026-08-18)
+- **Voice download across all media databases**: `download_voice()` now searches every `media_*.db` (not just `media_0.db`) — WeChat shards voice data across multiple media DBs; previously voices stored in `media_1.db` etc. could not be found (thanks uiharukazari0105).
+- **`demo_media.py --images N`**: download the latest N images of a chat directly from the DB (by local_type), bypassing the total-message `--limit` — no more "only a few images listed" when a group has thousands of messages.
+- **`WeChatDB._find_media_rows(user, types)`**: new helper returning all media local_ids of a chat for a set of local_types (batch download).
+- **Group-chat image thumbnail fallback**: original images in group chats are only downloaded after being opened in WeChat; `download_image` now falls back to the thumbnail (`_t.dat`) when the original is missing, saving it with a `_thumb` suffix.
+
+### v1.1.3 (2026-08-17)
+
+### v1.1.2 (2026-08-16)
+- **UIA driver thread-safety**: `WeChatUIA` now initializes COM on the current thread (`CoInitializeEx`, idempotent) — fixes crashes when instantiated from background threads / host apps (e.g. WeChatBot) with "CoInitialize not called / cannot load UIAutomationCore.dll" errors.
+- **Main-window filtering**: only windows whose process loaded `Weixin.dll` are considered — auxiliary processes without the DLL (whose hot-activation always fails) no longer produce noise warnings.
+- **Forward-voice fix**: `Chat.ForwardVoiceMessage` uses `self` when no target is given (the previous `_cur()` could resolve the wrong chat).
+- **Re-entrant UI lock**: `LockManager` is now re-entrant per thread — `@uilock` functions calling each other (e.g. `ForwardVoiceMessage` → `VoiceMessage.forward_to`) no longer deadlock.
+
+### v1.1.1 (2026-08-16)
+- **Recall last message** (`Chat.RecallLastMessage` / `uia_driver.recall_last_message`): right-click the latest own message → UIA-first menu-item click (`mmui::XMenuView` found inside the main-window subtree), OCR fallback; fails cleanly when the 2-minute recall window has passed (menu only shows "Delete").
+- UIA robustness: menu-item lookup scoped to the main-window subtree (avoids the Windows UIA root-traversal hang), removed the fragile `WindowControl(ClassName=...)` fallback.
+- Media fix: video id bytes→str decoding in `MediaDownloader`.
+- `demo_media.py --photos` default 3 → 10.
+
+### v1.1.0 (2026-08-15)
+- **Image AES key auto-capture** (`media.py`): the V2 image key is only resident in memory while viewing an image (~5 min). `_scan_aes_key()` gained a `monitor` mode — polls continuously and persists the key to `image_keys.json` once found; users just open one image to finish setup.
+- Fixed the process-ordering scan bug (removed the memory-usage sort that pushed the main process last).
+- **Forward voice messages**: SILK extraction from `media_0.db` + file-message send (`demo_forward_voice.py`).
+- New demos: `demo_group_messages.py` (group + red-packet ZSTD parsing), `demo_robust.py`.
+
+## 🤝 Acknowledgments
+
+Thanks to [vesio](https://github.com/vesio) for sharing the WeChat 4.1.12 UIA control-tree approach and debugging ideas in [issue #1](https://github.com/fanyuantaier/wechatauto-replica/issues/1) — it made the UIA hybrid driver (v1.0.8) possible.
+
+Thanks to [nanshanjack](https://github.com/nanshanjack) for finding the UI-lock re-entrancy problem (fixed in v1.1.2).
+
+Thanks to [maozhitao12450](https://github.com/maozhitao12450) for reporting the WXAM (wxgf) image download issue (fixed in v1.1.3).
+
+Thanks to [uiharukazari0105](https://github.com/uiharukazari0105) for finding that voice data stored in `media_1.db` (and later) was never searched (fixed in v1.1.4).
+
+Thanks to [wenjiavv](https://github.com/wenjiavv) for reporting the missing `threading` import that broke layout calibration in the published 1.2.2.5 ([#28](https://github.com/fanyuantaier/wechatauto-replica/issues/28)) and the substring/no-watermark hole in send verification ([#29](https://github.com/fanyuantaier/wechatauto-replica/issues/29)), both with reproductions and fix proposals (fixed in v1.2.2.6).
+
+Thanks to [dhz1145](https://github.com/dhz1145) for reporting [issue #32](https://github.com/fanyuantaier/wechatauto-replica/issues/32) — auto-detection depended on the working directory whenever WeChat's storage location was a drive root (`d:\`), complete with step-by-step reproductions, the root cause, a `GetFullPathNameW` cross-check and a fix proposal (fixed in v1.2.5.1).
+
+Thanks to [WrenZephyrSol](https://github.com/WrenZephyrSol) for the follow-up on [issue #20](https://github.com/fanyuantaier/wechatauto-replica/issues/20): on the same chat `list_message_chats()` counted 2654 messages while `get_messages()` returned 763, and they pasted a line-by-line source comparison plus a workaround that avoided `get_message_row` for downloads by carrying `server_id` over themselves. The analysis was written against v1.2.1, but following it uncovered the real hole — `local_id` is not unique across shards (fixed in v1.2.6).
+
+Thanks to [tryqylz](https://github.com/tryqylz) for reporting [issue #34](https://github.com/fanyuantaier/wechatauto-replica/issues/34) after noticing it in real use: sender names came out misaligned. Both findings held up — `_sender_id_index()` resolved `real_sender_id` through `SenderName2Id` in the resource database when the number belongs to the shard's own `Name2Id`, and `_resolve_sender()` treated id 2 as the local account unconditionally. The proposed fix (join on `Name2Id.rowid` inside the shard the row lives in, and keep an unknown state when no mapping exists rather than guessing from another database) is exactly what shipped in v1.2.6.1.
+
+Thanks to [dhz1145](https://github.com/dhz1145) for the fix round spanning [issues #38](https://github.com/fanyuantaier/wechatauto-replica/issues/38)–[#43](https://github.com/fanyuantaier/wechatauto-replica/issues/43), [PR #37](https://github.com/fanyuantaier/wechatauto-replica/pull/37) and [PR #44](https://github.com/fanyuantaier/wechatauto-replica/pull/44): each of the six problems (input-box offset, dead quote/reply targeting, remarks written to a similar-named contact, wrong window under multiple accounts, verification reading the wrong account's database, duplicate sends) arrived with three live reproductions, an independent database read-back and before/after comparisons, and the fix PRs carried 76 new offline regressions verified live on a two-account 4.1.15.55 setup (fixed in v1.2.8.1).
+
+## 📄 License & Disclaimer
+
+Apache-2.0. This project is for personal learning and automation research only — please respect the WeChat software license agreement and applicable laws.
+
+Contact: fanyuantaier@163.com

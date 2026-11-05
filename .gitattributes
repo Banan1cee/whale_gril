@@ -8,3 +8,7 @@
 *.json  text eol=lf
 *.yml   text eol=lf
 *.txt   text eol=lf
+
+# vendored 上游源码保持原始字节：MANIFEST.sha256 校验的是文件字节，
+# 不能让 git 按文本规则转换换行（否则换台机器 checkout 后哈希全对不上）
+vendor/wechatauto/** -text

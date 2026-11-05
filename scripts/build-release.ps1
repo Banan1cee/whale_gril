@@ -78,6 +78,13 @@ if (-not $SkipFull) {
   $fullDir = Join-Path $build $pkgNameFull
   robocopy $stage $fullDir /E /NFL /NDL /NJH /NJS /NP | Out-Null
   robocopy $rt (Join-Path $fullDir 'runtime') /E /NFL /NDL /NJH /NJS /NP | Out-Null
+  # vendor/ 只进源码包：完整包的 runtime\python 里已经装了同一份（构建时按 MANIFEST 校验过），
+  # 再带一份纯属重复。安装包（whale.iss）本来就逐项列文件，不会带 vendor。
+  $fullVendor = Join-Path $fullDir 'vendor'
+  if (Test-Path $fullVendor) {
+    Remove-Item $fullVendor -Recurse -Force
+    Write-Host '  已从完整包排除 vendor/（runtime 里已有同一份）'
+  }
   # 首次运行会从示例生成配置；发行包不包含 config.json，覆盖更新不会重置用户设置。
   $fullZip = Join-Path $OutDir ($pkgNameFull + '.zip')
   if (Test-Path $fullZip) { Remove-Item $fullZip -Force }
