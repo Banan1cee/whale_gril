@@ -57,6 +57,10 @@ test('切账号走 /api/wechat/account 校验，失败提示后端原因', () =>
   assert.match(block, /ApiText\(/, '失败时应把后端的 error 原文显示出来');
   assert.match(block, /_lastAccounts = DateTime\.MinValue/, '切完要强制重拉账号列表');
   assert.match(block, /TxtAccount\.Text = account/, '切完要让输入框和后端一致');
+  // 现场：启动阶段点账号卡，桥接的 config_watch 还没起（基线吞了这次写盘），
+  // 结果「几秒内自动重启」没发生，回复还是从大号发出去。切完必须直接重启。
+  assert.match(block, /_sup\.RestartBridge\(\)/, '切完要直接重启桥接，别只等它自己发现');
+  assert.doesNotMatch(block, /桥接会在几秒内自动重启/, '别再只承诺「几秒内」，要真的重启');
   // 别再用 /api/config 直接改账号，绕过「本机有没有这个号」的校验
   const saveBlock = code.slice(code.indexOf('private async Task SaveSendSettingsAsync'), code.indexOf('private async void OnSaveSendOpt'));
   assert.match(saveBlock, /\\"account\\":/, '手填输入框仍然要能保存账号（保留高级用法）');

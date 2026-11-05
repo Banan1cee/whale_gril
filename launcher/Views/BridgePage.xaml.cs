@@ -367,8 +367,12 @@ namespace WhaleLauncher.Views
                     return;
                 }
                 TxtAccount.Text = account;
-                SwitchHint.Text = "已切到 " + label + "，桥接会在几秒内自动重启。";
                 _sup.Say("微信账号 → " + label);
+                // 别只指望桥接自己发现 config 变了：它的 config_watch 要等开库/预热
+                // 做完才起得来，启动阶段切的号会被基线吞掉（现场：点了小号，回复
+                // 还是从大号发出去）。这里直接重启，界面承诺的「几秒内重启」才作数。
+                if (_sup.BridgeRunning) _sup.RestartBridge();
+                SwitchHint.Text = "已切到 " + label + "，正在重启桥接…";
                 _configLoaded = false;
                 _lastAccounts = DateTime.MinValue;
                 _lastRefresh = DateTime.MinValue;

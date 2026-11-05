@@ -70,6 +70,13 @@ except Exception:                       # noqa: BLE001
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_PATH = os.path.join(ROOT, "config.json")
+# config_watch 的基线必须在进程一启动就取（模块导入时），不能等它自己的线程起来再取：
+# 开库 + 预热要十几秒，这期间用户在启动器里切了账号的话，晚取的基线会把那次写盘
+# 当成「启动时的初始值」直接吞掉 —— 表现就是「点了小号卡，桥接没重启，还是从大号发」。
+try:
+    CONFIG_MTIME_AT_START = os.path.getmtime(CONFIG_PATH)
+except OSError:
+    CONFIG_MTIME_AT_START = 0.0
 LOG_FILE = os.path.join(ROOT, "data", "wechat-bridge-4x.log")
 # 日志级别：debug（详细）/ info（常规）/ error（仅错误），与 config.log.level 同步。
 # 桥接没有结构化日志，只能按关键词粗分：报错类永远写，排查噪音只在 debug 时写。
@@ -2006,8 +2013,54 @@ def main():
             % (ACCOUNT.get("hwnd"), ACCOUNT.get("why") or ""))
         return True
 
+    # config 里钉的账号 → 真实账号目录。按 config.json 的 mtime 缓存：
+    # 发送是热路径，不能每次都去开库解析昵称。
+    _pin_cache = {"mtime": None, "wanted": "", "dir": ""}
+
+    def configured_account_dir():
+        """config.json 里现在钉的是哪个账号 → 真实账号目录（没钉返回空串）。"""
+        try:
+            mt = os.path.getmtime(CONFIG_PATH)
+        except OSError:
+            return ""
+        c = _pin_cache
+        if mt != c["mtime"]:
+            c["mtime"] = mt
+            c["wanted"] = str(((read_config().get("wechat") or {}).get("account")) or "").strip()
+            c["dir"] = ""
+        wanted = c["wanted"]
+        if not wanted:
+            return ""
+        current = str(getattr(db, "account", "") or "")
+        # 便宜的三种写法先比（完整目录名 / wxid / 唯一前缀），别为一次发送去开库
+        if wanted == current or account_wxid(wanted) == account_wxid(current) \
+                or (current and current.lower().startswith(wanted.lower())):
+            return current
+        if not c["dir"]:
+            try:
+                c["dir"] = resolve_account_dir(db.db_dir or db_dir, wanted) or ""
+            except Exception:                     # noqa: BLE001
+                c["dir"] = ""
+        return c["dir"]
+
     def account_send_allowed(where, engine=None):
-        """统一的发送闸：认不出目标账号窗口就不发。"""
+        """统一的发送闸：认不出目标账号窗口、或窗口里的号不是配置指定的号，就不发。"""
+        # 只比窗口不够：pick_account_window 认的是「当前库这个号」的最近会话，
+        # 切号后桥接要是没重启成功，旧号的窗口照样能对上，消息就从旧号发出去了
+        # （实测：config 选的是小号，桥接还连着大号，回复从大号发给了对方）。
+        # 所以发送前拿 config.json 现查一次，对不上宁可这条不发。
+        pinned = configured_account_dir()
+        current = str(getattr(db, "account", "") or "")
+        if pinned and pinned != current:
+            ACCOUNT["blockedAt"] = time.time()
+            log_throttled(
+                "account-pin-mismatch",
+                "⚠️ 不发送（%s）：config 里选的账号是 %s，但桥接现在连的是 %s。"
+                "切号后桥接没重启成功，先从别的号发就露馅了 —— 重启桥接后再发。"
+                % (where, pinned, current),
+                ttl=60,
+            )
+            return False
         if ensure_account_window(engine):
             return True
         if ACCOUNT_GUARD:
@@ -4605,18 +4658,18 @@ def main():
         改「忽略名单」、「群聊开关」都没反应，只能重启桥接 —— 也就是
         「调了没用，还是默认」。
         """
-        last = 0.0
-        try:
-            last = os.path.getmtime(CONFIG_PATH)
-        except Exception:
-            last = 0.0
+        # 基线取导入那一刻的 mtime（见 CONFIG_MTIME_AT_START 的注释）：线程要等
+        # 开库/预热做完才起得来，现取基线会把启动阶段的写盘漏掉。
+        last = CONFIG_MTIME_AT_START
         while True:
             time.sleep(5)
             try:
                 mt = os.path.getmtime(CONFIG_PATH)
             except Exception:
                 continue
-            if mt <= last:
+            # 用「变了没有」而不是「变新了没有」：从备份恢复/复制回来的 config
+            # 可能带着更早的 mtime，一样要重新加载。
+            if mt == last:
                 continue
             last = mt
             current = read_config()

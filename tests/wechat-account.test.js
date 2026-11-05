@@ -135,6 +135,20 @@ test('心跳带上账号 → /api/status 里能读到「桥接当前在用哪个
   }
 });
 
+test('切号后桥接没重启成功时，发送闸要拦住（别从旧号发出去）', () => {
+  const bridge = fs.readFileSync(path.join(__dirname, '..', 'bridge', 'engine.py'), 'utf8');
+  assert.match(bridge, /def configured_account_dir/, '要能读 config 里现在钉的是哪个号');
+  const start = bridge.indexOf('def account_send_allowed');
+  assert.ok(start > 0, '缺 account_send_allowed');
+  const body = bridge.slice(start, bridge.indexOf('def foreground_is_fullscreen', start));
+  // 现场：config 选的是小号，桥接还连着大号；pick_account_window 认的是「当前库这个号」，
+  // 窗口照样能对上，于是回复从大号发了出去。发送前必须再比一次 config。
+  assert.match(body, /pinned != current/, '发送前要比较 config 账号和当前库账号');
+  assert.match(body, /config 里选的账号是/, '拦下来时要写清楚是哪个号对不上');
+  assert.match(body, /重启桥接后再发/, '要告诉用户怎么恢复');
+  assert.match(body, /return False/, '对不上就不能发');
+});
+
 test('桥接源码里必须留着「钉账号」的关键代码（别被后来的改动弄丢）', () => {
   const bridge = fs.readFileSync(path.join(__dirname, '..', 'bridge', 'engine.py'), 'utf8');
   assert.match(bridge, /--list-accounts/, '要有给网页列账号的一次性模式');
