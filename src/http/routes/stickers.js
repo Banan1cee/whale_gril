@@ -53,7 +53,7 @@ module.exports = function register(router) {
     }
 
     if (pathname === '/api/stickers/status' && method === 'GET') {
-      // 异步扫描 + 1.5s 结果缓存：启动器 2s、网页 3s 拉一次，别每次都全量同步扫库
+      // 异步扫描 + 1.5s 结果缓存：启动器 2s 拉一次，别每次都全量同步扫库
       return service.statusAsync(info.url.searchParams.get('queueOnly') === '1')
         .then((payload) => json(res, 200, payload))
         .catch((err) => json(res, err && err.statusCode ? err.statusCode : 500,

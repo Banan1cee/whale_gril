@@ -9,14 +9,14 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <!-- 窗口/任务栏/exe 文件图标：鲸鲸（右下角那只小人，气泡去掉了） -->
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
-    <Version>4.0.1</Version>
+    <Version>4.0.2</Version>
     <!-- 产品版本只写版本号，别让 SDK 把 git sha 拼成 4.0.0+ae20f30：
          SignPath 的 artifact configuration 用 product-version 做元数据约束，
          值必须每次构建都一致；用户看到的「产品版本」也不该是个提交号。 -->
     <InformationalVersion>$(Version)</InformationalVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <ProductVersion>$(Version)</ProductVersion>
-    <FileVersion>4.0.1.0</FileVersion>
+    <FileVersion>4.0.2.0</FileVersion>
     <Product>鲸鲸</Product>
     <AssemblyTitle>鲸鲸 · 启动器</AssemblyTitle>
     <Company>鲸鲸</Company>

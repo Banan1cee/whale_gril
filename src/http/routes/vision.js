@@ -5,7 +5,7 @@ const { json, readBody } = require('../util');
 
 module.exports = function register(router) {
   // 「测试看图」：拿内置的 64x64 PNG 试一下 Key 通不通。
-  // body.apiKey 可选 —— 网页里可以先测再保存。
+  // body.apiKey 可选 —— 可以先测再保存。
   router.post('/api/vision/test', async (runtime, req, res) => {
     let vbody = {};
     try { vbody = await readBody(req); } catch { vbody = {}; }

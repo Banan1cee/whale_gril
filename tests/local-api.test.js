@@ -327,14 +327,3 @@ test('看图服务商：自动跟随 = 跟聊天那把；手动选智谱 = 记�
     cleanup(root);
   }
 });
-
-/* ---------------- 网页设置面板 ---------------- */
-
-test('网页设置：本地地址要能自己判免 Key，并把演示模式关掉（静态断言）', () => {
-  const app = fs.readFileSync(path.join(__dirname, '..', 'web', 'assets', 'app.js'), 'utf8');
-  const page = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
-  assert.match(app, /function isLocalBaseUrl/, '要按地址判断是不是本机/内网，不能只看服务商预设');
-  assert.match(app, /function applyKeyExpectation/, 'Key 提示和演示模式开关要跟着地址走');
-  assert.match(app, /\$\('baseUrl'\)\.addEventListener\('input'/, '手改地址要即时重算');
-  assert.match(page, /id="mockHelp"/, '本地地址时要有一句「演示模式已关掉」的说明');
-});

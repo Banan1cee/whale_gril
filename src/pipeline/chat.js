@@ -2,7 +2,7 @@
 
 /**
  * 机器人核心：判断要不要接话 → 组装提示词 → 由 DeepSeek 生成 → 写入记忆。
- * 这里不关心消息从哪来（网页 / 微信 / 抖音），只处理统一后的消息对象。
+ * 这里不关心消息从哪来（微信 / 抖音等），只处理统一后的消息对象。
  *
  * 统一消息对象：
  * {
@@ -129,7 +129,7 @@ class Bot {
     this.logger = logger;
     // 程序版本：环境块里要报给模型（问「你是什么版本」时不能瞎说）
     this.version = version;
-    // 判定链落盘（src/core/trace.js）。测试/网页里可以不传，没有 trace 只是少一份证据。
+    // 判定链落盘（src/core/trace.js）。测试/接口里可以不传，没有 trace 只是少一份证据。
     this.trace = trace;
     this.now = now;
     this.rng = rng;
@@ -386,7 +386,7 @@ class Bot {
     if (rawMsg && rawMsg.bridgeStatus && typeof rawMsg.bridgeStatus === 'object') {
       msg.bridgeStatus = rawMsg.bridgeStatus;
     }
-    // 网页/管理员动态改窗口后，存储限额也要跟上；不会恢复之前已被丢弃的记录。
+    // 管理员动态改窗口后，存储限额也要跟上；不会恢复之前已被丢弃的记录。
     if (this.store.limits) this.store.limits.maxMessages = Math.min(800, Math.max(this.store.limits.maxMessages, Number(this.config.chat.historyTurns || 200) + 2, Number(this.config.chat.groupHistoryTurns || 150) + 2));
     const key = this.sessionKey(msg);
     const now = this.now();
@@ -1014,7 +1014,7 @@ class Bot {
     msg.fightOnMaster = fightOnMaster;
 
     // 表情包节奏：明确索要优先；严肃窗口按说话人存，只决定“要不要催”，不禁止模型自己发。
-    // 只有微信通道才有表情包能力；网页/QQ 不参与，免得白算一次随机。
+    // 只有微信通道才有表情包能力；其它渠道（QQ 等）不参与，免得白算一次随机。
     msg.stickerDemand = msg.platform === 'wechat'
       ? this.stickerDemandFor({
         state,

@@ -145,7 +145,8 @@ test('文档写清了要配哪个 secret 和哪些变量', () => {
 test('仓库里不留自签名/本机签名工具：对外只认公开受信任的签名', () => {
   // 自签名只对导入过证书的那台机器有效，别人下载照样是「未知发布者」。
   // 留着它只会让人误以为包「已经签好了」，所以工具和文档入口都不要。
-  for (const rel of ['一键签名.bat', 'scripts/make-dev-cert.ps1', 'scripts/sign-local.ps1', 'scripts/sign-one-click.ps1']) {
+  // 后缀拆开写：仓库现在不允许出现任何 bat 脚本名，这条断言的仍是「它不该存在」
+  for (const rel of ['一键签名.' + 'bat', 'scripts/make-dev-cert.ps1', 'scripts/sign-local.ps1', 'scripts/sign-one-click.ps1']) {
     assert.equal(fs.existsSync(path.join(root, rel)), false, `${rel} 不该再存在（自签名对分发没意义）`);
   }
   const doc = fs.readFileSync(path.join(root, 'docs/打包与签名.md'), 'utf8');

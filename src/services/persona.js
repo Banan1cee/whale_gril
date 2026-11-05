@@ -5,7 +5,7 @@ const personaStore = require('../persona/store');
 const { checkPersonaTokens, PERSONA_MAX_TOKENS } = require('../persona/tokenCheck');
 const { LIMITS } = require('../memory/constants');
 
-/* ---------------- 人设调教（浏览器表单用） ---------------- */
+/* ---------------- 人设调教（/api/persona 用） ---------------- */
 
 async function applyPersonaPatch(runtime, body) {
   if (body && body.reset) {

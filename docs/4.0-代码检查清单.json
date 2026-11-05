@@ -583,26 +583,6 @@
       "lines": 445
     },
     {
-      "file": "web/debug.html",
-      "lines": 1220
-    },
-    {
-      "file": "web/index.html",
-      "lines": 204
-    },
-    {
-      "file": "web/persona.html",
-      "lines": 363
-    },
-    {
-      "file": "web/assets/app.js",
-      "lines": 1071
-    },
-    {
-      "file": "web/assets/style.css",
-      "lines": 618
-    },
-    {
       "file": "installer/whale.iss",
       "lines": 57
     }

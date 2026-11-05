@@ -47,8 +47,9 @@ git push origin fix/一句话说明
 
 ### UI 改动默认改哪边？
 
-说「界面 / UI / 设置项 / 加个开关」时，**默认改启动器 EXE（`launcher/`）**，不是 `web/`；
-只有明确说「网页 / WebUI / 浏览器」才改网页，两边都有设置页时默认同步（EXE 为主）。
+说「界面 / UI / 设置项 / 加个开关」时，**默认改启动器 EXE（`launcher/`）**。
+内核不再提供网页界面（4.0.2 起 `web/` 已删除，`GET /` 返回 404 JSON），所以没有「两边同步」这回事；
+只有任务书明确要求恢复网页界面时才新建 `web/`。
 给 AI 协作者的同一约定写在仓库根目录 `AGENTS.md`，不用每次口头交代。
 
 - 改 `launcher/` 之后要重新发布：`dotnet publish launcher/WhaleLauncher.csproj -c Release -o launcher/publish -p:PublishSingleFile=true -p:SelfContained=false`，

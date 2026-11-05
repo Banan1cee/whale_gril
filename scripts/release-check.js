@@ -44,14 +44,6 @@ function mustInclude(rel, needles) {
 }
 
 // 1) 看图（图片识别）这条链路
-mustInclude('web/index.html', [
-  ['看图 API Key', 'visionApiKey'],
-  ['测试看图按钮', 'btnVisionTest'],
-]);
-mustInclude('web/assets/app.js', [
-  ['调用测试接口', '/api/vision/test'],
-  ['提交 visionApiKey', 'visionApiKey'],
-]);
 mustInclude('src/http/routes/vision.js', [
   ['看图测试接口', '/api/vision/test'],
   ['返回 vision 状态', 'vision.status('],
@@ -127,7 +119,7 @@ try {
   }
   check('每个版本都有说明内容', empty.length === 0, empty.length ? '空条目：' + empty.join(', ') : '');
 
-  // 7) 版本号必须在台面上可见：包名带版本、横幅与网页都显示
+  // 7) 版本号必须在台面上可见：包名与启动横幅
   try {
     const build = read('scripts/build-release.ps1');
     const dynamicPkg = /\$pkgName\s*=\s*"whale-girl-\$ver"/.test(build);
@@ -135,8 +127,6 @@ try {
       dynamicPkg ? 'whale-girl-$ver.zip' : '仍写死 whale-girl-3.0.zip');
     const server = read('server.js');
     check('启动横幅显示版本', /runtime\.version/.test(server) && /版本：/.test(server), '');
-    const html = read('web/index.html');
-    check('网页显示版本', /id="buildVersion"/.test(html), '');
   } catch (e) {
     check('版本可见性检查可运行', false, e.message);
   }

@@ -9,7 +9,7 @@
  *
  * 判定顺序：
  *   1. senderId 等于 master.wxids 里的某一项 → 是主人（微信内部 id，改不了昵称也冒充不了）
- *   2. 微信以外的渠道（网页 / 抖音）没有稳定 id，昵称对上就算
+ *   2. 微信以外的渠道（抖音等）没有稳定 id，昵称对上就算
  *   3. 微信里只有当 master.wxids 里没有任何「像 wxid 的值」时，才退回用昵称认
  *      —— 微信里谁都能改昵称，配了真 wxid 还认昵称就等于给所有人开后门
  */
@@ -22,7 +22,7 @@ function asList(value) {
     .filter(Boolean);
 }
 
-/** 取出主人名单（顺手去掉空行和首尾空格，网页里一行一个） */
+/** 取出主人名单（顺手去掉空行和首尾空格，界面里一行一个） */
 function masterLists(config) {
   const master = (config && config.persona && config.persona.master) || {};
   return { names: asList(master.names), wxids: asList(master.wxids) };
@@ -52,7 +52,7 @@ function matchMaster(config, msg = {}) {
   const idHit = Boolean(senderId) && wxids.some((w) => w.toLowerCase() === senderId.toLowerCase());
   const nameHit = Boolean(senderName) && names.some((n) => n.toLowerCase() === senderName.toLowerCase());
   const hardIds = wxids.filter(looksLikeWxid);
-  // 微信里只信 senderId；网页/抖音这类渠道没有稳定 id，才允许昵称兜底
+  // 微信里只信 senderId；抖音这类渠道没有稳定 id，才允许昵称兜底
   const nameFallback = platform !== 'wechat' || hardIds.length === 0;
   const isMaster = idHit || (nameFallback && nameHit);
 

@@ -1,6 +1,6 @@
 ﻿# 鲸鲸 · 启动器
 # 自动寻找可用的运行时：系统里的 Node.js → 本机 DeepSeek Harness 自带的 Electron 内核
-# 用法：双击 启动鲸鱼娘.bat，或在命令行运行 scripts\start.ps1
+# 用法：正常用启动器 WhaleLauncher.exe；命令行自救跑 powershell -File scripts\start.ps1
 param(
   [switch]$NoBrowser,
   [switch]$Check,
@@ -111,7 +111,7 @@ if (-not $pick) {
   Write-Host '   A. 重新解压完整压缩包（runtime\node.exe 应该在）'
   Write-Host '   B. 安装 Node.js LTS：https://nodejs.org/zh-cn'
   Write-Host '   C. 装了 DeepSeek Harness 的话，指定它的路径：'
-  Write-Host '      启动鲸鱼娘.bat -NodeExe "D:\...\DSH Desktop.exe"'
+  Write-Host '      scripts\start.ps1 -NodeExe "D:\...\DSH Desktop.exe"'
   Write-Host ''
   exit 1
 }

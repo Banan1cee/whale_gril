@@ -5,7 +5,7 @@
 ;   2. 启动器（WhaleLauncher.exe）带 requireAdministrator 清单：微信是管理员，
 ;      桥接必须同级才能改 gate / 读进程；拖拽已用 ChangeWindowMessageFilterEx 放行；
 ;   3. runtime\wheelhouse 只是构建缓存，不进包（省 117MB）；
-;   4. 界面只有启动器，所以 web/、docs/、tools/、scripts/、launcher 源码、安装脚本
+;   4. 界面只有启动器，所以 docs/、tools/、scripts/、launcher 源码、安装脚本
 ;      本身都不进包 —— 装完的目录里只剩运行需要的东西；
 ;   5. 运行环境全在包里：runtime\node.exe、runtime\python\（CPython 3.12 + 依赖）、
 ;      runtime\dotnet\windowsdesktop-runtime-10-win-x64.exe（缺 .NET 10 时由 [Code] 提权装）。

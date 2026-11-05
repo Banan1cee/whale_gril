@@ -4,9 +4,9 @@
  * 图片理解：把图片交给视觉模型（默认智谱 GLM-4.6V-Flash，免费）。
  * 返回详细描述（截图会逐条转写文字），交给聊天模型接着聊。
  *
- * Key 的查找顺序（以前只认第一个，导致「网页里填了却一直说没配」）：
+ * Key 的查找顺序（以前只认第一个，导致「设置里填了却一直说没配」）：
  *   1. config.json 的 vision.apiKey
- *   2. data/settings.json 的 visionApiKey（网页「设置」里填的就是这个）
+ *   2. data/settings.json 的 visionApiKey（启动器「设置」里填的就是这个）
  *   3. data/settings.json 的 keys.vision
  *   4. data/settings.json 的 keys.zhipu（用智谱聊天时同一把 Key 也能看图）
  *   5. 环境变量 ZHIPU_API_KEY / VISION_API_KEY
@@ -103,7 +103,7 @@ function resolveKey(config) {
   return st.zhipu || '';
 }
 
-/** 给网页/状态接口看的摘要（绝不返回明文 Key） */
+/** 给状态接口看的摘要（绝不返回明文 Key） */
 function status(config) {
   const v = resolveVisionConfig(config);
   const key = resolveKey(config);
@@ -258,7 +258,7 @@ async function describe(config, { imageBase64, mime = 'image/jpeg', prompt = '' 
   if (!apiKey && !local) {
     throw new Error(
       '看图没有 Key：在「模型与 Key」里把聊天模型换成能看图的（deepseek-flash / glm-4.6v-flash / ' +
-      'qwen3.8-max 等），或者到网页设置里填「看图 API Key」' +
+      'qwen3.8-max 等），或者到启动器「设置」里填「看图 API Key」' +
       '（默认智谱 GLM-4.6V-Flash，Key 在 open.bigmodel.cn 申请，免费额度够用）'
     );
   }

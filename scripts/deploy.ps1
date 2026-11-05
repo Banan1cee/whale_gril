@@ -1,13 +1,13 @@
 ﻿<#
 把「开发目录」的代码同步到「运行目录」，并可选重启服务。
 
-为什么需要它：手工 Copy-Item 会在目标里套出一层同名目录（web\web、src\src），
+为什么需要它：手工 Copy-Item 会在目标里套出一层同名目录（src\src），
 或者把 data\、config.json 一起覆盖 —— 这两件事都真实发生过，代价是配置和聊天记忆丢了。
 
 它做的事：
   1. robocopy 只同步代码，**永不**覆盖 data\、config.json、runtime\、日志、图片
   2. 逐文件比对 MD5，确认关键文件真的过去了（不一致直接报错）
-  3. -Restart 时按顺序重启 服务 + 桥接（带环境变量，和 .bat 里一致）
+  3. -Restart 时重启服务（桥接归启动器管；命令行手动起桥接见 README「没有图形入口时怎么办」）
 
 用法：
   powershell -File scripts\deploy.ps1                          # 同步到默认目标，不重启
@@ -40,7 +40,6 @@ if ($LASTEXITCODE -ge 8) { throw "robocopy 失败，退出码 $LASTEXITCODE" }
 # 2) 校验关键文件（防止「改了但没过去」）
 $must = @(
   'server.js', 'package.json',
-  'web\index.html', 'web\assets\app.js', 'web\assets\style.css',
   'src/pipeline/chat.js', 'src/adapters/vision.js', 'src/core/master.js', 'src/persona/index.js',
   'src/app.js', 'bridge/engine.py', 'tools/uia-diag.py', 'scripts/release-check.js'
 )
@@ -63,11 +62,9 @@ if ($Restart) {
   $env:PYTHONUTF8 = '1'; $env:PYTHONIOENCODING = 'utf-8'; $env:WECHATAUTO_RHYTHM = 'off'
   $env:HTTP_PROXY = ''; $env:HTTPS_PROXY = ''; $env:ALL_PROXY = ''; $env:NO_PROXY = '*'
   Start-Process -FilePath (Join-Path $Target 'runtime\node.exe') -ArgumentList 'server.js' -WorkingDirectory $Target -WindowStyle Hidden
-  # 桥接用守护循环启动：长时间挂着时微信窗口被回收会导致原生崩溃（0xC0000005），
-  # 守护循环 3 秒内自动拉起，不用人工重启。
+  # 桥接不在这里拉：它归启动器 RuntimeSupervisor 管（崩溃按 10 分钟窗口刹车重启）。
+  # 命令行调试要手动起桥接时，见 README「没有图形入口时怎么办」。
   Remove-Item -LiteralPath (Join-Path $Target 'data\PAUSED') -Force -ErrorAction SilentlyContinue
-  $loop = Join-Path $Target 'scripts\bridge_loop.bat'
-  Start-Process -FilePath $loop -WorkingDirectory $Target -WindowStyle Hidden
   Start-Sleep -Seconds 6
   $listen = (netstat -ano | Select-String ':8787.*LISTENING')
   Write-Host ("  8787 监听：{0}" -f $(if ($listen) { '是' } else { '否 ← 服务没起来' })) -ForegroundColor $(if ($listen) { 'Green' } else { 'Red' })

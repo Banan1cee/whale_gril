@@ -6,10 +6,10 @@ const { loadConfig, DEFAULT_CONFIG } = require('./config');
 const configSchema = require('./configSchema');
 
 /* ------------------------------------------------------------------ */
-/* 调试台：直接读写 config.json（改完立刻生效，不用重启）              */
+/* 设置接口：直接读写 config.json（改完立刻生效，不用重启）            */
 /* ------------------------------------------------------------------ */
 
-// 这些路径网页「⚙️ 设置」会写进 data/settings.json，而它的优先级高于 config.json
+// 这些路径设置接口会写进 data/settings.json，而它的优先级高于 config.json
 const SETTINGS_SHADOW = {
   provider: ['provider'],
   'deepseek.provider': ['provider'],
@@ -21,7 +21,7 @@ const SETTINGS_SHADOW = {
   'persona.ownerName': ['userName'],
 };
 
-// 密钥类：网页只显示「已设置 / 没配」，留空提交表示「不改」
+// 密钥类：接口只报「已设置 / 没配」，留空提交表示「不改」
 const SECRET_PATHS = new Set([
   'deepseek.apiKey',
   'vision.apiKey',
@@ -60,7 +60,7 @@ function setByPath(obj, dotted, value) {
   return obj;
 }
 
-/** 按现有配置的类型把网页送来的值转成正确类型（数字/开关/数组/JSON） */
+/** 按现有配置的类型把接口送来的值转成正确类型（数字/开关/数组/JSON） */
 function coerceValue(config, dotted, value) {
   const cur = getByPath(config, dotted);
   if (typeof cur === 'number') {
@@ -85,7 +85,7 @@ function coerceValue(config, dotted, value) {
   return String(value);
 }
 
-/** 给网页看的配置：去掉内部字段，密钥留空但告诉它「配没配」 */
+/** 给界面看的配置：去掉内部字段，密钥留空但告诉它「配没配」 */
 function publicConfig(config) {
   const internal = new Set(['env', 'paths', 'root', 'configExists']);
   const out = JSON.parse(JSON.stringify(config, (k, v) => (internal.has(k) ? undefined : v)));
@@ -98,7 +98,7 @@ function publicConfig(config) {
   return { config: out, secrets };
 }
 
-/** 把 settings.json 里会「盖住」刚改的字段清掉，否则网页上改了 config.json 却不生效 */
+/** 把 settings.json 里会「盖住」刚改的字段清掉，否则界面上改了 config.json 却不生效 */
 function clearSettingsShadow(runtime, paths) {
   const file = runtime.config.paths.settingsFile;
   let cur;
@@ -167,7 +167,7 @@ function flattenPatch(patch, prefix = '', out = {}) {
   return out;
 }
 
-/** 把网页提交的 { "persona.name": "新名字" } 写进 config.json 并立刻生效 */
+/** 把接口提交的 { "persona.name": "新名字" } 写进 config.json 并立刻生效 */
 function applyConfigPatch(runtime, patch) {
   if (!isPlainObject(patch)) throw new Error('patch 要是 { 字段名: 新值 } 这样的对象');
   patch = flattenPatch(patch);
@@ -184,7 +184,7 @@ function applyConfigPatch(runtime, patch) {
   for (const [dotted, value] of Object.entries(patch)) {
     const p = String(dotted || '').trim();
     if (!p) continue;
-    // 密钥留空 = 不改（网页上看不到已存的 Key，不能一保存就把它清了）
+    // 密钥留空 = 不改（界面上看不到已存的 Key，不能一保存就把它清了）
     if (SECRET_PATHS.has(p) && (value === '' || value === null || value === undefined)) continue;
     const next = coerceValue(runtime.config, p, value);
     const spec = configSchema.FIELDS[p];
@@ -210,7 +210,7 @@ function applyConfigPatch(runtime, patch) {
   mergeConfigInPlace(runtime.config, loadConfig({ root: runtime.config.root, env: runtime.config.env }));
   runtime.stickerService?.reconcile();
   if (runtime.llm && typeof runtime.llm.reload === 'function') runtime.llm.reload();
-  runtime.logger.info(`调试台保存了设置：${changed.join('、')}${cleared.length ? `（同时清了 ${cleared.join('、')}，让改动真的生效）` : ''}`);
+  runtime.logger.info(`设置接口保存了配置：${changed.join('、')}${cleared.length ? `（同时清了 ${cleared.join('、')}，让改动真的生效）` : ''}`);
   return { changed, cleared };
 }
 

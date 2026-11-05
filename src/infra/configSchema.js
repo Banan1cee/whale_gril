@@ -20,7 +20,6 @@ const FIELDS = {
   'server.port': { type: 'int', min: 0, max: 65535 },
   'server.host': { type: 'string', maxLen: 255 },
   'server.allowRemote': { type: 'bool' },
-  'server.openBrowser': { type: 'bool' },
 
   // ---- 日志 / 判定链 ----
   'log.level': { type: 'enum', values: ['debug', 'info', 'warn', 'error'] },

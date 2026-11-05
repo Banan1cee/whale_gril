@@ -5,7 +5,7 @@ const { applyConfigPatch } = require('../../infra/configPatch');
 const { json, readBody } = require('../util');
 
 module.exports = function register(router) {
-  // ---- 功能开关（控制台可开关；关掉就回到旧行为）----
+  // ---- 功能开关（POST /api/features 可开关；关掉就回到旧行为）----
   router.get('/api/features', (runtime, req, res) => {
     return json(res, 200, { ok: true, features: features.list(runtime.config) });
   });

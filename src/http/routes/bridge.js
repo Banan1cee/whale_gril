@@ -3,7 +3,7 @@
 const { json, readBody } = require('../util');
 
 module.exports = function register(router) {
-  // 桥接心跳：让网页知道「桥接在不在、UIA 通不通」。没这个，服务端只能看到
+  // 桥接心跳：让状态接口知道「桥接在不在、UIA 通不通」。没这个，服务端只能看到
   // 「我收到了消息」，根本不知道回复有没有可能发出去。
   router.post('/api/bridge/heartbeat', async (runtime, req, res) => {
     const hb = await readBody(req);

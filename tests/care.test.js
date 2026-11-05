@@ -236,15 +236,14 @@ test('接口 /api/care 能产出一句关心的话', async () => {
   }
 });
 
-test('默认配置里有 care 段，且调试台能编辑时间窗与频率', () => {
+test('默认配置里有 care 段，且时间窗与频率字段齐全', () => {
   assert.ok(DEFAULT_CONFIG.care, 'DEFAULT_CONFIG 缺 care');
   assert.ok(Array.isArray(DEFAULT_CONFIG.care.windows));
-  const html = fs.readFileSync(path.join(root, 'web', 'debug.html'), 'utf8');
-  for (const key of ['care.enabled', 'care.windows', 'care.everyMinutes', 'care.jitterMinutes', 'care.maxPerDay', 'care.quietAfterMinutes']) {
-    assert.ok(html.includes("'" + key + "'"), '调试台缺少字段 ' + key);
+  // 原先这条是拿网页调试台的表单键做断言；调试台已删除，改断言配置源本身，
+  // 免得字段在 DEFAULT_CONFIG 里悄悄少一个，启动器那边读到 undefined 还不报错。
+  for (const key of ['enabled', 'windows', 'everyMinutes', 'jitterMinutes', 'maxPerDay', 'quietAfterMinutes']) {
+    assert.ok(key in DEFAULT_CONFIG.care, 'DEFAULT_CONFIG.care 缺字段 ' + key);
   }
-  assert.match(html, /care: '主动找你聊天/, '调试台要有分组标题');
-  assert.match(html, /'links', 'care'/, 'care 要排在 links 后面');
 });
 
 test('桥接里接了定时器，且判断交给服务端', () => {

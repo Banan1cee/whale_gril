@@ -1028,7 +1028,7 @@ function buildLegacySystem({ config, msg, profile, notes = [], noteReminders = [
   const discussing = Boolean(msg.discussion);
   const maxChars = maxCharsFor(config, msg);
   const userName = msg.senderName || (isGroup ? '群友' : '你');
-  // 主人想让她怎么称呼自己：config.persona.ownerName（网页设置里的「怎么称呼你」会同步到这里）
+  // 主人想让她怎么称呼自己：config.persona.ownerName（设置里的「怎么称呼你」会同步到这里）
   const ownerName = String((config.persona && config.persona.ownerName) || '主人').trim() || '主人';
   const chatTitle = msg.chatTitle || (isGroup ? '一个微信群' : '');
   const lines = [];

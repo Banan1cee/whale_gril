@@ -1,8 +1,11 @@
 'use strict';
 
 /**
- * 启动脚本检查：.bat 必须是 CRLF，否则 cmd 会报「命令语法不正确」。
- * 这个坑踩过一次：一键终止.bat 用 LF 存盘，双击直接失败。
+ * 启动与维护脚本检查。
+ *
+ * 原来这里还有一条「所有启动脚本必须是 CRLF」：cmd 对 LF 换行会报「命令语法不正确」。
+ * 根目录启动脚本全部删除后，问题只剩 PowerShell 的 .ps1，而仓库里 .ps1 本来就有
+ * 混用换行（PowerShell 5.1 能正常读），所以这条约束去掉了 —— 不再拿它卡 CI。
  */
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -11,55 +14,12 @@ const path = require('node:path');
 
 const root = path.resolve(__dirname, '..');
 
-function listBat(dir) {
-  const out = [];
-  let entries = [];
-  try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch {
-    // 有些目录（比如别的工具留下的临时目录）会带奇怪的 ACL，读不进去就跳过，
-    // 脚本规范检查不该因为一个读不了的路人目录整体失败。
-    return out;
-  }
-  for (const name of entries) {
-    const full = path.join(dir, name.name);
-    if (name.isDirectory()) {
-      // runtime 是「一键装运行环境」下载的运行时（node/python），不归我们管：
-      // 里面的目录可能带各种 ACL，扫进去只会报 EPERM。
-      if (['node_modules', 'release', 'data', 'vendor', 'runtime'].includes(name.name)) continue;
-      out.push(...listBat(full));
-      continue;
-    }
-    if (name.name.toLowerCase().endsWith('.bat')) out.push(full);
-  }
-  return out;
-}
-
-test('所有 .bat 都用 CRLF 换行', () => {
-  const files = listBat(root);
-  assert.ok(files.length >= 5, '应该找到启动脚本，实际 ' + files.length);
-  for (const file of files) {
-    const text = fs.readFileSync(file, 'utf8');
-    const bareLf = text.split('\n').filter((line, i, all) => i < all.length - 1 && !line.endsWith('\r'));
-    assert.equal(bareLf.length, 0, path.basename(file) + ' 有 ' + bareLf.length + ' 行是 LF 换行，cmd 会报语法错误');
-  }
-});
-
-test('一键终止.bat 存在，并且调用 stop-all.ps1', () => {
-  const bat = path.join(root, '一键终止.bat');
-  assert.ok(fs.existsSync(bat), '缺少 一键终止.bat');
-  const text = fs.readFileSync(bat, 'utf8');
-  assert.match(text, /stop-all\.ps1/);
-  assert.ok(fs.existsSync(path.join(root, 'scripts', 'stop-all.ps1')), '缺少 scripts\\stop-all.ps1');
-});
-
 test('启动脚本会清掉失效的本机代理（否则所有模型请求都连不上）', () => {
   const ps1 = fs.readFileSync(path.join(root, 'scripts', 'start.ps1'), 'utf8');
   assert.match(ps1, /HTTPS_PROXY/, 'start.ps1 要处理 HTTPS_PROXY');
   assert.match(ps1, /Remove-Item "env:/, '要真的删掉代理环境变量');
   assert.match(ps1, /NO_PROXY/);
-  const bat = fs.readFileSync(path.join(root, '启动微信桥接.bat'), 'utf8');
-  assert.match(bat, /set "HTTPS_PROXY="/, '桥接启动时也要清代理');
+  assert.ok(fs.existsSync(path.join(root, 'scripts', 'stop-all.ps1')), '缺少 scripts\\stop-all.ps1');
 });
 
 test('start.ps1 必须是带 BOM 的 UTF-8（否则中文会让 PowerShell 解析失败）', () => {
@@ -80,26 +40,17 @@ test('优先用包里自带的 runtime\\node.exe（用户不用装 Node）', () 
   assert.ok(bundledAt > 0 && pathAt > bundledAt, '包内运行时应该先于 PATH 被选中');
 });
 
-test('桥接启动脚本在缺 Python 时给提示，而不是一闪而过', () => {
-  const bat = fs.readFileSync(path.join(root, '启动微信桥接.bat'), 'utf8');
-  assert.match(bat, /没找到 Python/);
-  assert.match(bat, /python\.org/);
-});
-
 test('stop-all.ps1 会写暂停标记，并覆盖服务/桥接/守护', () => {
   const ps1 = fs.readFileSync(path.join(root, 'scripts', 'stop-all.ps1'), 'utf8');
-  assert.match(ps1, /PAUSED/, '必须写 data\\PAUSED，否则 bridge_loop 会重新拉起桥接');
+  assert.match(ps1, /PAUSED/, '必须写 data\\PAUSED，否则启动器会把桥接重新拉起来');
   assert.match(ps1, /wechatauto_bridge\.py/);
   assert.match(ps1, /server\.js/);
-  assert.match(ps1, /bridge_loop\.bat/);
+  assert.match(ps1, /python/, '要按 python.exe 找桥接进程');
+  assert.equal(ps1.includes('.' + 'bat'), false, '启动脚本已全部删除，不该再按脚本进程名去杀');
   assert.doesNotMatch(ps1, /hotkey_daemon/, '热键功能已下线，不该再出现');
   assert.match(ps1, /8787/, '要有按端口兜底');
 });
 
-test('桥接启动脚本会清掉 PAUSED，避免手动启动被挡住', () => {
-  const text = fs.readFileSync(path.join(root, '启动微信桥接.bat'), 'utf8');
-  assert.match(text, /del \/q "data\\PAUSED"/);
-});
 /* ---------------- 维护脚本（部署 / 出包） ---------------- */
 
 test('部署与出包脚本存在，且是带 BOM 的 UTF-8（否则 PowerShell 5.1 解析中文会报错）', () => {
@@ -127,7 +78,7 @@ test('出包脚本会跑测试与发布自检，并从 zip 里复核内容', () 
   assert.match(text, /--test/, '要先跑测试');
   assert.match(text, /release-check\.js' --release|release-check\.js --release/, '要跑发布自检');
   assert.match(text, /ZipFile/, '要从 zip 里读文件复核');
-  assert.match(text, /visionApiKey/, '要检查看图字段真的在包里（3.0.3 事故）');
+  assert.match(text, /src\/http\/routes\/vision\.js/, '要从 zip 里复核看图接口真的在包里（3.0.3 事故）');
 });
 
 test('维护文档与 bug 台账在', () => {
@@ -148,10 +99,12 @@ test('桥接会定时发心跳，网页才看得到「桥接在线 / UIA 不可�
 });
 /* ---------------- 重置全部 = 恢复出厂 ---------------- */
 
-test('重置全部.bat 交给 factory-reset.ps1，不再是「只重启」', () => {
-  const bat = fs.readFileSync(path.join(root, '重置全部.bat'), 'utf8');
-  assert.match(bat, /factory-reset\.ps1/, '要调用恢复出厂脚本');
-  assert.doesNotMatch(bat, /start "鲸鲸服务"/, '不该自己再起服务（交给 ps1）');
+test('恢复出厂只剩 scripts\\factory-reset.ps1 一条路，且支持 -Yes 免交互', () => {
+  const p = path.join(root, 'scripts', 'factory-reset.ps1');
+  assert.ok(fs.existsSync(p), '缺少 scripts\\factory-reset.ps1');
+  const text = fs.readFileSync(p, 'utf8');
+  assert.match(text, /\[switch\]\$Yes/, '要能 -Yes 跳过交互确认（启动器与自检都靠它）');
+  assert.match(text, /factory-reset|恢复出厂/i, '脚本要说明自己做什么');
 });
 
 test('恢复出厂会备份、清空 data/config、并用示例重建', () => {
@@ -238,13 +191,6 @@ test('桥接起来后写就绪文件（用来判断「起来了但没监听」�
   assert.match(bridge, /bridge-ready\.json/);
 });
 
-test('守护循环有重启上限，不会无限 3 秒重启刷屏', () => {
-  const loop = fs.readFileSync(path.join(root, 'scripts', 'bridge_loop.bat'), 'utf8');
-  assert.match(loop, /FAILS/);
-  assert.match(loop, /GEQ 4/, '连续 4 次失败就停下来');
-  assert.match(loop, /bridge-ready\.json/, '每次启动前清掉就绪标记');
-});
-
 test('发行包自带 ffmpeg（微信 4.x 图片是 wxHEVC，没它看不了图）', () => {
   const probe = path.join(root, 'runtime', 'ffmpeg', 'bin', 'ffmpeg.exe');
   if (!fs.existsSync(probe)) {
@@ -255,21 +201,17 @@ test('发行包自带 ffmpeg（微信 4.x 图片是 wxHEVC，没它看不了图�
 });
 
 test('热键文件已删除，README 不再提热键', () => {
-  assert.equal(fs.existsSync(path.join(root, '启动热键.bat')), false, '启动热键.bat 应删除');
+  // 不写后缀：这条断言的就是「根本没有这个名字的入口」
+  assert.equal(fs.readdirSync(root).some((n) => n.includes('启动热键')), false, '启动热键入口应删除');
   assert.equal(fs.existsSync(path.join(root, 'tools', 'hotkey_daemon.py')), false, 'hotkey_daemon.py 应删除');
   const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
-  assert.doesNotMatch(readme, /启动热键\.bat|hotkey_daemon/, 'README 不该再提热键');
+  assert.doesNotMatch(readme, /启动热键|hotkey_daemon/, 'README 不该再提热键');
 });
 
-test('新增「先点启动鲸鱼娘再点启动桥接」文件夹，两个启动器按顺序编号', () => {
-  const dir = path.join(root, '先点启动鲸鱼娘再点启动桥接');
-  assert.ok(fs.existsSync(dir), '文件夹要存在');
-  const files = fs.readdirSync(dir).filter((n) => n.endsWith('.bat')).sort();
-  assert.equal(files.length, 2, '里面只放两个启动器');
-  assert.match(files[0], /^1 /, '第一个是第 1 步');
-  assert.match(files[1], /^2 /, '第二个是第 2 步');
-  assert.match(fs.readFileSync(path.join(dir, files[0]), 'utf8'), /启动鲸鱼娘\.bat/);
-  assert.match(fs.readFileSync(path.join(dir, files[1]), 'utf8'), /启动微信桥接\.bat/);
+test('README 不再引导用户去点脚本文件（入口只有 WhaleLauncher.exe）', () => {
+  const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
+  assert.equal(readme.includes('.' + 'bat'), false, 'README 里不该再出现启动脚本名');
+  assert.match(readme, /WhaleLauncher\.exe/, '要指向唯一的双击入口');
 });
 
 test('服务把实际端口写盘，桥接优先读（换端口不至于满屏积极拒绝）', () => {
@@ -284,6 +226,5 @@ test('桥接启动前等服务就绪，连接中断要节流并给明确提示',
   assert.match(bridge, /def wait_for_server/, '要有等待服务就绪');
   assert.match(bridge, /wait_for_server\(bot_url/, '监听前要调用');
   assert.match(bridge, /conn-refused/, '积极拒绝要走节流');
-  assert.match(bridge, /先双击「启动鲸鱼娘\.bat」/, '要告诉用户先点服务');
   assert.match(bridge, /已连上鲸鲸服务/, '恢复连接时打一条');
 });

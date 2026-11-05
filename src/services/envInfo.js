@@ -127,7 +127,7 @@ function systemBlock(config, version) {
 
 /**
  * 桥接状态拼一行：能不能发出去是「这一轮」的事实，不属于静态环境。
- * 没有 bridgeStatus（网页通道、测试）就返回空串，一个字都不加。
+ * 没有 bridgeStatus（接口通道、测试）就返回空串，一个字都不加。
  * @param {object} msg 统一消息对象（gateway 会挂 msg.bridgeStatus = {online, uia, ffmpeg}）
  */
 function bridgeLine(msg) {

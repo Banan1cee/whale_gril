@@ -4,7 +4,7 @@ const { json, readBody, sseInit, sseSend, sanitizeId } = require('../http/protoc
 const { LlmError } = require('../llm/client');
 const { describeError } = require('../infra/errors');
 
-/* ---------------- 网页聊天（SSE 流式） ---------------- */
+/* ---------------- 本机聊天口（SSE 流式，只认桥接 token） ---------------- */
 
 async function handleChat(runtime, req, res) {
   const { bot, config, logger } = runtime;

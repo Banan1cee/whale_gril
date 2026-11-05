@@ -4,7 +4,7 @@
 # 从零 pip 装 wechatauto 那套依赖经常卡在编译（winsdk / pywin32），体验很差。
 # 这里改成下一份已经调好的运行时包（约 86MB），解压即用，和 Releases 里的完整包一模一样。
 #
-# 用法：双击 一键装运行环境.bat（或 powershell -File scripts/setup-runtime.ps1）
+# 用法：powershell -File scripts\setup-runtime.ps1
 $ErrorActionPreference = 'Stop'
 
 # 国内网络经常有残留代理，直连失败；这些站点都不需要代理
@@ -76,7 +76,7 @@ if ($nodeOk -and ($pyCheck -match 'ok')) {
   $nodeVer = & $nodeExe -v
   Write-Host "  Node：$nodeVer"
   Write-Host ''
-  Write-Host '  完成。现在可以双击「启动鲸鱼娘.bat」了。' -ForegroundColor Cyan
+  Write-Host '  完成。现在可以用 WhaleLauncher.exe 启动了。' -ForegroundColor Cyan
 } else {
   Write-Host ' 有问题 ❌' -ForegroundColor Red
   Write-Host "  node 存在：$nodeOk"

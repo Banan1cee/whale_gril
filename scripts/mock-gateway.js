@@ -125,7 +125,7 @@ async function main() {
       return data;
     } catch (err) {
       console.log(`   ❌ 连接失败：${err.message}`);
-      console.log(`      先确认服务开着：双击 启动鲸鱼娘.bat，或 node server.js`);
+      console.log(`      先确认服务开着：打开启动器，或 node server.js`);
       return null;
     }
   };

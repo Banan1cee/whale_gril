@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 
-/* ---------------- 微信多账号：给网页列账号 / 选账号 ---------------- */
+/* ---------------- 微信多账号：给启动器列账号 / 选账号 ---------------- */
 
 /** 某个账号目录里 .db 的最新修改时间（只 stat，不解密，毫秒级） */
 function newestDbMtime(storageDir) {

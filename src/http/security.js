@@ -24,9 +24,9 @@ function safeEqual(a, b) {
 /**
  * 给每个响应挂安全头。
  *
- * CSP 里 script-src 保留了 'unsafe-inline'：网页里有两段内联脚本，
- * 去掉会直接白屏。即使如此，外部脚本仍然加载不了（default-src 'self'），
- * 这对「本机控制台」这个威胁模型够了。
+ * CSP 不放开 'unsafe-inline'：已无网页界面，脚本只来自 API 调用方
+ * （返回的是 JSON，浏览器不会把它当脚本执行）。外部脚本同样加载不了
+ * （default-src 'self'），这对「本机 API」这个威胁模型够了。
  */
 function applySecurityHeaders(res) {
   try {
@@ -36,7 +36,7 @@ function applySecurityHeaders(res) {
     res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=()');
     res.setHeader(
       'Content-Security-Policy',
-      "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; " +
+      "default-src 'self'; script-src 'self'; style-src 'self'; " +
         "img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; " +
         "object-src 'none'; base-uri 'none'; form-action 'self'"
     );

@@ -1,16 +1,14 @@
 'use strict';
 
 /**
- * 「三个人格预设没用，每次调完还是没区别」——三处叠加的 bug：
+ * 人设预设 / 自定义提示词的纯逻辑回归。
  *
- *   1. web/persona.html 的 save() 根本没把 customPrompt 发出去 →
- *      在「自定义提示词」里写什么，点保存都被静默丢弃；
- *   2. 同一个页面的 fill() 也没回填 customPrompt →
- *      导入 v1/v2/v3 之后框里还是空的，用户看不出预设到底生效没有；
- *      而 v1/v2/v3 的差异**只**在 customPrompt 里（preset 都是「正常」、text 基本相同）。
- *   3. personaStore.save() 会把空字符串统一删掉，于是 apply() 读不到这个键 →
- *      自定义提示词一旦写入就永远清不掉，之后改性格/外貌/整体语气全部无效。
- *      这才是「调完还是没区别」的主因。
+ * 原 tests/persona-preset.test.js 有一半用例在网页人设页（`web/persona.html`）上做断言；
+ * 网页控制台在 4.0.2 删除后，那些用例没有对象了。这里保留当时真正在测逻辑的部分：
+ *   · personaStore.save 对空字符串的处理（清空自定义提示词必须真的生效）
+ *   · 预设导入要记 sourcePreset、标题不能当名字
+ *   · 预览接口只读不写
+ *   · 恢复默认要清掉自定义提示词
  */
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -19,37 +17,17 @@ const os = require('node:os');
 const path = require('node:path');
 
 const personaStore = require('../src/persona/store');
+const presets = require('../src/persona/presets');
+const { DEFAULT_CONFIG } = require('../src/infra/config');
 
 const root = path.resolve(__dirname, '..');
-const page = fs.readFileSync(path.join(root, 'web', 'persona.html'), 'utf8');
 
 function freshConfig() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-persona-'));
   return { paths: { dataDir: dir }, persona: {}, chat: {}, links: {}, group: {}, memory: {} };
 }
 
-test('页面保存时会把「自定义提示词」发出去', () => {
-  // 保存用 readForm() 拼 payload；customPrompt 必须在里面
-  const body = page.slice(page.indexOf('function readForm()'));
-  const fn = body.slice(0, body.indexOf('async function save()'));
-  assert.match(fn, /customPrompt:\s*\$\('customPrompt'\)\.value/, '保存必须带 customPrompt，否则写了等于没写');
-  assert.match(page.slice(page.indexOf('async function save()')), /\.\.\.readForm\(\)/, 'save() 要用 readForm()');
-});
-
-test('页面加载/导入后会把「自定义提示词」回填进输入框', () => {
-  const body = page.slice(page.indexOf('function fill('));
-  const fn = body.slice(0, body.indexOf('function updateCustomNotice'));
-  assert.match(fn, /\$\('customPrompt'\)\.value\s*=\s*p\.customPrompt/, 'fill() 必须回填，否则看不出预设生效没有');
-});
-
-test('自定义提示词生效时页面要明确提示「下面那些控件不生效」', () => {
-  assert.match(page, /id="customNotice"/, '要有提示位置');
-  assert.match(page, /自定义提示词生效中/, '要写清楚现在是谁在生效');
-  assert.match(page, /都不会被使用/, '要说明性格/外貌/语气被忽略');
-  assert.match(page, /id="clearCustom"/, '要有一个「清空自定义提示词」的出口');
-});
-
-test('清空自定义提示词能真的清掉（不会再被空值清理吞掉）', () => {
+test('清空自定义提示词能真的清掉（不会被空值清理吞掉）', () => {
   const cfg = freshConfig();
   personaStore.save(cfg, { customPrompt: 'AAAA' });
   assert.equal(cfg.persona.customPrompt, 'AAAA');
@@ -68,33 +46,21 @@ test('清空后能改回用控件（性格/语气重新生效）', () => {
   assert.equal(cfg.persona.personality, '很凶', '清空自定义提示词不该动别的字段');
 });
 
-test('导入预设会记下来源，页面能显示「当前生效是哪版」', () => {
+test('导入预设会记下来源，保存接口也接受它', () => {
   // 模块化之后路由在 src/http/routes/persona.js，不再堆在 server.js 里
   const route = fs.readFileSync(path.join(root, 'src', 'http', 'routes', 'persona.js'), 'utf8');
-  assert.match(route, /patch\.sourcePreset\s*=\s*preset\.id/, '导入时要记 sourcePreset');
-  assert.match(page, /function showSourcePreset/, '页面要能显示来源');
-  assert.match(page, /当前生效/, '要有「当前生效」这行字');
-});
-
-test('人设页：选到哪版就直接填进下面输入框，不需要先点「导入」，保存才生效', () => {
-  assert.match(page, /async function previewPreset/, '要有预览函数');
-  assert.match(page, /\$\('presetPick'\)\.addEventListener\('change'/, '换预设要立刻预览');
-  assert.match(page, /loadPresetsAndPreview\(\)/, '打开页面就要自动载入一版');
-  assert.match(page, /sourcePreset:\s*PREVIEW_PRESET/, '保存时要记下这一版来自哪个预设');
-  assert.doesNotMatch(page, /id="presetApply"/, '「导入」按钮要删掉');
-  assert.doesNotMatch(page, /导入这个预设会覆盖/, '不再有导入确认弹窗');
-});
-
-test('人设页预览接口：GET 只读不写，返回内容给输入框', () => {
-  const route = fs.readFileSync(path.join(root, 'src', 'http', 'routes', 'persona.js'), 'utf8');
   const service = fs.readFileSync(path.join(root, 'src', 'services', 'persona.js'), 'utf8');
-  assert.match(route, /router\.get\('\/api\/persona\/preset'/, '要有预览 GET');
-  assert.match(route, /presets\.toPatch\(preset\)/, '预览要返回可填表的内容');
+  assert.match(route, /patch\.sourcePreset\s*=\s*preset\.id/, '导入时要记 sourcePreset');
   assert.match(service, /body\.sourcePreset !== undefined/, '保存时接受来源预设');
 });
 
+test('预设预览接口：GET 只读不写，返回可填表的内容', () => {
+  const route = fs.readFileSync(path.join(root, 'src', 'http', 'routes', 'persona.js'), 'utf8');
+  assert.match(route, /router\.get\('\/api\/persona\/preset'/, '要有预览 GET');
+  assert.match(route, /presets\.toPatch\(preset\)/, '预览要返回可填表的内容');
+});
+
 test('预设标题不能当她的名字；只有 personaName 才能改名', () => {
-  const presets = require('../src/persona/presets');
   const cfg = { paths: { root } };
   for (const item of presets.list(cfg)) {
     const one = presets.load(cfg, item.id);
@@ -106,22 +72,12 @@ test('预设标题不能当她的名字；只有 personaName 才能改名', () =
   assert.equal(patch.name, '真正的名字');
 });
 
-test('预览只覆盖预设里有的字段，不会清空外形/性格/背景', () => {
-  const body = page.slice(page.indexOf('function applyPresetToForm'));
-  const fn = body.slice(0, body.indexOf('async function previewPreset'));
-  assert.match(fn, /readForm\(\)/, '要拿当前表单的值做底');
-  assert.match(fn, /\.\.\.patch/, '再把预设字段盖上去');
-  assert.match(page, /function readForm\(\)/, '保存和预览共用同一份读表单逻辑');
-});
-
 test('HTTP：预览不写盘；导入预设不打乱她的名字和外形', async (t) => {
-  const os2 = require('node:os');
-  const fs2 = require('node:fs');
-  const tmp = fs2.mkdtempSync(path.join(os2.tmpdir(), 'whale-preset-name-'));
-  fs2.writeFileSync(path.join(tmp, 'config.json'), JSON.stringify({ server: { port: 0, openBrowser: false }, watchConfig: false, log: { level: 'error' } }));
-  fs2.mkdirSync(path.join(tmp, 'personas'), { recursive: true });
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-preset-name-'));
+  fs.writeFileSync(path.join(tmp, 'config.json'), JSON.stringify({ server: { port: 0, openBrowser: false }, watchConfig: false, log: { level: 'error' } }));
+  fs.mkdirSync(path.join(tmp, 'personas'), { recursive: true });
   for (const name of ['persona-standard.json', 'persona-zhainan.json']) {
-    fs2.copyFileSync(path.join(root, 'personas', name), path.join(tmp, 'personas', name));
+    fs.copyFileSync(path.join(root, 'personas', name), path.join(tmp, 'personas', name));
   }
   const { startServer } = require('../server');
   const inst = await startServer({ root: tmp, env: { WHALE_LOG_FILE: '' }, port: 0, openBrowser: false });
@@ -136,6 +92,7 @@ test('HTTP：预览不写盘；导入预设不打乱她的名字和外形', asyn
   assert.equal(applied.persona.name, before.name, '导入预设不能把她改名成预设标题');
   assert.equal(applied.persona.appearance, before.appearance, '外形不能丢');
 });
+
 test('各版人设预设的差异确实在 customPrompt 上（都写了内容且互不相同）', () => {
   const dir = path.join(root, 'personas');
   const seen = new Map();
@@ -161,7 +118,6 @@ test('各版人设预设的差异确实在 customPrompt 上（都写了内容且
  * 用户点「恢复默认」还是没变化。默认人格必须是「正常人格」。
  */
 test('恢复默认会清掉自定义提示词，回到正常人格', () => {
-  const { DEFAULT_CONFIG } = require('../src/infra/config');
   // 出厂配置本身不该带自定义提示词
   assert.equal(String(DEFAULT_CONFIG.persona.customPrompt || ''), '', '出厂不该预设自定义提示词');
   assert.equal(String(DEFAULT_CONFIG.persona.stylePreset || ''), '', '出厂不该预设整体语气');
@@ -173,8 +129,4 @@ test('恢复默认会清掉自定义提示词，回到正常人格', () => {
   assert.equal(cfg.persona.customPrompt, '', '恢复默认必须清掉自定义提示词');
   assert.equal(cfg.persona.sourcePreset, '', '恢复默认要清掉预设来源');
   assert.match(cfg.persona.personality, /温柔/, '性格要回到出厂设定');
-});
-
-test('人设页把「默认」标成「正常」，避免以为默认是别的人格', () => {
-  assert.match(page, /<option value="">正常（默认）<\/option>/, '默认档要写明是正常人格');
 });

@@ -6,7 +6,7 @@ const { loadSettings, saveSettings } = require('./config');
 
 /**
  * 称呼迁移：老版本存在 settings.userName，新版本只认 config.json 的 persona.ownerName。
- * 启动时把旧值搬过去，避免「网页改了、调试台又看到旧值」。
+ * 启动时把旧值搬过去，避免「接口改了、界面又看到旧值」。
  */
 function migrateOwnerName(config) {
   if (!config.persona) config.persona = {};

@@ -35,7 +35,7 @@ function createRuntime({ root = path.resolve(__dirname, '..'), env = process.env
   ensureConfigFile(root);
   const config = loadConfig({ root, env });
   // 称呼只认一个真源：config.json 的 persona.ownerName。
-  // 老版本把它存在 data/settings.json 的 userName 里，这里做一次迁移，之后网页设置和调试台改的是同一个值。
+  // 老版本把它存在 data/settings.json 的 userName 里，这里做一次迁移，之后设置接口和界面改的是同一个值。
   migrateOwnerName(config);
   // 加载主人在微信里调过的语态 / 能力（data/persona.json）
   personaStore.apply(config, personaStore.load(config));
