@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * 记忆 v2 的固定参数（docs/memory-v2-spec.md 第 11 节）。
+ * 记忆 v2 的固定参数（见 docs/记忆系统.md 的『参数』一节）。
  *
  * 这些值写死在代码里，不读 config.json、不提供预算接口/滑块。
  * 以后要调，改这一个文件并跑 tests/memory-*.test.js。

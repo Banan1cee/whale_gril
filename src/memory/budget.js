@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * 单轮预算语义（2026-11 改为按比例分配，覆盖 docs/memory-v2-spec.md 第 11 节的旧值）：
+ * 单轮预算语义（2026-11 改为按比例分配，覆盖 docs/记忆系统.md 的『参数』一节的旧值）：
  *
  *   dialogueBudget = D（默认 5,500，启动器可调）
  *     分片由 src/memory/budgetPlan.js 按比例算：recent 吃剩余，memory/summary/reserve

@@ -111,9 +111,9 @@ test('策略文件满足 SignPath 要求；README 如实说明当前尚未签名
   assert.match(policy, /Get-AuthenticodeSignature/, '策略里要写怎么验证签名');
 
   const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
-  assert.match(readme, /## Code signing policy/, 'README 首页要有 Code signing policy 段落');
+  assert.match(readme, /## 代码签名（Code signing policy）/, 'README 首页要有 Code signing policy 段落');
   assert.match(readme, /CODE_SIGNING_POLICY\.md/, 'README 要链到策略文件');
-  assert.match(readme, /not signed yet/i, '签名没下来时首页要如实说未签名');
+  assert.match(readme, /尚未签名/, '签名没下来时首页要如实说未签名');
   assert.doesNotMatch(readme, /Free code signing provided by/, '签名没下来时不要写“已提供签名”');
 });
 
@@ -121,7 +121,7 @@ test('SignPath 申请表单要的三个页面都在仓库里', () => {
   // 表单要 Homepage / Download / Privacy Policy 三个 URL；签名没下来前，
   // 下载页只能说明「尚未签名」并给校验方式，不能写“已用 SignPath 签名”。
   const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
-  assert.match(readme, /## Download/, 'README 要有下载段落当 Homepage/Download 入口');
+  assert.match(readme, /## 下载（Download）/, 'README 要有下载段落当 Homepage/Download 入口');
   assert.match(readme, /PRIVACY\.md/, 'README 要链到隐私声明');
 
   const download = fs.readFileSync(path.join(root, 'docs', 'DOWNLOAD.md'), 'utf8');
