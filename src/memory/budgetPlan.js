@@ -198,23 +198,10 @@ function planBudget(dialogueBudget, { relations = false } = {}) {
   return plan;
 }
 
-/** 给日志/调试台用的一行摘要（不打印任何记忆正文） */
-function describePlan(plan) {
-  if (!plan) return '';
-  const pct = (v, d) => `${Math.round((v / Math.max(1, d)) * 100)}%`;
-  return `预算 ${plan.dialogueBudget}：recent ${plan.recent}(${pct(plan.recent, plan.dialogueBudget)})`
-    + ` memory ${plan.memory}(${pct(plan.memory, plan.dialogueBudget)})`
-    + ` summary ${plan.summary}(${pct(plan.summary, plan.dialogueBudget)})`
-    + ` reserve ${plan.reserve}(${pct(plan.reserve, plan.dialogueBudget)})`
-    + ` relations ${plan.relations}(${pct(plan.relations, plan.dialogueBudget)})`
-    + ` [${plan.mode}]`;
-}
-
 module.exports = {
   planBudget,
   TIERS,
   nearestTier,
-  describePlan,
   cardCaps,
   SHARES,
   CEILINGS,

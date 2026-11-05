@@ -28,12 +28,6 @@ function clampText(value, max) {
   return s.length > max ? s.slice(0, max) : s;
 }
 
-function looksExplicitSelf(text) {
-  const s = cleanIncoming(text);
-  if (!s || s.length > 120) return false;
-  return /^我(?:叫|的名字|住在|搬到|搬去|在|是|喜欢|爱|讨厌|不喜欢|怕|害怕|不吃|不能吃|对.*过敏|的?生日|今天|刚刚|刚|最近|已经|要)/.test(s);
-}
-
 /**
  * 从一句话抽「自己说的事实」。
  * @returns {{facts:Array, correction?:{old:string,new:string}, event?:object}}
@@ -324,7 +318,6 @@ async function extractEpisode({ messages, llm, speakers = [], logger = null, now
 module.exports = {
   EPISODE_SYSTEM,
   cleanIncoming,
-  looksExplicitSelf,
   extractSelfFacts,
   applyFacts,
   lightweightCandidates,

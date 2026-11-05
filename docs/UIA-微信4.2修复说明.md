@@ -63,10 +63,10 @@ UIA 树不可用，本次会话使用 OCR 驱动
 
 ```bat
 :: 只读体检：窗口 / 版本 / 树状态 / 候选 / 权限
-runtime\python\python.exe -B tools\uia_probe.py
+runtime\python\python.exe -B scripts\tools\uia_probe.py
 
 :: 提权跑一遍完整启动并把结果落盘（会弹一次 UAC）
-runtime\python\python.exe -B tools\elev_uia_check.py
+runtime\python\python.exe -B scripts\tools\elev_uia_check.py
 ```
 
 ## 已知

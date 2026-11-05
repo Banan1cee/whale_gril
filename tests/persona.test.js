@@ -234,9 +234,9 @@ test('吵架大赛预设存在，且能切过去（火力全开但不碰四条�
   const { startServer } = require('../server');
   const root = fs2.mkdtempSync(path2.join(require('node:os').tmpdir(), 'whale-fight-'));
   fs2.writeFileSync(path2.join(root, 'config.json'), JSON.stringify({ server: { port: 0, openBrowser: false }, watchConfig: false, log: { level: 'error' } }));
-  fs2.mkdirSync(path2.join(root, 'personas'), { recursive: true });
-  const presetSrc = path2.resolve(__dirname, '..', 'personas', 'persona-fight.json');
-  fs2.copyFileSync(presetSrc, path2.join(root, 'personas', 'persona-fight.json'));
+  fs2.mkdirSync(path2.join(root, 'assets', 'personas'), { recursive: true });
+  const presetSrc = path2.resolve(__dirname, '..', 'assets', 'personas', 'persona-fight.json');
+  fs2.copyFileSync(presetSrc, path2.join(root, 'assets', 'personas', 'persona-fight.json'));
 
   const inst = await startServer({ root, env: { WHALE_LOG_FILE: '' }, port: 0, openBrowser: false });
   try {
@@ -290,8 +290,8 @@ test('吵架预设支持「一句话一条」：maxBubbles 会写进 config.chat
   const { startServer } = require('../server');
   const root = fs2.mkdtempSync(path2.join(os2.tmpdir(), 'whale-bubble-'));
   fs2.writeFileSync(path2.join(root, 'config.json'), JSON.stringify({ server: { port: 0, openBrowser: false }, watchConfig: false, log: { level: 'error' } }));
-  fs2.mkdirSync(path2.join(root, 'personas'), { recursive: true });
-  fs2.copyFileSync(path2.resolve(__dirname, '..', 'personas', 'persona-fight.json'), path2.join(root, 'personas', 'persona-fight.json'));
+  fs2.mkdirSync(path2.join(root, 'assets', 'personas'), { recursive: true });
+  fs2.copyFileSync(path2.resolve(__dirname, '..', 'assets', 'personas', 'persona-fight.json'), path2.join(root, 'assets', 'personas', 'persona-fight.json'));
   const inst = await startServer({ root, env: { WHALE_LOG_FILE: '' }, port: 0, openBrowser: false });
   try {
     const applied = await (

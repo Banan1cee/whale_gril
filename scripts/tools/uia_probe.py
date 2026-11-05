@@ -3,7 +3,7 @@
 """UIA 体检：一条命令把「现在能不能用、为什么不能用」全部打出来。
 
 换台电脑排查时只跑这一个，把输出贴回来就够定位：
-  runtime\\python\\python.exe -B tools\\uia_probe.py
+  runtime\\python\\python.exe -B scripts\\tools\\uia_probe.py
 
 它只读，不改微信进程（唯一的写发生在 --fix 时）。
 """
@@ -12,7 +12,7 @@ import ctypes
 import os
 import sys
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, ROOT)
 
 

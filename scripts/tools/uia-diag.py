@@ -9,15 +9,15 @@
   C. 补丁写了但校验失败  → mmui 控件没出现：版本对不上，或微信自我保护
 
 用法：
-  python tools/uia-diag.py           # 只报告，不改内存
-  python tools/uia-diag.py --probe   # 真的做一次热激活并测量耗时
-  python tools/uia-diag.py --all     # 把所有微信进程的模块情况都列出来
+  python scripts/tools/uia-diag.py           # 只报告，不改内存
+  python scripts/tools/uia-diag.py --probe   # 真的做一次热激活并测量耗时
+  python scripts/tools/uia-diag.py --all     # 把所有微信进程的模块情况都列出来
 """
 import os
 import sys
 import time
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(ROOT, "examples"))
 
 
@@ -33,7 +33,6 @@ def find_ffmpeg():
         return exe
     for d in (r"C:\ffmpeg\bin", r"D:\ffmpeg\bin", r"E:\ffmpeg\bin", r"F:\ffmpeg\bin",
               os.path.join(ROOT, "runtime", "ffmpeg", "bin"),
-              os.path.join(ROOT, "tools", "ffmpeg", "bin"),
               os.path.expandvars(r"%LOCALAPPDATA%\Programs\ffmpeg\bin")):
         p = os.path.join(d, "ffmpeg.exe")
         if os.path.isfile(p):
@@ -106,7 +105,7 @@ def main():
     if not dll_path:
         print("!! 主窗所在进程里没有 Weixin.dll（原因 A）")
         print("   → 说明拿到的是子进程/权限不足；关掉微信重新登录后立刻再试")
-        print("   → 想看清各进程情况：python tools/uia-diag.py --all")
+        print("   → 想看清各进程情况：python scripts/tools/uia-diag.py --all")
         return 1
 
     version = os.path.basename(os.path.dirname(dll_path))

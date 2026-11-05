@@ -7,10 +7,6 @@
       "lines": 152
     },
     {
-      "file": "src/adapters/bilibili.js",
-      "lines": 183
-    },
-    {
       "file": "src/adapters/gateway.js",
       "lines": 320
     },

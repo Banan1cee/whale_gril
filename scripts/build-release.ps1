@@ -52,7 +52,7 @@ if (Test-Path $publishedLauncher) {
 }
 
 # 本地活动用的东西不进包：吵架大赛预设（避免别人一下载就拿去开骂）
-$localOnly = @('personas\persona-fight.json', 'personas\persona-tieba.json', 'resources\clapback-fight.txt')
+$localOnly = @('assets\personas\persona-fight.json', 'assets\personas\persona-tieba.json', 'assets\clapback-fight.txt')
 foreach ($rel in $localOnly) {
   $p = Join-Path $stage $rel
   if (Test-Path $p) {
@@ -109,7 +109,7 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
 $checks = @(
   @{ entry = 'src/http/routes/vision.js'; needle = '/api/vision/test'; label = '看图测试接口' },
   @{ entry = 'src/core/master.js'; needle = 'matchMaster'; label = '主人判定' },
-  @{ entry = 'tools/uia-diag.py'; needle = 'QACCESSIBLE_ACTIVE_RVA_BY_VERSION'; label = 'UIA 诊断工具' }
+  @{ entry = 'scripts/tools/uia-diag.py'; needle = 'QACCESSIBLE_ACTIVE_RVA_BY_VERSION'; label = 'UIA 诊断工具' }
 )
 foreach ($zipPath in @($srcZip, $fullZip) | Where-Object { $_ }) {
   $zip = [System.IO.Compression.ZipFile]::OpenRead($zipPath)

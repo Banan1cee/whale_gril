@@ -20,7 +20,7 @@ CI 里跑 `innosetup-7.1.1-x64.exe /VERYSILENT` 实测要 **359 秒**（GitHub r
    - `Default.isl`、`isscint-x64.dll`、所有 `is*.dll`
    - **所有 `*.issig`**：Inno 7 会校验自家 DLL 的签名，少一个就拒绝启动
    - 同步更新 `license.txt`
-3. 本地验证：`tools\innosetup\compiler\ISCC.exe installer\whale.iss --define=AppVersion=4.0.0`
+3. 本地验证：`installer\innosetup\compiler\ISCC.exe installer\whale.iss --define=AppVersion=4.0.0`
 4. 跑一次 `installer`，确认 CI 还是绿的
 
 ## 注意

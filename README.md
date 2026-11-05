@@ -176,8 +176,8 @@ untime\ffmpeg\bin 等）；**没有 ffmpeg 就看不了图**，日志里会写�
 - **不学舌**：不会把别人刚说的话原样发回去；发现模型复读（原样重复、只加问号、「你才X」偷懒句）会自动重写一次，还复读就换成正常回应
 - **叫名字也算叫她**：群里不一定非要 @，「你好响呀鲸鲸」「鲸鲸你别装了」这种带名字的都会接话；被人骂了但没 @，只要她刚说过话也会回怼（别人之间互骂她不插嘴）
 - **看不懂就不说**：图片/表情包识别失败时保持沉默，不瞎编
-- **懂缩写**：`kskbl` → 回 `zdjd`，`xswl` → `我也xswl`；词表在 `resources/abbrev.txt`
-- **会回怼**：被骂或主人被骂时按「贴吧老哥」火力回：对方爆粗就带脏字、自称你爹、扣帽子（急了/破防/贵物/收收味/典），六成概率打两连击（先反问或扣帽子，再补一刀），连骂三轮自动收尾走人。台词库 `resources/clapback.txt` 分 9 档：`重`、`爹味`、`反问`、`典`、`急了`、`轻`、`叫滚`、`收尾`、`一般`，可自己加
+- **懂缩写**：`kskbl` → 回 `zdjd`，`xswl` → `我也xswl`；词表在 `assets/abbrev.txt`
+- **会回怼**：被骂或主人被骂时按「贴吧老哥」火力回：对方爆粗就带脏字、自称你爹、扣帽子（急了/破防/贵物/收收味/典），六成概率打两连击（先反问或扣帽子，再补一刀），连骂三轮自动收尾走人。台词库 `assets/clapback.txt` 分 9 档：`重`、`爹味`、`反问`、`典`、`急了`、`轻`、`叫滚`、`收尾`、`一般`，可自己加
 - **回怼不认输**：模型要是说「别生气」「我理解你」「没必要吵」这类软话，会被直接换成库里的狠话
 - **回怼有底线**：不碰性、不咒对方家人死、不搞地域性别疾病歧视、不威胁线下现实；主人被骂豁免，不会反打主人
 - **小助手**：主人私聊问「我微信多少」回自己的号；说「可以损我」授权后，主人才可以点名让他被损三句（以前「问群里都有谁就列发言次数排行」的功能已删）
@@ -239,7 +239,7 @@ untime\ffmpeg\bin 等）；**没有 ffmpeg 就看不了图**，日志里会写�
 | 清残留进程（8787 被占、桥接赖着不走） | 先关掉启动器，再 `powershell -File scripts\stop-all.ps1` |
 | 恢复出厂（清空记忆与配置） | 启动器「诊断」页「重置全部」，或 `powershell -File scripts\factory-reset.ps1 -Yes` |
 | 更新到新版本 | 启动器「检查更新」，或 `powershell -File scripts\update.ps1` |
-| 只读诊断 UIA（不改任何东西） | `python tools\uia-check.py` |
+| 只读诊断 UIA（不改任何东西） | `python scripts\tools\uia-check.py` |
 | 往文件传输助手发一条真实测试消息 | `python examples\uia_selftest.py` |
 ## 快速开始（源码版 / 命令行 / macOS / Linux）
 
@@ -347,11 +347,11 @@ python examples/wechatauto_bridge.py
 
 ### 人设预设（一个版本一个文件）
 
-`personas/` 下每一版人设单独一个文件，**升级时新增、不覆盖旧的**：
+`assets/personas/` 下每一版人设单独一个文件，**升级时新增、不覆盖旧的**：
 
 ```
-personas/persona-v1.json   # 通用版，已去掉主人的微信号和群里的人名
-personas/persona-v2.json   # 下一版
+assets/personas/persona-v1.json   # 通用版，已去掉主人的微信号和群里的人名
+assets/personas/persona-v2.json   # 下一版
 ```
 
 三种用法：
@@ -360,7 +360,7 @@ personas/persona-v2.json   # 下一版
 - 接口：`POST /api/persona/preset`，body `{"id":"persona-v1"}`
 - 直接把人设内容粘进面板的「自定义提示词」
 
-导入只改人设和上下文条数，不动模型、Key、群配置和记忆。`personas/` 会跟着发行包发出去，所以里面不能写任何私密信息。
+导入只改人设和上下文条数，不动模型、Key、群配置和记忆。`assets/personas/` 会跟着发行包发出去，所以里面不能写任何私密信息。
 
 ---
 
@@ -407,11 +407,10 @@ whale-girl/
 │  ├─ links.js               # 链接正文抓取
 │  ├─ websearch.js           # Bing 搜索 / 天气 / B站·微博·头条热榜（含总超时）
 │  ├─ searchRouter.js        # 让模型判断「这条要不要联网」并改写检索词
-│  ├─ bilibili.js            # B 站搜索/热门/评论
 │  └─ config.js / personaStore.js
 ├─ launcher/                 # WPF 启动器（.NET 10，单文件框架依赖）
 ├─ installer/                # Inno Setup 安装脚本（安装包由 GitHub Actions 构建）
-├─ personas/                 # 人设预设，一个版本一个文件（persona-v1.json…）
+├─ assets/                   # 人设预设（personas 子目录）+ 词库（abbrev / clapback / slang）
 ├─ examples/
 │  ├─ wechatauto_bridge.py   # 微信桥接（UI 自动化）
 │  └─ wechaty-bridge.js      # 另一种桥接示例
@@ -452,7 +451,7 @@ node server.js --doctor   # 自检
 Windows 发行包使用 **SignPath Foundation** 提供的免费代码签名
 （Free code signing provided by SignPath.io, certificate by SignPath Foundation），
 签名覆盖 `WhaleLauncher.exe` 与 `whale-girl-<版本>-setup.exe`。
-校验值与验证命令见 **[DOWNLOAD.md](DOWNLOAD.md)**。
+校验值与验证命令见 **[docs/DOWNLOAD.md](docs/DOWNLOAD.md)**。
 
 ---
 
@@ -466,8 +465,8 @@ Windows 发行包使用 **SignPath Foundation** 提供的免费代码签名
 GitHub Actions 构建出来的产物签名（每个发版签名都要人工批准）。
 
 **完整的代码签名策略**（签哪些文件、谁批准、隐私声明、怎么验证签名）见
-**[CODE_SIGNING_POLICY.md](CODE_SIGNING_POLICY.md)**。
-隐私声明单独一份：**[PRIVACY.md](PRIVACY.md)**。
+**[docs/CODE_SIGNING_POLICY.md](docs/CODE_SIGNING_POLICY.md)**。
+隐私声明单独一份：**[docs/PRIVACY.md](docs/PRIVACY.md)**。
 
 验证方法：
 

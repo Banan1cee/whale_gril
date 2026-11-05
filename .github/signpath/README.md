@@ -35,6 +35,6 @@ parameters: |
 - 通配符默认 `max-matches=1`：安装包那条 `whale-girl-*-setup.exe` 必须只匹配到一个文件。
 - `pe-file` 只签 PE 本身。安装包里的 `WhaleLauncher.exe` 是**先单独签好**再被 Inno 压进包里的，
   SignPath 不会（也做不到）去改 Inno 里的压缩数据。
-- 仓库首页（`README.md`）和 `CODE_SIGNING_POLICY.md` 里必须有 SignPath 要求的
+- 仓库首页（`README.md`）和 `docs/CODE_SIGNING_POLICY.md` 里必须有 SignPath 要求的
   「Code signing policy」段落，否则审核不通过。
 - 完整申请与配置步骤见 `docs/打包与签名.md` 第四节。

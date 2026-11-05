@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * 人设预设：根目录 personas/ 下一个风格一个文件（persona-standard.json、persona-tieba.json…）。
+ * 人设预设：assets/personas/ 下一个风格一个文件（persona-standard.json、persona-tieba.json…）。
  * 只读；列表按 order（攻击力从低到高）排。
  */
 const fs = require('node:fs');
@@ -11,7 +11,7 @@ const ID_RE = /^[a-z0-9][a-z0-9._-]{0,60}$/i;
 
 function dirFor(config) {
   const root = (config && config.paths && config.paths.root) || path.resolve(__dirname, '..', '..');
-  return path.join(root, 'personas');
+  return path.join(root, 'assets', 'personas');
 }
 
 /** 列出可用的预设文件（按 order 从小到大；没写 order 的排在后面，再按版本号） */

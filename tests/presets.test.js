@@ -13,15 +13,15 @@ const presets = require('../src/persona/presets');
 
 function makeRoot() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-presets-'));
-  fs.mkdirSync(path.join(dir, 'personas'), { recursive: true });
+  fs.mkdirSync(path.join(dir, 'assets', 'personas'), { recursive: true });
   return dir;
 }
 
 function writePreset(dir, name, data) {
-  fs.writeFileSync(path.join(dir, 'personas', name), JSON.stringify(data, null, 2), 'utf8');
+  fs.writeFileSync(path.join(dir, 'assets', 'personas', name), JSON.stringify(data, null, 2), 'utf8');
 }
 
-test('personas/ 下每个文件都被识别，按版本号排序', () => {
+test('assets/personas/ 下每个文件都被识别，按版本号排序', () => {
   const root = makeRoot();
   writePreset(root, 'persona-v2.json', { id: 'persona-v2', version: '2.0.0', name: '第二版', customPrompt: 'x' });
   writePreset(root, 'persona-v10.json', { id: 'persona-v10', version: '10.0.0', name: '第十版', customPrompt: 'y' });
@@ -44,7 +44,7 @@ test('order 决定列表顺序（按攻击力从低到高），没写 order 的�
 });
 test('坏文件和目录不存在时不会崩', () => {
   const root = makeRoot();
-  fs.writeFileSync(path.join(root, 'personas', 'broken.json'), '{ not json', 'utf8');
+  fs.writeFileSync(path.join(root, 'assets', 'personas', 'broken.json'), '{ not json', 'utf8');
   assert.deepEqual(presets.list({ paths: { root } }), []);
   assert.deepEqual(presets.list({ paths: { root: path.join(root, 'nope') } }), []);
   fs.rmSync(root, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });

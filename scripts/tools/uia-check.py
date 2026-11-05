@@ -1,4 +1,4 @@
-"""UIA 诊断入口：运行 python tools\\uia-check.py（只读，不改任何东西）。
+"""UIA 诊断入口：运行 python scripts\\tools\\uia-check.py（只读，不改任何东西）。
 
 目的：把「UIA 用不了 → 发送掉进很慢的 OCR」这个常见问题，变成一句人话结论
 ＋下一步该干什么，而不是让用户对着一屏英文/警告发懵。
@@ -7,9 +7,9 @@ import os
 import subprocess
 import sys
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 PY = os.path.join(ROOT, "runtime", "python", "python.exe")
-DIAG = os.path.join(ROOT, "tools", "uia-diag.py")
+DIAG = os.path.join(ROOT, "scripts", "tools", "uia-diag.py")
 
 
 def main():
@@ -17,7 +17,7 @@ def main():
         print("[错误] 找不到 runtime\\python\\python.exe，请从鲸鱼娘文件夹根目录运行。")
         return 2
     if not os.path.isfile(DIAG):
-        print("[错误] 找不到 tools\\uia-diag.py。")
+        print("[错误] 找不到 scripts\\tools\\uia-diag.py。")
         return 2
     env = dict(os.environ)
     env["PYTHONUTF8"] = "1"

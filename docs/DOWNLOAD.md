@@ -18,8 +18,8 @@ Windows 发行包使用 **SignPath Foundation** 提供的免费代码签名：
 
 - 签名的文件：`WhaleLauncher.exe`（启动器）与 `whale-girl-<版本>-setup.exe`（安装包）
 - 只有由本仓库 GitHub Actions 构建出来的产物才会被签名（每个发版都人工批准一次）
-- 完整的签名策略见 [CODE_SIGNING_POLICY.md](CODE_SIGNING_POLICY.md)；
-  隐私声明见 [PRIVACY.md](PRIVACY.md)
+- 完整的签名策略见 [docs/CODE_SIGNING_POLICY.md](CODE_SIGNING_POLICY.md)；
+  隐私声明见 [docs/PRIVACY.md](PRIVACY.md)
 
 ### 验证签名
 

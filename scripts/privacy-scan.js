@@ -24,7 +24,7 @@ const SKIP_DIRS = new Set([
 // 不跳过会把「刚编译完」误报成泄露。这里只跳中间产物，launcher/publish 的成品要扫。
 const SKIP_PREFIX = [
   'launcher/bin/', 'launcher/obj/',
-  'dist/', 'release/', '.tools/', 'artifacts/',
+  'dist/', 'release/', 'artifacts/',
   'tests/launcher/Checks/bin/', 'tests/launcher/Checks/obj/',
   'tests/launcher/FakeBridge/bin/', 'tests/launcher/FakeBridge/obj/',
   'tests/voice-send/bin/', 'tests/voice-send/obj/',

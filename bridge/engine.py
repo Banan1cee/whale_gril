@@ -1682,13 +1682,6 @@ def main():
             alias_cache[key] = out
         return out
 
-    def chat_latest_seq(username):
-        try:
-            rows = db.get_messages(username, limit=1)
-            return rows[0].get("sort_seq") or 0 if rows else 0
-        except Exception:
-            return 0
-
     gui = None
     gui_lock = threading.Lock()
     send_lock = threading.Lock()

@@ -79,5 +79,5 @@ Get-FileHash .\whale-girl-4.0.0-setup.exe -Algorithm SHA256
 
 - 流水线只跑在本仓库的 GitHub-hosted runner 上
 - 启动器由 `dotnet publish` 从 `launcher/` 源码编译（`Deterministic=true`，不带 PDB）
-- 安装包由仓库自带的 Inno Setup 7.1.1（`tools/innosetup/`）编译，版本号从 tag / `package.json` 取
+- 安装包由仓库自带的 Inno Setup 7.1.1（`installer/innosetup/`）编译，版本号从 tag / `package.json` 取
 - 签名前后的校验值都写在运行摘要里

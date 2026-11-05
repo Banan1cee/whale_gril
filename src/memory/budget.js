@@ -125,6 +125,4 @@ module.exports = {
   buildBudget,
   assertWithinHardLimit,
   compareUsage,
-  DIALOGUE_BUDGET: LIMITS.dialogueBudget,
-  HARD_TOTAL_TOKENS: LIMITS.hardTotalTokens,
 };

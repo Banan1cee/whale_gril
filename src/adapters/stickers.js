@@ -12,7 +12,6 @@ const EMOTIONS = Object.freeze({ cute: '傲娇', angry: '炸毛', happy: '开心
 // 免得往被当作 JSON 解析的 stdout 里掺东西。
 let probeLogger = null;
 function setProbeLogger(logger) { probeLogger = logger || null; }
-const EMOTION_LABELS = EMOTIONS;
 const GENERIC = '通用';
 // Legacy keys remain accepted by the API, but are never exposed as extra cards.
 // 旧的「其他」及其别名统一并到内置的「开心」：不再有单独的其他分类。
@@ -373,7 +372,6 @@ function categoryItems(dir, emotion) {
     };
   });
 }
-function anyImages(dir) { return [...new Set(Object.keys(EMOTIONS).flatMap((key) => categoryImages(dir, key)))]; }
 function resolveImage(dir, emotion, id) {
   if (typeof id !== 'string' || !id || /[\\:\x00-\x1f]/.test(id)) return '';
   const segments = id.split('/');
@@ -1012,8 +1010,8 @@ function upload(config, root, emotion, files) {
   invalidateScan(target);
   return uploaded;
 }
-module.exports = { EMOTIONS, EMOTION_LABELS, EXTRA_PREFIX, cleanCategoryLabel, extraKey, hasCategory, readExtraCategories, writeExtraCategories, categoryFile, discoverCategories, syncDiscoveredCategories, readIgnored, writeIgnored, normalizeEmotion, categoryFromName, resolveCategory, SYNONYMS, promptCategories, GENERIC, EXTS, MAX_FILE_BYTES, MAX_UPLOAD_BYTES, MAX_UPLOAD_FILES,
-  hasEmotion, resolveImage, safeDirectory, migrateLegacy, migrateLegacyAsync, ensureBuiltinDirs, stickerDir, regularFile, listImages, listImagesAsync, categoryImages, categoryImagesAsync, categoryItems, categoryItemsAsync, categoryDir, targetForOpen, imagesFor, anyImages, isOn,
+module.exports = { EMOTIONS, EXTRA_PREFIX, cleanCategoryLabel, extraKey, hasCategory, readExtraCategories, writeExtraCategories, categoryFile, discoverCategories, syncDiscoveredCategories, readIgnored, writeIgnored, normalizeEmotion, categoryFromName, resolveCategory, SYNONYMS, promptCategories, GENERIC, EXTS, MAX_FILE_BYTES, MAX_UPLOAD_BYTES, MAX_UPLOAD_FILES,
+  hasEmotion, resolveImage, safeDirectory, migrateLegacy, migrateLegacyAsync, ensureBuiltinDirs, stickerDir, regularFile, listImages, listImagesAsync, categoryImages, categoryImagesAsync, categoryItems, categoryItemsAsync, categoryDir, targetForOpen, imagesFor, isOn,
   invalidateScan, clearScanCache, choose, pick, isStickerRequest, imageType, upload,
   isSeriousText, isLivelyText, SERIOUS_WINDOW_MS, SERIOUS_TURNS,
   isUsableCategory, defaultCategory, resolveUsableCategory, categoryInText, setProbeLogger, moodCategory };
