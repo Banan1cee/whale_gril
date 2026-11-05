@@ -189,7 +189,7 @@ jobs:
       - name: 发布启动器（framework-dependent 单文件）
         shell: pwsh
         run: |
-          # 版本号必须从这里注入：csproj 里的 4.0.1 只是本机默认值。
+          # 版本号必须从这里注入：csproj 里的 4.0.2 只是本机默认值。
           # 不传的话 CI 出的 exe 文件属性会永远停在 csproj 那个值，
           # 和安装包 / release-manifest.json 对不上。
           dotnet publish launcher/WhaleLauncher.csproj `
