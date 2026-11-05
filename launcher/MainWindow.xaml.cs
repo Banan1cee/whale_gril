@@ -99,7 +99,6 @@ namespace WhaleLauncher
 
         // ── 检查更新（左下角按钮 + 右上角小横幅）────────────────
         private bool _updating;
-        private bool _forceDialogOpen;
         private DispatcherTimer _toastTimer;
         private ManifestCheck _lastManifest;
         private DateTime _lastManifestCheck = DateTime.MinValue;
@@ -204,7 +203,7 @@ namespace WhaleLauncher
 
         /// <summary>
         /// 拿清单结果决定界面形态。这里只做「提示 / 强制 / 禁止启动」的判定，
-        /// 不下载；真下载仍交给 scripts/update.ps1（带备份和失败回滚）。
+        /// 不下载；真下载交给 UpdateService（安装版下安装包，源码版跑 update.ps1）。
         /// </summary>
         private async Task SilentUpdateCheckAsync()
         {
@@ -295,92 +294,27 @@ namespace WhaleLauncher
             Application.Current.Shutdown();
         }
 
-        /// <summary>强制态用独立小窗，只给「立即更新」和「退出」，没有「以后再说」。</summary>
-        private void ShowForceDialog(ManifestCheck chk)
-        {
-            if (_forceDialogOpen) return;
-            _forceDialogOpen = true;
-            try
-            {
-                var win = new Window
-                {
-                    Title = "需要更新",
-                    Width = 470,
-                    SizeToContent = SizeToContent.Height,
-                    WindowStartupLocation = WindowStartupLocation.CenterOwner,
-                    ResizeMode = ResizeMode.NoResize,
-                    WindowStyle = WindowStyle.ToolWindow,
-                    Owner = this,
-                    Topmost = true,
-                };
-                var panel = new StackPanel { Margin = new Thickness(24) };
-                panel.Children.Add(new TextBlock
-                {
-                    Text = "需要更新后才能继续使用",
-                    FontSize = 18,
-                    FontWeight = FontWeights.SemiBold,
-                });
-                panel.Children.Add(new TextBlock
-                {
-                    Text = "当前 v" + chk.Current + "，最新 v" + chk.Manifest.Latest + "。\n\n"
-                        + (chk.Manifest.Message.Length > 0 ? chk.Manifest.Message : "这个版本已经停止支持。"),
-                    TextWrapping = TextWrapping.Wrap,
-                    Margin = new Thickness(0, 14, 0, 0),
-                });
-                var row = new StackPanel
-                {
-                    Orientation = Orientation.Horizontal,
-                    HorizontalAlignment = HorizontalAlignment.Right,
-                    Margin = new Thickness(0, 22, 0, 0),
-                };
-                var quit = new Button
-                {
-                    Content = "退出",
-                    MinWidth = 88,
-                    Margin = new Thickness(0, 0, 8, 0),
-                    Style = (Style)FindResource("Ghost"),
-                };
-                quit.Click += (_, __) => Application.Current.Shutdown();
-                var now = new Button
-                {
-                    Content = "立即更新",
-                    MinWidth = 112,
-                    Style = (Style)FindResource("Primary"),
-                };
-                now.Click += (_, __) =>
-                {
-                    win.Close();
-                    _ = RunUpdateAsync(chk, askFirst: false);
-                };
-                row.Children.Add(quit);
-                row.Children.Add(now);
-                panel.Children.Add(row);
-                win.Content = panel;
-                win.ShowDialog();
-            }
-            finally
-            {
-                _forceDialogOpen = false;
-            }
-        }
-
         /// <summary>
-        /// 真正下载并换版：跑 update.ps1 -Yes -Force（脚本自己备份、覆盖、自检、失败回滚）。
-        /// askFirst=false 用于强制态：不再问「现在更新吗」，只留「立即更新 / 退出」。
+        /// 真正下载并换版：源码版跑 update.ps1（备份 / 覆盖 / 失败回滚），安装版下载官方安装包、
+        /// 校验 SHA256 后静默覆盖安装。askFirst=false 用于强制态：不再问「现在更新吗」。
         /// </summary>
         private async Task RunUpdateAsync(ManifestCheck chk, bool askFirst)
         {
             if (_updating || chk == null || chk.Manifest == null) return;
             var latest = chk.Manifest.Latest;
+            // 有脚本 = 源码版 / 老 zip 装法；安装版包里没有 scripts\，走安装包
+            var byScript = File.Exists(Path.Combine(_sup.BaseDir, "scripts", "update.ps1"));
 
             if (askFirst)
             {
+                var how = byScript
+                    ? "更新会先备份，再覆盖代码；data\\ 和 config.json 不会被改动。\n"
+                    : "更新会下载官方安装包，校验 SHA256 后覆盖安装；data\\ 和 config.json 不会被改动。\n";
                 var answer = MessageBox.Show(
                     "发现新版本 v" + latest + "（当前 v" + chk.Current + "）。\n\n"
                     + (chk.Manifest.Message.Length > 0 ? chk.Manifest.Message + "\n\n" : "")
-                    + "更新会先备份，再覆盖代码；data\\ 和 config.json 不会被改动。\n"
-                    + "更新完会自动重启启动器（内核会先停）。更新期间关掉窗口也不要紧——"
-                    + "脚本会在后台跑完，结束后自己把启动器重新拉起来。\n\n现在更新吗？",
+                    + how
+                    + "更新期间启动器会退出，结束后自动重新打开。\n\n现在更新吗？",
                     "检查更新", MessageBoxButton.YesNo, MessageBoxImage.Question);
                 if (answer != MessageBoxResult.Yes) return;
             }
@@ -390,19 +324,38 @@ namespace WhaleLauncher
             ShowUpdateProgress("正在更新…", -1);
             try
             {
-                // 脚本每吐一行进度就回传一次（Progress<T> 会切回 UI 线程）
+                // 进度每来一条就回传一次（Progress<T> 会切回 UI 线程）
                 var prog = new Progress<UpdateService.Progress>((p) => ShowUpdateProgress(p.Text, p.Percent));
-                var err = await UpdateService.ApplyAsync(_sup.BaseDir, prog);
-                if (err.Length > 0)
+                var outcome = await UpdateService.ApplyAsync(_sup.BaseDir, latest, prog);
+                if (!outcome.Ok)
                 {
                     HideUpdateProgress();
-                    StatusLine.Text = "更新失败：" + err;
-                    MessageBox.Show("更新失败：" + err + "\n\n再点一次「检查更新」可以重试（失败会自动回滚）。",
+                    StatusLine.Text = "更新失败：" + outcome.Error;
+                    // 强制态不能「失败也照常用」：提示完退出，下次启动还会再拦
+                    if (!askFirst)
+                    {
+                        MessageBox.Show(
+                            "必须更新到 v" + latest + " 才能继续使用，但自动更新失败了：\n\n" + outcome.Error,
+                            "必须更新", MessageBoxButton.OK, MessageBoxImage.Stop);
+                        Application.Current.Shutdown();
+                        return;
+                    }
+                    MessageBox.Show("更新失败：" + outcome.Error + "\n\n再点一次「检查更新」可以重试。",
                         "检查更新", MessageBoxButton.OK, MessageBoxImage.Warning);
                     return;
                 }
 
-                // 更新完必须重启：跑着的还是旧镜像，旧 exe 也只有等本进程退出才删得掉。
+                // 安装版：apply.ps1 已经接手——等本进程退出后装包，装完自己拉起新版。
+                // 这里不能再 RestartSelf，否则会跟安装器抢同一个 exe。
+                if (outcome.HandedToInstaller)
+                {
+                    StatusLine.Text = "正在安装 v" + latest + "，启动器会退出并在安装完成后自动重新打开…";
+                    await Task.Delay(800);
+                    Application.Current.Shutdown();
+                    return;
+                }
+
+                // 源码版：跑着的还是旧镜像，旧 exe 也只有等本进程退出才删得掉。
                 StatusLine.Text = "已更新到 v" + latest + "，正在重启…";
                 await Task.Delay(800);
 
@@ -471,7 +424,7 @@ namespace WhaleLauncher
             if (!_updating) return;
             var ans = MessageBox.Show(
                 "更新还在进行。\n\n" +
-                "关掉窗口不会中断更新：脚本会继续在后台跑完，结束后自动把启动器重新打开。\n\n现在关吗？",
+                "关掉窗口不会中断更新：下载和安装会在后台继续，装完会自动把启动器重新打开。\n\n现在关吗？",
                 "更新进行中", MessageBoxButton.YesNo, MessageBoxImage.Warning);
             if (ans != MessageBoxResult.Yes) e.Cancel = true;
         }
