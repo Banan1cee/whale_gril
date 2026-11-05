@@ -407,11 +407,20 @@ jobs:
             'runtime\node.exe',
             'runtime\python\python.exe',
             'runtime\python\python312.zip',
-            'runtime\manifest.json'
+            'runtime\manifest.json',
+            'VB-CABLE虚拟声卡\VBCABLE_Setup_x64.exe',
+            'VB-CABLE虚拟声卡\readme.txt'
           )
           $missing = $expect | Where-Object { -not (Test-Path (Join-Path $dir $_)) }
           if ($missing) {
             Write-Output "::error title=安装后缺文件::$($missing -join '、')"
+            exit 1
+          }
+
+          # 虚拟声卡整包在安装目录根部（用户反馈埋在 runtime 深处根本找不到）；
+          # 同时 runtime 里不该再留一份，否则就是 [Files] 的 Excludes 没生效、白胖一份。
+          if (Test-Path (Join-Path $dir 'runtime\vb-cable\VBCABLE_Setup_x64.exe')) {
+            Write-Output '::error title=声卡包重复::runtime\vb-cable 里还有 VBCABLE_Setup_x64.exe——Excludes: vb-cable\* 没生效，声卡包装了两份'
             exit 1
           }
 

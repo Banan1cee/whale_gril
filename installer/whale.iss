@@ -79,14 +79,18 @@ Source: "..\examples\*"; DestDir: "{app}\examples"; Flags: ignoreversion recurse
 ; （它也是 CPython 标准库 python312.zip 所在目录，所以绝不能整体排除 *.zip）
 ; 注意：pythonwin 目录里放着 win32ui.pyd / win32uiole.pyd，wechatauto 截图要用，绝不能整目录排除。
 Source: "..\runtime\*"; DestDir: "{app}\runtime"; Flags: ignoreversion recursesubdirs createallsubdirs; \
-    Excludes: "wheelhouse\*,.temp\*,.uv-cache\*,.built,__pycache__\*,*.cat"
+    Excludes: "wheelhouse\*,.temp\*,.uv-cache\*,.built,__pycache__\*,*.cat,vb-cable\*"
+; 虚拟声卡安装包放在安装目录根部：用户反馈在 runtime 深处根本找不到。
+; 官方 Pack45 内文件必须同目录，所以整文件夹搬，不拆散。
+Source: "..\runtime\vb-cable\*"; DestDir: "{app}\VB-CABLE虚拟声卡"; \
+    Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\runtime\vb-cable\VBCABLE_Setup_x64.exe"; Description: "安装 VB-CABLE 虚拟声卡（自动语音需要；VB-Audio Donationware）"; Verb: "runas"; Flags: shellexec postinstall skipifsilent unchecked; Check: FileExists(ExpandConstant('{app}\runtime\vb-cable\VBCABLE_Setup_x64.exe'))
+Filename: "{app}\VB-CABLE虚拟声卡\VBCABLE_Setup_x64.exe"; Description: "安装 VB-CABLE 虚拟声卡（安装包在「VB-CABLE虚拟声卡」文件夹里；VB-Audio Donationware）"; Verb: "runas"; Flags: shellexec postinstall skipifsilent unchecked; Check: FileExists(ExpandConstant('{app}\VB-CABLE虚拟声卡\VBCABLE_Setup_x64.exe'))
 ; 启动器清单是 requireAdministrator：必须走 ShellExecuteEx 才会弹 UAC。
 ; 用默认的 CreateProcess 直接拉会失败：code 740 = ERROR_ELEVATION_REQUIRED。
 Filename: "{app}\{#AppExe}"; Description: "启动{#AppName}"; Verb: "runas"; Flags: shellexec postinstall skipifsilent
@@ -209,6 +213,9 @@ begin
       Files 段的 Excludes 排除，117MB 不会进包）。装完顺手删掉这个空目录，
       别在用户机器上留个看不懂的 wheelhouse。 }
     DelTree(ExpandConstant('{app}\runtime\wheelhouse'), True, True, True);
+
+    { 老版本装在 runtime\vb-cable，升级上来会残留旧的一份，顺手清掉。 }
+    DelTree(ExpandConstant('{app}\runtime\vb-cable'), True, True, True);
 
     if IsDesktopRuntimeInstalled() then
       Log('.NET 10 桌面运行时已存在，跳过')

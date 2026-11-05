@@ -156,8 +156,10 @@ public sealed class VoiceSendPage : UserControl
 
         Card("虚拟声卡驱动","运行包只附带官方安装文件；解压、打开启动器和打开实验开关都不会替你安装 Windows 驱动。");
         driverButton=Button("安装 VB-CABLE 官方驱动",_=>{
-            string exe=Path.Combine(root,"runtime","vb-cable","VBCABLE_Setup_x64.exe");
-            if(!File.Exists(exe))throw new Exception("运行包缺少驱动，请从 https://vb-audio.com/Cable/ 安装");
+            string exe=Path.Combine(root,"VB-CABLE虚拟声卡","VBCABLE_Setup_x64.exe");
+            // 兼容 4.0.4 及更早安装位置（老安装包把它埋在 runtime\vb-cable）
+            if(!File.Exists(exe))exe=Path.Combine(root,"runtime","vb-cable","VBCABLE_Setup_x64.exe");
+            if(!File.Exists(exe))throw new Exception("找不到驱动安装程序：安装目录\\VB-CABLE虚拟声卡\\VBCABLE_Setup_x64.exe；也可以从 https://vb-audio.com/Cable/ 下载");
             Process.Start(new ProcessStartInfo(exe){UseShellExecute=true,Verb="runas"});
             status.Text="完成官方安装并按提示重启后刷新声卡。VB-CABLE 为 VB-Audio Donationware，可向官方捐赠。";
             return Task.CompletedTask;
