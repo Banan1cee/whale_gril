@@ -8,7 +8,7 @@
  * 回收/自更新，uiautomation 还攥着旧窗口的 COM 指针/句柄，心跳每 20 秒碰一下
  * 就被炸死。修法分两层：
  *   1. 预防：每次碰 UIA 前先现查微信主窗还在不在，没了就先把引擎丢掉、别去碰；
- *   2. 兜底：启动脚本变成守护循环，真崩了（负数错码）3 秒内自动拉起，不用人工。
+ *   2. 兜底：桥接由启动器 RuntimeSupervisor 管，真崩了（负数错码）会自动拉起，不用人工。
  */
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -17,8 +17,6 @@ const path = require('node:path');
 
 const root = path.resolve(__dirname, '..');
 const bridge = fs.readFileSync(path.join(root, 'bridge', 'engine.py'), 'utf8');
-const launcher = fs.readFileSync(path.join(root, '启动微信桥接.bat'), 'utf8');
-const loop = fs.readFileSync(path.join(root, 'scripts', 'bridge_loop.bat'), 'utf8');
 const deploy = fs.readFileSync(path.join(root, 'scripts', 'deploy.ps1'), 'utf8');
 
 function count(haystack, needle) {
@@ -75,18 +73,14 @@ test('原生崩溃尽量在死前留下当时在跑哪句（bridge-crash.log）'
   assert.match(bridge, /bridge-crash\.log/, '崩溃堆栈写进独立日志');
 });
 
-test('启动脚本是守护循环：崩溃后 3 秒自动拉起', () => {
-  assert.match(launcher, /scripts\\bridge_loop\.bat/, '根目录启动脚本要把循环交给 bridge_loop');
-  assert.match(launcher, /自动守护/, '要告诉用户崩溃会自动拉起来');
-  assert.match(loop, /:loop/, '要有循环标签');
-  assert.match(loop, /goto loop/, '要真的回头重跑');
-  assert.match(loop, /runtime\\python\\python\.exe/, '循环脚本要用包里的 Python，不是系统里的');
-  assert.match(loop, /-1073741819/, '要解释那个负数崩溃码，用户才看得懂');
-  assert.match(loop, /"%CODE%"=="7"/, 'code 7（看门狗要求重启）要自动重启');
-  assert.match(loop, /"%CODE%"=="2"/, 'code 2（配置问题）不要无限重启，得停下来看日志');
+test('桥接由启动器守护：崩溃后自动拉起，且刹车交给 RuntimeSupervisor', () => {
+  const cs = fs.readFileSync(path.join(root, 'launcher', 'RuntimeSupervisor.cs'), 'utf8');
+  assert.match(cs, /_bridgeRestarts|BridgeRestartCap/, '启动器要记重启次数并按上限刹车');
+  assert.match(cs, /StartBridge|startBridge|StartBridgeProcess/, '启动器要负责把桥接拉起来');
 });
 
-test('一键部署（deploy.ps1）重启桥接也走守护循环，而不是裸跑 python', () => {
-  assert.match(deploy, /bridge_loop\.bat/, '部署重启要启动守护循环');
-  assert.doesNotMatch(deploy, /examples\\wechatauto_bridge\.py"\)/, '不能再裸跑 python（崩了没人拉）');
+test('一键部署（deploy.ps1）不再自己拉桥接，也不靠脚本文件守护', () => {
+  assert.equal(deploy.includes('.' + 'bat'), false, '启动脚本已删除，deploy 不该再引用');
+  assert.doesNotMatch(deploy, /examples\\wechatauto_bridge\.py"\)/, '部署不该裸跑 python（桥接归启动器管）');
+  assert.match(deploy, /RuntimeSupervisor/, '要说明桥接归启动器守护');
 });

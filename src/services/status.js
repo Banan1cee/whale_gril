@@ -142,7 +142,7 @@ function recentMessages(store, limit = 10) {
 function replyChannelLabel(config) {
   const g = (config.gateway && config.gateway.wechat) || {};
   if (g.outboundUrl) return `中转网关 ${g.outboundUrl}`;
-  return '本地桥接（要另开一个「启动微信桥接.bat」窗口，回复才发得出去）';
+  return '本地桥接（启动器里点「启动」，桥接起来后回复才发得出去）';
 }
 
 module.exports = { storeSummary, statusPayload, recentSenders, recentMessages, replyChannelLabel, budgetSnapshot, usageSnapshot };

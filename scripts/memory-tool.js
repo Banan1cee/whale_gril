@@ -123,7 +123,7 @@ async function main() {
     }
     if (!dryRun && await serverRunning()) {
       console.log('提示：服务在跑，直接写记忆会被内存里的旧状态盖回去。');
-      console.log('      请先停止服务（「一键终止.bat」）再导入。');
+      console.log('      请先停止服务（关掉启动器，或运行 scripts\\stop-all.ps1）再导入。');
       return 1;
     }
     let chatStore = null;
@@ -181,7 +181,7 @@ async function main() {
     console.log('已恢复：' + info.restored.join('、'));
     console.log(`现在有 ${info.sessions} 个聊天 / ${info.messages} 条消息 / ${info.notes} 条偏好`);
     console.log('恢复前的旧记忆已另存到 data\\backups\\，后悔了可以再 restore 回去。');
-    console.log('如果服务正在运行，重启一下（或双击「重启鲸鱼娘.bat」）才生效。');
+    console.log('如果服务正在运行，重启一下（关掉启动器再打开）才生效。');
     return 0;
   }
 

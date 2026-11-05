@@ -208,11 +208,7 @@ test('滚动条是自定义圆角滑块，页面/输入控件关掉默认焦点�
   assert.match(readLauncher('Views/SettingsPage.xaml'), /FocusVisualStyle="\{x:Null\}"/, '设置页 FocusVisualStyle 没关');
 });
 
-test('启动脚本和新版 exe 都在仓库里', () => {
-  const bat = read('启动鲸鲸界面.bat');
-  assert.match(bat, /WhaleLauncher\.exe/);
-  assert.match(bat, /DOTNET_ROOT/, 'bat 应该带本地运行时兜底');
-
+test('新版 exe 都在仓库里', () => {
   for (const rel of ['WhaleLauncher.exe', 'launcher/publish/WhaleLauncher.exe']) {
     const file = path.join(root, rel);
     assert.ok(fs.existsSync(file), `缺少 ${rel}`);

@@ -7,13 +7,13 @@
   3. 删掉：data\（聊天记忆、API Key、人设调教、PAUSED、媒体缓存）、config.json（主人名单 / 令牌 / 各项设置）、
      wechatauto_db\、wechatauto_logs\、debug.log
   4. 用 config.example.json 重建 config.json —— 跟刚解压时一模一样
-  5. 重新启动服务 + 桥接（-NoStart 可跳过）
+  5. 重新启动服务（-NoStart 可跳过；桥接由启动器拉起）
 
 注意：这不是「重启」，是**真的清空**。API Key、主人名单、聊天记忆、人设都会没。
 可以先备份里捞回来：backup\reset-时间戳\
 
 用法：
-  双击 重置全部.bat
+  在启动器「诊断」页点「重置全部」，或者：
   powershell -File scripts\factory-reset.ps1            # 交互确认
   powershell -File scripts\factory-reset.ps1 -Yes -NoStart   # 免确认、不重启（自检/测试用）
 #>
@@ -137,17 +137,13 @@ if ($NoStart) {
 } else {
   Say '[5/5] 重新启动服务与桥接…' 'Cyan'
   Start-Process -FilePath 'cmd.exe' -ArgumentList '/c', ('powershell -NoProfile -ExecutionPolicy Bypass -File "' + (Join-Path $PSScriptRoot 'start.ps1') + '"') -WorkingDirectory $root -WindowStyle Minimized
-  Start-Sleep -Seconds 4
-  $loop = Join-Path $PSScriptRoot 'bridge_loop.bat'
-  if (Test-Path $loop) {
-    Start-Process -FilePath 'cmd.exe' -ArgumentList '/c', ('"' + $loop + '"') -WorkingDirectory $root -WindowStyle Minimized
-  }
+  # 桥接不在这里拉：它归启动器 RuntimeSupervisor 管。
   Start-Sleep -Seconds 4
   $listen = @(Get-NetTCPConnection -LocalPort 8787 -State Listen -ErrorAction SilentlyContinue)
   if ($listen.Count) {
     Say '  · 服务已起来：http://127.0.0.1:8787' 'Green'
   } else {
-    Say '  ! 服务好像没起来，双击「启动鲸鱼娘.bat」看看报错' 'Yellow'
+    Say '  ! 服务好像没起来，运行 powershell -File scripts\start.ps1 看看报错' 'Yellow'
   }
 }
 

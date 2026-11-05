@@ -122,7 +122,7 @@ const PROVIDERS = {
 
 const DEFAULT_CONFIG = {
   provider: 'deepseek',
-  server: { host: '127.0.0.1', port: 8787, openBrowser: false },  // 界面只有启动器，不再自动弹浏览器
+  server: { host: '127.0.0.1', port: 8787 },
   deepseek: {
     provider: 'deepseek',
     apiKey: '',

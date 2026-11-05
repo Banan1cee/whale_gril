@@ -39,6 +39,29 @@ test('loadConfig 的 paths 里没有 webDir', () => {
   }
 });
 
+test('默认配置里没有 openBrowser（开关连带整条链路都删了）', () => {
+  // 用空目录测「默认配置」，不受本机 config.json 影响：老安装里可能还留着这个键，
+  // 它已经没有消费方了。这里断言的是「新装的用户不会再有这个开关」。
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-no-open-browser-'));
+  try {
+    const cfg = loadConfig({ root: dir, env: {} });
+    assert.equal('openBrowser' in cfg.server, false, 'server.openBrowser 应随网页界面一起删除');
+    assert.equal(typeof cfg.server.port, 'number', 'server.port 不能被误删');
+    assert.ok(cfg.server.host, 'server.host 不能被误删');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
+  }
+});
+
+test('示例配置里没有 openBrowser，也不提网页 / 浏览器', () => {
+  // config.example.json 会被 ensureConfigFile 复制成用户的 config.json，
+  // 里面留一句「启动时自动开浏览器」等于给新用户埋一个 404。
+  const raw = fs.readFileSync(path.join(root, 'config.example.json'), 'utf8');
+  assert.equal(raw.includes('openBrowser'), false, '示例配置不该再出现 openBrowser');
+  assert.equal(raw.includes('网页'), false, '示例配置的注释不该再提「网页」');
+  assert.equal(raw.includes('浏览器'), false, '示例配置的注释不该再提「浏览器」');
+});
+
 test('GET / 返回 404 JSON，不是 HTML', async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-no-web-'));
   fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ server: { port: 0, openBrowser: false }, log: { level: 'error' } }));

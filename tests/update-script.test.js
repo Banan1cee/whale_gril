@@ -16,17 +16,17 @@ const path = require('node:path');
 
 const root = path.resolve(__dirname, '..');
 const ps1Path = path.join(root, 'scripts', 'update.ps1');
-const batPath = path.join(root, '一键更新.bat');
 
 function readPs1() {
   return fs.readFileSync(ps1Path, 'utf8');
 }
 
-test('一键更新.bat 存在，并调用 scripts\\update.ps1', () => {
-  assert.ok(fs.existsSync(batPath), '缺少 一键更新.bat');
-  const text = fs.readFileSync(batPath, 'utf8');
-  assert.match(text, /scripts\\update\.ps1/);
-  assert.match(text, /ExecutionPolicy Bypass/);
+test('更新只剩 scripts\\update.ps1 一条路，且带 -Check 与 -Yes 两个分支', () => {
+  assert.ok(fs.existsSync(ps1Path), '缺少 scripts\\update.ps1');
+  const text = readPs1();
+  assert.match(text, /\[switch\]\$Check/, '要有 -Check（只查不装）');
+  assert.match(text, /\[switch\]\$Yes/, '要有 -Yes（免交互，启动器调用靠它）');
+  assert.match(text, /\[switch\]\$Rollback/, '失败要能回滚');
 });
 
 test('scripts\\update.ps1 是带 BOM 的 UTF-8（否则 PowerShell 5.1 解析中文会挂）', () => {
@@ -104,8 +104,8 @@ test('旧入口 migrate-data.ps1 只转发，不再有第二份实现', () => {
   assert.ok(shim.split(/\r?\n/).length < 40, 'shim 不该长回一份实现');
 });
 
-test('升级到新版本.bat 已并入 一键更新.bat', () => {
-  assert.ok(!fs.existsSync(path.join(root, '升级到新版本.bat')));
+test('「升级到新版本」不再是独立入口，已并入 update.ps1', () => {
+  assert.equal(fs.readdirSync(root).some((n) => n.startsWith('升级到新版本')), false);
 });
 
 test('Low 标签会先自愈，再决定用哪个临时目录', () => {

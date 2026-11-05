@@ -1,5 +1,29 @@
 # 更新记录
 
+## 4.0.3
+
+### 改进 · 根目录只剩一个双击入口（WhaleLauncher.exe）
+
+- 删除仓库里全部 18 个启动/维护脚本（根目录 13 个 + 「先点启动鲸鱼娘再点启动桥接」子目录 2 个 + `scripts/` 下 2 个 + 上一版已删的调试台入口），根目录只留 `WhaleLauncher.exe`；安装包 `[Icons]` 本来就指向它，无需改动。
+- 启动与重启全部收进启动器：内核、桥接的拉起和崩溃恢复由 `RuntimeSupervisor` 负责，桥接重启刹车（10 分钟窗口 + 连续 4 次上限）只在启动器里实现。
+- `scripts\deploy.ps1`、`scripts\factory-reset.ps1` 不再启动桥接守护循环；`scripts\stop-all.ps1` 不再按脚本进程名清理，只按 `server.js` / `wechatauto_bridge.py` / `python.exe` 匹配。
+- `scripts\update.ps1` 删掉「找 cmd 守护窗口」的逻辑，提示改成命令行写法；`scripts\start.ps1`、`setup-runtime.ps1`、`migrate-data.ps1`、`memory-tool.js`、`mock-gateway.js` 的引导文案同步改成脚本命令。
+- 启动器与接口里「另开一个桥接窗口」的提示改成「启动器里点启动」：`src/services/status.js`、`src/adapters/gateway.js`。
+- 桥接日志与注释里 11 条「双击某个脚本」的提示改成启动器操作（`bridge/engine.py`，只动字符串与注释，不改逻辑）；
+- 文档：README 新增「没有图形入口时怎么办」自救表，快速开始 / 更新 / 终止 / 接入微信各节改成启动器与 `scripts\*.ps1` 说法；`docs/接入微信.md`、`设置说明`、`维护手册`、`架构总览`、`回归测试覆盖对照`、`PRIVACY.md`、`docs/4.0-规划.md`、`config.example.json` 同步。
+
+### 其他 · 接受的能力损失
+
+1. 缺 .NET 10 桌面运行时不再自动安装 —— 干净机器要先自己装好桌面运行时，否则 `WhaleLauncher.exe` 只会弹一句英文错误。
+2. 不再自动下载 Node / Python 运行时 —— 只支持发行包自带的 `runtime\`；源码版要自己准备 Node 18+ 与 Python 3.12。
+3. 不再有清残留进程的图形入口 —— 8787 被占用时只能用任务管理器，或关掉启动器后跑 `scripts\stop-all.ps1`。
+4. 不再有「真的发一条消息」的自检入口 —— 诊断页只剩只读的 `python tools\uia-check.py`；要真发测试消息得自己跑 `python examples\uia_selftest.py`。
+5. 不再修 Python 目录的 Low 完整性标签 —— zip 解压后被系统标成 Low 的机器，UIA 会整个不可用（微信进程模块枚举失败、SetWindowPos 拒绝访问），只能手动改目录权限。
+
+### 其他 · 清掉网页界面留下的 openBrowser
+
+- 删网页后清掉 `server.openBrowser` 与启动自动开浏览器的逻辑，避免全新安装时弹出一个 404 页面：`server.js` 去掉 `openBrowser()`、`--no-browser` 参数和 `node:child_process` 导入，`configSchema` 与默认配置去掉这个字段，`config.example.json` 不再提网页/浏览器；`tests/no-web.test.js` 补两条门禁。
+
 ## 4.0.2
 
 ### 改进 · 删掉网页控制台，只留 HTTP API

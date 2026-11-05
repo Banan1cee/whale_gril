@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """鲸鲸 · 微信发送通道自检（UIA 这条路）
 
-双击项目根目录的「一键修复并自检.bat」就会跑这个脚本。它做五件事：
+运行 python examples\\uia_selftest.py 就会跑这个脚本。它做五件事：
 
   1. 列出微信进程的所有窗口（含托盘/最小化，标题可能是账号昵称）
   2. 把主窗从托盘/最小化状态「还原 + 摆到固定尺寸」
@@ -124,7 +124,7 @@ def main():
 
     if bridge_running():
         log.error("")
-        log.error("先把正在跑的「启动微信桥接」黑窗口关掉再自检——")
+        log.error("先在启动器里点「停止」把桥接停掉再自检——")
         log.error("否则两个程序会一起抢微信窗口，结果不准（单实例锁 47821 还占着）。")
         return 2
 
@@ -423,7 +423,7 @@ def main():
     section("结论")
     if not PROBLEMS:
         log.info("✓✓ 全通：UIA 能认主窗、能发消息，数据库也能证实。")
-        log.info("   接下来直接双击「启动微信桥接.bat」用就行。")
+        log.info("   接下来在启动器里点「启动」就行。")
         return 0
     log.error("还有 %d 个问题：", len(PROBLEMS))
     for p in PROBLEMS:

@@ -1,15 +1,13 @@
 {
-  "_说明": "鲸鲸的全部设置都在这里。改完直接存盘就生效（服务在跑会自动重新加载，不用重启）。data/ 和 config.json 都不会进 git。网页「⚙️ 设置」里的东西存在 data/settings.json，优先级比这个文件高。",
+  "_说明": "鲸鲸的全部设置都在这里。改完直接存盘就生效（服务在跑会自动重新加载，不用重启）。data/ 和 config.json 都不会进 git。启动器「设置」里的东西存在 data/settings.json，优先级比这个文件高。",
   "_模型服务": "provider 可选 deepseek / zhipu / siliconflow / qwen / tju / ollama / custom；本地地址（127.0.0.1、192.168.*）可以免 Key",
   "provider": "deepseek",
   "server": {
-    "_说明": "网页聊天服务的地址；openBrowser = 启动时自动开浏览器",
     "host": "127.0.0.1",
-    "port": 8787,
-    "openBrowser": true
+    "port": 8787
   },
   "deepseek": {
-    "_说明": "老版本的模型配置，现在一般不用改这里——Key 建议在网页「设置」里填（存 data/settings.json）。这里留空也行",
+    "_说明": "老版本的模型配置，现在一般不用改这里——Key 建议在启动器「设置」里填（存 data/settings.json）。这里留空也行",
     "provider": "deepseek",
     "apiKey": "",
     "baseUrl": "https://api.deepseek.com",
@@ -25,7 +23,7 @@
     "presencePenalty": 0
   },
   "persona": {
-    "_说明": "人设。这些是「出厂设定」，被叫出来的语气/口癖会在 data/persona.json 里慢慢演化，网页「人设」页可以微调",
+    "_说明": "人设。这些是「出厂设定」，被叫出来的语气/口癖会在 data/persona.json 里慢慢演化，启动器「人设」页可以微调",
     "name": "鲸鲸",
     "age": 23,
     "job": "自由职业",
@@ -99,7 +97,7 @@
     "allowOthers": false
   },
   "wechat": {
-    "_说明": "微信桥接（examples/wechatauto_bridge.py）的参数。桥接是独立进程，backgroundSend=不抢前台直接发送（默认 true，实测微信最小化/被遮挡也能发，电脑可照常用；设 false 则每次先把微信拉到前台）。改完这里要重启「启动微信桥接.bat」才生效。account=固定用哪个微信号（微信双开/多账号时一定要选，填账号目录名 / wxid / 昵称都行；留空=自动选「最近活跃」，可能选到另一个号）——一般不用手填，在启动器「微信桥接」页点一下账号卡就行；accountGuard=认不出哪个窗口是所选账号时宁可不发（默认 true）；windowHwnd=手动钉微信主窗句柄（调试用，0=自动）；staleAfterSec=多久没新消息就当她去忙了（3.9 起没有游戏休息/离开回来/排队补发的开关了）；ignoreSenders=这些会话永不回复；quoteReply=是否引用原消息回复；dbDir=微信文件保存位置（留空会自动找：先看正在运行的微信打开了哪些文件，再扫各个盘根目录；找不到时把微信「设置→文件管理」里的路径填这里）；bgSend=零焦点发送通道（默认开：用窗口消息打字+点按钮，全程不抢前台；失败才退回前面的通道）；pipelineWorkers=同时处理几个会话（默认 4；同一会话永远串行，改 1 = 全部串行）；pipelineQueueLimit=单个会话最多积压几条（超出丢最早的）",
+    "_说明": "微信桥接（examples/wechatauto_bridge.py）的参数。桥接是独立进程，backgroundSend=不抢前台直接发送（默认 true，实测微信最小化/被遮挡也能发，电脑可照常用；设 false 则每次先把微信拉到前台）。改完这里要在启动器「微信桥接」页点「重启桥接」才生效。account=固定用哪个微信号（微信双开/多账号时一定要选，填账号目录名 / wxid / 昵称都行；留空=自动选「最近活跃」，可能选到另一个号）——一般不用手填，在启动器「微信桥接」页点一下账号卡就行；accountGuard=认不出哪个窗口是所选账号时宁可不发（默认 true）；windowHwnd=手动钉微信主窗句柄（调试用，0=自动）；staleAfterSec=多久没新消息就当她去忙了（3.9 起没有游戏休息/离开回来/排队补发的开关了）；ignoreSenders=这些会话永不回复；quoteReply=是否引用原消息回复；dbDir=微信文件保存位置（留空会自动找：先看正在运行的微信打开了哪些文件，再扫各个盘根目录；找不到时把微信「设置→文件管理」里的路径填这里）；bgSend=零焦点发送通道（默认开：用窗口消息打字+点按钮，全程不抢前台；失败才退回前面的通道）；pipelineWorkers=同时处理几个会话（默认 4；同一会话永远串行，改 1 = 全部串行）；pipelineQueueLimit=单个会话最多积压几条（超出丢最早的）",
     "dbDir": "",
     "account": "",
     "accountGuard": true,

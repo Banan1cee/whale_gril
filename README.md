@@ -7,9 +7,9 @@
 >
 > **解压到原来那个文件夹，选「覆盖」。** 包里的 `data\`（聊天记忆 / Key / 称呼）和 `config.json`（主人名单 / token）都不会被覆盖，所以记忆一直在。
 >
-> 已经解压到新文件夹了？双击 **`一键更新.bat`**：它发现这个目录还没有记忆，会先找旧安装（同级 / 上级 / 桌面 / 下载 / 各盘根目录），把 `data\` 和 `config.json` 搬过来再更新（搬之前先备份当前数据）。
+> 已经解压到新文件夹了？跑 **`powershell -File scripts\update.ps1`**：它发现这个目录还没有记忆，会先找旧安装（同级 / 上级 / 桌面 / 下载 / 各盘根目录），把 `data\` 和 `config.json` 搬过来再更新（搬之前先备份当前数据）。
 >
-> 想手动备份也行：`备份记忆.bat` 导出 json；`恢复记忆.bat` 放回去。详见下面的「3.51 更新」。
+> 想手动备份也行：`node scripts\memory-tool.js export <文件>` 导出 json，`restore <文件>` 放回去（启动器诊断页「数据维护」也是同一套）。详见下面的「3.51 更新」。
 >
 > **旧版（3.x）的 `data\store.json` 会被自动识别并转成 4.0 格式**：直接把旧 `data\` 合并进来启动即可，
 > 导入完启动器会弹一次「记忆已导入并转换格式」（原文件留在 `data\memory\legacy\`）。也可以随时在
@@ -18,7 +18,7 @@
 > ---
 >
 > 这里的 `Code → Download ZIP` 只有 **400 KB 源码**（不含运行时，也不含你本地的 Key 和聊天记录）。从源码跑有两条路：
-> 1. 双击 **`一键装运行环境.bat`** —— 自动下载 Node + Python 并把微信依赖装进 `runtime\`，之后和发行包一样用；
+> 1. 跑 **`powershell -File scripts\setup-runtime.ps1`** —— 自动下载 Node + Python 并把微信依赖装进 `runtime\`，之后和发行包一样用；
 > 2. 或者自己装 Node 18+（`npm start` 启动内核），接微信再装 Python 3.12 + `pip install -r requirements.txt`。
 
 一个能真正聊天的「鲸鱼娘」：**微信群自动回复 + B 站热搜/视频信息 + 联网查资料**，设置与诊断全在启动器里。
@@ -78,7 +78,7 @@
 - **看图自带 ffmpeg**：微信 4.x 图片是 wxgf/HEVC，包内已带 `runtime\ffmpeg\bin\ffmpeg.exe`（包体积约 117MB）
 - **「重启了但不监听」**：打开微信数据库加 90 秒超时 + 就绪文件 `data\bridge-ready.json` + 重启上限 4 次
 - **「积极拒绝」**：等服务就绪再监听、本机请求不走代理、服务端口写 `data\server-port.txt`
-- **新增启动文件夹**：`先点启动鲸鱼娘再点启动桥接\`，里面 1、2 两个编号启动器
+- **新增按顺序启动的引导**：先起服务再起桥接（现已合并进启动器，点一次「启动」即可）
 - **移除**：全局热键（PageUp 终止 / PageDown 恢复那套已下线）
 
 ## 3.53 更新
@@ -101,7 +101,7 @@
 **更新不再丢记忆。** 根因不是程序删数据，是大家把新版本解压到**新文件夹**——新目录没有 `data\`，看起来就是记忆全没了。这一版：
 
 - 发行包里**不再带 `config.json`**：解压覆盖到原文件夹时，`data\` 和 `config.json` 都不受影响，记忆自然还在（第一次运行会自己生成 config.json）
-- 新增 **`升级到新版本.bat`**：已经解压到新文件夹的，双击它自动找旧版本搬 `data\` + `config.json`（搬前先备份）
+- 新增「升级到新版本」入口（现在并进 `scripts\update.ps1`）：已经解压到新文件夹的，跑一次就自动找旧版本搬 `data\` + `config.json`（搬前先备份）
 
 正确姿势：**解压到同一个文件夹，选覆盖。**
 
@@ -111,8 +111,8 @@
 **记忆能带走了。** 以前更新是把整个文件夹换成新版，新目录里没有 `data\`，看起来就是「记忆全没了」。现在：
 
 - 每次启动自动快照到 `data\backups\`（留最近 20 份）
-- 双击 **`备份记忆.bat`** 立刻备份；HTTP 记忆接口已关闭（不能再用 `GET /api/memory/export`），要导出请用 `node scripts/memory-tool.js export <文件>`，或启动器诊断页「数据维护 → 备份记忆」
-- 双击 **`恢复记忆.bat`** 看快照列表；`node scripts/memory-tool.js restore <文件>` 也能把导出的 json 放回去
+- `node scripts/memory-tool.js backup` 立刻备份；HTTP 记忆接口已关闭（不能再用 `GET /api/memory/export`），要导出请用 `node scripts/memory-tool.js export <文件>`，或启动器诊断页「数据维护 → 备份记忆」
+- `node scripts/memory-tool.js restore <文件>` 把导出的 json 放回去；启动器诊断页「数据维护 → 恢复记忆」也能看快照列表
 - 恢复前会自动把当前记忆另存一份（`before-restore`），手滑也能回滚
 
 ```bash
@@ -152,7 +152,7 @@ node scripts/memory-tool.js import "D:\旧版\data\store.json"             # 真
 4. 每条微信私聊在 `data/whale.log` 留一行 `[master] … → 主人（wxid）`，排查不用猜。
 5. 调试台「身份 / 主人」卡片新增：名单告警 +「最近说过话的人（真实 senderId）」—— 不知道自己的 wxid，照着抄就行。
 
-其他修复：`npm test` 只跑 `tests/`（不再把 `runtime/python` 里 Python 包自带的 `.js` 当测试）；修 `providers.test.js` 误写真实 `data/settings.json` 的问题；`saveSettings` 不再丢掉别的服务商的 Key；`一键修复并自检.bat` 换成 CRLF。
+其他修复：`npm test` 只跑 `tests/`（不再把 `runtime/python` 里 Python 包自带的 `.js` 当测试）；修 `providers.test.js` 误写真实 `data/settings.json` 的问题；`saveSettings` 不再丢掉别的服务商的 Key；自检入口脚本的换行统一成 CRLF。
 
 ### 3.0.2 看图
 
@@ -183,7 +183,7 @@ untime\ffmpeg\bin 等）；**没有 ffmpeg 就看不了图**，日志里会写�
 - **听得懂语音**：别人发语音会先转成文字再正常接话（`config.json` 的 `voice`，默认 qwen3-asr-flash）；她自己只发文字，不发语音条
 - **联网**：由模型判断该不该查，Bing 搜索 + B站/微博热搜（按站点分流）+ 头条热榜 + 链接正文抓取；有总超时，会把「查到什么」和「没查到」分开告诉模型，提示词自带当前日期
 - **群管理**：禁言群、解禁、改模型、切语气、清记忆、低电量自动发晚安
-- **一键终止所有**：`一键终止.bat`，服务、桥接、守护全部停掉并写暂停标记
+- **一键终止所有**：`scripts\stop-all.ps1`，服务、桥接全部停掉并写暂停标记（启动器里点「停止」也是同一套）
 - **微信桥接**：`examples/wechatauto_bridge.py`，基于 `wechatauto-replica` 的 UI 自动化（只读数据库 + 窗口操作，**不注入微信**）
 - **零 npm 依赖**：不用 `npm install`；带 `runtime\` 的发行包连 Node 都不用装（本仓库是源码版，不带 `runtime\`）
 
@@ -196,19 +196,19 @@ untime\ffmpeg\bin 等）；**没有 ffmpeg 就看不了图**，日志里会写�
 > **解压到纯英文路径**（例如 `D:\whale-girl-3.0`）。放在带中文的目录里，微信那侧的自动发送会失败并一直报「拒绝访问」，原因见下面「接入微信群」里的说明。
 
 1. 解压压缩包
-2. 双击 `启动鲸鱼娘.bat`（拉起内核，`8787` 只给启动器与桥接调用，没有网页界面）
-3. 双击 `启动鲸鲸界面.bat` 打开启动器，在「状态」页看到内核亮起就能用
+2. 双击 **`WhaleLauncher.exe`**，点右上角「启动」——内核和桥接都由它拉起（`8787` 只给启动器与桥接调用，没有网页界面）
+3. 在「状态」页看到内核、桥接都亮起就能用
 
-包里已经带了 **Node 运行时**（`runtime\node.exe`）和 **Python 运行时**（`runtime\python`），两个都不需要你装。启动脚本优先用包内的，找不到才回退系统 PATH。
+包里已经带了 **Node 运行时**（`runtime\node.exe`）和 **Python 运行时**（`runtime\python`），两个都不需要你装。启动器优先用包内的，找不到才回退系统 PATH。
 
-微信桥接同样双击 `启动微信桥接.bat` 就行，用的是包内那套 Python（已经装好 wechatauto-replica、pywin32、uiautomation、Pillow、cryptography、pysilk 等依赖）。
+桥接同理：启动器点「启动」时会一起拉起，用的是包内那套 Python（已经装好 wechatauto-replica、pywin32、uiautomation、Pillow、cryptography、pysilk 等依赖）。
 
 唯一还需要你的东西：**一个登录着的微信小号**，和**一个模型 API Key**（DeepSeek / 智谱 / 千问任选）。
 
-## 更新到新版本（`一键更新.bat`）
+## 更新到新版本
 
-不用再手动下载解压。双击 `一键更新.bat` → 回车，它会自己查最新 release、下载、校验、覆盖；
-`data\`（聊天记忆）和 `config.json`（Key）全程不动。
+不用再手动下载解压。在启动器里点「检查更新」，或跑 `powershell -File scripts\update.ps1`，
+它会自己查最新 release、下载、校验、覆盖；`data\`（聊天记忆）和 `config.json`（Key）全程不动。
 
 ```
 [回车] 现在更新     [r] 回滚上次更新     [q] 退出
@@ -217,15 +217,29 @@ untime\ffmpeg\bin 等）；**没有 ffmpeg 就看不了图**，日志里会写�
 - **校验**：按官方 API 给的 `sha256` 比对，对不上直接中止，不会装半个包。
 - **失败自动回滚**：覆盖后自检版本号 / 记忆条数 / `config.json` 哈希，任一项不过就用备份还原。
 - **官方连不上**：自动换镜像（`ghfast.top` / `gh-proxy.com` / `gh-proxy.org` / `ghproxy.net`，只搬运、不参与校验）；查版本接口被墙时先走 `gh-proxy.com`、`gh-proxy.org` 的 API 转发，全都挂了再从镜像页面抠版本号。
-  也可以自己下 zip，拖到 `一键更新.bat` 上离线装。
-- **只看版本**：`一键更新.bat -Check`；**手动回滚**：`一键更新.bat -Rollback`。
+  也可以自己下 zip，跑 `scripts\update.ps1 <zip 路径>` 离线装。
+- **只看版本**：`scripts\update.ps1 -Check`；**手动回滚**：`scripts\update.ps1 -Rollback`。
 - **第一次用（换过文件夹）**：目录里没有 `data\` 时会先找旧安装，按「最后保存时间」从新到旧列出（带会话数/条数），回车即搬、输序号换一个、`s` 跳过；
-  也可以直接指定：`一键更新.bat -Migrate -FromDir "D:\whale-girl-3.50"`。
+  也可以直接指定：`scripts\update.ps1 -Migrate -FromDir "D:\whale-girl-3.50"`。
 - **Low 完整性标签**：安装目录带 Low 标签时 node 写不了 `%TEMP%`（报 `EPERM`），更新前会自动把
   `runtime\node.exe` / `python.exe` 标回 Medium；修不动就改用安装目录里的临时目录，更新照样能跑。
 
 > 自己改过源码要注意：更新是整包覆盖，会把你改过的文件换掉。检测到本地有自定义功能时，
 > 脚本会列出来并要求确认（`-Force` 可跳过确认）。
+
+## 没有图形入口时怎么办
+
+仓库根目录只剩 `WhaleLauncher.exe` 一个双击入口，其余全是命令行脚本。启动器打不开、
+或者要在一台没有图形界面的机器上自救时，用这几条：
+
+| 场景 | 命令 |
+| --- | --- |
+| 装 Node / Python 和桥接依赖 | `powershell -File scripts\setup-runtime.ps1` |
+| 清残留进程（8787 被占、桥接赖着不走） | 先关掉启动器，再 `powershell -File scripts\stop-all.ps1` |
+| 恢复出厂（清空记忆与配置） | 启动器「诊断」页「重置全部」，或 `powershell -File scripts\factory-reset.ps1 -Yes` |
+| 更新到新版本 | 启动器「检查更新」，或 `powershell -File scripts\update.ps1` |
+| 只读诊断 UIA（不改任何东西） | `python tools\uia-check.py` |
+| 往文件传输助手发一条真实测试消息 | `python examples\uia_selftest.py` |
 ## 快速开始（源码版 / 命令行 / macOS / Linux）
 
 ```bash
@@ -236,7 +250,7 @@ node -v
 npm start
 ```
 
-没填 API Key 时会用内置台词演示；在页面右上角「设置」里选服务商、填 Key 即可接真模型。
+没填 API Key 时会用内置台词演示；在启动器「设置」里选服务商、填 Key 即可接真模型。
 
 首次启动会自动把 `config.example.json` 复制成 `config.json`；**`config.json` 和 `data/` 里是你的 Key、聊天记录和主人名单，已在 `.gitignore` 里排除，别提交**。
 
@@ -256,7 +270,7 @@ python examples/wechatauto_bridge.py
 然后：
 
 1. 在 `config.json` 里配置 `gateway.wechat.inboundToken`（桥接和服务器共用的密钥）
-2. 启动 `启动微信桥接.bat`（带守护循环，异常自动拉起）
+2. 双击 `WhaleLauncher.exe` 点「启动」：内核与桥接都由它拉起，桥接崩溃会按 10 分钟窗口刹车重启
 3. 用你的微信给机器人账号发一句话，启动器「状态」页能看到回复
 
 > 详细说明见 [docs/接入微信.md](docs/接入微信.md)。桥接依赖 `wechatauto-replica` 的 UI 自动化能力，微信升级可能导致失效，请自行评估风险。
@@ -268,17 +282,17 @@ python examples/wechatauto_bridge.py
 > `error(5, 'SetWindowPos', '拒绝访问')`、退到 OCR 兜底、发不出去，日志一直刷。
 > 正确做法：**`D:\whale-girl-3.0`、`C:\whale-girl-3.0` 这种纯英文路径**。
 
-### 一键终止所有（`一键终止.bat`）
+### 一键终止所有（`scripts\stop-all.ps1`）
 
-双击 `一键终止.bat`，会依次停掉：
+先关掉启动器，再跑 `powershell -File scripts\stop-all.ps1`，它会依次停掉：
 
 - 鲸鲸服务（占用 8787 的进程）
 - 微信桥接（`wechatauto_bridge.py`）
-- 桥接守护循环和启动器窗口（否则它 3 秒后又把桥接拉起来）
+- 启动器窗口（不关的话它会把桥接重新拉起来）
 
 同时会写 `data\PAUSED`，防止任何自动重启。脚本会多扫三遍，因为杀父进程时可能正好有子进程在启动；最后会打印结果，停干净了显示绿色，没停干净会列出残留 pid。
 
-恢复只要重新双击 `启动鲸鱼娘.bat` 和 `启动微信桥接.bat`（桥接启动时自动清掉 `PAUSED`）。
+恢复：重新打开 `WhaleLauncher.exe` 点「启动」（启动器会清掉 `PAUSED`）。
 
 ---
 
@@ -349,8 +363,8 @@ personas/persona-v2.json   # 下一版
 
 ## 一键终止 / 继续
 
-双击 `一键终止.bat` 停掉服务 + 桥接（不发任何消息）并写 `data/PAUSED`；
-双击 `重启鲸鱼娘.bat` 清掉暂停标记并重新拉起。
+关掉启动器（或跑 `scripts\stop-all.ps1`）停掉服务 + 桥接（不发任何消息）并写 `data/PAUSED`；
+重新打开 `WhaleLauncher.exe` 点「启动」即恢复（它会清掉暂停标记）。
 
 ## 配置
 

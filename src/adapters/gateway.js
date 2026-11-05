@@ -275,7 +275,7 @@ class Gateway {
         this.logger &&
           this.logger.warn(
             `[${this.platform}] 这条回复不会到微信：既没有 gateway.outboundUrl，也不是本地桥接请求。` +
-            `本地用法请另开「启动微信桥接.bat」；自建中转才需要 outboundUrl。内容：${String(text).slice(0, 40)}`
+            `本地用法请在启动器里点「启动」拉起桥接；自建中转才需要 outboundUrl。内容：${String(text).slice(0, 40)}`
           );
       }
       return { ok: true, dryRun: true, local };

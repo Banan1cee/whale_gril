@@ -1,6 +1,6 @@
 ﻿# 鲸鲸 · 一键终止所有
-# 停掉：服务（8787）、微信桥接、桥接守护循环、启动器窗口，并写 data\PAUSED 防止被自动拉起
-# 用法：双击 一键终止.bat，或 powershell -File scripts\stop-all.ps1
+# 停掉：服务（8787）、微信桥接、启动器窗口，并写 data\PAUSED 防止被启动器自动拉起
+# 用法：关掉启动器后运行 powershell -File scripts\stop-all.ps1
 param(
   [switch]$Quiet,
   [string]$AppRoot = ''
@@ -23,7 +23,7 @@ Say '    正在终止鲸鲸的所有进程' 'Cyan'
 Say '  ==========================================' 'Cyan'
 Say ''
 
-# 1) 先立暂停标记：bridge_loop.bat 看到它就乖乖等着，不会 3 秒后把桥接拉起来
+# 1) 先立暂停标记：启动器看到它就不会再把桥接拉起来
 try {
   New-Item -ItemType Directory -Path $dataDir -Force | Out-Null
   Set-Content -LiteralPath (Join-Path $dataDir 'PAUSED') -Value ([string](Get-Date -Format 'o')) -Encoding UTF8
@@ -34,9 +34,6 @@ try {
 
 $patterns = @(
   @{ Match = 'wechatauto_bridge.py'; Label = '微信桥接' },
-  @{ Match = 'bridge_loop.bat';      Label = '桥接守护循环' },
-  @{ Match = '启动微信桥接.bat';      Label = '桥接启动窗口' },
-  @{ Match = '启动鲸鱼娘.bat';        Label = '服务启动窗口' },
   @{ Match = 'server.js';            Label = '鲸鲸服务' }
 )
 
@@ -132,6 +129,5 @@ if ($left.Count -eq 0 -and $portLeft -eq 0) {
   Say '  再运行一次这个脚本，或者用任务管理器结束。' 'Yellow'
 }
 Say ''
-Say '  恢复方法：双击「启动鲸鱼娘.bat」，再双击「启动微信桥接.bat」'
-Say '  （桥接启动时会自动清掉 data\PAUSED）'
+Say '  恢复方法：重新打开 WhaleLauncher.exe 点「启动」（它会清掉 data\PAUSED）'
 Say ''

@@ -1,7 +1,7 @@
 ﻿<#
   一键更新：从 GitHub Release 拉最新版，原地覆盖代码；data\ 和 config.json 一个字节都不动。
 
-  用法（双击根目录的 一键更新.bat 即可）：
+  用法（powershell -File scripts\update.ps1）：
     scripts\update.ps1                    # 自动找安装目录 → 查最新 → 更新
     scripts\update.ps1 -Check             # 只看有没有新版
     scripts\update.ps1 -Rollback          # 退回上一次更新前
@@ -724,7 +724,7 @@ function Invoke-DataMigration {
     return $true
 }
 
-# 把 runtime 里的 exe 从 Low 标回 Medium（和 scripts\fix-python-il.bat 一个思路）
+# 把 runtime 里的 exe 从 Low 标回 Medium（本文件自己实现，不依赖外部脚本）
 function Repair-ExeIntegrity {
     param([string]$Root)
     $user = $env:USERDOMAIN + '\' + $env:USERNAME
@@ -836,7 +836,7 @@ function Save-ReleaseAsset {
             if (Test-Path -LiteralPath $Dest) { Remove-Item -LiteralPath $Dest -Force -ErrorAction SilentlyContinue }
         }
     }
-    throw ('所有下载源都失败：' + ($errors -join ' / ') + '。可手动下载 zip 拖到 一键更新.bat 上，或用 -Mirror 指定镜像。')
+    throw ('所有下载源都失败：' + ($errors -join ' / ') + '。可手动下载 zip 后用 scripts\update.ps1 <zip 路径> 离线装，或用 -Mirror 指定镜像。')
 }
 
 # ---------------------------------------------------------------- 解压 / 体检
@@ -941,30 +941,12 @@ function Get-AppProcessesByPath {
     return $res
 }
 
-function Get-WatchdogProcesses {
-    param([string]$AppRoot)
-    # 桥接的崩溃守护（cmd 跑 bridge_loop.bat）—— CIM 被系统挡住就拿不到，属于尽力而为
-    try {
-        $list = @(Get-CimInstance Win32_Process -Filter "Name='cmd.exe'" -ErrorAction Stop)
-        return @($list | Where-Object {
-            $_.CommandLine -and (
-                $_.CommandLine.IndexOf($AppRoot, [StringComparison]::OrdinalIgnoreCase) -ge 0 -or
-                $_.CommandLine -match 'bridge_loop|启动微信桥接'
-            )
-        })
-    } catch {
-        return @()
-    }
-}
-
 function Stop-AppForUpdate {
     param([string]$AppRoot)
     $total = 0
     for ($round = 1; $round -le 3; $round++) {
         $procs = @(Get-AppProcessesByPath $AppRoot)
-        $wd = @(Get-WatchdogProcesses $AppRoot)
-        if ($procs.Count -eq 0 -and $wd.Count -eq 0) { break }
-        foreach ($w in $wd) { try { Stop-Process -Id $w.ProcessId -Force -ErrorAction Stop; $total++ } catch { } }
+        if ($procs.Count -eq 0) { break }
         foreach ($p in $procs) { try { Stop-Process -Id $p.Id -Force -ErrorAction Stop; $total++ } catch { } }
         Start-Sleep -Milliseconds 900
     }
@@ -1155,7 +1137,7 @@ function Invoke-RollbackFlow {
     [void](Stop-AppForUpdate -AppRoot $script:appRoot)
     Restore-Backup -AppRoot $script:appRoot -BackupDir $target
     $nv = Get-AppVersion $script:appRoot
-    Show-Result -Kind 'ok' -Message ('已回滚到 ' + $nv) -Detail @(('备份：' + $target), '下一步：双击 启动鲸鱼娘.bat')
+    Show-Result -Kind 'ok' -Message ('已回滚到 ' + $nv) -Detail @(('备份：' + $target), '下一步：重新打开 WhaleLauncher.exe')
     exit 0
 }
 
@@ -1190,12 +1172,12 @@ try {
         $src = Select-MigrationSource -Root $script:appRoot
         if ($src -eq 'QUIT') { Show-Result -Kind 'cancelled' -Message '已退出，什么都没动'; exit 0 }
         if (-not $src) {
-            Show-Result -Kind 'cancelled' -Message '没有迁移，什么都没动' -Detail @('要指定旧目录：一键更新.bat -Migrate -FromDir "D:\旧版本\whale-girl"')
+            Show-Result -Kind 'cancelled' -Message '没有迁移，什么都没动' -Detail @('要指定旧目录：scripts\update.ps1 -Migrate -FromDir "D:\旧版本\whale-girl"')
             exit 0
         }
         $script:Stage = 'migrate'
         [void](Invoke-DataMigration -Root $script:appRoot -Source $src)
-        Show-Result -Kind 'ok' -Message '迁移完成，现在可以双击 启动鲸鱼娘.bat' -Detail @('之后更新直接双击 一键更新.bat 即可')
+        Show-Result -Kind 'ok' -Message '迁移完成，现在可以重新打开 WhaleLauncher.exe' -Detail @('之后更新直接跑 scripts\update.ps1 即可')
         exit 0
     }
 
@@ -1242,7 +1224,7 @@ try {
         if ($cand -and (Test-NodeWritable -NodeExe $nodeExe -Dir $cand)) { $WorkRoot = $cand; break }
     }
     if (-not $WorkRoot) {
-        throw '找不到 node 能写的临时目录（%TEMP% 和安装目录下的 backup\ 都写不进去）。可以手动下载 zip，拖到 一键更新.bat 上离线更新。'
+        throw '找不到 node 能写的临时目录（%TEMP% 和安装目录下的 backup\ 都写不进去）。可以手动下载 zip，用 scripts\update.ps1 <zip 路径> 离线更新。'
     }
     if ($WorkRoot -ne $StateDir) {
         $StateDir = $WorkRoot
@@ -1335,7 +1317,7 @@ try {
         }
         Say ('  ⚠ API 全挂，从镜像页面拿到最新版：' + $htmlTag + '（这一路没有 sha256，只校验大小）') 'Yellow'
     } else {
-        throw '查不到任何版本信息（API 被墙 / 断网 / 限流）。可以：① 挂代理后重跑；② 手动下载 zip 后拖到 一键更新.bat 上；③ 加 -Tag v3.54 走直连模式。'
+        throw '查不到任何版本信息（API 被墙 / 断网 / 限流）。可以：① 挂代理后重跑；② 手动下载 zip 后用 scripts\update.ps1 <zip> 装；③ 加 -Tag v3.54 走直连模式。'
     }
 
     $remoteVer = ([string]$rel.tag_name) -replace '^[vV]', ''
@@ -1387,7 +1369,7 @@ try {
         } else {
             Say ('  有新版：' + $localVer + ' → ' + $remoteVer) 'Yellow'
         }
-        Say '  双击 一键更新.bat 即可更新（会先备份、再覆盖代码）。' 'Gray'
+        Say '  在启动器里点「检查更新」，或跑 scripts\update.ps1（会先备份、再覆盖代码）。' 'Gray'
         exit 0
     }
 
@@ -1570,10 +1552,10 @@ try {
     if ($stop.Left.Count -gt 0) {
         Say '  ⚠ 还有进程没停掉（可能权限不够，或桥接守护在自动拉起）：' 'Yellow'
         foreach ($p in $stop.Left) { Say ('     PID ' + $p.Id + '  ' + $p.Path) 'Yellow' }
-        Say '     如果覆盖时报"文件被占用"，请先双击 一键终止.bat，再从安装目录运行本工具。' 'Yellow'
+        Say '     如果覆盖时报"文件被占用"，请先关掉启动器并运行 scripts\stop-all.ps1，再从安装目录重跑本工具。' 'Yellow'
     }
     if (-not (Test-FileWritable (Join-Path $script:appRoot 'server.js'))) {
-        throw 'server.js 还被占用着，先关闭鲸鲸再更新（双击 一键终止.bat）。'
+        throw 'server.js 还被占用着，先关闭鲸鲸再更新（关掉启动器，再跑 scripts\stop-all.ps1）。'
     }
 
     # ---- 备份 ----
@@ -1617,7 +1599,7 @@ try {
     $OverlayStarted = $true
     $rc = Invoke-Robocopy -Source $srcRoot -Dest $script:appRoot -ExcludeDirs $exclDirs -ExcludeFiles $exclFiles
     if (-not $rc.Ok) {
-        throw ('复制失败（robocopy 退出码 ' + $rc.Code + '）。备份在 ' + $bak + '，用 一键更新.bat -Rollback 恢复。')
+        throw ('复制失败（robocopy 退出码 ' + $rc.Code + '）。备份在 ' + $bak + '，用 scripts\update.ps1 -Rollback 恢复。')
     }
 
     # ---- 自检 ----
@@ -1627,12 +1609,12 @@ try {
     }
     $after = Get-StoreStats -Root $script:appRoot
     if ($before.Exists -and $after.Messages -lt $before.Messages) {
-        throw ('记忆条数变少了（' + $before.Messages + ' → ' + $after.Messages + '）。用 一键更新.bat -Rollback 恢复。')
+        throw ('记忆条数变少了（' + $before.Messages + ' → ' + $after.Messages + '）。用 scripts\update.ps1 -Rollback 恢复。')
     }
     $cfgHashAfter = ''
     if (Test-Path -LiteralPath $cfgPath) { $cfgHashAfter = Get-Sha256 $cfgPath }
     if ($cfgHashBefore -and $cfgHashAfter -ne $cfgHashBefore) {
-        throw ('config.json 被动过了！用 一键更新.bat -Rollback 恢复。')
+        throw ('config.json 被动过了！用 scripts\update.ps1 -Rollback 恢复。')
     }
 
     # ---- 换启动器自己 ----
@@ -1690,11 +1672,11 @@ try {
         ('config.json：' + $(if ($cfgHashBefore) { '原样保留' } else { '本来就没有，未创建' })),
         ('备份：' + $bak),
         $exeLine,
-        '下一步：双击 启动鲸鱼娘.bat（改了代码必须重启才生效）',
-        '想退回上一版：双击 一键更新.bat -Rollback'
+        '下一步：重新打开 WhaleLauncher.exe（改了代码必须重启才生效）',
+        '想退回上一版：scripts\update.ps1 -Rollback'
     )
     if (-not (Test-Path -LiteralPath (Join-Path $script:appRoot 'runtime\node.exe'))) {
-        Say '  ⚠ runtime 里没有 node.exe，先双击 一键装运行环境.bat' 'Yellow'
+        Say '  ⚠ runtime 里没有 node.exe，先运行 scripts\setup-runtime.ps1 装运行环境' 'Yellow'
     }
 
     exit 0
@@ -1744,7 +1726,7 @@ try {
     if ($script:Stage -eq 'net') {
         Show-Result -Kind 'network' -Message '网络失败，没有改动任何东西' -Detail @(
             ('原因：' + $err),
-            '① 过一会儿重跑；② 挂代理重跑；③ 自己下 zip，把 .zip 拖到 一键更新.bat 上（等价于在线更新）'
+            '① 过一会儿重跑；② 挂代理重跑；③ 自己下 zip，跑 scripts\update.ps1 <zip 路径>（等价于在线更新）'
         )
     } else {
         Show-Result -Kind 'cancelled' -Message '没有改动任何东西（在动安装目录之前就停了）' -Detail @(('原因：' + $err))

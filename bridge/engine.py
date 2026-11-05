@@ -10,7 +10,7 @@
 前置：
   1. WeChat 4.x 已登录（建议用小号）
   2. 已装依赖：pip install wechatauto-replica requests
-  3. 鲸鲸服务已启动（双击 启动鲸鱼娘.bat）
+  3. 鲸鲸服务已启动（启动器状态页显示「运行中」）
   4. config.json 里 gateway.wechat.enabled = true（脚本会读 token）
 
 用法：
@@ -258,7 +258,7 @@ PIPELINE_QUEUE_LIMIT = 8
 
 _cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "config.json")
 # 新版发行包不再自带 config.json（免得覆盖安装时把用户的主人名单/token 冲掉）。
-# 如果用户先双击了桥接、服务还没起过，这里用 example 生成一份，避免「token 空 → 401 → 她不回话」。
+# 如果用户先启动了桥接、服务还没起过，这里用 example 生成一份，避免「token 空 → 401 → 她不回话」。
 if not os.path.exists(_cfg_path):
     _example = os.path.join(os.path.dirname(_cfg_path), "config.example.json")
     if os.path.exists(_example):
@@ -454,7 +454,7 @@ def reload_config(path=None):
 
     为什么需要：调试台（/debug）改的是 config.json，但桥接以前只在启动时读一次，
     用户在页面上关掉「主动搭话」、改「忽略名单」、调「群聊开关」……全都没反应，
-    只能手动重启「启动微信桥接.bat」，表现出来就是「调了没用，还是默认」。
+    只能在启动器里手动重启桥接，表现出来就是「调了没用，还是默认」。
     现在 config.json 一变，5 秒内自动生效。
 
     返回是否真的重新加载了。
@@ -520,7 +520,7 @@ def reload_config(path=None):
             time.sleep(1)
         if SEND_STATE.get("active"):
             log("⚠️ 仍有发送未结束就重启了，输入框可能留有半截草稿，请手动清一下")
-        # bridge_loop.bat 把 exit code 7 当成「桥接自己要求重启」，3 秒后会用新配置拉起来。
+        # 看门狗用 exit code 7 表示「桥接自己要求重启」，守护方 3 秒后用新配置拉起来。
         # 直接 os._exit 而不是 sys.exit：这里是后台线程，sys.exit 退不掉整个进程。
         os._exit(7)
     GOODNIGHT_TEXT = str(w.get("goodnightText") or GOODNIGHT_TEXT)
@@ -1207,8 +1207,7 @@ def wait_for_server(url, timeout=30):
             log("等服务起来（最多 %d 秒）…" % timeout)
         _t.sleep(1)
         waited += 1
-    log_error("[!] 等了 %d 秒服务还没起来。先双击「启动鲸鱼娘.bat」，再跑桥接。" % timeout)
-    log("    提示：直接双击「先点启动鲸鱼娘再点启动桥接」文件夹里的两个 bat 就不会顺序错。")
+    log_error("[!] 等了 %d 秒服务还没起来。先在启动器里点「启动」，等状态变成「运行中」再跑桥接。" % timeout)
     return False
 
 
@@ -1310,7 +1309,7 @@ def main():
         import ctypes
         if not ctypes.windll.shell32.IsUserAnAdmin():
             log_warn("[!] 当前不是管理员：如果微信也是管理员运行的，零焦点发送会用不了（UIPI）。")
-            log("    用「启动微信桥接.bat」启动会自动提权；手动跑请右键「以管理员身份运行」。")
+            log("    启动器本身以管理员运行，桥接继承同一权限；命令行手动跑请用管理员终端。")
     except Exception:
         pass
     # 微信的 Qt accessibility 只在「纯英文路径」下能热激活成功；路径里带中文时，
@@ -1416,7 +1415,7 @@ def main():
             log("")
             log("[!] 这不是缺 Python 包，是本机缺 VC++ 运行库（wechatauto-replica 的原生模块要用）。")
             log("    装这个（选 x64）：https://aka.ms/vs/17/release/vc_redist.x64.exe")
-            log("    装完重启电脑，再双击「启动微信桥接.bat」。")
+            log("    装完重启电脑，再回启动器「微信 · 桥接」页点「重启桥接」。")
             log("    提示：Windows Server 默认不装 MFC，家庭版/专业版一般已有。")
         else:
             log("请先运行：\"%LOCALAPPDATA%\\Programs\\Python\\Python312\\python.exe\" -m pip install wechatauto-replica requests")
@@ -1493,7 +1492,7 @@ def main():
         log("")
         log("✗ 打开微信数据库卡住超过 90 秒，已放弃这次启动（不是崩溃，是卡死）。")
         log("  常见原因：微信没完全登录 / 数据库被占用 / 微信正在更新。")
-        log("  处理：确认微信已登录 → 重启微信 → 再双击「启动微信桥接.bat」。")
+        log("  处理：确认微信已登录 → 重启微信 → 再在启动器「微信 · 桥接」页点「重启桥接」。")
         log("  如果反复卡住，把 data\\bridge-hang.log 和这段日志发给作者。")
         # L2：说清楚孤儿线程——那个 open-db 线程还卡在 wechatauto 内部（找微信进程/取密钥），
         # 杀不掉也回收不了，会留到本进程退出为止；下次启动是全新线程，不受它影响。
@@ -1512,7 +1511,7 @@ def main():
         log("  2) 微信 → 左下角三条杠 → 设置 → 文件管理 → 「微信文件默认保存位置」")
         log("     把那个路径填进 config.json：\"wechat\": { \"dbDir\": \"E:\\\\xwechat_files\" }")
         log("     （填到 xwechat_files 这一层，不是里面的 wxid_xxx 目录）")
-        log("  3) 保存后重新运行「启动微信桥接.bat」")
+        log("  3) 保存后在启动器「微信 · 桥接」页点「重启桥接」")
         log("  原始错误：%s" % e)
         return 2
     except Exception as e:
@@ -1521,7 +1520,7 @@ def main():
         log("")
         log_error("✗ 打开微信数据库失败（%s）：%s" % (type(e).__name__, e))
         log("  按顺序检查：1) 微信 4.x 已登录？2) config.json 的 wechat.dbDir 填对没有；")
-        log("  3) 重跑「启动微信桥接.bat」；还不行就把这段日志发给作者。")
+        log("  3) 在启动器里重启桥接；还不行就把这段日志发给作者。")
         return 2
 
     # 建库后硬断言：指定了账号就必须真的是那个账号。
@@ -1531,7 +1530,7 @@ def main():
         log("")
         log("✗ 账号被库自己换掉了：要的是 %s，实际打开的是 %s。" % (acct, db.account))
         log("  多半是微信当前登录的是另一个号，取到的密钥解不开 %s 的库。" % acct)
-        log("  请确认微信现在登录的就是小号，再重启「启动微信桥接.bat」。")
+        log("  请确认微信现在登录的就是小号，再在启动器里点「重启桥接」。")
         log("  （这里直接停下，绝不会用 %s 继续跑。）" % db.account)
         return 2
     _media_box = {"downloader": None}
@@ -3470,7 +3469,7 @@ def main():
                 log("UIA 发不出去，跳过 OCR 兜底：", chat_display_name)
             else:
                 log_throttled("uia-unavailable",
-                              "UIA 不可用：先试键盘通道；如果一直这样，双击「一键诊断UIA.bat」看原因"
+                              "UIA 不可用：先试键盘通道；如果一直这样，到启动器「诊断」页点「UIA 自检」看原因"
                               "（常见：微信需要重新登录、鲸鱼娘不是管理员而微信是、微信缩在托盘）",
                               ttl=600)
                 log("UIA 不可用，走 OCR 兜底")
@@ -4005,7 +4004,7 @@ def main():
                 if "10061" in _msg or "refused" in _msg.lower() or "积极拒绝" in _msg:
                     log_throttled(
                         "conn-refused",
-                        "连不上本地服务（积极拒绝 = 127.0.0.1 上没有程序在监听）。先双击「启动鲸鱼娘.bat」，等窗口出现「服务已启动」再来。",
+                        "连不上本地服务（积极拒绝 = 127.0.0.1 上没有程序在监听）。先在启动器里点「启动」，等状态变成「运行中」再来。",
                     )
                     if CONN_STATE.get("ok") is not False:
                         CONN_STATE["ok"] = False
@@ -4468,7 +4467,7 @@ def main():
             u = gui._get_uia()
             UIA_CACHE["u"] = u
             if u is None:
-                log("发送通道预热：UIA 不可用（只剩 OCR 兜底，先跑「一键修复并自检.bat」）")
+                log("发送通道预热：UIA 不可用（只剩 OCR 兜底，先跑 examples/uia_selftest.py，它会往文件传输助手发一条）")
                 explain_uia_failure()
             else:
                 win = getattr(u, "_win", None)

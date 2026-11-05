@@ -14,7 +14,6 @@
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
-const { exec } = require('node:child_process');
 
 const { ensureConfigFile, loadConfig, resolveRuntime, maskKey, projectRoot } = require('./src/infra/config');
 const { createRuntime, VERSION } = require('./src/app');
@@ -47,19 +46,7 @@ function createHandler(runtime) {
 /* 启动 / 停止                                                         */
 /* ------------------------------------------------------------------ */
 
-function openBrowser(url, logger) {
-  const cmd =
-    process.platform === 'win32'
-      ? `start "" "${url}"`
-      : process.platform === 'darwin'
-        ? `open "${url}"`
-        : `xdg-open "${url}"`;
-  exec(cmd, (err) => {
-    if (err && logger) logger.warn('没能自动打开浏览器，请手动访问：' + url);
-  });
-}
-
-async function startServer({ root = projectRoot(), env = process.env, port, host, openBrowser: shouldOpen } = {}) {
+async function startServer({ root = projectRoot(), env = process.env, port, host } = {}) {
   const runtime = createRuntime({ root, env });
   const { config, logger } = runtime;
   const handler = createHandler(runtime);
@@ -127,9 +114,6 @@ async function startServer({ root = projectRoot(), env = process.env, port, host
     runtime.stopConfigWatch?.();
     runtime.store.close();
   });
-
-  const open = shouldOpen === undefined ? Boolean(config.server.openBrowser) : shouldOpen;
-  if (open) setTimeout(() => openBrowser(url, logger), 400);
 
   return { server, runtime, port: actualPort, host: listenHost, url, close };
 }
@@ -211,11 +195,10 @@ async function main() {
   }
   const portArg = args.find((a) => /^--port=\d+$/.test(a));
   const port = portArg ? Number(portArg.split('=')[1]) : undefined;
-  const noBrowser = args.includes('--no-browser');
 
   let instance;
   try {
-    instance = await startServer({ port, openBrowser: noBrowser ? false : undefined });
+    instance = await startServer({ port });
   } catch (err) {
     if (err.code === 'EADDRINUSE') {
       console.error(`\n❌ 端口被占用了（${err.port || '默认端口'}）。换个端口：node server.js --port=8788\n`);
