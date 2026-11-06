@@ -314,7 +314,7 @@ class Bot {
   }
 
   buildTurns(msg, history, memoryBlock, tailBlock) {
-    return context.buildTurns(msg, history, memoryBlock, tailBlock);
+    return context.buildTurns({ ...msg, botName: this.config.persona.name }, history, memoryBlock, tailBlock);
   }
 
   /**
@@ -712,7 +712,7 @@ class Bot {
           key,
           msg,
           atMe,
-          canned: isMaster ? '主人你叫谁乐乐呢，哼' : '乐乐你叫谁呢',
+          canned: isMaster ? `${this.config.persona.ownerName || '主人'}你叫谁乐乐呢，哼` : '乐乐你叫谁呢',
           reason: 'nickname_provoke',
         };
       }
@@ -721,7 +721,7 @@ class Bot {
         key,
         msg,
         atMe,
-        canned: isGroup ? '在，怎么啦' : (isMaster ? '在呢主人，怎么啦' : '在，怎么了'),
+        canned: isGroup ? '在，怎么啦' : (isMaster ? `在呢${this.config.persona.ownerName || '主人'}，怎么啦` : '在，怎么了'),
         reason: 'bare_mention',
       };
     }

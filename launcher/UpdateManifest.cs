@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 
 namespace WhaleLauncher
@@ -27,6 +28,7 @@ namespace WhaleLauncher
         public bool? Force { get; set; }
         public string KillBelow { get; set; } = "";
         public string Message { get; set; } = "";
+        public string ReleaseNotes { get; set; } = "";
         public int ManifestVersion { get; set; }
     }
 
@@ -52,6 +54,20 @@ namespace WhaleLauncher
     /// </summary>
     public static class UpdateManifestService
     {
+        public static string ReleaseSummary(UpdateManifest manifest)
+        {
+            var notes = !string.IsNullOrWhiteSpace(manifest?.ReleaseNotes) ? manifest.ReleaseNotes : manifest?.Message;
+            if (string.IsNullOrWhiteSpace(notes)) return "该版本暂未提供详细更新说明。";
+            var lines = notes.Replace("\r", "").Split('\n')
+                .Where(line => !Regex.IsMatch(line, @"^\s{2,}[-*]\s"))
+                .Select(line => Regex.Replace(line.Trim(), @"^#{1,6}\s+", ""))
+                .Select(line => Regex.Replace(line, @"\[([^\]]+)\]\([^)]*\)", "$1").Replace("`", ""))
+                .Where(line => line.Length > 0)
+                .Select(line => Regex.Replace(line, @"^[-*]\s+", "• "))
+                .Take(10);
+            var summary = string.Join("\n", lines);
+            return summary.Length > 1400 ? summary.Substring(0, 1400) + "…" : summary;
+        }
         private const string Repo = "Banan1cee/whale_gril";
 
         // 顺序不重要（并行拉），但源要覆盖三种网络：GitHub 直连 / 墙内镜像 / CDN 兜底。
@@ -249,6 +265,7 @@ namespace WhaleLauncher
 
             m.KillBelow = Str(r, "kill_below");
             m.Message = Str(r, "message");
+            m.ReleaseNotes = Str(r, "release_notes");
             if (r.TryGetProperty("manifest_version", out var mv) && mv.ValueKind == JsonValueKind.Number && mv.TryGetInt32(out var i))
                 m.ManifestVersion = i;
             return m;
@@ -273,6 +290,7 @@ namespace WhaleLauncher
                     force = m.Force,
                     kill_below = m.KillBelow,
                     message = m.Message,
+                    release_notes = m.ReleaseNotes,
                     manifest_version = m.ManifestVersion,
                     cached_at = DateTimeOffset.UtcNow.ToString("o", CultureInfo.InvariantCulture),
                 };

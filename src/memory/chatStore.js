@@ -348,6 +348,7 @@ class ChatStore {
   }
 
   saveCard(chat, card) {
+    if (chat.deleted) return;
     const file = path.join(chat.dir, 'people', `${personHash(card.uid)}.json`);
     try {
       writeJsonAtomic(file, card);
@@ -521,6 +522,7 @@ class ChatStore {
   /* ------------------------------ meta / summary / checkpoint ------------------------------ */
 
   saveMeta(chat, { immediate = false } = {}) {
+    if (chat.deleted) return;
     chat.dirtyMeta = true;
     if (immediate) {
       this._flushMeta(chat);
@@ -536,6 +538,7 @@ class ChatStore {
   }
 
   _flushMeta(chat) {
+    if (chat.deleted) return;
     if (!chat.dirtyMeta) return;
     try {
       writeJsonAtomic(path.join(chat.dir, 'meta.json'), {
@@ -567,6 +570,7 @@ class ChatStore {
   }
 
   saveSummary(chat) {
+    if (chat.deleted) return;
     try {
       writeJsonAtomic(path.join(chat.dir, 'summary.json'), chat.summary);
       chat.dirtySummary = false;
@@ -576,6 +580,7 @@ class ChatStore {
   }
 
   checkpoint(chat, extra = {}) {
+    if (chat.deleted) return null;
     const seq = (chat.messages[chat.messages.length - 1] || {}).seq || 0;
     if (!seq) return null;
     const payload = {
@@ -624,6 +629,8 @@ class ChatStore {
       if (this.logger) this.logger.warn('删除会话目录失败：' + (err && err.message));
       return false;
     }
+    // 后台摘要/人物卡任务可能还持有旧对象，禁止它们把已删目录写回来。
+    chat.deleted = true;
     this.chats.delete(chat.chatId);
     this._refreshManifestStats();
     return true;

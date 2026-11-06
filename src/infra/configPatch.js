@@ -139,6 +139,14 @@ function mergeConfigInPlace(target, src) {
   return target;
 }
 
+function reloadRuntimeConfig(runtime) {
+  const next = loadConfig({ root: runtime.config.root, env: runtime.config.env });
+  // 人设另存在 persona.json；重载时必须与启动时一样合并，否则改称呼会把名字盖回默认。
+  const personaStore = require('../persona/store');
+  personaStore.apply(next, personaStore.load(next));
+  return mergeConfigInPlace(runtime.config, next);
+}
+
 /**
  * 把「整段对象」形式的补丁摊平成点号路径。
  *
@@ -199,7 +207,7 @@ function applyConfigPatch(runtime, patch) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify(raw, null, 2) + '\n', 'utf8');
   const cleared = clearSettingsShadow(runtime, changed);
-  mergeConfigInPlace(runtime.config, loadConfig({ root: runtime.config.root, env: runtime.config.env }));
+  reloadRuntimeConfig(runtime);
   runtime.stickerService?.reconcile();
   if (runtime.llm && typeof runtime.llm.reload === 'function') runtime.llm.reload();
   runtime.logger.info(`设置接口保存了配置：${changed.join('、')}${cleared.length ? `（同时清了 ${cleared.join('、')}，让改动真的生效）` : ''}`);
@@ -256,7 +264,7 @@ function watchConfigFile(runtime) {
         try {
           const raw = fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '');
           JSON.parse(raw); // 先确认是合法 JSON，写坏了就别覆盖内存里的好配置
-          mergeConfigInPlace(runtime.config, loadConfig({ root: runtime.config.root, env: runtime.config.env }));
+          reloadRuntimeConfig(runtime);
           runtime.stickerService?.reconcile();
                   if (runtime.llm && typeof runtime.llm.reload === 'function') runtime.llm.reload();
           runtime.logger.info('config.json 已重新加载（改动已生效，不用重启）');

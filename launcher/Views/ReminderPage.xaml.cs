@@ -79,13 +79,7 @@ namespace WhaleLauncher.Views
             _busy = true;
             try
             {
-                if (!_sup.NodeRunning)
-                {
-                    ShowState("内核没起，连不上提醒接口。点顶栏 ⏻ 启动。", true);
-                    return;
-                }
-
-                var res = await Api.Get(_sup.Url, "/api/reminders");
+                var res = await _sup.ReadConfigurationAsync("/api/reminders");
                 if (!res.Ok)
                 {
                     ShowState("提醒接口还没就绪（GET /api/reminders 失败）。" + Detail(res), true);
@@ -132,6 +126,8 @@ namespace WhaleLauncher.Views
                 if (full || !_formsLoaded) await LoadCareAsync();   // 周期刷新不碰表单，免得覆盖正在编辑的值（M30）
                 _formsLoaded = true;
                 StatusText.Text = "共 " + rows.Count + " 条 · " + DateTime.Now.ToString("HH:mm:ss") + " 刷新";
+                if (!_sup.NodeRunning) StatusText.Text += " · 本地配置，启动内核后可修改";
+                ConfigurationControls.SetReadOnly(this, !_sup.NodeRunning);
             }
             catch (Exception ex)
             {
@@ -180,7 +176,7 @@ namespace WhaleLauncher.Views
         // ── 主动搭话（同一页，配置独立）────────────────────────
         private async Task LoadCareAsync()
         {
-            var cfg = await Api.Get(_sup.Url, "/api/config");
+            var cfg = await _sup.ReadConfigurationAsync("/api/config");
             if (!cfg.Ok || cfg.Prop("config").ValueKind != JsonValueKind.Object) return;
             if (!cfg.Prop("config").TryGetProperty("care", out var care) || care.ValueKind != JsonValueKind.Object)
                 return;

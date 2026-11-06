@@ -1,7 +1,7 @@
 'use strict';
 
 const path = require('node:path');
-const { json } = require('../util');
+const { json, readBody } = require('../util');
 const { isLoopbackRequest } = require('../security');
 const migrate = require('../../memory/migrate');
 const { describeError } = require('../../infra/errors');
@@ -25,6 +25,48 @@ function memoryDirOf(runtime) {
 }
 
 module.exports = function register(router) {
+  function registerList(route, field, groupsOnly) {
+  router.get(route, (runtime, req, res) => {
+    if (!isLoopbackRequest(req)) return json(res, 403, { ok: false, error: '记忆管理只允许在本机操作' });
+    const groups = [...runtime.store.chatStore.chats.values()]
+      .filter((chat) => !groupsOnly || chat.platform === 'wechat' && chat.chatType === 'group')
+      .map((chat) => ({ key: chat.chatId, title: chat.title || chat.chatId, chatType: chat.chatType, platform: chat.platform,
+        messageCount: chat.messages.length, peopleCount: chat.people.size, lastActiveAt: chat.lastActiveAt }))
+      .sort((a, b) => b.lastActiveAt - a.lastActiveAt);
+    return json(res, 200, { ok: true, [field]: groups });
+  });
+  }
+
+  function registerReset(route, groupsOnly) {
+  router.post(route, async (runtime, req, res) => {
+    if (!isLoopbackRequest(req)) return json(res, 403, { ok: false, error: '记忆管理只允许在本机操作' });
+    const body = await readBody(req);
+    if (!body || typeof body.key !== 'string' || body.confirm !== true) {
+      return json(res, 400, { ok: false, error: '请选择对话并确认清空' });
+    }
+    const chat = runtime.store.chatStore.chats.get(body.key);
+    if (!chat || groupsOnly && (chat.platform !== 'wechat' || chat.chatType !== 'group')) {
+      return json(res, 404, { ok: false, error: '该对话没有可清空的记忆，请刷新列表' });
+    }
+    // 回复结束前不能删：进行中的管线会继续追加带旧上下文的回复。
+    if (runtime.bot._handleChains.has(body.key)) {
+      return json(res, 409, { ok: false, error: '该对话正在处理消息，请等回复结束后再清空' });
+    }
+    try {
+      if (!runtime.store.resetSession(body.key)) throw new Error('无法删除对话记忆文件，请检查文件占用或目录权限');
+      runtime.logger.info('已清空一个对话的内部记忆');
+      return json(res, 200, { ok: true });
+    } catch (err) {
+      runtime.logger.warn('清空对话记忆失败：' + describeError(err));
+      return json(res, 500, { ok: false, error: (err && err.message) || '清空失败' });
+    }
+  });
+  }
+  registerList('/api/memory/chats', 'chats', false);
+  registerReset('/api/memory/chats/reset', false);
+  registerList('/api/memory/groups', 'groups', true);
+  registerReset('/api/memory/groups/reset', true);
+
   router.get('/api/memory/import/status', (runtime, req, res) => {
     if (!isLoopbackRequest(req)) return json(res, 403, { ok: false, error: '旧记忆检测只允许在本机操作' });
     try {

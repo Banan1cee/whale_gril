@@ -229,14 +229,9 @@ def _release_restore_slot() -> None:
 
 
 def restore_wechat(win: dict, log=None, wait: float = 15.0) -> bool:
-    """微信缩在托盘时，主窗被隐藏、UI 子树被销毁，UIA 必然拿不到。
+    """只显示已存在的隐藏窗口，不另启微信实例，也不切换前台焦点。
 
-    单纯 ShowWindow / SetForegroundWindow / 点任务栏按钮都试过，都不重建子树；
-    但**再拉起一次 Weixin.exe** 会走单实例转发，效果等同于用户点托盘图标：
-    窗口恢复、Qt 重新建树。实测 4.2.0.9：1 秒内树就从 shell 变 ok。
-
-    建完树之后把窗口**留在屏幕上**（不缩回托盘）：这是使用方的要求，
-    也让 UIA 有稳定的控件树可读。
+    显示后树仍未恢复时交给 ensure 的 gate 校验；不能用反复运行 exe 来修 UIA。
     """
     def say(msg):
         if callable(log):
@@ -265,19 +260,13 @@ def restore_wechat(win: dict, log=None, wait: float = 15.0) -> bool:
         return False
 
     try:
-        import psutil
-        exe = None
-        try:
-            exe = psutil.Process(int(win["pid"])).exe()
-        except Exception:
-            exe = None
-        if not exe or not os.path.exists(exe):
-            say("UIA 自检：找不到 Weixin.exe 路径，没法自动打开微信窗口")
-            _release_restore_slot()
+        import win32gui
+        import win32con
+        if win32gui.IsWindowVisible(hwnd) and not win32gui.IsIconic(hwnd):
             return False
-
-        say("UIA 自检：微信窗口是隐藏的（托盘态），自动唤起一次让它重建控件树…")
-        subprocess.Popen([exe], cwd=os.path.dirname(exe), close_fds=True)
+        # 再运行 Weixin.exe 可能另开登录实例；只恢复已有窗口且不抢前台。
+        win32gui.ShowWindow(hwnd, win32con.SW_SHOWNOACTIVATE)
+        say("UIA 自检：显示已有微信窗口并等待控件树，不启动新进程")
     except Exception as e:                      # noqa: BLE001
         say("UIA 自检：唤起微信失败：%r" % (e,))
         _release_restore_slot()
@@ -287,7 +276,7 @@ def restore_wechat(win: dict, log=None, wait: float = 15.0) -> bool:
     ok = False
     while time.time() < deadline:
         # 唤起之后微信可能换了新窗口（旧句柄留着但没树），所以每轮重新挑一次
-        w2 = pick_window()
+        w2 = pick_window(prefer_hwnd=hwnd)
         if w2 and tree_state(w2["hwnd"], timeout=0.5) == "ok":
             win.update(w2)
             hwnd = w2["hwnd"]
@@ -301,7 +290,6 @@ def restore_wechat(win: dict, log=None, wait: float = 15.0) -> bool:
         return False
 
     # 需求：微信在托盘时要让它显示出来，而且建完树之后**不能再缩回托盘**
-    _keep_visible(win, log)
     return True
 
 
@@ -511,16 +499,8 @@ def ensure(prefer_hwnd: int = 0, log=None, max_candidates: int = 6,
 
     win = pick_window(prefer_hwnd)
     if not win:
-        # 微信彻底缩进托盘时主窗会被销毁，pick_window 什么都拿不到 —— 直接拉起来
-        win, ok = launch_wechat(log=log)
-        if ok:
-            say(f"UIA 自检：微信 {win.get('version')} 已打开，控件树就绪")
-            _keep_visible(win, log)
-            return {"ok": True, "reason": "restored", "hwnd": win["hwnd"], "pid": win["pid"],
-                    "version": win.get("version"), "tree": "ok"}
-        if not win:
-            say("UIA 自检：没找到微信主窗（PID 里没有 Weixin.dll 的窗口一个都没有）")
-            return {"ok": False, "reason": "no_window"}
+        say("UIA 自检：没找到微信主窗，请手动打开已登录的微信；不会另启微信进程")
+        return {"ok": False, "reason": "no_window"}
 
     hwnd, pid, version = win["hwnd"], win["pid"], win.get("version") or ""
     state = tree_state(hwnd, timeout=0.8)

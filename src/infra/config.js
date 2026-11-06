@@ -392,7 +392,7 @@ function migrateSampling(cfg, log) {
   return true;
 }
 
-function loadConfig({ root = projectRoot(), env = process.env } = {}) {
+function loadConfig({ root = projectRoot(), env = process.env, readOnly = false } = {}) {
   const configPath = path.join(root, 'config.json');
   const configExists = fs.existsSync(configPath);
   const fromFile = configExists ? readJson(configPath, {}) : {};
@@ -401,7 +401,7 @@ function loadConfig({ root = projectRoot(), env = process.env } = {}) {
   // 即使还留在 config.json 里也不参与运行，这里不再做任何兼容搬移。
   // 老配置迁移（在 env 覆盖之前做，避免把用户的 env 设置改掉）
   const migrated = migrateSampling(cfg);
-  if (migrated && configExists) {
+  if (migrated && configExists && !readOnly) {
     // 顺手写回文件，免得用户打开 config.json 看到的还是旧参数
     try {
       const raw = readJson(configPath, null);
@@ -565,7 +565,7 @@ function resolveRuntime(cfg) {
   // 只对「恰好等于旧默认值」的情况做归一，用户自己调过的不动。
   const legacyTemperature = LEGACY_TEMPERATURES.includes(Number(rawTemperature));
   const temperature = legacyTemperature ? DEFAULT_CONFIG.deepseek.temperature : rawTemperature;
-  if (legacyTemperature && typeof settings.temperature === 'number') {
+  if (legacyTemperature && typeof settings.temperature === 'number' && !cfg.readOnly) {
     // 顺手把设置面板里那个旧默认改掉，否则页面上显示的数值和实际生效的不一致
     try {
       settings.temperature = temperature;
@@ -582,16 +582,9 @@ function resolveRuntime(cfg) {
       ? legacy.thinking
       : false;
   const explicitMock = typeof settings.mock === 'boolean' ? settings.mock : null;
-  // 「演示模式」只是「没有 Key 时的兜底」，不能反过来把本来能用的接口挡在门外：
-  // 目标服务不需要 Key（本地 Ollama / 本机 / 内网自建）而且地址已经填好，就一律当真接入。
-  // 之前这里直接信 settings.mock，于是「新装默认勾着演示模式」的用户选完本地模型，
-  // 一次请求都不会发到本地服务，还一直提示「还没拿到 API Key」。
+  // 本地免 Key 服务直接真实接入；未填 Key 的云服务仍保留演示兜底。
   const keyFree = !needsKey && /^https?:\/\//i.test(baseUrl);
-  const mock = keyFree
-    ? false
-    : explicitMock === null
-      ? !apiKey && needsKey
-      : explicitMock;
+  const mock = keyFree ? false : explicitMock === null ? !apiKey && needsKey : explicitMock;
   return {
     settings,
     provider,

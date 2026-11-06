@@ -26,6 +26,8 @@
 """
 
 import ctypes
+import json
+import os
 import re
 import threading
 import time
@@ -48,11 +50,26 @@ TIMING = {
 }
 
 
-def configure(bg_cfg=None):
+def configure(bg_cfg=None, state_file=None):
     """从 config 的 wechat.bgSend.timing 覆盖 TIMING（缺省保持原值）。
 
     只认 0~3 秒、数字类型；写错就忽略 —— 这里绝不能因为配置笔误把发送卡死。
     """
+    global _MODE_STATE_FILE, _LAST_MODE_STATE
+    if state_file is not None and state_file != _MODE_STATE_FILE:
+        _MODE_STATE_FILE = state_file
+        _LAST_MODE_STATE = ""
+        try:
+            with open(state_file, encoding="utf-8") as saved:
+                entries = json.load(saved).get("windows", {})
+            for key, value in list(entries.items())[-32:]:
+                if value.get("mode") not in ("gbk", "utf16"):
+                    continue
+                h = int(key)
+                _DETECTED_MODES[h] = value["mode"]
+                _CONFIGURED_MODES[h] = value.get("configured", "auto")
+        except (OSError, ValueError, TypeError, AttributeError):
+            pass
     over = (bg_cfg or {}).get("timing") or {}
     for key in list(TIMING):
         if key not in over:
@@ -628,6 +645,30 @@ def _detect_char_mode_by_version(hwnd=0):
 
 # 自动探测的结果缓存：窗口句柄 -> "gbk" / "utf16"（同一个窗口只测一次）
 _DETECTED_MODES = {}
+_CONFIGURED_MODES = {}
+_MODE_STATE_FILE = None
+_LAST_MODE_STATE = ""
+
+
+def _remember_char_mode(hwnd, mode, log):
+    global _LAST_MODE_STATE
+    _DETECTED_MODES[int(hwnd)] = mode
+    if not _MODE_STATE_FILE:
+        return
+    windows = {str(h): {"mode": m, "configured": _CONFIGURED_MODES.get(h, "auto")}
+               for h, m in list(_DETECTED_MODES.items())[-32:] if m in ("gbk", "utf16")}
+    body = json.dumps({"version": 1, "windows": windows}, sort_keys=True)
+    if body == _LAST_MODE_STATE:
+        return
+    try:
+        os.makedirs(os.path.dirname(os.path.abspath(_MODE_STATE_FILE)), exist_ok=True)
+        temp = _MODE_STATE_FILE + ".tmp"
+        with open(temp, "w", encoding="utf-8") as saved:
+            saved.write(body)
+        os.replace(temp, _MODE_STATE_FILE)
+        _LAST_MODE_STATE = body
+    except OSError as err:
+        log("后台通道：有效编码已在内存固定，状态保存失败（%s）" % type(err).__name__)
 # 探测收尾没把输入框清干净时置真，send() 看到就按 input_dirty 返回，不再往脏框里打字
 _DETECT_DIRTY = []
 
@@ -715,8 +756,6 @@ def detect_char_mode(hwnd=0, log=None):
     再真的打一个「鲸」读回来验证，选出正确的那个并缓存。
     """
     mode = _detect_char_mode_by_version(hwnd)
-    if mode == "utf16":
-        return mode
     try:
         # 只用窗口句柄，不需要 win32 模块：CI 上没装 pywin32 也要能跑到实测分支
         h = int(hwnd or 0) or find_hwnd()
@@ -726,6 +765,8 @@ def detect_char_mode(hwnd=0, log=None):
         return mode
     if h in _DETECTED_MODES:
         return _DETECTED_MODES[h]
+    if mode == "utf16":
+        return mode
     # 只对调用方明确传入的窗口做实测：hwnd=0 时 find_hwnd() 可能摸到别的微信窗口，
     # 单元测试/离线脚本不该去动真实输入框。
     if not int(hwnd or 0):
@@ -734,8 +775,21 @@ def detect_char_mode(hwnd=0, log=None):
     if sniffed:
         _DETECTED_MODES[h] = sniffed
         return sniffed
-    _DETECTED_MODES[h] = "gbk"
-    return "gbk"
+    return mode
+
+
+def _composer_text(value):
+    """Qt 会附加段落换行；保留正文内部空格、换行和所有可见字符。"""
+    if not isinstance(value, str):
+        return None
+    return value.replace("\r\n", "\n").replace("\r", "\n").replace("\u2029", "\n").strip()
+
+
+def _expected_text(text, mode, strip_unencodable):
+    if mode == "utf16":
+        return text
+    payload, _ = encode_gbk(text, strip_unencodable)
+    return payload.decode("gbk") if payload is not None else None
 
 
 def encode_gbk(text, strip_unencodable=True):
@@ -1157,8 +1211,17 @@ def send(text, chat=None, hwnd=0, log=None, char_gap=0.04,
             # 读不到（None）维持原语义：当作没草稿，继续发。
             if info["value"] is not None and not _is_blank(info["value"]):
                 return False, "input_not_empty"
+            if info["value"] is None:
+                # 还没输入时可以安全退回 Unicode 剪贴板通道；输入之后则不能盲目重发。
+                return False, "input_unreadable"
 
-            mode = char_mode
+            configured = str(char_mode or "auto").lower()
+            previous = _CONFIGURED_MODES.get(int(hwnd))
+            if previous is not None and previous != configured:
+                # 用户主动改选项才重置候选；同一个设置不能每条消息都盖掉实测结果。
+                _DETECTED_MODES.pop(int(hwnd), None)
+            _CONFIGURED_MODES[int(hwnd)] = configured
+            mode = _DETECTED_MODES.get(int(hwnd), configured)
             if mode in (None, "", "auto"):
                 mode = detect_char_mode(hwnd, log=log)
                 if _DETECT_DIRTY:
@@ -1174,18 +1237,52 @@ def send(text, chat=None, hwnd=0, log=None, char_gap=0.04,
             # 从这里开始往输入框投字：之后的失败返回一律改带 input_dirty（新增枚举，
             # 向后兼容），声明「草稿可能残留」（M2），免得调用方在脏草稿上接着打字、
             # 拼出双份或拼接脏消息。
-            draft_dirty = True
-            ok, skipped = sender.type_text(text, char_gap=char_gap,
-                                           strip_unencodable=strip_unencodable, mode=mode)
-            if not ok:
-                # 编码就失败了，一个字都没投出去，不算残留
-                return False, "gbk_unsupported"
-            if skipped:
-                log("后台通道：GBK 编不了 %d 个字符，已跳过：%s"
-                    % (len(skipped), "".join(skipped)[:20]))
+            for attempt in range(2):
+                expected = _composer_text(_expected_text(text, mode, strip_unencodable))
+                if not expected:
+                    return False, "gbk_unsupported"
+                draft_dirty = True
+                ok, skipped = sender.type_text(text, char_gap=char_gap,
+                                               strip_unencodable=strip_unencodable, mode=mode)
+                if not ok:
+                    return False, "gbk_unsupported"
+                time.sleep(TIMING["sendEnabled"])
+                info = read_ui(hwnd)
+                if chat and not _chat_is_target(info.get("chat"), chat)[0]:
+                    sender.end_input()
+                    return False, "chat_mismatch"
+                observed = _composer_text(info.get("value"))
+                if observed is None:
+                    sender.end_input()
+                    log("后台通道：发送前读不到正文，停止发送，草稿可能残留")
+                    return False, "input_dirty"
+                if observed == expected:
+                    _remember_char_mode(hwnd, mode, log)
+                    break
+                if attempt:
+                    sender.end_input()
+                    log("后台通道：两种编码均未通过正文校验，停止发送，请检查草稿")
+                    return False, "input_dirty"
+                # 清理前再核对一次，避免把用户切换到其他会话后的草稿清掉。
+                current = read_ui(hwnd)
+                if (chat and not _chat_is_target(current.get("chat"), chat)[0]
+                        or _composer_text(current.get("value")) != observed):
+                    sender.end_input()
+                    return False, "input_dirty"
+                sender.end_input()
+                if not _clear_composer(hwnd, current.get("edit")):
+                    log("后台通道：编码校验失败且无法清空本次草稿，停止发送")
+                    return False, "input_dirty"
+                current = read_ui(hwnd)
+                if (chat and not _chat_is_target(current.get("chat"), chat)[0]
+                        or not _is_blank(current.get("value"))):
+                    return False, "input_dirty"
+                mode = "gbk" if mode == "utf16" else "utf16"
+                _DETECTED_MODES.pop(int(hwnd), None)
+                log("后台通道：正文回读与预期不一致，切换为 %s 后重试一次" % mode)
 
-            time.sleep(TIMING["sendEnabled"])      # 等按钮变 enabled（文档 §9）
-            info = read_ui(hwnd)                   # 再读一次：按钮此刻才 enabled
+            if skipped:
+                log("后台通道：GBK 编不了 %d 个字符，已跳过" % len(skipped))
             xy = info["send_xy"]
             if xy is None:
                 sender.end_input()

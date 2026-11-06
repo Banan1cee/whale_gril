@@ -229,7 +229,12 @@ function apply(config, data) {
   if (Object.keys(legacy).length) {
     try {
       const { saveConfigPatch } = require('../infra/configPatch');
-      saveConfigPatch(config, legacy);
+      if (config.readOnly) {
+        for (const [dotted, value] of Object.entries(legacy)) {
+          const [section, key] = dotted.split('.');
+          config[section][key] = value;
+        }
+      } else saveConfigPatch(config, legacy);
     } catch { /* 写不了就按默认值跑 */ }
   }
   config.persona.emotions = data.emotions !== false;

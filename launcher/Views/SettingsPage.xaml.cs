@@ -52,6 +52,7 @@ namespace WhaleLauncher.Views
         private Dictionary<string, JsonElement> _providers;
         private bool _loading;
         private bool _configLoaded;      // 已经成功全量回填过一次（M30：周期刷新据此判断要不要补）
+        private bool _loadedOnline;
         private bool _loadingConfig;     // 全量回填在途，防止载入和定时器双跑
         private DateTime _lastLoad = DateTime.MinValue;
         public SettingsPage(RuntimeSupervisor sup)
@@ -62,7 +63,7 @@ namespace WhaleLauncher.Views
             Loaded += async (_, __) =>
             {
                 MainScroll.ScrollToTop();
-                await LoadConfigAsync();   // 页面载入才全量回填（M30）
+                await RefreshAsync();
             };
         }
 
@@ -1061,7 +1062,6 @@ namespace WhaleLauncher.Views
             var baseUrl = new TextBox();
             var model = new ComboBox { Height = 28, IsEditable = true, MinWidth = 320, HorizontalAlignment = HorizontalAlignment.Left };
             var key = new PasswordBox();
-            var mock = new CheckBox();
             // 深度思考：和 /api/settings 共用 data/settings.json 的 thinking（保存走 ModelRequest）。
             // 只在这里声明，Click 处理器等 AutoSaveChatAsync 定义好之后再挂（否则编译器会报
             // 「未赋值的局部变量」——那个函数捕获了后面才声明的控件）。
@@ -1320,7 +1320,6 @@ namespace WhaleLauncher.Views
             baseUrl.LostFocus += async (s, e) => await AutoSaveChatAsync();
             model.LostFocus += async (s, e) => await AutoSaveChatAsync();
             key.LostFocus += async (s, e) => { if (key.Password.Length > 0) await AutoSaveChatAsync(); };
-            mock.Click += async (s, e) => await AutoSaveChatAsync();
             visionModel.LostFocus += async (s, e) => await AutoSaveVisionAsync();
             visionKey.LostFocus += async (s, e) => { if (visionKey.Password.Length > 0) await AutoSaveVisionAsync(); };
 
@@ -1329,7 +1328,13 @@ namespace WhaleLauncher.Views
             chatPanel.Children.Add(Row("接口地址", baseUrl, "", false, ModelLabel));
             chatPanel.Children.Add(Row("模型名", model, "点下拉直接选；没有的型号也可以自己输入", false, ModelLabel));
             chatPanel.Children.Add(Row("API Key", key, "留空表示不改；已存的这里不会显示", false, ModelLabel));
-            chatPanel.Children.Add(Row("演示模式", mock, "不连模型，用内置台词", false, ModelLabel));
+            var connectionNote = new Border { CornerRadius = new CornerRadius(8), Padding = new Thickness(12, 10, 12, 10),
+                Margin = new Thickness(0, 0, 0, 12), BorderThickness = new Thickness(1) };
+            connectionNote.SetResourceReference(Border.BackgroundProperty, "Hover");
+            connectionNote.SetResourceReference(Border.BorderBrushProperty, "Accent");
+            connectionNote.Child = new TextBlock { Text = "连接小贴士：如果回复总是重复一句话、答非所问，或像在“装傻”，API 可能没有连接成功。没填 API Key 时会使用演示回复；填好后请点击“测试连接”，检查 Key、接口地址和模型名（本地免 Key 模型除外）。",
+                Style = (Style)FindResource("Small"), TextWrapping = TextWrapping.Wrap };
+            chatPanel.Children.Add(connectionNote);
 
             var chatDivider = new Border { Height = 1, Margin = new Thickness(0, 4, 0, 12) };
             chatDivider.SetResourceReference(Border.BackgroundProperty, "Line");
@@ -1393,7 +1398,7 @@ namespace WhaleLauncher.Views
                     + "\"visionProvider\":\"" + Api.Esc(VisionProviderValue()) + "\","
                     + "\"visionModel\":\"" + Api.Esc(VisionValue()) + "\","
                     + (VisionIsCustom() ? "\"visionBaseUrl\":\"" + Api.Esc(visionUrl.Text.Trim()) + "\"," : "")
-                    + "\"mock\":" + (mock.IsChecked == true ? "true" : "false")
+                    + "\"mock\":false"
                     + ",\"thinking\":" + (thinking.IsChecked == true ? "true" : "false")
                     + (key.Password.Length > 0 ? ",\"apiKey\":\"" + Api.Esc(key.Password.Trim()) + "\"" : "")
                     + "}";
@@ -1614,7 +1619,6 @@ namespace WhaleLauncher.Views
                         if (visionProvider.SelectedItem is ProviderItem sel && sel.Key.Length > 0) FillVisionModels(sel.Key);
                     }
                 }
-                if (!mock.IsKeyboardFocusWithin) mock.IsChecked = set.ValueKind == JsonValueKind.Object && set.TryGetProperty("mock", out var m) && m.ValueKind == JsonValueKind.True;
                 if (!thinking.IsKeyboardFocusWithin)
                     thinking.IsChecked = set.ValueKind == JsonValueKind.Object
                         && set.TryGetProperty("thinking", out var th) && th.ValueKind == JsonValueKind.True;
@@ -1654,13 +1658,14 @@ namespace WhaleLauncher.Views
         /// </summary>
         public async Task RefreshAsync()
         {
-            if (!_sup.NodeRunning)
+            if (_configLoaded && _loadedOnline != _sup.NodeRunning)
             {
-                KernelHint.Text = "内核没起，配置项读不到也存不了；外观（主题 / 背景图）仍然可用。点顶栏 ⏻ 启动。";
                 _configLoaded = false;
-                return;
+                _lastLoad = DateTime.MinValue;
             }
-            KernelHint.Text = "改完立即写回 config.json（密钥留空表示不改）";
+            KernelHint.Text = _sup.NodeRunning
+                ? "改完立即写回 config.json（密钥留空表示不改）"
+                : "已读取本地配置，启动内核后可修改；外观设置仍可直接调整。";
             if (!_configLoaded) await LoadConfigAsync();      // 还没回填过，补一次
         }
 
@@ -1673,9 +1678,9 @@ namespace WhaleLauncher.Views
             _lastLoad = DateTime.Now;
             try
             {
-                var cfg = await Api.Get(_sup.Url, "/api/config");
-                if (!cfg.Ok) return;
-                var settings = await Api.Get(_sup.Url, "/api/settings");
+                var cfg = await _sup.ReadConfigurationAsync("/api/config");
+                if (!cfg.Ok) { KernelHint.Text = cfg.Error; return; }
+                var settings = await _sup.ReadConfigurationAsync("/api/settings");
                 var config = cfg.Prop("config");
                 _loading = true;
                 try
@@ -1695,6 +1700,10 @@ namespace WhaleLauncher.Views
                     _loadVision?.Invoke(settings.Root);
                 }
                 _configLoaded = true;
+                _loadedOnline = _sup.NodeRunning;
+                // 外观是本地设置，内核停止时仍然可以编辑。
+                for (var i = 0; i < Math.Min(2, SectionsHost.Children.Count); i++)
+                    ConfigurationControls.SetReadOnly(SectionsHost.Children[i], !_loadedOnline);
             }
             finally
             {

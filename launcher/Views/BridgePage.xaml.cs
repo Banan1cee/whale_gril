@@ -239,8 +239,9 @@ namespace WhaleLauncher.Views
             _lastRefresh = DateTime.Now;
 
             var s = await _sup.ProbeAsync();
+            ConfigurationControls.SetReadOnly(this, !s.NodeUp);
             UpdatePerm(s);
-            if (!_configLoaded && s.NodeUp) await LoadConfigAsync();
+            if (!_configLoaded) await LoadConfigAsync();
             if ((DateTime.Now - _lastAccounts).TotalSeconds < 15) return;
             _lastAccounts = DateTime.Now;
             await LoadAccountsAsync(s);
@@ -449,9 +450,9 @@ namespace WhaleLauncher.Views
             if (_configLoaded) return;
             try
             {
-                var json = await _http.GetStringAsync(_sup.Url + "/api/config");
-                using var doc = JsonDocument.Parse(json);
-                if (!doc.RootElement.TryGetProperty("config", out var cfg)) return;
+                var result = await _sup.ReadConfigurationAsync("/api/config");
+                if (!result.Ok) return;
+                var cfg = result.Prop("config");
                 if (!cfg.TryGetProperty("wechat", out var wx) || wx.ValueKind != JsonValueKind.Object) return;
 
                 _loading = true;
