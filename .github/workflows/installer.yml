@@ -7,6 +7,9 @@ name: installer
 # 触发：
 #   · 测试分支：推 test/** 就构建（只出 Artifact，**不会**建 Release）
 #   · 手动：Actions → installer → Run workflow（产物在本次运行的 Artifacts 里）
+#   · PR：改动落在打包相关路径（installer/**、launcher/**、构建脚本）才构建 + 真装真卸，
+#         只出 Artifact、不建 Release。目的是让「装不上 / 覆盖升级丢数据」在合并前暴露，
+#         而不是等发版那天才发现——#65 那次就是烟测漏建 data 目录，PR 阶段完全没跑过。
 #   · tag：git push origin v4.0.0 → 自动建 GitHub Release 并挂安装包
 #
 # 签名：仓库配了 WINDOWS_SIGNING_PFX_BASE64 / WINDOWS_SIGNING_PFX_PASSWORD 就签，
@@ -29,6 +32,17 @@ on:
       - 'test/**'
     tags:
       - 'v*'
+  # PR 也跑：只改打包/安装器/启动器的 PR 必须证明「装得上、覆盖升级不丢数据」。
+  # paths 过滤把范围压到打包相关文件，改文案、改内核逻辑的 PR 不会被拖慢十分钟。
+  pull_request:
+    paths:
+      - 'installer/**'
+      - '.github/workflows/installer.yml'
+      - 'scripts/build-runtime.ps1'
+      - 'scripts/fetch-dotnet-runtime.ps1'
+      - 'scripts/fetch-vb-cable.ps1'
+      - 'scripts/sign-windows.ps1'
+      - 'launcher/**'
 
 permissions:
   contents: write

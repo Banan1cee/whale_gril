@@ -51,6 +51,27 @@ jobs:
           python -c "import sys, locale; print(sys.version); print('stdout=', sys.stdout.encoding, 'preferred=', locale.getpreferredencoding())"
           dotnet --version
 
+      # workflow 文件本身也要过一遍静态检查：input 名写错、表达式语法错、引用不存在的
+      # action 输入，GitHub 大多只给一条黄警告，甚至静默忽略（upload-artifact v4 的
+      # archive 就是被忽略的），不拦下来等于没发现。放最前面，几十秒就能出结果。
+      - name: workflow 静态检查（actionlint）
+        if: always()
+        shell: pwsh
+        run: |
+          $ver = '1.7.12'
+          $zip = Join-Path $env:RUNNER_TEMP "actionlint-$ver.zip"
+          $dir = Join-Path $env:RUNNER_TEMP "actionlint-$ver"
+          Invoke-WebRequest -Uri "https://github.com/rhysd/actionlint/releases/download/v$ver/actionlint_${ver}_windows_amd64.zip" -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath $dir -Force
+          # SignPath 那两步还在用 upload-artifact v3 时代的 archive 输入（v4 已经没有），
+          # 签名路径当前没启用，先只忽略这一条；其它问题一律不许过。
+          & (Join-Path $dir 'actionlint.exe') -ignore 'input "archive" is not defined' `
+            .github/workflows/build.yml .github/workflows/installer.yml .github/workflows/tests.yml
+          if ($LASTEXITCODE -ne 0) {
+            Write-Output '::error title=actionlint::workflow 文件有静态错误，见上方输出'
+            exit 1
+          }
+
       # 后面每一步都加 if: always()，任何一步红了也把剩下的跑完，
       # 这样一次运行就能看到整条流水线的真实状态，而不是在第一个错处停下。
       - name: 分层依赖（谁可以 require 谁）
