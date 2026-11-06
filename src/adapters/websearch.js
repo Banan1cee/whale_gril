@@ -5,12 +5,13 @@
  * 只用 Node 内置 https，不依赖第三方库；失败返回空数组。
  */
 const https = require('node:https');
+const { performance } = require('node:perf_hooks');
 
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36';
 
 function getText(url, timeoutMs = 8000, extraHeaders = null) {
-  const deadline = Date.now() + Math.max(1, Number(timeoutMs) || 8000);
+  const deadline = performance.now() + Math.max(1, Number(timeoutMs) || 8000);
   const visit = (target, redirects = 0) => new Promise((resolve, reject) => {
     let req;
     let response;
@@ -27,9 +28,9 @@ function getText(url, timeoutMs = 8000, extraHeaders = null) {
       finish(err);
       if (response) response.destroy();
       if (req) req.destroy(err);
-    }, Math.max(1, deadline - Date.now()));
+    }, Math.max(1, deadline - performance.now()));
     try {
-      if (Date.now() >= deadline) return finish(new Error('search deadline exceeded'));
+      if (performance.now() >= deadline) return finish(new Error('search deadline exceeded'));
       req = https.get(target, {
         headers: { 'User-Agent': UA, 'Accept-Language': 'zh-CN,zh;q=0.9', Accept: 'text/html,*/*', ...(extraHeaders || {}) },
       }, (res) => {
@@ -327,10 +328,10 @@ async function search(query, { limit = 5, timeoutMs = 8000, maxAgeDays } = {}) {
   const q = siteFilter
     ? rawQuery.replace(siteFilter, '').trim().slice(0, 100) + ' ' + siteFilter
     : rawQuery.slice(0, 100);
-  const deadline = Date.now() + Math.max(1, Number(timeoutMs) || 8000);
+  const deadline = performance.now() + Math.max(1, Number(timeoutMs) || 8000);
   const ask = async (term) => {
     if (siteFilter && !term.toLowerCase().includes(siteFilter.toLowerCase())) term += ' ' + siteFilter;
-    const remaining = deadline - Date.now();
+    const remaining = deadline - performance.now();
     if (remaining <= 0) return [];
     const url = 'https://cn.bing.com/search?q=' + encodeURIComponent(term) + '&setlang=zh-CN&count=10';
     // 每次纠错独立失败，不能因补搜失败丢掉前面已经拿到的有效资料。
