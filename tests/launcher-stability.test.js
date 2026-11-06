@@ -31,10 +31,11 @@ test('模型名下拉仍然是可编辑的（没有型号时可以手输）', ()
 
 test('检查更新不在 UI 线程同步等进程', () => {
   const code = read('UpdateService.cs');
+  // 检测那段（CheckAsync + 30 秒 CTS）已经整段删掉：版本判定在 UpdateManifestService 里走 HTTP，
+  // 这里只剩落地。脚本路径必须把等待丢进 Task.Run，安装包路径本身就是异步下载。
   assert.doesNotMatch(code, /\.WaitForExit\(30000\)/, '同步 WaitForExit 会卡住 UI 线程');
-  assert.match(code, /WaitForExitAsync/, '应该用 WaitForExitAsync');
-  assert.match(code, /CancellationTokenSource\(TimeSpan\.FromSeconds\(30\)\)/, '保留 30 秒超时');
-  assert.match(code, /OperationCanceledException/, '超时要被接住并 Kill');
+  assert.match(code, /Task\.Run\(\(\) => p\.WaitForExit\(/, '等子进程要放进 Task.Run，别卡 UI 线程');
+  assert.match(read('UpdateManifest.cs'), /public static async Task<ManifestCheck> FetchAsync/, '检测要异步，别在 UI 线程等网络');
 });
 
 test('更新过程有进度反馈：流式读输出 + 底栏进度条', () => {

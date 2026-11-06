@@ -15,7 +15,7 @@ public static class VoiceSendGuide
         var layout=new StackPanel();card.Child=layout;
         var toggle=new Button{Content="首次使用 · 展开完整教程 ▾",HorizontalAlignment=HorizontalAlignment.Left};
         toggle.SetResourceReference(FrameworkElement.StyleProperty,"Ghost");layout.Children.Add(toggle);
-        layout.Children.Add(Text("包内已附 VB-CABLE 安装程序，但打开软件不会自动安装。首次使用请按教程逐步设置。"));
+        layout.Children.Add(Text("包内已附 VB-CABLE 安装程序，装完就在安装目录的 VB-CABLE虚拟声卡 文件夹里；但打开软件不会自动安装。首次使用请按教程逐步设置。"));
         var body=new StackPanel{Visibility=Visibility.Collapsed};layout.Children.Add(body);
         toggle.Click+=(_,_)=>{
             bool open=body.Visibility!=Visibility.Visible;body.Visibility=open?Visibility.Visible:Visibility.Collapsed;
@@ -26,7 +26,7 @@ public static class VoiceSendGuide
             "先打开本页第一行的实验开关。运行包只附带驱动安装文件；解压、打开启动器和打开实验开关都不会替你安装 Windows 驱动。\n"+
             "点击本页底部「安装 VB-CABLE 官方驱动」，在 Windows 权限提示里允许操作，再按官方窗口中的 Install Driver 完成安装，按提示重启电脑。不要选择 Remove Driver。\n"+
             "如果 Windows 声音设备里已经有 CABLE Input 和 CABLE Output，可跳过安装。安装后看不到设备时，先重启，再点本页「刷新声卡」。\n"+
-            "如果提示运行包缺少驱动，使用教程末尾的 VB-CABLE 官网链接下载并完整解压官方驱动包，再运行其中的 VBCABLE_Setup_x64.exe；不要只取出一个 exe，安装需要同目录的其他驱动文件。");
+            "如果提示运行包缺少驱动，包内那份在安装目录的 VB-CABLE虚拟声卡 文件夹里（含 VBCABLE_Setup_x64.exe 和同目录的驱动文件）；也可以使用教程末尾的 VB-CABLE 官网链接下载并完整解压官方驱动包，再运行其中的 VBCABLE_Setup_x64.exe；不要只取出一个 exe，安装需要同目录的其他驱动文件。");
         ActionButton("前往本页的驱动安装按钮",goToDriver);
 
         Step("2. 在微信设置 Ctrl+Tab 发语音快捷键",

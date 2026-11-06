@@ -30,6 +30,11 @@ DefaultDirName={localappdata}\Programs\WhaleGirl
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
+; 覆盖安装：升级时由 Restart Manager 检测占用，弹窗让用户关掉正在运行的鲸鲸再继续。
+; RestartApplications 必须 No —— 装完 [Run] 段已经会拉起启动器，让 Inno 再拉一次会开两个。
+UsePreviousAppDir=yes
+CloseApplications=yes
+RestartApplications=no
 ; 版本资源：CI 里 ISCC --define=AppVersion=4.0.0 打进来，安装包右键属性里能看到，
 ; 签名之后也能和证书信息对上。
 VersionInfoVersion={#AppVersion}
@@ -57,6 +62,19 @@ Name: "chinese"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加任务："; Flags: checkedonce
 
+; 覆盖安装前先清掉「只有旧版本才有」的东西。Inno 在装文件之前统一处理这一段。
+; 绝不能在这里放用户数据或运行期库：删不掉（进程占用）会让整次安装失败。
+[InstallDelete]
+; 4.0.1 及更早：资源和人格放在 personas\ 与 resources\，4.0 起搬到 assets\。
+; 整目录删 —— 这两个目录完全由安装包提供，聊天记忆与配置不在其中。
+Type: filesandordirs; Name: "{app}\personas"
+Type: filesandordirs; Name: "{app}\resources"
+; 4.0.1 之后删掉的两个模块（webkit 控制台入口与没人调用的 B 站适配器）
+Type: files; Name: "{app}\src\http\static.js"
+Type: files; Name: "{app}\src\adapters\bilibili.js"
+; 虚拟声卡安装包从 runtime\vb-cable 挪到安装目录根部
+Type: filesandordirs; Name: "{app}\runtime\vb-cable"
+
 ; 注意：这里绝不能写 *.zip。CPython embeddable 的标准库就是
 ; runtime\python\python312.zip，排掉它用户装完 python 直接报
 ; "No module named encodings"（4.0 的 CI 烟测就是这么抓到的）。
@@ -79,14 +97,18 @@ Source: "..\examples\*"; DestDir: "{app}\examples"; Flags: ignoreversion recurse
 ; （它也是 CPython 标准库 python312.zip 所在目录，所以绝不能整体排除 *.zip）
 ; 注意：pythonwin 目录里放着 win32ui.pyd / win32uiole.pyd，wechatauto 截图要用，绝不能整目录排除。
 Source: "..\runtime\*"; DestDir: "{app}\runtime"; Flags: ignoreversion recursesubdirs createallsubdirs; \
-    Excludes: "wheelhouse\*,.temp\*,.uv-cache\*,.built,__pycache__\*,*.cat"
+    Excludes: "wheelhouse\*,.temp\*,.uv-cache\*,.built,__pycache__\*,*.cat,vb-cable\*"
+; 虚拟声卡安装包放在安装目录根部：用户反馈在 runtime 深处根本找不到。
+; 官方 Pack45 内文件必须同目录，所以整文件夹搬，不拆散。
+Source: "..\runtime\vb-cable\*"; DestDir: "{app}\VB-CABLE虚拟声卡"; \
+    Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\runtime\vb-cable\VBCABLE_Setup_x64.exe"; Description: "安装 VB-CABLE 虚拟声卡（自动语音需要；VB-Audio Donationware）"; Verb: "runas"; Flags: shellexec postinstall skipifsilent unchecked; Check: FileExists(ExpandConstant('{app}\runtime\vb-cable\VBCABLE_Setup_x64.exe'))
+Filename: "{app}\VB-CABLE虚拟声卡\VBCABLE_Setup_x64.exe"; Description: "安装 VB-CABLE 虚拟声卡（安装包在「VB-CABLE虚拟声卡」文件夹里；VB-Audio Donationware）"; Verb: "runas"; Flags: shellexec postinstall skipifsilent unchecked; Check: FileExists(ExpandConstant('{app}\VB-CABLE虚拟声卡\VBCABLE_Setup_x64.exe'))
 ; 启动器清单是 requireAdministrator：必须走 ShellExecuteEx 才会弹 UAC。
 ; 用默认的 CreateProcess 直接拉会失败：code 740 = ERROR_ELEVATION_REQUIRED。
 Filename: "{app}\{#AppExe}"; Description: "启动{#AppName}"; Verb: "runas"; Flags: shellexec postinstall skipifsilent
@@ -209,6 +231,11 @@ begin
       Files 段的 Excludes 排除，117MB 不会进包）。装完顺手删掉这个空目录，
       别在用户机器上留个看不懂的 wheelhouse。 }
     DelTree(ExpandConstant('{app}\runtime\wheelhouse'), True, True, True);
+
+    { [InstallDelete] 已经把 runtime\vb-cable 里的旧文件清掉了，但 [Files] 的 runtime 那条
+      带 createallsubdirs，装文件时又会把 vb-cable 这个空目录建回来。这里补一刀，
+      不然升级完目录里会留一个空的 runtime\vb-cable，用户看着像个坏掉的旧版本。 }
+    DelTree(ExpandConstant('{app}\runtime\vb-cable'), True, True, True);
 
     if IsDesktopRuntimeInstalled() then
       Log('.NET 10 桌面运行时已存在，跳过')
