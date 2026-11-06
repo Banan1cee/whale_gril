@@ -126,3 +126,48 @@ test('release-manifest.json 的字段与 UpdateManifest.Parse 一一对应', () 
   assert.ok(manifest.latest.length > 0, 'latest 是空的，客户端永远显示已是最新');
   assert.equal(typeof manifest.manifest_version, 'number', 'manifest_version 必须是数字（多源比较用）');
 });
+
+/**
+ * 清单有 4 个源（含两个镜像），所以「检查更新」总能拿到版本号；
+ * 但资产以前只有 GitHub 一条路，国内直连 TLS 直接断，于是卡在
+ * 「下载校验清单失败」——知道有新版本，却一个字节都下不来。
+ */
+test('UpdateService：资产（安装包 / 校验清单）有镜像回退，直连排在第一位', () => {
+  const start = service.indexOf('private static readonly string[] AssetBases');
+  assert.ok(start > 0, '没有资产源列表 AssetBases');
+  const block = service.slice(start, service.indexOf('};', start));
+
+  for (const host of ['gh-proxy.com', 'ghfast.top', 'ghproxy.net']) {
+    assert.ok(block.includes(host), `资产源里缺镜像 ${host}（与 scripts/update.ps1 用过的三家保持一致）`);
+  }
+  assert.ok(block.includes('https://github.com/'), '资产源里没有 GitHub 直连');
+  assert.ok(
+    block.indexOf('https://github.com/') < block.indexOf('gh-proxy.com'),
+    '镜像排到了直连前面：官方源能用时不该先走第三方'
+  );
+});
+
+test('UpdateService：校验清单多源并行，哈希对不上就中止而不是挑一个用', () => {
+  assert.match(service, /Task\.WhenAll\(AssetBases\.Select/, '校验清单没有多源并行拉取');
+  assert.match(service, /不一致，已中止/, '多个源的哈希冲突时没有中止（会装到被篡改的包）');
+  assert.match(service, /hash\.Length == 64/, '没有校验哈希格式，镜像的错误页会被当成哈希');
+});
+
+test('UpdateService：安装包 4 段并发，服务端不支持 Range 就退回单连接', () => {
+  assert.ok(service.includes('RangeHeaderValue'), '没有用 Range 分段下载');
+  assert.match(service, /SegmentCount = 4/, '分段数不是 4');
+  assert.match(service, /HttpStatusCode\.PartialContent/, '没有检查 206（Range 是否真的被支持）');
+  assert.match(service, /ProbeLengthAsync/, '没有先探总长度就直接分段');
+  assert.match(
+    service,
+    /DownloadSegmentsAsync\([^;]*\)\)[\s\S]{0,120}return await DownloadSingleAsync/,
+    '分段失败后没有回退单连接'
+  );
+});
+
+test('UpdateService：单个源失败不影响整体——换源，并把每个源的原因汇总报出来', () => {
+  assert.match(service, /foreach \(var baseUrl in AssetBases\)/, '没有逐源尝试');
+  assert.match(service, /tried\.Add\(/, '没有记录每个源的失败原因');
+  assert.ok(service.includes('的 SHA256 对不上'), '哈希不符时直接判死，没有换下一个源');
+  assert.match(service, /string\.Join\("；", tried\)/, '全部失败时没有把原因汇总给用户');
+});
