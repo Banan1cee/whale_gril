@@ -3,7 +3,7 @@
 /**
  * README 目录树门禁：树里画的东西必须和「GitHub 仓库跟踪的条目」一致。
  *
- * 只解析 README「## 目录结构」一节里的那个代码块，别把别处的代码块当目录树。
+ * 只解析 README「## Project structure」一节里的那个代码块，别把别处的代码块当目录树。
  * 三个方向：
  *   1. 树里每个一级路径都必须被 git 跟踪（防手写一个不存在的文件/目录）；
  *   2. 25 个必须出现在树里的跟踪条目，少一个就失败（防漏画新目录）；
@@ -32,14 +32,14 @@ const REQUIRED = [
 
 const FORBIDDEN = ['data', 'runtime', 'artifacts', 'config.json', 'web', 'tools', 'personas', 'resources'];
 
-/** 取出「## 目录结构」这一节里第一个代码块的行 */
+/** 取出「## Project structure」这一节里第一个代码块的行 */
 function treeLines() {
-  const heading = readme.indexOf('## 目录结构');
-  assert.ok(heading >= 0, 'README 缺少「## 目录结构」一节');
+  const heading = readme.indexOf('## Project structure');
+  assert.ok(heading >= 0, 'README 缺少「## Project structure」一节');
   const nextHeading = readme.indexOf('\n## ', heading + 3);
   const section = readme.slice(heading, nextHeading < 0 ? undefined : nextHeading);
   const block = section.match(/```[^\n]*\n([\s\S]*?)```/);
-  assert.ok(block, '「## 目录结构」一节里没有代码块');
+  assert.ok(block, '「## Project structure」一节里没有代码块');
   return block[1].split(/\r?\n/).filter(Boolean);
 }
 
