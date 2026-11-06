@@ -10,7 +10,7 @@ name: installer
 #   · PR：改动落在打包相关路径（installer/**、launcher/**、构建脚本）才构建 + 真装真卸，
 #         只出 Artifact、不建 Release。目的是让「装不上 / 覆盖升级丢数据」在合并前暴露，
 #         而不是等发版那天才发现——#65 那次就是烟测漏建 data 目录，PR 阶段完全没跑过。
-#   · tag：git push origin v4.0.0 → 自动建 GitHub Release 并挂安装包
+#   · tag：生成含安装包、校验值、更新清单的 Release 资产包，维护者账号校验后发布
 #
 # 签名：仓库配了 WINDOWS_SIGNING_PFX_BASE64 / WINDOWS_SIGNING_PFX_PASSWORD 就签，
 #       没配就跳过，并在运行摘要里写明「未签名」。配置步骤见 docs/打包与签名.md。
@@ -41,6 +41,8 @@ on:
       - 'scripts/build-runtime.ps1'
       - 'scripts/fetch-dotnet-runtime.ps1'
       - 'scripts/fetch-vb-cable.ps1'
+      - 'scripts/vb-cable-package.ps1'
+      - 'scripts/vb-cable-pack45.json'
       - 'scripts/sign-windows.ps1'
       - 'launcher/**'
 
@@ -432,6 +434,8 @@ jobs:
           }
 
           # 虚拟声卡整包在安装目录根部（用户反馈埋在 runtime 深处根本找不到）；
+          . ./scripts/vb-cable-package.ps1
+          Assert-VbCablePackage (Join-Path $dir 'VB-CABLE虚拟声卡')
           # 同时 runtime 里不该再留一份，否则就是 [Files] 的 Excludes 没生效、白胖一份。
           if (Test-Path (Join-Path $dir 'runtime\vb-cable\VBCABLE_Setup_x64.exe')) {
             Write-Output '::error title=声卡包重复::runtime\vb-cable 里还有 VBCABLE_Setup_x64.exe——Excludes: vb-cable\* 没生效，声卡包装了两份'
@@ -575,6 +579,8 @@ jobs:
           Invoke-Setup '覆盖安装' (Join-Path $env:RUNNER_TEMP 'whale-upgrade-reinstall.log')
 
           Write-Output '覆盖烟测：第 4 步，断言'
+          . ./scripts/vb-cable-package.ps1
+          Assert-VbCablePackage (Join-Path $dir 'VB-CABLE虚拟声卡')
           $problems = @()
           foreach ($old in @("$dir\personas", "$dir\resources", "$dir\runtime\vb-cable")) {
             if (Test-Path $old) { $problems += "旧目录还在：$old" }
@@ -670,11 +676,10 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: 创建 GitHub Release（tag 触发）
+      - name: 准备 GitHub Release 资产（tag 触发）
         if: github.ref_type == 'tag'
         shell: pwsh
         env:
-          GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
           $setup = (Get-ChildItem artifacts/setup/*.exe | Select-Object -First 1).FullName
@@ -694,20 +699,20 @@ jobs:
           $manifest | ConvertTo-Json -Depth 4 | Set-Content -Path $manifestPath -Encoding utf8NoBOM
           Get-Content $manifestPath
 
-          $notes = "- 由 GitHub Actions 在 $env:RUNNER_OS 上构建`n- 内置 Node 与 CPython 3.12（含桥接依赖），用户端零网络`n- .NET 10 桌面运行时随包，目标机缺失时安装器会请求管理员授权后静默安装`n- 安装包签名状态见本次运行摘要"
-          gh release create $env:TAG $setup $sums $manifestPath --title "鲸鲸 $env:TAG" --notes $notes
-          if ($LASTEXITCODE -ne 0) {
-            Write-Output '::warning::Release 可能已存在，改为覆盖上传资产'
-            gh release upload $env:TAG $setup $sums $manifestPath --clobber
-            if ($LASTEXITCODE -ne 0) { Write-Output '::error title=Release 上传失败::gh release upload 退出码非 0'; exit 1 }
+          foreach ($file in @($setup, $sums, $manifestPath)) {
+            if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Release 资产缺失：$file" }
           }
 
-          # 回读资产列表：少传一个文件，客户端就有一半人更新不了，不能只信 gh 的退出码。
-          $assets = @(gh release view $env:TAG --json assets --jq '.assets[].name')
-          $need = @((Split-Path $setup -Leaf), 'SHA256SUMS.txt', 'release-manifest.json')
-          $missing = @($need | Where-Object { $assets -notcontains $_ })
-          if ($missing.Count -gt 0) {
-            Write-Output "::error title=Release 资产不全::缺 $($missing -join '、')，现有 $($assets -join '、')"
-            exit 1
-          }
-          Write-Output "Release $env:TAG 资产齐全：$($assets -join '、')"
+      # 不用 Actions 机器人创建公开 Release，避免与维护者的草稿重复。
+      # 维护者下载该资产包、核对 CI 和 SHA256 后，以自己的 GitHub 账号发布。
+      - name: 上传 Release 资产包（tag 触发）
+        if: github.ref_type == 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: whale-girl-release-${{ steps.ver.outputs.version }}
+          path: |
+            artifacts/setup/*.exe
+            artifacts/setup/SHA256SUMS.txt
+            artifacts/setup/release-manifest.json
+          if-no-files-found: error
+          retention-days: 30

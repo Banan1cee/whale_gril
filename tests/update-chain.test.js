@@ -90,25 +90,19 @@ test('强制态更新失败后必须真的拦住（不许弹个框就让人继�
   assert.ok(!main.includes('ShowForceDialog'), 'ShowForceDialog 还在，会误导后来的人');
 });
 
-test('Release 资产包含 release-manifest.json，并且建完会回读', () => {
-  const start = wf.indexOf('创建 GitHub Release');
-  assert.ok(start > 0, 'installer.yml 没有创建 Release 的步骤');
+test('Release 资产包包含安装器、SHA256 和更新清单，不用机器人重复创建 Release', () => {
+  const start = wf.indexOf('准备 GitHub Release');
+  assert.ok(start > 0, 'installer.yml 没有准备 Release 资产的步骤');
   const block = wf.slice(start);
   assert.ok(block.includes('release-manifest.json'), 'Release 资产里没有 release-manifest.json');
-  assert.ok(
-    /gh release create[^\n]*\$manifestPath/.test(block),
-    'gh release create 没有把 manifest 作为资产传上去'
-  );
-  assert.ok(
-    block.includes('gh release upload') && /gh release upload[^\n]*\$manifestPath/.test(block),
-    '覆盖上传时漏了 release-manifest.json'
-  );
-  assert.ok(block.includes('gh release view'), '建完没有回读资产列表');
-  assert.ok(block.includes("'release-manifest.json'"), '回读断言里没检查 manifest');
+  assert.ok(block.includes('actions/upload-artifact@v4'));
+  for(const file of ['artifacts/setup/*.exe','artifacts/setup/SHA256SUMS.txt','artifacts/setup/release-manifest.json'])assert.ok(block.includes(file));
+  assert.ok(block.includes('Test-Path -LiteralPath $file -PathType Leaf'));
+  assert.ok(!/gh release (create|edit|upload)/.test(block), 'Actions 不应替维护者创建或发布 Release');
 });
 
 test('发版步骤会写 latest / released_at / manifest_version', () => {
-  const start = wf.indexOf('创建 GitHub Release');
+  const start = wf.indexOf('准备 GitHub Release');
   const block = wf.slice(start);
   for (const needle of ['$manifest.latest = $env:version', 'released_at', '$manifest.manifest_version', 'force_after_hours']) {
     // force_after_hours 由仓库里的清单原样带过去（只读不改）

@@ -85,10 +85,19 @@ test('回归测试列不许有被转义坏掉的路径（TAB + ests/、\\tests/ 
   }
 });
 
-test('每条 bug 都指向至少一个 tests/*.test.js（#9 是出包自检，例外）', () => {
+function regressionRefs(text) {
+  return text.match(/tests\/(?:[\w.-]+\.test\.js|voice-send\/[\w.-]+Checks\.cs)/g) || [];
+}
+
+test('每条 bug 都指向 JS 回归或 CI 执行的语音 C# 回归（出包自检除外）', () => {
   const exempt = new Set();
   for (const r of rows) {
-    const refs = r.regression.match(/tests\/[\w.-]+\.test\.js/g) || [];
+    const refs = regressionRefs(r.regression);
+    for (const ref of refs.filter(p=>p.endsWith('.cs'))) {
+      const checkName=path.basename(ref,'.cs');
+      assert.ok(fs.readFileSync(path.join(ROOT,'tests/voice-send/Program.cs'),'utf8').includes(checkName+'.Run('));
+      assert.ok(fs.readFileSync(path.join(ROOT,'.github/workflows/tests.yml'),'utf8').includes('tests/voice-send/VoiceSendChecks.csproj'));
+    }
     if (refs.length === 0) {
       // 唯一的例外：出包类 bug 靠 release-check / 出包脚本守
       const byScript = /release-check|出包脚本|build-release/.test(r.regression);
@@ -103,7 +112,7 @@ test('每条 bug 都指向至少一个 tests/*.test.js（#9 是出包自检，�
 test('台账里提到的测试文件必须真实存在', () => {
   const missing = new Set();
   for (const r of rows) {
-    const refs = r.regression.match(/tests\/[\w.-]+\.test\.js/g) || [];
+    const refs = regressionRefs(r.regression);
     for (const ref of refs) {
       if (!fs.existsSync(path.join(ROOT, ref))) missing.add(`${ref}（第 ${r.line} 行 #${r.id}）`);
     }

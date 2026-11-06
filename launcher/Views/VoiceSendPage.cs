@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
@@ -20,10 +21,19 @@ public sealed class VoiceSendPage : UserControl
     readonly TextBox synthTimeout=new(){Text="20",Width=140,HorizontalAlignment=HorizontalAlignment.Left};
     readonly ComboBox shortcut=new(){IsEditable=true,Text="Ctrl+Alt"},devices=new(),models=new(),voices=new();
     readonly PasswordBox key=new();
+    readonly ComboBox provider=new();
+    readonly TextBlock providerHint=new(){TextWrapping=TextWrapping.Wrap};
     readonly CheckBox groups=new(){Content="群聊",IsChecked=true},privates=new(){Content="私聊",IsChecked=true};
     readonly TextBlock status=new(){TextWrapping=TextWrapping.Wrap};
     readonly TextBlock keyStatus=new(){TextWrapping=TextWrapping.Wrap,Visibility=Visibility.Collapsed},testStatus=new(){TextWrapping=TextWrapping.Wrap,Visibility=Visibility.Collapsed};
-    readonly string root,file,keyFile;
+    readonly string root,file;
+    string providerId="breezeblue";
+    string keyFile=>SpeechProviders.KeyFile(root,providerId);
+    Dictionary<string,SpeechProfile> profiles=new();
+    Dictionary<string,string> modelVoices=new();
+    BreezeSpeech.Choice[] remoteVoices=Array.Empty<BreezeSpeech.Choice>();
+    string voiceModel="";
+    readonly Dictionary<string,string> draftKeys=new();
     AutoVoiceSettings saved=new();
     CancellationTokenSource requests=new();
     bool loading;
@@ -32,7 +42,7 @@ public sealed class VoiceSendPage : UserControl
 
     public VoiceSendPage(RuntimeSupervisor sup)
     {
-        root=sup.BaseDir;file=Path.Combine(root,"data","voice-send.json");keyFile=Path.Combine(root,"data","voice-send-breeze.key");
+        root=sup.BaseDir;file=Path.Combine(root,"data","voice-send.json");
         SetResourceReference(ForegroundProperty,"Text");
         UseLayoutRounding=true;
 
@@ -89,12 +99,18 @@ public sealed class VoiceSendPage : UserControl
         groups.Margin=new Thickness(0,0,24,0);scopes.Children.Add(groups);scopes.Children.Add(privates);current.Children.Add(scopes);
         current.Children.Add(Note("快捷键须和微信「发语音」完全一致，教程用的是 Ctrl+Tab；录音和松手由程序完成。"));
 
-        Card("模型与音色","已预选中英双语版和大肥鱼（机灵版）。填好 Key 就能测试连接、保存，不必先读取列表或手选音色。");
-        Add("BreezeBlue Key（留空沿用已保存的 Key）",key);
+        Card("模型与音色","选择语音厂商后填写对应的 Key。各厂商独立保存模型、音色和密钥；合成使用该厂商账户额度。");
+        provider.ItemsSource=SpeechProviders.All;
+        Add("语音厂商",provider);
+        providerHint.SetResourceReference(StyleProperty,"Small");current.Children.Add(providerHint);
+        Button("打开当前厂商的 Key 页面",_=>{
+            Process.Start(new ProcessStartInfo(SpeechProviders.Get(providerId).KeyUrl){UseShellExecute=true});return Task.CompletedTask;
+        },null,flat:false);
+        Add("当前厂商 API Key（留空沿用该厂商已保存的 Key）",key);
         var keyRow=new WrapPanel{Margin=new Thickness(0,10,0,0)};
         keyRow.Children.Add(Button("测试 API Key 连接",async token=>{
             ShowResult(keyStatus,"正在测试 API Key（最多 15 秒）…","Accent");
-            var result=await BreezeSpeech.CheckKey(string.IsNullOrWhiteSpace(key.Password)?BreezeSpeech.LoadKey(keyFile):key.Password,token);
+            var result=await SpeechProviders.CheckKey(providerId,string.IsNullOrWhiteSpace(key.Password)?BreezeSpeech.LoadKey(keyFile):key.Password,token);
             token.ThrowIfCancellationRequested();ShowResult(keyStatus,result.Message,result.Available?"Ok":"Bad");
         },keyStatus,flat:true));
         current.Children.Add(keyRow);
@@ -111,18 +127,24 @@ public sealed class VoiceSendPage : UserControl
         searchRow.ColumnDefinitions.Add(new ColumnDefinition{Width=GridLength.Auto});
         var searchBox=Field("搜索其他音色（可选）",search);searchBox.Margin=new Thickness(0,0,12,0);searchRow.Children.Add(searchBox);
         var read=Button("读取模型和音色",async token=>{
+            string selectedProvider=providerId;
             string secret=string.IsNullOrWhiteSpace(key.Password)?BreezeSpeech.LoadKey(keyFile):key.Password;
-            var modelOptions=await BreezeSpeech.Catalog(secret,false,"",token);
-            var voiceOptions=await BreezeSpeech.Catalog(secret,true,search.Text.Trim(),token);
-            token.ThrowIfCancellationRequested();BindChoices(models,modelOptions,model,false);BindChoices(voices,voiceOptions,voice,true);
-            status.Text="已读取，保留当前选择。音色一次最多返回100个，可搜索其他音色。";
+            var modelOptions=await SpeechProviders.Catalog(selectedProvider,secret,false,"",token);
+            token.ThrowIfCancellationRequested();
+            string selectedModel=model.Text.Trim();
+            var voiceOptions=await SpeechProviders.Catalog(selectedProvider,secret,true,"",token,model:selectedModel);
+            token.ThrowIfCancellationRequested();
+            if(model.Text.Trim()!=selectedModel)return;
+            remoteVoices=voiceOptions;BindChoices(models,modelOptions,model,false);BindChoices(voices,remoteVoices,voice,true);
+            status.Text="已读取，保留当前选择。预置音色和该账户的自定义音色可在下拉框中选择。";
         },null,flat:true);
         read.VerticalAlignment=VerticalAlignment.Bottom;Grid.SetColumn(read,1);searchRow.Children.Add(read);
         current.Children.Add(searchRow);
-        models.SelectionChanged+=(_,_)=>{if(models.SelectedItem is BreezeSpeech.Choice c)model.Text=c.Id;};
+        models.SelectionChanged+=(_,_)=>{if(models.SelectedItem is BreezeSpeech.Choice c)SelectModel(c.Id);};
         voices.SelectionChanged+=(_,_)=>{if(voices.SelectedItem is BreezeSpeech.Choice c)voice.Text=c.Id;};
-        model.LostKeyboardFocus+=(_,_)=>BindChoices(models,models.Items.Cast<BreezeSpeech.Choice>().ToArray(),model,false);
+        model.LostKeyboardFocus+=(_,_)=>{SelectModel(model.Text.Trim());BindChoices(models,models.Items.Cast<BreezeSpeech.Choice>().ToArray(),model,false);};
         voice.LostKeyboardFocus+=(_,_)=>BindChoices(voices,voices.Items.Cast<BreezeSpeech.Choice>().ToArray(),voice,true);
+        search.TextChanged+=(_,_)=>{if(!loading)BindChoices(voices,remoteVoices,voice,true);};
         var advanced=new StackPanel{Visibility=Visibility.Collapsed,Margin=new Thickness(0,4,0,0)};
         current.Children.Add(advanced);
         current.Children.Add(Button("高级：手动填写模型 / 音色 ID",_=>{advanced.Visibility=advanced.Visibility==Visibility.Visible?Visibility.Collapsed:Visibility.Visible;return Task.CompletedTask;},null,flat:true));
@@ -160,6 +182,7 @@ public sealed class VoiceSendPage : UserControl
             // 兼容 4.0.4 及更早安装位置（老安装包把它埋在 runtime\vb-cable）
             if(!File.Exists(exe))exe=Path.Combine(root,"runtime","vb-cable","VBCABLE_Setup_x64.exe");
             if(!File.Exists(exe))throw new Exception("找不到驱动安装程序：安装目录\\VB-CABLE虚拟声卡\\VBCABLE_Setup_x64.exe；也可以从 https://vb-audio.com/Cable/ 下载");
+            VbCablePackage.Validate(Path.GetDirectoryName(exe));
             Process.Start(new ProcessStartInfo(exe){UseShellExecute=true,Verb="runas"});
             status.Text="完成官方安装并按提示重启后刷新声卡。VB-CABLE 为 VB-Audio Donationware，可向官方捐赠。";
             return Task.CompletedTask;
@@ -173,6 +196,18 @@ public sealed class VoiceSendPage : UserControl
             result.SetResourceReference(ForegroundProperty,"Muted");
         }
         Load();experimental.Checked+=Toggle;experimental.Unchecked+=Toggle;
+        provider.SelectionChanged+=(_,_)=>{
+            if(loading||provider.SelectedItem is not SpeechProviders.Provider p||p.Id==providerId)return;
+            if(testing){loading=true;provider.SelectedItem=SpeechProviders.Get(providerId);loading=false;status.Text="请等待语音测试结束后再切换厂商。";return;}
+            RememberProfile();draftKeys[providerId]=key.Password;
+            requests.Cancel();requests.Dispose();requests=new();
+            loading=true;
+            try {
+                providerId=p.Id;key.Password=draftKeys.GetValueOrDefault(providerId,"");
+                search.Clear();ApplyProfile();keyStatus.Visibility=Visibility.Collapsed;testStatus.Visibility=Visibility.Collapsed;
+                status.Text="已切换到 "+p.Name+"，请测试连接并保存配置后生效。";
+            } finally {loading=false;}
+        };
         key.PasswordChanged+=(_,_)=>{
             if(loading||experimental.IsChecked!=true||string.IsNullOrWhiteSpace(key.Password))return;
             BindChoices(models,models.Items.Cast<BreezeSpeech.Choice>().ToArray(),model,false);
@@ -235,11 +270,47 @@ public sealed class VoiceSendPage : UserControl
         target.Text=text;target.Visibility=Visibility.Visible;target.SetResourceReference(TextBlock.ForegroundProperty,tone);
     }
 
-    static void BindChoices(ComboBox combo,BreezeSpeech.Choice[] options,TextBox field,bool isVoice)
+    void BindChoices(ComboBox combo,BreezeSpeech.Choice[] options,TextBox field,bool isVoice)
     {
-        string id=BreezeSpeech.SelectionId(field.Text,isVoice);
-        var choices=BreezeSpeech.Choices(options,id,isVoice);
+        var defaults=SpeechProviders.Defaults(providerId);
+        string id=string.IsNullOrWhiteSpace(field.Text)?(isVoice?defaults.Voice:defaults.Model):field.Text.Trim();
+        var choices=SpeechProviders.Choices(providerId,options,id,isVoice,model.Text);
+        if(isVoice&&!string.IsNullOrWhiteSpace(search.Text))choices=choices.Where(c=>c.Id==id||(c.Name??"").Contains(search.Text.Trim(),StringComparison.OrdinalIgnoreCase)||c.Id.Contains(search.Text.Trim(),StringComparison.OrdinalIgnoreCase)).ToArray();
         combo.ItemsSource=choices;combo.SelectedItem=choices.First(c=>c.Id==id);field.Text=id;
+    }
+    void SelectModel(string selected)
+    {
+        if(string.IsNullOrWhiteSpace(selected))return;
+        model.Text=selected;
+        if(providerId=="siliconflow"&&voiceModel!=selected) {
+            modelVoices[voiceModel]=voice.Text.Trim();
+            string previous=voice.Text.Trim();
+            string suffix=previous.StartsWith(voiceModel+":",StringComparison.Ordinal)?previous.Substring(voiceModel.Length+1):"claire";
+            voice.Text=modelVoices.GetValueOrDefault(selected,selected+":"+suffix);
+            remoteVoices=Array.Empty<BreezeSpeech.Choice>();
+            voiceModel=selected;BindChoices(voices,remoteVoices,voice,true);
+        }
+        voiceModel=selected;
+        instructions.IsEnabled=providerId!="minimax"&&!(providerId=="siliconflow"&&selected==SpeechProviders.MossModel);
+    }
+    void RememberProfile()
+    {
+        modelVoices[model.Text.Trim()]=voice.Text.Trim();
+        profiles[providerId]=new(){Model=model.Text.Trim(),Voice=voice.Text.Trim(),Instructions=instructions.Text.Trim(),ModelVoices=new(modelVoices)};
+    }
+    void ApplyProfile()
+    {
+        var value=profiles.GetValueOrDefault(providerId)??SpeechProviders.Defaults(providerId);
+        model.Text=value.Model;voice.Text=value.Voice;instructions.Text=value.Instructions;
+        modelVoices=new(value.ModelVoices??new());voiceModel=model.Text;
+        remoteVoices=Array.Empty<BreezeSpeech.Choice>();
+        BindChoices(models,null,model,false);BindChoices(voices,null,voice,true);
+        providerHint.Text=providerId switch {
+            "minimax"=>"MiniMax · 8 个语音模型、官方系统音色列表，支持中文、方言及多语言。搜索框可按名称或语言筛选音色；连接后还可读取账户音色。",
+            "siliconflow"=>"硅基流动 · CosyVoice 2 / MOSS-TTSD，每个模型 8 个系统音色；可读取账户音色及新增模型。MOSS 自动添加说话人标签，自由语气指令仅用于 CosyVoice 2。",
+            _=>"BreezeBlue · 默认中英双语版 / 大肥鱼（机灵版）。保留原有模型、音色和 Key。"
+        };
+        SelectModel(model.Text);
     }
 
     void Toggle(object sender,RoutedEventArgs args)
@@ -250,7 +321,7 @@ public sealed class VoiceSendPage : UserControl
         {
             var current=File.Exists(file)?AutoVoiceSettings.Load(root):new AutoVoiceSettings();
             current.Enabled=on;Write(current);saved=current;
-            if(!on){requests.Cancel();key.Clear();panel.Visibility=Visibility.Collapsed;AutoVoiceSettings.CancelJobs(root);}
+            if(!on){requests.Cancel();key.Clear();draftKeys.Clear();panel.Visibility=Visibility.Collapsed;AutoVoiceSettings.CancelJobs(root);}
             else
             {
                 if(requests.IsCancellationRequested){requests.Dispose();requests=new();}
@@ -285,11 +356,15 @@ public sealed class VoiceSendPage : UserControl
         try
         {
             saved=File.Exists(file)?AutoVoiceSettings.Load(root):new AutoVoiceSettings();
+            providerId=SpeechProviders.Get(saved.Provider).Id;
+            profiles=new(saved.Profiles??new());
+            var previous=profiles.GetValueOrDefault(providerId);
+            profiles[providerId]=new(){Model=saved.Model,Voice=saved.Voice,Instructions=saved.Instructions,ModelVoices=previous?.ModelVoices??new()};
+            provider.SelectedItem=SpeechProviders.Get(providerId);draftKeys.Clear();key.Clear();
             experimental.IsChecked=saved.Enabled;panel.Visibility=saved.Enabled?Visibility.Visible:Visibility.Collapsed;
             groups.IsChecked=saved.Groups;privates.IsChecked=saved.Private;probability.Text=saved.Probability.ToString(CultureInfo.InvariantCulture);
             synthTimeout.Text=saved.SynthTimeoutSec.ToString(CultureInfo.InvariantCulture);
-            model.Text=saved.Model;voice.Text=saved.Voice;instructions.Text=saved.Instructions;shortcut.Text=saved.RecordingHotkey;
-            BindChoices(models,null,model,false);BindChoices(voices,null,voice,true);
+            ApplyProfile();shortcut.Text=saved.RecordingHotkey;
             if(saved.Enabled){RefreshDevices();devices.SelectedItem=devices.Items.Cast<Device>().FirstOrDefault(d=>d.Id==saved.Device);}
         }
         catch{saved=new();experimental.IsChecked=false;panel.Visibility=Visibility.Collapsed;}
@@ -302,8 +377,9 @@ public sealed class VoiceSendPage : UserControl
         if(!double.TryParse(synthTimeout.Text,NumberStyles.Float,CultureInfo.InvariantCulture,out var seconds)||!double.IsFinite(seconds)||seconds<5||seconds>90)throw new Exception("语音合成最长等待须为 5～90 秒");
         var hotkey=RecordingShortcut.Parse(shortcut.Text);
         if(devices.SelectedItem is not Device d||string.IsNullOrWhiteSpace(voice.Text))throw new Exception("请选择虚拟声卡和音色");
-        BreezeSpeech.SaveKey(keyFile,key.Password);if(string.IsNullOrWhiteSpace(BreezeSpeech.LoadKey(keyFile)))throw new Exception("请配置 BreezeBlue Key");
-        var value=new AutoVoiceSettings{Enabled=true,Probability=chance,Groups=groups.IsChecked==true,Private=privates.IsChecked==true,Model=model.Text.Trim(),Voice=voice.Text.Trim(),Instructions=instructions.Text.Trim(),Device=d.Id,RecordingHotkey=hotkey.Label};
+        BreezeSpeech.SaveKey(keyFile,key.Password);if(string.IsNullOrWhiteSpace(BreezeSpeech.LoadKey(keyFile)))throw new Exception("请配置 "+SpeechProviders.Get(providerId).Name+" Key");
+        RememberProfile();
+        var value=new AutoVoiceSettings{Enabled=true,Provider=providerId,Address=SpeechProviders.Get(providerId).BaseUrl,Profiles=new(profiles),Probability=chance,Groups=groups.IsChecked==true,Private=privates.IsChecked==true,Model=model.Text.Trim(),Voice=voice.Text.Trim(),Instructions=instructions.Text.Trim(),Device=d.Id,RecordingHotkey=hotkey.Label};
         value.SynthTimeoutSec=seconds;
         Write(value);saved=value;shortcut.Text=hotkey.Label;
         status.Text="已保存，微信录音快捷键："+hotkey.Label+"。关闭实验开关立即停止后续语音任务。";

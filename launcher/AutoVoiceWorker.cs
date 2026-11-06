@@ -17,6 +17,7 @@ public sealed class AutoVoiceSettings
     public string Address { get; set; } = BreezeSpeech.BaseUrl;
     public string Model { get; set; } = BreezeSpeech.DefaultModelId;
     public string Voice { get; set; } = BreezeSpeech.DefaultVoiceId;
+    public System.Collections.Generic.Dictionary<string, SpeechProfile> Profiles { get; set; } = new();
     public string Device { get; set; } = "";
     public string Instructions { get; set; } = "";
     public string RecordingHotkey { get; set; } = "Ctrl+Alt";
@@ -59,12 +60,13 @@ public static class AutoVoiceWorker
             if(DateTime.UtcNow-info.LastWriteTimeUtc>TimeSpan.FromMinutes(3))throw new Exception("任务已过期");
             var job=JsonSerializer.Deserialize<Job>(File.ReadAllText(path));
             var settings=AutoVoiceSettings.Load(root);
-            if(!settings.Enabled||settings.Provider!="breezeblue")throw new Exception("自动语音未启用或服务不受支持");
+            if(!settings.Enabled)throw new Exception("自动语音未启用");
+            SpeechProviders.Get(settings.Provider);
             if(string.IsNullOrWhiteSpace(settings.Device))throw new Exception("尚未选择虚拟声卡");
             var shortcut=RecordingShortcut.Parse(settings.RecordingHotkey);
-            var key=BreezeSpeech.LoadKey(Path.Combine(root,"data","voice-send-breeze.key"));
+            var key=BreezeSpeech.LoadKey(SpeechProviders.KeyFile(root,settings.Provider));
             double seconds=double.IsFinite(settings.SynthTimeoutSec)?Math.Clamp(settings.SynthTimeoutSec,5,90):85;
-            await BreezeSpeech.Generate(key,settings.Model,settings.Voice,job.Text,settings.Instructions,audio,cancel.Token,metrics,TimeSpan.FromSeconds(seconds));
+            await SpeechProviders.Generate(settings.Provider,key,settings.Model,settings.Voice,job.Text,settings.Instructions,audio,cancel.Token,metrics,TimeSpan.FromSeconds(seconds));
             File.WriteAllText(path+".ready","ready");
             var deadline=DateTime.UtcNow.AddSeconds(25);
             while(!File.Exists(path+".go")){cancel.Token.ThrowIfCancellationRequested();if(DateTime.UtcNow>deadline)throw new Exception("桥接没有确认目标会话");await Task.Delay(100,cancel.Token);}

@@ -5,6 +5,8 @@
 
 | # | 现象 | 根因 | 修复 | 版本 | 回归测试 |
 | --- | --- | --- | --- | --- | --- |
+| 57 | 硅基流动发送短测试语音却提示超过 55 秒 | 实测 HTTP 200 的 WAV 仍含 RIFF/data 未知长度标记，171350 字节 PCM 被 NAudio 按 4294967040 字节计时 | 完整下载后按真实样本数回填未知长度字段，不修饰普通截断文件；明确显示实际时长 | 4.0.7 | `tests/voice-send/StreamingWaveChecks.cs` |
+| 56 | 用户反馈旧运行包缺少 CAT 签名文件，声卡驱动安装报 Error -106 / 0xE000022F | 旧 runtime 打包排除 *.cat；下载缓存与安装烟测仅检查 EXE/readme，无法拦截残缺驱动包 | 移除 CAT 排除规则，使用官方 Pack45 全文件哈希清单校验下载缓存、安装/覆盖升级产物及界面驱动安装入口 | 4.0.7 | `tests/vb-cable-package.test.js`、`tests/voice-send/VbCableChecks.cs` |
 | 55 | 搜索超时后仍可能再发一次纠错请求 | 毫秒定时器与浮点截止时间存在舍入差异 | 记录总超时状态，阻止后续补充请求 | 4.0.6 | `tests/search-network.test.js` |
 | 54 | 清空会话后旧记忆被后台任务写回 | 异步抽取仍持有已删除会话对象 | 删除标记拦截旧对象写入，并保留其他会话 | 4.0.6 | `tests/group-memory-reset.test.js` |
 | 53 | 修改名字后又被旧值覆盖 | 配置热重载未合并独立人设文件 | 重载合并人设，当前称呼优先，串行保存 | 4.0.6 | `tests/persona-live-name.test.js` |
