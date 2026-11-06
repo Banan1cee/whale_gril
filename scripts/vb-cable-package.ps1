@@ -4,7 +4,12 @@ function Get-VbCablePackageProblems([string]$Directory, [string]$Manifest = (Joi
     foreach ($entry in $files.PSObject.Properties) {
         $path = Join-Path $Directory $entry.Name
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { "Missing: $($entry.Name)"; continue }
-        if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $entry.Value) { "Modified: $($entry.Name)" }
+        $algorithm = [Security.Cryptography.SHA256]::Create()
+        $stream = [IO.File]::OpenRead($path)
+        try {
+            $actual = [BitConverter]::ToString($algorithm.ComputeHash($stream)).Replace('-', '')
+        } finally { $stream.Dispose(); $algorithm.Dispose() }
+        if (-not [string]::Equals($actual, [string]$entry.Value, [StringComparison]::OrdinalIgnoreCase)) { "Modified: $($entry.Name)" }
     }
 }
 function Assert-VbCablePackage([string]$Directory) {
