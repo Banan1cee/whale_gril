@@ -7,12 +7,12 @@
 - 项目名称：**鲸鲸 / Whale Girl**
 - 版权：Copyright (c) 2026 鲸鲸 / Whale Girl contributors
 - 原作者与指定署名方：**[@Banan1cee](https://github.com/Banan1cee)**
-- 项目地址：<https://github.com/Banan1cee/whale_gril>
+- 项目地址：<https://github.com/Banan1cee/whale_girl>
 - 许可：**GNU Affero General Public License v3.0 only（AGPL-3.0-only，OSI 认可的开源许可证）**
 
 分享本项目或其修改版本时，请保留 `LICENSE`、本 `NOTICE.md` 和版权声明，并在 README、关于页、应用内致谢或其它合理位置注明：
 
-> 基于鲸鲸 / Whale Girl（作者 @Banan1cee，https://github.com/Banan1cee/whale_gril）修改
+> 基于鲸鲸 / Whale Girl（作者 @Banan1cee，https://github.com/Banan1cee/whale_girl）修改
 
 同时请标明你做了哪些修改。AGPL-3.0 还要求：分发修改版、或让用户通过网络使用修改版时，必须提供完整对应的源代码。
 
@@ -51,6 +51,6 @@ AGPL-3.0 允许商业使用，不需要额外交费。但如果你分发修改�
 
 如果你需要不受 AGPL 源码开放义务约束的闭源商业授权，可以联系维护者另行协商；这不是 AGPL 的要求，也不影响任何人依据 AGPL 继续使用本项目。
 
-联系方式：<https://github.com/Banan1cee/whale_gril/issues>
+联系方式：<https://github.com/Banan1cee/whale_girl/issues>
 
 请勿在公开 Issue 中发送 API Key、聊天记录或其他敏感信息。

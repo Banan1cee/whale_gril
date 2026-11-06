@@ -54,7 +54,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$Repo = 'Banan1cee/whale_gril'
+$Repo = 'Banan1cee/whale_girl'
 # 下载并发：GitHub 对单连接限速很凶，多连接能明显快；-NoParallel 强制单连接
 $script:conns = if ($NoParallel) { 1 } else { [Math]::Max(1, $Connections) }
 $StateDir = if ($env:TEMP) { Join-Path $env:TEMP 'whale-girl-tools' } else { Join-Path $PSScriptRoot '..\.state' }

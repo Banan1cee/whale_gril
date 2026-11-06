@@ -74,6 +74,7 @@ test('二进制里的调试路径与源码托管链接会被扫出来', () => {
   assert.ok(rulesOf(scanBinaryBuffer(sourceLink)).includes('源码托管链接（二进制）'));
 
   assert.deepEqual(scanBinaryBuffer(Buffer.from('plain binary, no paths')), []);
+  for(const repo of ['whale_girl','whale_gril'])assert.deepEqual(scanBinaryBuffer(Buffer.from('https://raw.github'+'usercontent.com/Banan1cee/'+repo+'/main/release-manifest.json')),[]);
 });
 
 test('scan() 会跳过 data/runtime/artifacts，但会扫 launcher/publish 的成品', () => {

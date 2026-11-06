@@ -2,13 +2,13 @@
 
 # 🐋 鲸鲸 · DeepSeek 鲸鱼娘聊天机器人
 
-[![GitHub release](https://img.shields.io/github/v/release/Banan1cee/whale_gril)](https://github.com/Banan1cee/whale_gril/releases/latest)
+[![GitHub release](https://img.shields.io/github/v/release/Banan1cee/whale_girl)](https://github.com/Banan1cee/whale_girl/releases/latest)
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D18-339933)](https://nodejs.org/)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D4)
-[![GitHub stars](https://img.shields.io/github/stars/Banan1cee/whale_gril)](https://github.com/Banan1cee/whale_gril/stargazers)
+[![GitHub stars](https://img.shields.io/github/stars/Banan1cee/whale_girl)](https://github.com/Banan1cee/whale_girl/stargazers)
 
-> **想直接跑？点右边的 [Releases](https://github.com/Banan1cee/whale_gril/releases/latest)，下 `whale-girl-*-setup.exe`（约 168 MB）。**
+> **想直接跑？点右边的 [Releases](https://github.com/Banan1cee/whale_girl/releases/latest)，下 `whale-girl-*-setup.exe`（约 168 MB）。**
 > 安装包里带好 Node、Python 3.12 和随包的 .NET 10 桌面运行时，**装完不用再联网**。安装本身不弹 UAC，
 > 只有系统缺 .NET 10 桌面运行时才会单独提权装一次；装完桌面上有快捷方式，双击就是启动器。
 >
@@ -78,7 +78,7 @@
 
 ## 安装（Windows · 安装包）
 
-> 本仓库是**源码版，不含 `runtime\`**，请直接看下一节。想直接用请到 [Releases](https://github.com/Banan1cee/whale_gril/releases/latest) 下 `whale-girl-*-setup.exe`。
+> 本仓库是**源码版，不含 `runtime\`**，请直接看下一节。想直接用请到 [Releases](https://github.com/Banan1cee/whale_girl/releases/latest) 下 `whale-girl-*-setup.exe`。
 >
 > **装到纯英文路径**（例如 `D:\whale-girl-4.0`）。放在带中文的目录里，微信那侧的自动发送会失败并一直报「拒绝访问」，原因见下面「接入微信群」里的说明。
 
@@ -307,7 +307,7 @@ node server.js --doctor   # 自检
 
 ## 下载（Download）
 
-安装包只从 **GitHub Releases** 下载：<https://github.com/Banan1cee/whale_gril/releases>。
+安装包只从 **GitHub Releases** 下载：<https://github.com/Banan1cee/whale_girl/releases>。
 校验值与验证命令见 [docs/DOWNLOAD.md](docs/DOWNLOAD.md)。
 
 ## 代码签名（Code signing policy）

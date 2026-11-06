@@ -68,7 +68,7 @@ namespace WhaleLauncher
             var summary = string.Join("\n", lines);
             return summary.Length > 1400 ? summary.Substring(0, 1400) + "…" : summary;
         }
-        private const string Repo = "Banan1cee/whale_gril";
+        private const string Repo = "Banan1cee/whale_girl";
 
         // 顺序不重要（并行拉），但源要覆盖三种网络：GitHub 直连 / 墙内镜像 / CDN 兜底。
         private static readonly string[] Sources =
