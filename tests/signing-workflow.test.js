@@ -107,7 +107,8 @@ test('策略文件满足 SignPath 要求；README 如实说明当前尚未签名
   for (const role of ['Authors', 'Reviewers', 'Approvers']) {
     assert.ok(policy.includes(role), `策略里要写清 ${role} 角色`);
   }
-  assert.match(policy, /## 隐私声明/, '策略里要有隐私声明');
+  assert.match(policy, /## 隐私政策/, '策略里要有隐私政策段落');
+  assert.match(policy, /\.\.\/PRIVACY\.md/, '策略里的隐私政策要指向根目录唯一版本');
   assert.match(policy, /Get-AuthenticodeSignature/, '策略里要写怎么验证签名');
 
   const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
@@ -129,10 +130,11 @@ test('SignPath 申请表单要的三个页面都在仓库里', () => {
   assert.match(download, /SHA256SUMS\.txt/, '下载页要给校验方式');
   assert.match(download, /github\.com\/Banan1cee\/whale_gril\/releases/, '下载页要给 Releases 链接');
 
-  const privacy = fs.readFileSync(path.join(root, 'docs', 'PRIVACY.md'), 'utf8');
-  assert.match(privacy, /隐私声明/, '隐私声明要有标题');
-  assert.match(privacy, /遥测/, '隐私声明要说明有没有遥测');
-  assert.match(privacy, /data\\/, '隐私声明要写清本地数据放在哪');
+  const privacy = fs.readFileSync(path.join(root, 'PRIVACY.md'), 'utf8');
+  assert.match(privacy, /隐私政策/, '隐私政策要有标题');
+  assert.match(privacy, /遥测/, '隐私政策要说明有没有遥测');
+  assert.match(privacy, /data\\/, '隐私政策要写清本地数据放在哪');
+  assert.equal(fs.existsSync(path.join(root, 'docs', 'PRIVACY.md')), false, '不要保留重复的隐私文档');
 });
 
 test('文档写清了要配哪个 secret 和哪些变量', () => {

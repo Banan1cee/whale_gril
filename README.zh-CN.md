@@ -3,7 +3,7 @@
 # 🐋 鲸鲸 · DeepSeek 鲸鱼娘聊天机器人
 
 [![GitHub release](https://img.shields.io/github/v/release/Banan1cee/whale_gril)](https://github.com/Banan1cee/whale_gril/releases/latest)
-[![License: MIT](https://img.shields.io/github/license/Banan1cee/whale_gril)](LICENSE)
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D18-339933)](https://nodejs.org/)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D4)
 [![GitHub stars](https://img.shields.io/github/stars/Banan1cee/whale_gril)](https://github.com/Banan1cee/whale_gril/stargazers)
@@ -40,6 +40,10 @@
 ---
 
 ## 实验性表情包
+
+「表情包」页的「自动收集收到的表情包」开关默认关闭，开启后桥接约 5 秒内应用。原图单独保存到 `data/收集的表情包/`，按内容去重，GIF 保留动画，不自动加入发送图库；可点「打开收集文件夹」查看。收集的是桥接实际接收到并处理的表情消息，不扫描历史记录。获取依赖微信本地缓存或消息里的可用下载地址，失败时跳过；保存不依赖模型识图成功。
+
+随包提供 27 张鲸鲸预设 PNG（傲娇、炸毛、开心各 9 张）。首次启动内核并开启表情包功能后，后台导入当前图库，不覆盖已有图片；删除的预设不会在重启后自动补回。总开关仍默认关闭。
 
 在启动器「表情包」页打开总闸（默认关闭）。分类由模型在回复末尾写 `[[sticker:分类]]` 决定：写哪个分类就发那一类，标记会被剥掉，用户看不到；没写标记、分类不存在或该分类没有图就**不发**，程序不猜情绪、不按概率配图。内置傲娇 / 炸毛 / 开心三类，也可以自己新增分类；启动器里管理分类、上传/删除图片、打开文件夹，支持 GIF、PNG、JPEG、WebP（单张不超过 4 MB）。上传只保存原图，不发送微信消息，不转码 GIF。
 
@@ -174,7 +178,7 @@ npm start
 
 ## 谁可以当管理员
 
-开源版不写死任何人的微信 ID，部署者自己决定：
+源码版不写死任何人的微信 ID，部署者自己决定：
 
 ```json
 "persona": {
@@ -204,6 +208,12 @@ npm start
 ### 人设预设（一个版本一个文件）
 
 `assets/personas/` 一版一个文件，升级新增、不覆盖旧版；在启动器「人设」页底部导入。目录约定与隐私红线见 [assets/personas/README.md](assets/personas/README.md)。
+
+### 日记（Markdown）
+
+启动器「主动与提醒」页可开启「每天自动写日记」，设置生成时间（电脑本地时间，默认 `23:00`），也可点「立即写一篇」手动生成。自动开关默认关闭；保存后立即生效，需保持内核运行并配置聊天模型。
+
+日记沿用当前人设和模型，依据当天截至生成时的聊天素材（最多最近 300 条、约 24,000 字符）写成，按年份保存到 `data/diary/YYYY/MM-DD.md`，例如 `data/diary/2026/11-06.md`。手动与自动合计每天最多一篇；发现当天已有文件（包括旧格式日记）就跳过，不再调用模型，也不覆盖。重启不会重复；当天晚启动会补写，过去日期不补写。当天无聊天不生成，失败五分钟后重试。「打开日记文件夹」可直接查看文件。配置对应 `diary.enabled` 和 `diary.time`。
 
 ---
 
@@ -303,12 +313,13 @@ node server.js --doctor   # 自检
 ## 代码签名（Code signing policy）
 
 当前发行包**尚未签名**，Windows 会提示「未知发布者」；安装前请核对 Release 里 `SHA256SUMS.txt` 的校验值。
-签名申请与策略见 [docs/CODE_SIGNING_POLICY.md](docs/CODE_SIGNING_POLICY.md)；隐私声明见 [docs/PRIVACY.md](docs/PRIVACY.md)。
+签名申请与策略见 [docs/CODE_SIGNING_POLICY.md](docs/CODE_SIGNING_POLICY.md)；隐私政策见 [PRIVACY.md](PRIVACY.md)。
 
 ## 致谢
 
 微信收发完全站在前人的肩膀上，特别感谢：
 
+- **图标原创角色作者：上善无形** —— 本项目使用的鲸鲸图标是在其原创角色基础上的**二创作品**；角色原创版权归原作者，本项目仅按授权范围使用并署名。详见 [NOTICE.md](NOTICE.md)。
 - **[wechatauto-replica](https://github.com/fanyuantaier/wechatauto-replica)**（v1.2.9，**Apache-2.0**，作者 fanyuantaier，[PyPI](https://pypi.org/project/wechatauto-replica/)）
   —— 微信 4.x Windows 客户端自动化库（wxauto 复刻版）：SQLCipher 数据库解密读取 + UIA / 坐标-OCR 混合发送。
   本项目的微信桥接（`examples/wechatauto_bridge.py`）直接建立在它之上。
@@ -322,8 +333,8 @@ node server.js --doctor   # 自检
 
 - `wechatauto-replica` 采用 **Apache-2.0**：允许私人使用、修改、再分发乃至商用，**前提是保留许可证与版权声明、标注你对它的修改、不暗示上游为本项目背书**。
 - 本项目满足的方式：许可证原文随源码放在 `vendor/wechatauto/dist-info/licenses/LICENSE`；`vendor/MANIFEST.sha256` 与构建脚本保证上游源码未被手改、改动只发生在构建期补丁里；致谢与仓库地址写在这里和 `vendor/README.md`。
-- 本项目自己的代码是 **MIT**（见 [LICENSE](LICENSE)），与上游的 Apache-2.0 互不冲突。
+- 本项目原创代码、文档和原创素材采用 **AGPL-3.0-only**（见 [LICENSE](LICENSE)）。这是 OSI 认可的开源许可证：允许商业使用，但分发修改版、或让用户通过网络使用修改版时，必须按 AGPL-3.0 提供完整对应的源代码。第三方组件仍适用各自许可证，详见 [NOTICE.md](NOTICE.md)。
 
 ## License
 
-MIT，见 [LICENSE](LICENSE)。欢迎 fork、改人设、接自己的模型。
+**AGPL-3.0-only**，见 [LICENSE](LICENSE)。欢迎使用、修改和分发（包括商业使用），但修改版分发或网络服务必须按 AGPL-3.0 提供源代码；请保留 [NOTICE.md](NOTICE.md) 中的署名。
