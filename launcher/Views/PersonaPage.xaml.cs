@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
+using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -23,6 +24,8 @@ namespace WhaleLauncher.Views
         private readonly DispatcherTimer _saveTimer;
         private bool _loading;
         private bool _loaded;
+        private bool _loadedOnline;
+        private readonly SemaphoreSlim _saveGate = new SemaphoreSlim(1, 1);
         private string _loadedEmoji = "正常";   // 上次载入的颜文字档位，用来判断用户有没有改过
 
         /// <summary>
@@ -54,17 +57,17 @@ namespace WhaleLauncher.Views
 
         public async Task RefreshAsync()
         {
-            if (!_sup.NodeRunning || _loaded) return;
+            if (_loaded && _loadedOnline == _sup.NodeRunning) return;
             await LoadAsync();
         }
 
         private async Task LoadAsync()
         {
-            var res = await Api.Get(_sup.Url, "/api/persona");
-            if (!res.Ok) return;
+            var res = await _sup.ReadConfigurationAsync("/api/persona");
+            if (!res.Ok) { SaveState.Text = res.Error; return; }
 
-            var set = await Api.Get(_sup.Url, "/api/settings");
-            var cfg = await Api.Get(_sup.Url, "/api/config");
+            var set = await _sup.ReadConfigurationAsync("/api/settings");
+            var cfg = await _sup.ReadConfigurationAsync("/api/config");
 
             _loading = true;
             try
@@ -120,9 +123,90 @@ namespace WhaleLauncher.Views
 
             await LoadPresetsAsync(_currentPresetId);
             await LoadFlagsAsync();
+            await LoadMemoryChatsAsync();
             _loaded = true;
-            SaveState.Text = "";
+            _loadedOnline = _sup.NodeRunning;
+            ConfigurationControls.SetReadOnly(Body, !_loadedOnline);
+            SaveState.Text = _loadedOnline ? "" : "已读取本地配置 · 启动内核后可修改";
             PresetSaved.Text = "";
+        }
+
+        private sealed class MemoryChatItem
+        {
+            public string Key { get; set; }
+            public string Title { get; set; }
+            public string Label { get; set; }
+        }
+
+        private async Task LoadMemoryChatsAsync()
+        {
+            BtnResetMemory.IsEnabled = false;
+            CmbMemoryChat.ItemsSource = null;
+            if (!_sup.NodeRunning)
+            {
+                MemoryHint.Text = "请先启动内核，再刷新对话列表。";
+                return;
+            }
+            var res = await Api.Get(_sup.Url, "/api/memory/chats");
+            if (!res.Ok)
+            {
+                MemoryHint.Text = "读取对话失败：" + (res.Error.Length > 0 ? res.Error : res.Raw);
+                return;
+            }
+            var groups = new List<MemoryChatItem>();
+            var arr = res.Prop("chats");
+            if (arr.ValueKind == JsonValueKind.Array)
+                foreach (var g in arr.EnumerateArray())
+                {
+                    var title = S(g, "title");
+                    var key = S(g, "key");
+                    groups.Add(new MemoryChatItem { Key = key, Title = title,
+                        Label = $"【{(S(g, "chatType") == "group" ? "群聊" : "私聊")}】{title} · {L(g, "messageCount")} 条记录 · {L(g, "peopleCount")} 人记忆（{key}）" });
+                }
+            CmbMemoryChat.ItemsSource = groups;
+            if (groups.Count > 0) CmbMemoryChat.SelectedIndex = 0;
+            BtnResetMemory.IsEnabled = groups.Count > 0;
+            MemoryHint.Text = groups.Count > 0 ? "列出鲸鲸当前保存了记忆的所有对话，包含群聊和私聊。" : "暂无已保存记忆的对话。";
+        }
+
+        private async void OnRefreshMemoryChats(object sender, RoutedEventArgs e)
+        {
+            BtnRefreshMemory.IsEnabled = false;
+            try { await LoadMemoryChatsAsync(); }
+            finally { BtnRefreshMemory.IsEnabled = true; }
+        }
+
+        private async void OnResetChatMemory(object sender, RoutedEventArgs e)
+        {
+            if (!_sup.NodeRunning || CmbMemoryChat.SelectedItem is not MemoryChatItem group) return;
+            var result = MessageBox.Show(Window.GetWindow(this),
+                $"确定清空「{group.Title}」的全部内部记忆吗？\n\n" +
+                "将清除：上下文聊天记录、摘要、人物卡、事件与关系记忆。\n" +
+                "微信聊天记录、其他会话记忆和人设设置保留。\n\n" +
+                "此操作无法直接撤销；之后从新消息开始记忆。已有的手动备份与自动快照保留。",
+                "清空该对话记忆", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
+            if (result != MessageBoxResult.Yes) return;
+            BtnResetMemory.IsEnabled = false;
+            BtnRefreshMemory.IsEnabled = false;
+            CmbMemoryChat.IsEnabled = false;
+            try
+            {
+                var res = await Api.Post(_sup.Url, "/api/memory/chats/reset",
+                    JsonSerializer.Serialize(new { key = group.Key, confirm = true }));
+                if (!res.Ok)
+                {
+                    MemoryHint.Text = "清空失败：" + (res.Error.Length > 0 ? res.Error : res.Raw);
+                    return;
+                }
+                await LoadMemoryChatsAsync();
+                MemoryHint.Text = $"已清空「{group.Title}」的内部记忆，微信聊天记录保留。";
+            }
+            finally
+            {
+                BtnRefreshMemory.IsEnabled = true;
+                CmbMemoryChat.IsEnabled = true;
+                BtnResetMemory.IsEnabled = CmbMemoryChat.SelectedItem != null;
+            }
         }
 
         private void UpdateHints()
@@ -139,7 +223,7 @@ namespace WhaleLauncher.Views
 
         private async Task LoadPresetsAsync(string currentId = "")
         {
-            var res = await Api.Get(_sup.Url, "/api/persona/presets");
+            var res = await _sup.ReadConfigurationAsync("/api/persona/presets");
             if (!res.Ok) return;
             var items = new List<PresetItem>();
             var arr = res.Prop("presets");
@@ -165,7 +249,7 @@ namespace WhaleLauncher.Views
         private async Task LoadFlagsAsync()
         {
             FlagsHost.Children.Clear();
-            var res = await Api.Get(_sup.Url, "/api/features");
+            var res = await _sup.ReadConfigurationAsync("/api/features");
             if (!res.Ok) return;
             var arr = res.Prop("features");
             if (arr.ValueKind != JsonValueKind.Array) return;
@@ -278,6 +362,9 @@ namespace WhaleLauncher.Views
 
         private async Task SaveAllAsync(string okText)
         {
+            await _saveGate.WaitAsync();
+            try
+            {
             if (_loading || !_sup.NodeRunning) return;
 
             int age = int.TryParse(TxtAge.Text.Trim(), out var a) ? Math.Clamp(a, 1, 120) : 23;
@@ -323,8 +410,12 @@ namespace WhaleLauncher.Views
 
             // 称呼（persona 接口不收，走 settings）；群聊规则统一在「设置 → 群聊」，这里不再写 config
             var owner = TxtOwner.Text.Trim();
-            if (owner.Length > 0)
-                await Api.Post(_sup.Url, "/api/settings", $"{{\"userName\":\"{Api.Esc(owner)}\"}}");
+            var ownerResult = await Api.Post(_sup.Url, "/api/settings", $"{{\"userName\":\"{Api.Esc(owner)}\"}}");
+            if (!ownerResult.Ok)
+            {
+                SaveState.Text = "人设已保存，但称呼保存失败：" + ownerResult.Error;
+                return;
+            }
             var patch = "{\"patch\":{" +
                 "\"persona.masterRoast\":" + (ChkRoast.IsChecked == true ? "true" : "false") + "," +
                 "\"persona.aliases\":" + Lines(TxtAliases) + "," +
@@ -332,16 +423,24 @@ namespace WhaleLauncher.Views
                 "\"persona.master.wxids\":" + Lines(TxtMasterWxids) + "," +
                 "\"chat.emojiChance\":" + emojiChance.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture) +
                 "}}";
-            await Api.Post(_sup.Url, "/api/config", patch);
+            var configResult = await Api.Post(_sup.Url, "/api/config", patch);
+            if (!configResult.Ok)
+            {
+                SaveState.Text = "人设与称呼已保存，但其他设置保存失败：" + configResult.Error;
+                return;
+            }
             _loadedEmoji = emoji;
 
             SaveState.Text = okText + " · " + DateTime.Now.ToString("HH:mm:ss");
             PresetSaved.Text = "✔ 已保存";
             PresetSaved.Foreground = (Brush)FindResource("Text");
+            }
+            finally { _saveGate.Release(); }
         }
 
         private async void OnImportPreset(object sender, RoutedEventArgs e)
         {
+            if (!_sup.NodeRunning) { SaveState.Text = "请先启动内核，再导入预设。"; return; }
             if (!(CmbPreset.SelectedItem is PresetItem p)) return;
             var res = await Api.Post(_sup.Url, "/api/persona/preset", $"{{\"id\":\"{Api.Esc(p.Id)}\"}}");
             if (!res.Ok)

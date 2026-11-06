@@ -50,7 +50,7 @@ function buildTurns(msg, history, memoryBlock = '', tailBlock = '') {
     // 单独的群聊事件记录：历史不是所有人轮流与机器人私聊。
     // 只发送不可反推的参与者标签，不把内部微信 ID 暴露给模型。
     const speaker = (m) => {
-      if (m.role === 'assistant') return '鲸鲸（机器人）';
+      if (m.role === 'assistant') return `${msg.botName || '鲸鲸'}（机器人）`;
       const uid = m.uid || m.senderId || m.name || m.senderName || '未知';
       const tag = createHash('sha256').update(`${msg.chatId}:${uid}`).digest('hex').slice(0, 8);
       return `${m.name || m.senderName || '群友'}（参与者${tag}）`;

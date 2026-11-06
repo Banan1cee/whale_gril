@@ -133,6 +133,10 @@ class ChatIdentityError(RuntimeError):
     """
 
 
+class DraftDirtyError(RuntimeError):
+    """输入框可能残留本次草稿，禁止换通道继续发送。"""
+
+
 def _chat_identity_level(current, aliases):
     """当前会话名和目标候选名有多像：0 完全相同、1 成员名集合吻合，其它一律不收。
 
@@ -164,7 +168,8 @@ class _SendStateScope:
     """
 
     def __init__(self, text_len=0):
-        self.budget = max(40.0, float(text_len or 0) * 0.12)
+        # 编码热切换时最多输入两次（一次 GBK、一次 UTF-16），并留出回读/清理时间。
+        self.budget = max(40.0, float(text_len or 0) * 0.16 + 8.0)
 
     def __enter__(self):
         SEND_STATE["active"] = True
@@ -575,6 +580,7 @@ try:
     SYSTEM_SENDER_NAMES |= {str(x).strip() for x in (_wechat.get("ignoreSenders") or []) if str(x).strip()}
 except Exception:
     pass
+
 
 # 微信 4.x 数据目录的常见名字（不同版本 / 不同安装方式会有差异）
 DB_ROOT_NAMES = ("xwechat_files", "WeChat Files", "xwechat_files_data")
@@ -2630,7 +2636,7 @@ def main():
         if not hwnd:
             return False
         try:
-            bg_sender.configure(BG_SEND)
+            bg_sender.configure(BG_SEND, state_file=os.path.join(ROOT, "data", "wechat-encoding.json"))
         except Exception:                        # noqa: BLE001
             pass
         if chat_username:
@@ -2664,6 +2670,8 @@ def main():
             # 后台通道自己核对过「点开的是不是目标会话」，不是就一个字都没打。
             # 属于「发错人」红线，不许再换通道重试（换通道还是打进当前会话）。
             raise ChatIdentityError("后台通道：当前会话不是目标 %r" % chat_display_name)
+        if why in ("input_dirty", "residue_left", "input_not_empty"):
+            raise DraftDirtyError("输入框存在草稿或正文校验失败，请检查草稿后再试（%s）" % why)
         if ok:
             BG_STATS["ok"] += 1
             BG_STATS["treeFails"] = 0
@@ -3397,6 +3405,10 @@ def main():
                         log("发送成功（后台通道，%.1fs）→ %s"
                             % (time.time() - t_start, chat_display_name))
                         return True
+                except DraftDirtyError as e:
+                    allow_mark_dead = False
+                    log_error("发送暂停：%s" % e)
+                    return False
                 except ChatIdentityError as e:
                     log_error("会话核对没通过，这条不发（%s）：%s" % (chat_display_name, e))
                     return False

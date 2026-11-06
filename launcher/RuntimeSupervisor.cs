@@ -74,6 +74,9 @@ namespace WhaleLauncher
     public sealed class RuntimeSupervisor : IDisposable
     {
         public string BaseDir { get; }
+        private LocalConfiguration _localConfiguration;
+        public Task<ApiResult> ReadConfigurationAsync(string path)
+            => NodeRunning ? Api.Get(Url, path) : (_localConfiguration ??= new LocalConfiguration(BaseDir)).ReadAsync(path);
         public string DataDir { get; }
         public string LogPath { get; }
         public event Action<LogLine> Line;

@@ -5,6 +5,11 @@
 
 | # | 现象 | 根因 | 修复 | 版本 | 回归测试 |
 | --- | --- | --- | --- | --- | --- |
+| 55 | 搜索超时后仍可能再发一次纠错请求 | 毫秒定时器与浮点截止时间存在舍入差异 | 记录总超时状态，阻止后续补充请求 | 4.0.6 | `tests/search-network.test.js` |
+| 54 | 清空会话后旧记忆被后台任务写回 | 异步抽取仍持有已删除会话对象 | 删除标记拦截旧对象写入，并保留其他会话 | 4.0.6 | `tests/group-memory-reset.test.js` |
+| 53 | 修改名字后又被旧值覆盖 | 配置热重载未合并独立人设文件 | 重载合并人设，当前称呼优先，串行保存 | 4.0.6 | `tests/persona-live-name.test.js` |
+| 52 | 微信登录窗口反复弹出、编码反复切回候选值 | UIA 恢复再次运行微信；手动候选覆盖已验证编码 | 仅恢复已有窗口，回读校验并持久保存有效编码 | 4.0.6 | `tests/bridge-adaptive-encoding.test.js`、`tests/test_uia_recovery.py`、`tests/test_bg_live_encoding.py` |
+| 51 | 内核未启动时人设和设置显示为空 | 页面只从运行中的 HTTP 服务读取 | 使用短进程只读加载本地配置 | 4.0.6 | `tests/launcher-offline-config.test.js` |
 | 50 | 用户说“发个表情包”，她只回“行吧，最后一张了”，并没有带图；OpenCode Go 的缓存命中一直显示 0 | ①4.0 只在模型主动写 `[[sticker:分类]]` 时才发，明确索要没有兜底；②`src/llm/client.js` 的 `_recordUsage` 只读 `prompt_cache_hit_tokens`，OpenCode 返回的 `prompt_tokens_details.cached_tokens` / `opencode.tokens.cache_read` 没读，界面和日志都是假 0 | ①明确索要时模型没写标记，就按原话分类名 → FOLDERS 家族 → 默认有图分类补一张；空分类不借图；②缓存命中依次取三个字段里第一个 >0，miss 用 `prompt - hit` 兜底；③新增尾部节奏提示 `sticker.demandChance`（默认 0.7）和按说话人的严肃窗口（15 分钟 / 连续 4 条普通消息 / “没事了”提前解除） | 4.0 | `tests/sticker-demand.test.js` 6 条、`tests/sticker-capability.test.js`「四分类只有三个有图」「stickerDemand 只加在尾部」 |
 | 49 | 微信里出现视频号卡片 / 分享第三方链接后，桥接卡死、断链，然后无限重启 | ①视频号卡片会把 UIA 的 `Name/Exists` 卡在一次调用里不返回（`data/bridge-hang.log` 栈：`uiautomation.Name` → `bg_sender.read_ui` → `send_text`），发送看门狗 40 秒后 `os._exit(7)`；②`scripts/bridge_loop.bat` 对 code=7 直接 `goto retry`、不计 FAILS，3 秒重启后又卡 → 无限循环；③启动器「进程活过 60 秒就把重启计数清零」等于没有刹车 | ①视频号卡片（`finderFeed` / `<type>51</type>` / 含「视频号」的链接卡片）直接装死不接话，不再拉起视频号窗口；②`bridge_loop.bat` 给 code=7 加重启上限（5 次）并开延迟展开，到顶打印原因后 pause 退出；③启动器改成「最近 10 分钟重启 ≥5 次」才刹车，手动启动 / 重启会清零计数 | 4.0 | `tests/bridge-restart-brake.test.js` 3 条 |
 | 48 | 联网搜索「时间不对」：问今天有什么新闻，回的是几天前的旧闻；「今天的热点新闻」也不走实时热榜 | ①摘要时间只认「X 天之前」和「YYYY年M月D日」，`4 天前`、`刚刚`、`昨天`、`11月2日`（不带年份）全被当成「不知道多旧」放行；②「今天的热点新闻」被热榜正则的锚定写法漏掉，退回普通搜索；③搜索路由器不知道当前日期，判断「今天 / 最新」只能靠训练数据 | ①补全时间写法解析（含跨年：1 月读到「12月20日」按去年算）；②「今天 / 刚刚 / 实时」把丢旧阈值收紧到 2 天，「这周 / 最近几天」到 7 天；③热榜触发改为「时间词 + 新闻 / 热点」组合匹配；④路由器提示词注入当天日期（可注入 `now` 便于测试） | 4.0 | `tests/c1c2c3.test.js` 2 条、`tests/search-bot.test.js` 2 条、`tests/search-router.test.js` 2 条 |

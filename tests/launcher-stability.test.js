@@ -170,7 +170,7 @@ test('模型页所有输入都自动保存（失焦/换选项/勾选），手动
   assert.match(code, /key\.LostFocus \+= async \(s, e\) => \{ if \(key\.Password\.Length > 0\) await AutoSaveChatAsync\(\); \}/, 'API Key 填完失焦要自动保存');
   assert.match(code, /baseUrl\.LostFocus/, '接口地址失焦要自动保存');
   assert.match(code, /model\.LostFocus/, '模型名失焦要自动保存');
-  assert.match(code, /mock\.Click \+= async/, '演示模式勾选要自动保存');
+  assert.doesNotMatch(code, /Row\("演示模式"/, '演示模式开关按用户要求移除，未配 Key 的兜底仍由内核处理');
   assert.match(code, /visionKey\.LostFocus/, '看图 Key 失焦要自动保存');
   assert.match(code, /await AutoSaveChatAsync\(\);[\s\S]{0,400}model\.SelectionChanged/, '换模型服务商后要自动保存');
   // 手动按钮必须保留（用户原话：手动保存已经存在的不用管）

@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Runtime.InteropServices;
 using System.Windows.Interop;
 using System.Windows.Input;
@@ -78,15 +79,8 @@ namespace WhaleLauncher
             Loaded += async (_, __) =>
             {
                 Nav.SelectedIndex = 0;
+                _ = SilentUpdateCheckAsync();
                 await RefreshAsync();
-                // 静默查一次（5 秒后）：只在有新版本时亮一行字，不下载、不弹窗
-                var once = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
-                once.Tick += async (s, ___) =>
-                {
-                    once.Stop();
-                    await SilentUpdateCheckAsync();
-                };
-                once.Start();
             };
             Closing += OnClosingDuringUpdate;
             Closed += (_, __) =>
@@ -99,7 +93,7 @@ namespace WhaleLauncher
 
         // ── 检查更新（左下角按钮 + 右上角小横幅）────────────────
         private bool _updating;
-        private DispatcherTimer _toastTimer;
+        private bool _checkingUpdates;
         private ManifestCheck _lastManifest;
         private DateTime _lastManifestCheck = DateTime.MinValue;
 
@@ -108,34 +102,32 @@ namespace WhaleLauncher
 
         private void ShowToast(string text)
         {
+            var opening = UpdateToast.Visibility != Visibility.Visible;
             UpdateToastText.Text = text ?? "已检测到新版本";
+            UpdateToastNotes.Text = UpdateManifestService.ReleaseSummary(_lastManifest?.Manifest);
             UpdateToast.Visibility = Visibility.Visible;
-            if (_toastTimer == null)
+            if (opening)
             {
-                _toastTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(8) };
-                _toastTimer.Tick += (s, e) =>
-                {
-                    _toastTimer.Stop();
-                    UpdateToast.Visibility = Visibility.Collapsed;
-                };
+                UpdateToastSlide.BeginAnimation(TranslateTransform.YProperty,
+                    new DoubleAnimation(-32, 0, TimeSpan.FromMilliseconds(220))
+                    { EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut } });
+                UpdateToast.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(180)));
             }
-            _toastTimer.Stop();
-            _toastTimer.Start();
         }
 
         private void HideToast()
         {
-            _toastTimer?.Stop();
             UpdateToast.Visibility = Visibility.Collapsed;
         }
 
-        private void OnToastClick(object sender, MouseButtonEventArgs e)
+        private void OnToastUpdateClick(object sender, RoutedEventArgs e)
         {
-            HideToast();
             if (_lastManifest != null && _lastManifest.HasUpdate) _ = RunUpdateAsync(_lastManifest, askFirst: true);
             else OnCheckUpdate(sender, null);
             e.Handled = true;
         }
+
+        private void OnToastDismissClick(object sender, RoutedEventArgs e) => HideToast();
 
         /// <summary>
         /// 内核启动时如果自动迁移了 3.x 旧记忆，弹一次「已导入并转换格式」。
@@ -187,17 +179,20 @@ namespace WhaleLauncher
 
         private async void OnCheckUpdate(object sender, RoutedEventArgs e)
         {
-            if (_updating) return;
+            if (_updating || _checkingUpdates) return;
+            _checkingUpdates = true;
             BtnUpdate.IsEnabled = false;
             StatusLine.Text = "正在检查更新…";
             try
             {
                 var chk = await UpdateManifestService.FetchAsync(_sup.BaseDir);
+                _lastManifestCheck = DateTime.Now;
                 ApplyManifestPolicy(chk, true);
             }
             finally
             {
                 BtnUpdate.IsEnabled = true;
+                _checkingUpdates = false;
             }
         }
 
@@ -207,10 +202,15 @@ namespace WhaleLauncher
         /// </summary>
         private async Task SilentUpdateCheckAsync()
         {
-            if (_updating) return;
+            if (_updating || _checkingUpdates) return;
+            _checkingUpdates = true;
             _lastManifestCheck = DateTime.Now;
-            var chk = await UpdateManifestService.FetchAsync(_sup.BaseDir);
-            ApplyManifestPolicy(chk, false);
+            try
+            {
+                var chk = await UpdateManifestService.FetchAsync(_sup.BaseDir);
+                ApplyManifestPolicy(chk, false, allowBlocking: false);
+            }
+            finally { _checkingUpdates = false; }
         }
 
         /// <summary>
@@ -222,9 +222,7 @@ namespace WhaleLauncher
         {
             if (_updating) return;
             if ((DateTime.Now - _lastManifestCheck).TotalHours < PeriodicCheckHours) return;
-            _lastManifestCheck = DateTime.Now;
-            var chk = await UpdateManifestService.FetchAsync(_sup.BaseDir);
-            ApplyManifestPolicy(chk, interactive: false, allowBlocking: false);
+            await SilentUpdateCheckAsync();
         }
 
         private void ApplyManifestPolicy(ManifestCheck chk, bool interactive, bool allowBlocking = true)
@@ -235,8 +233,9 @@ namespace WhaleLauncher
                     if (!allowBlocking)
                     {
                         // 定时检查不拦人：只在状态行说明，下次启动才真的停用
-                        _lastManifest = null;
-                        SetUpdateButton(false);
+                        _lastManifest = chk;
+                        SetUpdateButton(chk.HasUpdate);
+                        ShowToast("当前版本已停用，请更新到 v" + chk.Manifest.Latest);
                         StatusLine.Text = "当前版本已被停用，下次启动需要更新";
                         return;
                     }
@@ -274,6 +273,7 @@ namespace WhaleLauncher
 
                 default:
                     _lastManifest = null;
+                    HideToast();
                     SetUpdateButton(false);
                     StatusLine.Text = chk.Error.Length > 0
                         ? "检查更新失败：" + chk.Error + "（不影响使用）"

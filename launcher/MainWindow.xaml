@@ -127,19 +127,34 @@
             </DockPanel>
         </Border>
 
-        <!-- 右上角：检测到新版本时滑出的小横幅（8 秒后自动消失） -->
-        <Border x:Name="UpdateToast" Grid.Row="1" HorizontalAlignment="Right" VerticalAlignment="Top"
-                Margin="0,14,26,0" CornerRadius="10" Padding="12,7" Visibility="Collapsed"
+        <!-- 浮层与主区共用一行，通过 ZIndex 覆盖显示，不参与主区高度分配 -->
+        <Border x:Name="UpdateToast" Grid.Row="1" HorizontalAlignment="Right" VerticalAlignment="Top" Width="860"
+                Margin="24,8,24,8" CornerRadius="10" Padding="14,10" Visibility="Collapsed"
                 Panel.ZIndex="9"
-                BorderThickness="1" Cursor="Hand" MouseLeftButtonUp="OnToastClick">
+                BorderThickness="1">
+            <Border.RenderTransform><TranslateTransform x:Name="UpdateToastSlide" /></Border.RenderTransform>
             <Border.Style>
                 <Style TargetType="Border">
                     <Setter Property="Background" Value="{DynamicResource AccentSoft}" />
                     <Setter Property="BorderBrush" Value="{DynamicResource Accent}" />
                 </Style>
             </Border.Style>
-            <TextBlock x:Name="UpdateToastText" Text="已检测到新版本" FontSize="11.5" FontWeight="SemiBold"
-                       Foreground="{DynamicResource Accent}" />
+            <StackPanel>
+                <DockPanel LastChildFill="True">
+                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                        <Button Content="立即更新" Style="{StaticResource Primary}" Click="OnToastUpdateClick" />
+                        <Button Content="暂时收起" Style="{StaticResource Ghost}" Margin="8,0,0,0" Click="OnToastDismissClick" />
+                    </StackPanel>
+                    <TextBlock x:Name="UpdateToastText" Text="已检测到新版本" FontSize="13" FontWeight="SemiBold"
+                               VerticalAlignment="Center" Foreground="{DynamicResource Accent}" />
+                </DockPanel>
+                <Expander Header="更新内容与修复" IsExpanded="True" Margin="0,6,0,0" Foreground="{DynamicResource Text}">
+                    <ScrollViewer MaxHeight="130" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                        <TextBlock x:Name="UpdateToastNotes" FontSize="12.5" Foreground="{DynamicResource Text2}"
+                                   LineHeight="20" TextWrapping="Wrap" Margin="4,6,4,2" />
+                    </ScrollViewer>
+                </Expander>
+            </StackPanel>
         </Border>
 
         <!-- 左栏 + 主区 -->

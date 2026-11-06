@@ -178,6 +178,10 @@ jobs:
         if: always()
         run: dotnet build launcher/WhaleLauncher.csproj -c Release --nologo
 
+      - name: 更新摘要解析与兼容回归
+        if: always()
+        run: dotnet run --project tests/launcher/UpdateChecks/UpdateChecks.csproj -c Release --artifacts-path artifacts/update-checks
+
       - name: 语音实验开关与发送回归（模拟接口，不发消息）
         if: always()
         timeout-minutes: 3

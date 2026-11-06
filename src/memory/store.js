@@ -644,8 +644,9 @@ class Store {
 
   resetSession(key) {
     const chatId = String(key || '');
+    if (!this.chatStore.deleteChat(chatId)) return false;
     this.sessions.delete(chatId);
-    return this.chatStore.deleteChat(chatId);
+    return true;
   }
 
   resetAll() {

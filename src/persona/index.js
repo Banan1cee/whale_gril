@@ -954,6 +954,11 @@ function buildPromptParts(ctx = {}) {
     return { system: buildLegacySystem(ctx), tail: '' };
   }
   const { static: blocks, dynamic } = buildBlocks(ctx);
+  const p = ctx.config.persona || {};
+  blocks.push('【当前名字与称呼】\n'
+    + `- 你现在的名字是「${p.name || '鲸鲸'}」。\n`
+    + `- 对经过身份认证的主人，当前称呼为「${p.ownerName || '主人'}」；其他人的身份和称呼按各自信息处理。\n`
+    + '- 名字与称呼以本段当前设置为准；旧对话、记忆摘要、自定义提示词或预设中的旧名字与旧称呼仅是历史，不沿用。其他经历和关系记忆继续保留。');
   return {
     system: blocks.join('\n\n'),
     tail: dynamic.length ? TURN_STATE_HEADER + '\n' + dynamic.join('\n') : '',

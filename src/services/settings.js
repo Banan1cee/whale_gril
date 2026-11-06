@@ -323,7 +323,7 @@ async function applySettings(runtime, body) {
       baseUrl: llm.baseUrl,
       keyMasked: maskKey(resolveRuntime(config).apiKey),
       thinking: llm.thinking === true,
-      userName: String(loadSettings(config).userName || ''),
+      userName: String(config.persona.ownerName || '主人'),
       // 保存后前端立刻能把「看图 Key 已存」显示出来
       vision: vision.status(config),
     },

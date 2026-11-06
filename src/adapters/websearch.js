@@ -25,6 +25,7 @@ function getText(url, timeoutMs = 8000, extraHeaders = null) {
     // socket timeout 只是“空闲超时”，滴流响应/重定向也必须受同一个总时限约束。
     const timer = setTimeout(() => {
       const err = new Error('search deadline exceeded');
+      err.code = 'SEARCH_DEADLINE';
       finish(err);
       if (response) response.destroy();
       if (req) req.destroy(err);
@@ -329,13 +330,19 @@ async function search(query, { limit = 5, timeoutMs = 8000, maxAgeDays } = {}) {
     ? rawQuery.replace(siteFilter, '').trim().slice(0, 100) + ' ' + siteFilter
     : rawQuery.slice(0, 100);
   const deadline = performance.now() + Math.max(1, Number(timeoutMs) || 8000);
+  let deadlineExpired = false;
   const ask = async (term) => {
     if (siteFilter && !term.toLowerCase().includes(siteFilter.toLowerCase())) term += ' ' + siteFilter;
     const remaining = deadline - performance.now();
-    if (remaining <= 0) return [];
+    if (deadlineExpired || remaining <= 0) return [];
     const url = 'https://cn.bing.com/search?q=' + encodeURIComponent(term) + '&setlang=zh-CN&count=10';
     // 每次纠错独立失败，不能因补搜失败丢掉前面已经拿到的有效资料。
-    try { return keepRelevant(q, parseBing(await getText(url, remaining))); } catch { return []; }
+    try { return keepRelevant(q, parseBing(await getText(url, remaining))); }
+    catch (err) {
+      // 定时器可能比浮点截止时间早不到 1ms 触发；一旦超时，后续纠错不能重新发请求。
+      if (err && err.code === 'SEARCH_DEADLINE') deadlineExpired = true;
+      return [];
+    }
   };
   const first = await ask(q);
   // 泛问当前产品阵容时可补官方站点；这只是额外检索，摘要仍须作为外部资料核实。
