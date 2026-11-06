@@ -46,7 +46,7 @@ test('package validator rejects missing CATs, corrupt files and the exact user-r
   fs.unlinkSync(path.join(fixture, name));
   assert.deepEqual(check(), ['Missing: ' + name]);
   fs.writeFileSync(path.join(fixture, name), 'damaged');
-  assert.deepEqual(check(), ['Modified: ' + name]);
+  assert.deepEqual(check(), ['Modified: ' + name], 'Corrupt catalog fixture hash: ' + crypto.createHash('sha256').update(fs.readFileSync(path.join(fixture,name))).digest('hex') + '; expected: ' + expected[name]);
   for (const n of Object.keys(manifest).filter(n => n.endsWith('.cat'))) fs.unlinkSync(path.join(fixture, n));
   assert.equal(check().length, 8);
 });
