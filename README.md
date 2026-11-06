@@ -3,7 +3,7 @@
 # 🐋 Whale Girl — a DeepSeek-powered WeChat companion bot
 
 [![GitHub release](https://img.shields.io/github/v/release/Banan1cee/whale_gril)](https://github.com/Banan1cee/whale_gril/releases/latest)
-[![License: MIT](https://img.shields.io/github/license/Banan1cee/whale_gril)](LICENSE)
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D18-339933)](https://nodejs.org/)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D4)
 [![GitHub stars](https://img.shields.io/github/stars/Banan1cee/whale_gril)](https://github.com/Banan1cee/whale_gril/stargazers)
@@ -46,6 +46,8 @@ The persona is a blue-haired whale girl — short messages, real moods, sweet on
 ---
 
 ## Experimental stickers
+
+The package includes 27 Whale Girl preset PNGs (9 each in tsundere, angry and happy). They are imported into your library in the background the first time stickers are enabled. Existing images are never overwritten, and deleting a preset does not make it reappear after a restart. The master switch remains off by default.
 
 Turn the master switch on in the launcher's **Stickers** page (off by default). The category is chosen by the model, which writes `[[sticker:category]]` at the end of a reply: the marker is stripped before the user sees anything, and if the marker is missing, the category does not exist or that category has no images, **nothing is sent** — the bot never guesses a mood and never picks one at random. Three built-in categories (tsundere / angry / happy) plus any custom ones you add; manage categories, upload and delete images, or open the folder from the launcher. GIF, PNG, JPEG and WebP are supported (4 MB per file). Uploading only stores the original file: no WeChat message is sent and GIFs are not re-encoded.
 
@@ -305,12 +307,13 @@ Checksums and verification commands are in [docs/DOWNLOAD.md](docs/DOWNLOAD.md).
 ## Code signing policy
 
 Current release builds are **not signed yet**, so Windows shows "Unknown publisher". Verify `SHA256SUMS.txt` from the release before installing.
-The signing policy is in [docs/CODE_SIGNING_POLICY.md](docs/CODE_SIGNING_POLICY.md); the privacy statement is in [docs/PRIVACY.md](docs/PRIVACY.md).
+The signing policy is in [docs/CODE_SIGNING_POLICY.md](docs/CODE_SIGNING_POLICY.md); the privacy policy is in [PRIVACY.md](PRIVACY.md).
 
 ## Acknowledgements
 
 WeChat support in this project stands entirely on the shoulders of others. Special thanks to:
 
+- **Original character author: 上善无形** — the Whale Girl icon used in this project is a **derivative work** based on their original character. Rights in the original character remain with the original author; this project uses and credits it within the permitted scope. See [NOTICE.md](NOTICE.md).
 - **[wechatauto-replica](https://github.com/fanyuantaier/wechatauto-replica)** (v1.2.9, **Apache-2.0**, by fanyuantaier, [PyPI](https://pypi.org/project/wechatauto-replica/))
   — a Windows WeChat 4.x automation library (a wxauto replica): SQLCipher database decryption plus hybrid UIA / coordinate-OCR sending.
   The WeChat bridge (`examples/wechatauto_bridge.py`) is built directly on top of it.
@@ -324,8 +327,8 @@ WeChat support in this project stands entirely on the shoulders of others. Speci
 
 - `wechatauto-replica` is licensed under **Apache-2.0**, which permits private and commercial use, modification and redistribution **provided the licence and copyright notices are kept, your changes are stated, and you do not imply endorsement by the upstream project**.
 - This repository satisfies those terms by shipping the licence text at `vendor/wechatauto/dist-info/licenses/LICENSE`, keeping the upstream source unmodified (patches happen at build/run time only, verified by `vendor/MANIFEST.sha256`), and crediting the project here and in `vendor/README.md`.
-- This project's own code is **MIT** (see [LICENSE](LICENSE)); it is compatible with the upstream Apache-2.0.
+- This project's original code, documentation and original assets are licensed under **AGPL-3.0-only** (see [LICENSE](LICENSE)). It is an OSI-approved open-source license: commercial use is allowed, but if you distribute a modified version or let users interact with it over a network, you must offer the complete corresponding source under AGPL-3.0. Third-party components keep their own licenses; see [NOTICE.md](NOTICE.md).
 
 ## License
 
-MIT — see [LICENSE](LICENSE). Fork it, rewrite the persona, plug in your own model.
+**AGPL-3.0-only** — see [LICENSE](LICENSE). You may use, modify and distribute it, including commercially, under the AGPL. Network services based on modified versions must offer their source. Please keep the attribution described in [NOTICE.md](NOTICE.md).

@@ -6,6 +6,10 @@
 本文件说明鲸鲸（whale_gril）的 Windows 发行包是怎么签名的、谁有权批准、怎么验证。
 对应的流水线在 [`.github/workflows/installer.yml`](.github/workflows/installer.yml)。
 
+> **许可提示：** 本项目自 4.0.x 起采用 **AGPL-3.0-only**（OSI 认可的开源许可证）。
+> SignPath Foundation 的免费 OSS 签名要求 OSI 认可的许可证；AGPL-3.0 符合这一前提，
+> 但仍需满足公开仓库、GitHub-hosted runner 和可复现构建等其它条件。
+
 ## 签哪些文件
 
 | 产物 | 说明 |
@@ -45,18 +49,13 @@
 协作改动请走 Pull Request；`main` 的每次发版都由 Approver 在 SignPath 后台确认后才会签名。
 贡献者名单见 [GitHub contributors](https://github.com/Banan1cee/whale_gril/graphs/contributors)。
 
-## 隐私声明（privacy policy）
+## 隐私政策（privacy policy）
 
-**本程序不会把它收集到的数据发给用户没有指定的系统。**
+本项目的完整隐私政策只有一份，位于仓库根目录：
 
-- 聊天内容、人设、记忆、联系人缓存都在本机 `data/` 目录里，卸载时默认保留
-- 需要模型回复时，聊天内容会发往**用户自己配置的模型接口**（`config.json` 里的
-  `baseUrl` / `apiKey`，例如 DeepSeek、阿里云百炼等；第三方服务的隐私政策由各自提供）
-- 开启语音识别时，别人发来的语音（转成 wav）会发往用户配置的语音接口（默认阿里云百炼的
-  `qwen3-asr-flash`）；开启看图时，图片会发往用户配置的视觉接口
-- 联网搜索功能会把检索词发往搜索服务（B站 / 微博 / 头条等公开接口）
-- 没有遥测、没有自动上报、不往维护者的服务器发任何数据
-- 程序监听 `127.0.0.1:8787`，只对本机开放，没有登录鉴权，**不要暴露到公网**
+- [PRIVACY.md](../PRIVACY.md)
+
+这里不再重复政策正文，避免多处内容不一致。
 
 ## 怎么验证签名
 
