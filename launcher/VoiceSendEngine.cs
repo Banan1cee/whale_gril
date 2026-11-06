@@ -19,7 +19,13 @@ public static class VoiceSendEngine
  public static Uri Endpoint(string address) {
   if(!Uri.TryCreate(address,UriKind.Absolute,out var u)||u.UserInfo.Length>0||!(u.Scheme=="https"||(u.Scheme=="http"&&u.IsLoopback))) throw new ArgumentException("请输入完整 HTTPS 合成地址，本地接口允许 HTTP"); return u;
  }
- public static double ValidateWave(string file) { using var w=new WaveFileReader(file); var n=w.TotalTime.TotalSeconds; if(n<1||n>55)throw new ArgumentException("音频必须为 1～55 秒"); return n; }
+ public static double ValidateWave(string file) {
+  using var w=new WaveFileReader(file);var n=w.TotalTime.TotalSeconds;
+  if(!double.IsFinite(n)||w.Length<=0)throw new InvalidDataException("合成接口返回了空音频或异常音频");
+  if(n<1)throw new ArgumentException($"合成音频实际只有 {n:F2} 秒，需达到 1 秒才能发送");
+  if(n>55)throw new ArgumentException($"合成音频实际为 {n:F2} 秒，超过 55 秒发送上限，请缩短回复");
+  return n;
+ }
  public static async Task Generate(string address,string key,string model,string voice,string text,string file,CancellationToken ct) {
   using var deadline=CancellationTokenSource.CreateLinkedTokenSource(ct);deadline.CancelAfter(TimeSpan.FromSeconds(90));ct=deadline.Token;
   if(string.IsNullOrWhiteSpace(text)||text.Length>1000)throw new ArgumentException("请输入 1～1000 字");
