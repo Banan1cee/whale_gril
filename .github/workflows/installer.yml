@@ -8,6 +8,7 @@ name: installer
 #   · 测试分支：推 test/** 就构建（只出 Artifact，**不会**建 Release）
 #   · 手动：Actions → installer → Run workflow（产物在本次运行的 Artifacts 里）
 #   · tag：git push origin v4.0.0 → 自动建 GitHub Release 并挂安装包
+#   · 网页 release：Draft a new release → Publish → 同样构建，安装包补挂到该 Release
 #
 # 签名：仓库配了 WINDOWS_SIGNING_PFX_BASE64 / WINDOWS_SIGNING_PFX_PASSWORD 就签，
 #       没配就跳过，并在运行摘要里写明「未签名」。配置步骤见 docs/打包与签名.md。
@@ -29,6 +30,11 @@ on:
       - 'test/**'
     tags:
       - 'v*'
+  # 网页上「Draft a new release」→ Publish 同样会构建：Release 已经存在时，
+  # 文件末尾那步 gh release create 会失败并自动改走 gh release upload --clobber，
+  # 把安装包补挂上去。这样不敲 git tag 也能发版。
+  release:
+    types: [published]
 
 permissions:
   contents: write
@@ -109,7 +115,7 @@ jobs:
       # tag 与 package.json 不一致时，manifest 里的 latest 和包里实际版本会分叉，
       # 客户端会永远判「已是最新」，强制更新直接失效。宁可在这里红，别让用户踩。
       - name: 校验 tag 与 package.json 一致（tag 触发）
-        if: github.ref_type == 'tag'
+        if: github.ref_type == 'tag' || github.event_name == 'release'
         shell: pwsh
         run: |
           $pkg = (Get-Content package.json -Raw -Encoding utf8 | ConvertFrom-Json).version
@@ -655,7 +661,7 @@ jobs:
           retention-days: 30
 
       - name: 创建 GitHub Release（tag 触发）
-        if: github.ref_type == 'tag'
+        if: github.ref_type == 'tag' || github.event_name == 'release'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}

@@ -17,6 +17,7 @@
 ### 改进 · 发版
 
 - Release 现在自动携带 `release-manifest.json`，并回读校验资产齐全。
+- 网页上发布 Release 也会触发构建：不用敲 `git tag`，点 Publish 就能出包并挂到该 Release。
 
 ## 4.0.4
 
