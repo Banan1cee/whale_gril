@@ -221,6 +221,108 @@ begin
            '启动器如果打不开，请手动运行：' + Installer, mbInformation, MB_OK, IDOK);
 end;
 
+{ ── 升级 / 卸载前关掉正在运行的鲸鲸 ──────────────────────────────
+  Setup 段的 CloseApplications=yes 走的是 Restart Manager，但两边权限对不上：
+  启动器是 requestedExecutionLevel=requireAdministrator（提权运行），安装器是
+  PrivilegesRequired=lowest（普通权限）。RM 停不掉完整性级别更高的进程，于是覆盖
+  WhaleLauncher.exe 时停在「DeleteFile failed; code 5 拒绝访问」的重试框里，用户
+  只能自己关掉鲸鲸再点 Try again。
+
+  这里改成自己动手，顺序是「先检测、后提权」：没在运行就一个 UAC 都不弹；
+  真在运行才用 runas 跑 taskkill /T，连同它拉起来的内核 node.exe 与桥接
+  python.exe 一起结束——那两个子进程还占着 runtime\ 里的文件。 }
+
+const
+  AppExeName = 'WhaleLauncher.exe';
+
+{ tasklist 按镜像名探测：不需要提权就能看到同一用户下提权运行的进程，
+  比 Get-Process 的 Path 属性稳（后者对更高完整性级别的进程直接拒绝访问）。 }
+function IsAppRunning(): Boolean;
+var
+  TmpFile, Cmd: String;
+  Lines: TArrayOfString;
+  I, ExitCode: Integer;
+begin
+  Result := False;
+  TmpFile := ExpandConstant('{tmp}\app-running.txt');
+  DeleteFile(TmpFile);
+  Cmd := '/c tasklist /FI "IMAGENAME eq ' + AppExeName + '" /NH > "' + TmpFile + '"';
+  if not Exec(ExpandConstant('{cmd}'), Cmd, '', SW_HIDE, ewWaitUntilTerminated, ExitCode) then
+  begin
+    Log('IsAppRunning：tasklist 启动失败，按「没在运行」处理（会退回 Inno 自己的占用提示）');
+    Exit;
+  end;
+  if not LoadStringsFromFile(TmpFile, Lines) then
+  begin
+    Log('IsAppRunning：tasklist 没有输出，按「没在运行」处理');
+    Exit;
+  end;
+  for I := 0 to GetArrayLength(Lines) - 1 do
+  begin
+    { 没匹配到时 tasklist 输出的是一句提示（英文/中文视系统语言而定），
+      只有真进程行里才有 ".exe"，用它区分，免得误判成「在运行」。 }
+    if (Pos('.exe', Lines[I]) > 0) and (Pos('INFO:', Lines[I]) = 0) then
+    begin
+      Result := True;
+      Break;
+    end;
+  end;
+  if not Result then Log('IsAppRunning：没检测到 ' + AppExeName);
+end;
+
+function KillAppProcesses(): Boolean;
+var
+  Params: String;
+  ExitCode: Integer;
+begin
+  Params := '/c taskkill /F /T /IM ' + AppExeName + ' >nul 2>nul';
+
+  { 先按当前权限试一次：启动器若本来就是普通权限跑的，这一步就够，省掉一次 UAC }
+  Exec(ExpandConstant('{cmd}'), Params, '', SW_HIDE, ewWaitUntilTerminated, ExitCode);
+  { taskkill 返回时进程可能还没完全退出，稍等再探，免得误判成「没杀掉」}
+  Sleep(600);
+  Result := not IsAppRunning();
+  if Result then Exit;
+
+  { 提权再来一次。UAC 被取消时 ShellExec 返回 False，按「没杀掉」处理 }
+  Log('当前权限结束不了鲸鲸（多半是提权运行），改用 runas');
+  if not ShellExec('runas', ExpandConstant('{cmd}'), Params, '', SW_HIDE,
+                   ewWaitUntilTerminated, ExitCode) then
+    Exit;
+  Sleep(600);
+  Result := not IsAppRunning();
+end;
+
+{ Inno 的钩子：返回非空字符串 = 中止安装并把它当错误显示。
+   放在这里而不是 CurStepChanged(ssInstall)，是因为它在 InstallDelete / Files 段
+   之前跑，exe 还没被换掉，这时关掉才有意义。 }
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  Result := '';
+  if not IsAppRunning() then
+  begin
+    { 绝大多数情况走这里：没开着，零打扰地继续 }
+    Log('PrepareToInstall：鲸鲸没在运行，直接安装');
+    Exit;
+  end;
+
+  Log('PrepareToInstall：检测到鲸鲸正在运行');
+  if not WizardSilent then
+    if SuppressibleMsgBox('检测到鲸鲸正在运行（旧版本）。' + #13#10#13#10 +
+           '安装会先把它关掉——正在生成的回复会中断，聊天记忆和 Key 不受影响。' + #13#10 +
+           '继续吗？', mbConfirmation, MB_OKCANCEL, IDOK) <> IDOK then
+    begin
+      Result := '已取消：请先关闭鲸鲸，再运行安装包。';
+      Exit;
+    end;
+
+  if KillAppProcesses() then
+    Log('已关闭正在运行的鲸鲸')
+  else
+    Result := '没能关闭正在运行的鲸鲸（' + AppExeName + '）。' + #13#10#13#10 +
+              '请手动退出鲸鲸（任务管理器结束 WhaleLauncher.exe）后重试。';
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   Log('CurStepChanged 触发，CurStep=' + IntToStr(Ord(CurStep)));
@@ -278,6 +380,16 @@ procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if CurUninstallStep = usUninstall then
   begin
+    { 卸载同样会被占用的 exe 卡住（卸载器也一样删不掉运行中的文件），
+      静默卸载不提问直接关——第三方卸载工具都是静默调用，弹框会卡住它们。 }
+    if IsAppRunning() then
+    begin
+      if WizardSilent or
+         (SuppressibleMsgBox('鲸鲸正在运行，需要先关闭才能卸载。现在关闭并继续？',
+              mbConfirmation, MB_OKCANCEL, IDOK) = IDOK) then
+        KillAppProcesses();
+    end;
+
     if SuppressibleMsgBox('是否同时删除个人数据？' + #13#10#13#10 +
               'data\ 里存着 API Key、聊天记忆、人设和提醒；删掉之后无法恢复。' + #13#10 + #13#10 +
               '选「是」= 个人数据也一起删，应用程序全部移除；选「否」= 保留个人数据，重装后还能接着用。',
