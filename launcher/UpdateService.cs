@@ -1,9 +1,14 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
+using System.Net;
 using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace WhaleLauncher
@@ -33,8 +38,24 @@ namespace WhaleLauncher
         }
 
         // 资产名与 installer/whale.iss 的 OutputBaseFilename=whale-girl-{#AppVersion}-setup 对应
-        private const string ReleaseBase = "https://github.com/Banan1cee/whale_gril/releases/latest/download";
         private const string ReleasePage = "https://github.com/Banan1cee/whale_gril/releases/latest";
+
+        /// <summary>
+        /// 安装包和校验清单的候选源，顺序就是尝试顺序：GitHub 直连在前，镜像兜底。
+        /// 镜像写法照抄 UpdateManifest 那份（前缀 + 原始 GitHub 地址），
+        /// 三家与 scripts/update.ps1 历史上用过的一致。
+        ///
+        /// 为什么下载也要镜像：清单有 4 个源（含两个镜像），所以「检查更新」总能拿到版本号；
+        /// 但资产只有 GitHub 一条路，国内直连 github.com 经常 TLS 直接断，
+        /// 于是卡在「下载校验清单失败」——明明知道有新版本，却一个字节都下不来。
+        /// </summary>
+        private static readonly string[] AssetBases =
+        {
+            "https://github.com/Banan1cee/whale_gril/releases/latest/download",
+            "https://gh-proxy.com/https://github.com/Banan1cee/whale_gril/releases/latest/download",
+            "https://ghfast.top/https://github.com/Banan1cee/whale_gril/releases/latest/download",
+            "https://ghproxy.net/https://github.com/Banan1cee/whale_gril/releases/latest/download",
+        };
 
         // 不调 GitHub API：未认证的 60 次/小时/IP 在共享网络里很容易用完，而且只会更慢。
         // 下载必须跟随系统代理：国内用户基本都挂着代理，直连 176MB 等于必然失败。
@@ -97,41 +118,50 @@ namespace WhaleLauncher
                 var dir = Path.Combine(Path.GetTempPath(), "whale-update", latest);
                 Directory.CreateDirectory(dir);
                 var setup = Path.Combine(dir, name);
-                var sums = Path.Combine(dir, "SHA256SUMS.txt");
 
-                progress?.Report(new Progress { Text = "读取校验清单…", Percent = -1 });
-                if (!await DownloadAsync(ReleaseBase + "/SHA256SUMS.txt", sums, null))
-                    return Fail("下载校验清单失败（连不上 GitHub）");
+                // 校验清单：4 个源并行拿、哈希必须一致（安全锚）。拿不到才谈下载。
+                progress?.Report(new Progress { Text = "读取校验清单…（" + AssetBases.Length + " 个源并行）", Percent = -1 });
+                var sums = await FetchSumsAsync(name);
+                if (sums.Hash.Length == 0) return Fail(sums.Error);
+                if (sums.SourcesHit > 1)
+                    progress?.Report(new Progress { Text = "校验清单一致（" + sums.SourcesHit + " 个源）", Percent = -1 });
 
-                var expected = FindHash(sums, name);
-                if (expected.Length == 0)
-                    return Fail("校验清单里没有 " + name + "，这个版本可能还没发布安装包");
-
+                var expected = sums.Hash;
                 var ok = false;
-                for (var attempt = 0; attempt < 2 && !ok; attempt++)
+                var tried = new List<string>();
+                foreach (var baseUrl in AssetBases)
                 {
-                    progress?.Report(new Progress { Text = "下载安装包…", Percent = 0 });
-                    if (!await DownloadAsync(ReleaseBase + "/" + name, setup, progress))
-                        return Fail("下载失败（连不上 GitHub）");
+                    var label = LabelOf(baseUrl);
+                    progress?.Report(new Progress { Text = "下载安装包…（源：" + label + "）", Percent = 0 });
+                    if (!await DownloadAsync(baseUrl + "/" + name, setup, progress, label))
+                    {
+                        tried.Add(label + " 连不上");
+                        continue;
+                    }
 
                     var size = new FileInfo(setup).Length;
                     // 被墙 / 被重定向时，GitHub 会回一张 HTML 错误页，只有几百 KB
                     if (size < 100L * 1024 * 1024)
                     {
                         TryDelete(setup);
-                        if (attempt == 0) continue;
-                        return Fail("下载到的安装包只有 " + (size / 1024 / 1024) + " MB，明显是错误页，已删除");
+                        tried.Add(label + " 只回了 " + (size / 1024 / 1024) + " MB（像错误页）");
+                        continue;
                     }
 
+                    // 哈希对不上就换下一个源：镜像缓存了旧包也会走到这里，不是直接判死。
                     var actual = await HashAsync(setup);
                     if (!string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
                     {
                         TryDelete(setup);
-                        return Fail("安装包 SHA256 不一致，已删除下载的文件");
+                        tried.Add(label + " 的 SHA256 对不上");
+                        continue;
                     }
+
+                    progress?.Report(new Progress { Text = "校验通过（源：" + label + "）", Percent = 100 });
                     ok = true;
+                    break;
                 }
-                if (!ok) return Fail("下载安装包失败");
+                if (!ok) return Fail("安装包下载失败：" + string.Join("；", tried));
 
                 var apply = Path.Combine(dir, "apply.ps1");
                 File.WriteAllText(apply, ApplyScript, new UTF8Encoding(false));
@@ -187,28 +217,167 @@ namespace WhaleLauncher
                     + "如果挂了代理，请在系统代理里放行 github.com。"
             };
 
-        /// <summary>从 SHA256SUMS.txt（sha256sum 格式：哈希 + 两个空格 + 文件名）里找对应文件的哈希。</summary>
-        private static string FindHash(string sumsPath, string fileName)
+        // ── 校验清单：多源并行 + 一致性仲裁 ──────────────────────────
+        // 抄的是 UpdateManifest 的思路（4 个源并行、按 manifest_version 取最大），
+        // 但仲裁目标不同：清单是「取最新」，哈希是「必须一致」——
+        // 镜像缓存错乱或被投毒时，多源对不上就直接中止，宁可更新不了也不装错包。
+
+        private sealed class SumsResult
+        {
+            public string Hash = "";
+            public string Error = "";
+            public int SourcesHit;
+        }
+
+        private static async Task<SumsResult> FetchSumsAsync(string fileName)
+        {
+            var hits = (await Task.WhenAll(AssetBases.Select(b => FetchSumsOneAsync(b, fileName))))
+                .Where(h => h != null)
+                .ToList();
+
+            if (hits.Count == 0)
+                return new SumsResult { Error = "连不上 GitHub，镜像也没拿到 SHA256SUMS.txt" };
+            if (hits.Any(h => !string.Equals(h, hits[0], StringComparison.OrdinalIgnoreCase)))
+                return new SumsResult { Error = "多个源的 SHA256SUMS.txt 不一致，已中止（可能是镜像缓存错乱或被篡改）" };
+
+            return new SumsResult { Hash = hits[0], SourcesHit = hits.Count };
+        }
+
+        /// <summary>某一源上的哈希；拿不到或格式不对都返回 null，让别的源顶上。</summary>
+        private static async Task<string> FetchSumsOneAsync(string baseUrl, string fileName)
         {
             try
             {
-                foreach (var raw in File.ReadAllLines(sumsPath))
-                {
-                    var line = raw.Trim();
-                    if (line.Length == 0) continue;
-                    var idx = line.LastIndexOf(' ');
-                    if (idx <= 0) continue;
-                    var hash = line.Substring(0, idx).Trim();
-                    var file = line.Substring(idx + 1).Trim().TrimStart('*');
-                    if (string.Equals(file, fileName, StringComparison.OrdinalIgnoreCase)) return hash;
-                }
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+                var text = await Http.GetStringAsync(baseUrl + "/SHA256SUMS.txt", cts.Token);
+                var hash = FindHashIn(text, fileName);
+                return hash.Length == 64 ? hash : null;   // 只认 64 位十六进制，别把错误页当哈希
             }
-            catch { }
+            catch { return null; }
+        }
+
+        /// <summary>从 SHA256SUMS.txt（sha256sum 格式：哈希 + 两个空格 + 文件名）里找对应文件的哈希。</summary>
+        private static string FindHashIn(string text, string fileName)
+        {
+            if (string.IsNullOrEmpty(text)) return "";
+            foreach (var raw in text.Split('\n'))
+            {
+                var line = raw.Trim();
+                if (line.Length == 0) continue;
+                var idx = line.LastIndexOf(' ');
+                if (idx <= 0) continue;
+                var hash = line.Substring(0, idx).Trim();
+                var file = line.Substring(idx + 1).Trim().TrimStart('*');
+                if (string.Equals(file, fileName, StringComparison.OrdinalIgnoreCase)) return hash;
+            }
             return "";
         }
 
-        /// <summary>边下边报真实字节进度；失败时删掉半截文件，别让下次误判「已下好」。</summary>
-        private static async Task<bool> DownloadAsync(string url, string path, IProgress<Progress> progress)
+        // ── 下载：单源内 4 段并发，失败退回单连接 ──────────────────────
+
+        /// <summary>小于这个体积不值得切段：4 段并发对几 MB 的文件只有反效果。</summary>
+        private const long SegmentMinBytes = 8L * 1024 * 1024;
+        private const int SegmentCount = 4;
+
+        /// <summary>
+        /// 下载一个资产：先探服务端支不支持 Range，支持就 4 段并发拉，
+        /// 不支持或任何一段失败就退回单连接——宁可慢一点，不要卡在半截。
+        /// 失败时删掉半截文件，别让下次误判「已下好」。
+        /// </summary>
+        private static async Task<bool> DownloadAsync(string url, string path, IProgress<Progress> progress, string label)
+        {
+            try
+            {
+                var total = await ProbeLengthAsync(url);
+                if (total >= SegmentMinBytes && await DownloadSegmentsAsync(url, path, total, progress, label))
+                    return true;
+                return await DownloadSingleAsync(url, path, progress, label);
+            }
+            catch
+            {
+                TryDelete(path);
+                return false;
+            }
+        }
+
+        /// <summary>用 Range: bytes=0-0 探总长度；只有 206 + Content-Range 才算支持分段。</summary>
+        private static async Task<long> ProbeLengthAsync(string url)
+        {
+            try
+            {
+                using var req = new HttpRequestMessage(HttpMethod.Get, url);
+                req.Headers.Range = new RangeHeaderValue(0, 0);
+                using var res = await Http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead);
+                if (res.StatusCode != HttpStatusCode.PartialContent) return -1;
+                var range = res.Content.Headers.ContentRange;
+                if (range == null || !range.HasLength) return -1;
+                return range.Length ?? -1;
+            }
+            catch { return -1; }
+        }
+
+        private static async Task<bool> DownloadSegmentsAsync(string url, string path, long total,
+            IProgress<Progress> progress, string label)
+        {
+            var chunk = total / SegmentCount;
+            try
+            {
+                TryDelete(path);
+                // 先按总长度占位：各段按自己的偏移写入，谁先到都不影响结果
+                using (var fs = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.ReadWrite))
+                    fs.SetLength(total);
+
+                var done = new long[1];
+                var lastPct = new int[1] { -1 };
+                var tasks = new Task[SegmentCount];
+                for (var i = 0; i < SegmentCount; i++)
+                {
+                    var start = i * chunk;
+                    var end = i == SegmentCount - 1 ? total - 1 : start + chunk - 1;
+                    tasks[i] = DownloadSegmentAsync(url, path, start, end, done, lastPct, total, progress, label);
+                }
+                await Task.WhenAll(tasks);
+
+                if (new FileInfo(path).Length != total) throw new IOException("分段下载长度对不上");
+                return true;
+            }
+            catch
+            {
+                TryDelete(path);
+                return false;
+            }
+        }
+
+        private static async Task DownloadSegmentAsync(string url, string path, long start, long end,
+            long[] done, int[] lastPct, long total, IProgress<Progress> progress, string label)
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Get, url);
+            req.Headers.Range = new RangeHeaderValue(start, end);
+            using var res = await Http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead);
+            if (res.StatusCode != HttpStatusCode.PartialContent)
+                throw new InvalidOperationException("服务端不支持分段下载");
+
+            await using var src = await res.Content.ReadAsStreamAsync();
+            // 每个段开自己的句柄、从自己的偏移写，互不覆盖
+            await using var fs = new FileStream(path, FileMode.Open, FileAccess.Write, FileShare.ReadWrite);
+            fs.Seek(start, SeekOrigin.Begin);
+
+            var buffer = new byte[81920];
+            int n;
+            while ((n = await src.ReadAsync(buffer, 0, buffer.Length)) > 0)
+            {
+                await fs.WriteAsync(buffer, 0, n);
+                var all = Interlocked.Add(ref done[0], n);
+                if (progress == null || total <= 0) continue;
+                var pct = (int)(all * 100L / total);
+                if (pct == lastPct[0]) continue;   // 每 80KB 报一次会把 UI 刷爆，按整数百分比报
+                lastPct[0] = pct;
+                Report(progress, pct, all, total, label);
+            }
+        }
+
+        private static async Task<bool> DownloadSingleAsync(string url, string path,
+            IProgress<Progress> progress, string label)
         {
             try
             {
@@ -227,13 +396,9 @@ namespace WhaleLauncher
                     done += n;
                     if (progress == null || total <= 0) continue;
                     var pct = (int)(done * 100L / total);
-                    if (pct == lastPct) continue;   // 每 80KB 报一次会把 UI 刷爆，按整数百分比报
+                    if (pct == lastPct) continue;
                     lastPct = pct;
-                    progress.Report(new Progress
-                    {
-                        Text = "下载中 " + pct + "% · " + (done / 1048576.0).ToString("F1") + "/" + (total / 1048576.0).ToString("F1") + " MB",
-                        Percent = pct,
-                    });
+                    Report(progress, pct, done, total, label);
                 }
                 return true;
             }
@@ -242,6 +407,25 @@ namespace WhaleLauncher
                 TryDelete(path);
                 return false;
             }
+        }
+
+        private static void Report(IProgress<Progress> progress, int pct, long done, long total, string label)
+        {
+            progress.Report(new Progress
+            {
+                Text = "下载中 " + pct + "% · " + (done / 1048576.0).ToString("F1") + "/" + (total / 1048576.0).ToString("F1") + " MB"
+                    + (label.Length > 0 ? " · " + label : ""),
+                Percent = pct,
+            });
+        }
+
+        /// <summary>进度里显示的源名：直连叫 GitHub，镜像取域名（别把整条 URL 塞进状态栏）。</summary>
+        private static string LabelOf(string baseUrl)
+        {
+            if (baseUrl.StartsWith("https://github.com/", StringComparison.OrdinalIgnoreCase)) return "GitHub";
+            var host = baseUrl.Substring("https://".Length);
+            var slash = host.IndexOf('/');
+            return slash > 0 ? host.Substring(0, slash) : host;
         }
 
         private static async Task<string> HashAsync(string path)
