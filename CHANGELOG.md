@@ -5,6 +5,7 @@
 ### 修复 · 安装包
 
 - 覆盖安装：升级时自动关闭正在运行的鲸鲸再继续；沿用原安装目录；`data\` 与 `config.json` 原样保留。
+  - `CloseApplications=yes` 走的是 Restart Manager，可启动器是 `requireAdministrator`、安装器是 `PrivilegesRequired=lowest`，RM 停不掉完整性级别更高的进程，实测卡在「DeleteFile failed; code 5 拒绝访问」。改成 `PrepareToInstall` 里先 `tasklist` 探测、需要时 `runas` 跑 `taskkill /F /T`（连内核 node 与桥接 python 一起收），关不掉就明确中止；卸载前同样处理，静默卸载不弹框。
 - 升级清理：删掉 4.0.1 遗留的 `personas\`、`resources\`、`src\http\static.js`、`src\adapters\bilibili.js` 与旧位置的 `runtime\vb-cable`。
 - VB-CABLE 安装程序改到安装目录根部 `VB-CABLE虚拟声卡\`，并加 CI 断言防回退。
 

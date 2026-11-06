@@ -150,3 +150,44 @@ test('下载脚本：官方地址与 SHA256 原样未动', () => {
     'fetch-vb-cable.ps1 的 SHA256 被改了'
   );
 });
+
+/**
+ * 覆盖安装时 WhaleLauncher.exe 被占用：CloseApplications=yes 走 Restart Manager，
+ * 但启动器是 requireAdministrator、安装器是 PrivilegesRequired=lowest，RM 停不掉
+ * 完整性级别更高的进程，用户就停在「DeleteFile failed; code 5 拒绝访问」上。
+ * 所以安装器必须自己 taskkill（必要时提权），光靠 [Setup] 那三个开关不够。
+ */
+test('whale.iss：安装前主动结束正在运行的鲸鲸（提权 taskkill）', () => {
+  assert.match(iss, /function PrepareToInstall\(var NeedsRestart: Boolean\): String;/, '缺 PrepareToInstall 钩子');
+  assert.match(iss, /function IsAppRunning\(\): Boolean;/, '缺进程探测');
+  assert.match(iss, /function KillAppProcesses\(\): Boolean;/, '缺结束进程的实现');
+
+  // /T 必须带上：内核 node.exe 与桥接 python.exe 是子进程，还占着 runtime\ 里的文件
+  assert.ok(iss.includes('taskkill /F /T /IM'), 'taskkill 没带 /T，子进程会继续占着文件');
+  // 启动器提权运行，普通权限 taskkill 会失败，必须能降级到 runas
+  assert.match(iss, /ShellExec\('runas', ExpandConstant\('\{cmd\}'\)/, '没有 runas 提权重试');
+
+  // 没在运行时不能有任何提示（零 UAC、零打扰）：早退必须发生在提示之前
+  const gate = iss.indexOf('if not IsAppRunning() then');
+  const prompt = iss.indexOf('检测到鲸鲸正在运行');
+  assert.ok(gate > 0 && prompt > gate, 'PrepareToInstall 没有先判断「没在运行」，会无端弹窗/提权');
+
+  // 关不掉就必须中止安装，不能带着被占用的 exe 继续
+  assert.ok(iss.includes("Result := '没能关闭正在运行的鲸鲸"), '关不掉时没有返回错误中止安装');
+});
+
+test('whale.iss：卸载前也先关掉鲸鲸，且静默卸载不弹框', () => {
+  const un = iss.slice(iss.indexOf('procedure CurUninstallStepChanged'));
+  assert.ok(un.includes('KillAppProcesses()'), '卸载流程没有结束正在运行的鲸鲸');
+  assert.ok(/if WizardSilent or/.test(un), '静默卸载会弹框，第三方卸载工具会卡住');
+});
+
+test('根因是权限不匹配：启动器提权 / 安装器不提权（改了要回头重想这块）', () => {
+  const manifest = read('launcher/app.manifest');
+  assert.match(
+    manifest,
+    /requestedExecutionLevel level="requireAdministrator"/,
+    '启动器不再提权运行，Restart Manager 也许就够了，重新评估这段 taskkill'
+  );
+  assert.match(iss, /^PrivilegesRequired=lowest$/m, '安装器不再是非提权安装，意味着 UAC 取舍变了');
+});
