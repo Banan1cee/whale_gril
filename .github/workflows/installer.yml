@@ -540,8 +540,10 @@ jobs:
           Invoke-Setup '首次安装' (Join-Path $env:RUNNER_TEMP 'whale-upgrade-install.log')
 
           # 新包不会再生成这些，手工造出来模拟 4.0.1 的老目录。
+          # data\ 必须一起建：它是程序首次运行时才 mkdir 的，安装器没有 [Dirs] 段不会创建它；
+          # 不建的话下面 Set-Content 直接报 "Could not find a part of the path"，测的是崩溃不是行为。
           Write-Output '覆盖烟测：第 2 步，伪造 4.0.1 残留与用户数据'
-          foreach ($d in @("$dir\personas", "$dir\resources", "$dir\runtime\vb-cable")) {
+          foreach ($d in @("$dir\data", "$dir\personas", "$dir\resources", "$dir\runtime\vb-cable")) {
             New-Item -ItemType Directory -Force -Path $d | Out-Null
           }
           Set-Content -LiteralPath "$dir\personas\old.json" -Value '{"old":true}' -Encoding utf8
