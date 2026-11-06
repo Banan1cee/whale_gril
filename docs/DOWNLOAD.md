@@ -2,7 +2,7 @@
 
 ## 官方下载
 
-**唯一官方渠道：[GitHub Releases](https://github.com/Banan1cee/whale_gril/releases)**
+**唯一官方渠道：[GitHub Releases](https://github.com/Banan1cee/whale_girl/releases)**
 
 | 文件 | 说明 |
 | --- | --- |

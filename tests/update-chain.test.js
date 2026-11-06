@@ -37,7 +37,7 @@ test('UpdateService：有脚本才走脚本，没有就下载安装包（不是�
 test('UpdateService：从 releases/latest/download 取安装包和校验清单', () => {
   assert.ok(service.includes('releases/latest/download'), '没有走 releases/latest/download');
   assert.ok(service.includes('SHA256SUMS.txt'), '没有下载 SHA256SUMS.txt');
-  assert.ok(service.includes('Banan1cee/whale_gril'), '仓库地址不对');
+  assert.ok(service.includes('Banan1cee/whale_girl'), '仓库地址不对');
   // 不调 GitHub API：未认证限流会直接把更新卡死
   assert.ok(!service.includes('api.github.com'), '又回去调 GitHub API 了（未认证会限流）');
 });

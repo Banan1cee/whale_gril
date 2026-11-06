@@ -99,11 +99,12 @@ const BINARY_RULES = [
   },
   {
     // 启动器内置的强制更新清单地址指向本仓库自己（公开），不算泄露；
-    // 只放行这一条精确前缀，其它 raw 链接照报。
+    // 同时保留更名前的官方路径，兼容历史版本；其它 raw 链接照报。
     name: '源码托管链接（二进制）',
     re: /raw\.githubusercontent\.com\/[A-Za-z0-9._-]+\//gi,
     keep: (m, index, text) =>
-      !text.slice(index).toLowerCase().startsWith('raw.githubusercontent.com/banan1cee/whale_gril/'),
+      !['raw.githubusercontent.com/banan1cee/whale_girl/', 'raw.githubusercontent.com/banan1cee/whale_gril/']
+        .some(prefix => text.slice(index).toLowerCase().startsWith(prefix)),
   },
 ];
 

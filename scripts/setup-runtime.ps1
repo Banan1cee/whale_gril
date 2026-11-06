@@ -16,7 +16,7 @@ $env:NO_PROXY = '*'
 
 $root = Split-Path -Parent $PSScriptRoot
 $runtime = Join-Path $root 'runtime'
-$REPO = 'Banan1cee/whale_gril'
+$REPO = 'Banan1cee/whale_girl'
 $REL = 'v3.50'
 $ASSET = 'runtime-3.50.zip'
 

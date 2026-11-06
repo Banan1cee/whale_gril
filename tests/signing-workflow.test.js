@@ -128,7 +128,7 @@ test('SignPath 申请表单要的三个页面都在仓库里', () => {
   const download = fs.readFileSync(path.join(root, 'docs', 'DOWNLOAD.md'), 'utf8');
   assert.match(download, /尚未签名/, '下载页要说明当前未签名');
   assert.match(download, /SHA256SUMS\.txt/, '下载页要给校验方式');
-  assert.match(download, /github\.com\/Banan1cee\/whale_gril\/releases/, '下载页要给 Releases 链接');
+  assert.match(download, /github\.com\/Banan1cee\/whale_girl\/releases/, '下载页要给 Releases 链接');
 
   const privacy = fs.readFileSync(path.join(root, 'PRIVACY.md'), 'utf8');
   assert.match(privacy, /隐私政策/, '隐私政策要有标题');
