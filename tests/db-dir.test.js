@@ -23,6 +23,8 @@ const root = path.resolve(__dirname, '..');
 const py = path.join(root, 'runtime', 'python', 'python.exe');
 const bridgePath = path.join(root, 'bridge', 'engine.py');
 const bridgeSrc = fs.readFileSync(bridgePath, 'utf8');
+// 目录探测已拆到 wechat_db.py；engine.py 只留同名薄封装。
+const wechatDbSrc = fs.readFileSync(path.join(root, 'bridge', 'wechat_db.py'), 'utf8');
 const hasPy = fs.existsSync(py);
 
 function runPy(code) {
@@ -37,8 +39,8 @@ function runPy(code) {
 test('桥接源码：有更狠的目录探测，且找不到时给的是提示而不是 traceback', () => {
   assert.match(bridgeSrc, /def resolve_db_dir/, '要有自己的目录探测函数');
   assert.match(bridgeSrc, /def looks_like_db_root/, '要有目录结构判断');
-  assert.match(bridgeSrc, /wechat\.dbDir|"dbDir"/, '要支持配置里手填 dbDir');
-  assert.match(bridgeSrc, /psutil\.process_iter/, '要能反射正在运行的微信进程');
+  assert.match(bridgeSrc + '\n' + wechatDbSrc, /wechat\.dbDir|"dbDir"/, '要支持配置里手填 dbDir');
+  assert.match(wechatDbSrc, /psutil\.process_iter/, '要能反射正在运行的微信进程');
   assert.match(bridgeSrc, /微信文件默认保存位置|文件管理/, '报错要告诉用户去点哪里');
   assert.match(bridgeSrc, /except RuntimeError/, '要接住库抛的 RuntimeError');
   const m = bridgeSrc.match(/except RuntimeError as e:[\s\S]{0,900}/);

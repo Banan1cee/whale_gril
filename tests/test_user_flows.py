@@ -11,10 +11,24 @@ from unittest.mock import patch
 
 SOURCE = Path(os.environ.get('WHALE_TEST_ENGINE_SOURCE') or Path(__file__).resolve().parents[1] / 'bridge/engine.py')
 TREE = ast.parse(SOURCE.read_text(encoding='utf-8-sig'))
+CONFIG_SOURCE = SOURCE.parent / 'config.py'
+CONFIG_TREE = ast.parse(CONFIG_SOURCE.read_text(encoding='utf-8-sig'))
+VOICE_SOURCE = SOURCE.parent / 'voice.py'
+VOICE_TREE = ast.parse(VOICE_SOURCE.read_text(encoding='utf-8-sig'))
 
 def function(name, env):
     node = next(n for n in ast.walk(TREE) if isinstance(n, ast.FunctionDef) and n.name == name)
     exec(compile(ast.Module(body=[node], type_ignores=[]), str(SOURCE), 'exec'), env)
+    return env[name]
+
+def config_function(name, env):
+    node = next(n for n in ast.walk(CONFIG_TREE) if isinstance(n, ast.FunctionDef) and n.name == name)
+    exec(compile(ast.Module(body=[node], type_ignores=[]), str(CONFIG_SOURCE), 'exec'), env)
+    return env[name]
+
+def voice_function(name, env):
+    node = next(n for n in ast.walk(VOICE_TREE) if isinstance(n, ast.FunctionDef) and n.name == name)
+    exec(compile(ast.Module(body=[node], type_ignores=[]), str(VOICE_SOURCE), 'exec'), env)
     return env[name]
 
 class Response:
@@ -151,7 +165,7 @@ class BridgeUserFlows(unittest.TestCase):
         def get(*args, **kw): requests.append(args); return next(responses)
         env = dict(LOCAL_HTTP=types.SimpleNamespace(get=get), log=lambda *a: None)
         with patch('time.time', side_effect=lambda: clock[0]), patch('time.sleep', side_effect=lambda seconds: clock.__setitem__(0, clock[0]+seconds)):
-            self.assertTrue(function('wait_for_server', env)('http://localhost/webhook/wechat', timeout=5))
+            self.assertTrue(config_function('wait_for_server', env)('http://localhost/webhook/wechat', timeout=5))
         self.assertEqual(len(requests), 3)
 
     def test_long_png_segments_are_labelled_as_jpeg(self):
@@ -176,10 +190,12 @@ class BridgeUserFlows(unittest.TestCase):
 class VoiceKeyIsolation(unittest.TestCase):
     def resolve(self, cfg, settings):
         import json
+        from urllib.parse import urlsplit
         with tempfile.TemporaryDirectory() as root:
             (Path(root)/'data').mkdir()
             (Path(root)/'data/settings.json').write_text(json.dumps(settings), encoding='utf-8')
-            return function('_resolve_voice_key', dict(ROOT=root, os=os, json=json, VOICE_BASE_URL='https://dashscope.aliyuncs.com/api/v1/asr'))(cfg)
+            fn = voice_function('resolve_voice_key', dict(os=os, json=json, urlsplit=urlsplit))
+            return fn(cfg, 'https://dashscope.aliyuncs.com/api/v1/asr', root)
     def test_default_asr_does_not_receive_deepseek_chat_key(self):
         self.assertEqual(self.resolve({'deepseek':{'apiKey':'chat-only'}}, {'provider':'deepseek','apiKey':'chat-only'}), '')
     def test_qwen_key_is_selected_instead_of_vision_key(self):

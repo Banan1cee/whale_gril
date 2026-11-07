@@ -217,8 +217,8 @@ test('README 不再引导用户去点脚本文件（入口只有 WhaleLauncher.e
 test('服务把实际端口写盘，桥接优先读（换端口不至于满屏积极拒绝）', () => {
   const server = fs.readFileSync(path.join(root, 'server.js'), 'utf8');
   assert.match(server, /server-port\.txt/, '服务要写实际端口');
-  const bridge = fs.readFileSync(path.join(root, 'bridge', 'engine.py'), 'utf8');
-  assert.match(bridge, /server-port\.txt/, '桥接要优先读它');
+  const bridgeConfig = fs.readFileSync(path.join(root, 'bridge', 'config.py'), 'utf8');
+  assert.match(bridgeConfig, /server-port\.txt/, '桥接要优先读它');
 });
 
 test('桥接启动前等服务就绪，连接中断要节流并给明确提示', () => {

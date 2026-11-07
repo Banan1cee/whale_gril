@@ -43,6 +43,8 @@ The persona is a blue-haired whale girl — short messages, real moods, sweet on
 
 The package includes 27 Whale Girl preset PNGs (9 each in tsundere, angry and happy). They are imported into your library in the background the first time stickers are enabled. Existing images are never overwritten, and deleting a preset does not make it reappear after a restart. The master switch remains off by default.
 
+The Stickers page also has an independent **"collect received stickers"** switch (off by default). When enabled, the bridge saves original incoming sticker images to `data/收集的表情包/`, deduplicated by content; GIFs keep their animation, and collected images are **not** added to the send library. A separate **Open collection folder** button lets you browse them. Collection only covers stickers the bridge actually receives and processes — it does not scan chat history — and depends on the WeChat cache or a usable download URL, so failures are skipped. It works independently of model recognition and the send switch.
+
 Turn the master switch on in the launcher's **Stickers** page (off by default). The category is chosen by the model, which writes `[[sticker:category]]` at the end of a reply: the marker is stripped before the user sees anything, and if the marker is missing, the category does not exist or that category has no images, **nothing is sent** — the bot never guesses a mood and never picks one at random. Three built-in categories (tsundere / angry / happy) plus any custom ones you add; manage categories, upload and delete images, or open the folder from the launcher. GIF, PNG, JPEG and WebP are supported (4 MB per file). Uploading only stores the original file: no WeChat message is sent and GIFs are not re-encoded.
 
 Custom categories are matched by name, so the more descriptive the name, the better (for example "passive-aggressive" or "grievance"): the model picks from categories that actually contain images, and never force-fits an uninformative name. Categories without images are not shown to the model at all.
@@ -55,6 +57,18 @@ A send counts as "confirmed" only when a new outgoing image record appears in th
 
 See [CHANGELOG.md](CHANGELOG.md) for the change history.
 
+## Moments (read-only and manual interaction)
+
+The launcher's **Moments** page can manually read the 20 most recent locally cached posts (up to 50 per request) for the currently selected bridge account, filtered by body keyword, publisher internal ID, or "only me". It reuses the bridge's selected database, never opens the WeChat UI, downloads no media, and does not add anything to chat memory. Results stay in memory for five minutes and the post bodies are cleared when you leave the page.
+
+Like, unlike, comment and reply require both the publisher's exact nickname and a body keyword; they reuse the bridge's send lock and account checks. Even when the UI reports success it still shows "unconfirmed" and never retries automatically. Automatic posting is not supported; the post action copies the draft text so you can publish it in WeChat yourself. The local cache is not a complete or real-time view, and interaction has not yet been verified against a real account.
+
+## Voice replies (optional)
+
+The launcher's **Voice send** page lets her reply with voice as well as text. BreezeBlue, MiniMax and SiliconFlow are supported; each provider keeps its own encrypted key, model, voice and style, so switching providers never overwrites another provider's choices. MiniMax voices can be searched by name or language, and SiliconFlow switches and remembers voices per model.
+
+Sending requires the **VB-CABLE** virtual audio device. The installer only ships the official driver installer; follow the page to install it and pick the device the first time. If synthesis times out or recording never starts, she falls back to text; an unconfirmed send is never retried automatically. Voice quotas and billing are controlled by each provider account.
+
 ## Features
 
 - **One entry point** — the launcher (WPF + .NET 10) is the only GUI; there is no browser console, and `8787` only serves the HTTP API.
@@ -65,8 +79,10 @@ See [CHANGELOG.md](CHANGELOG.md) for the change history.
 - **Slang** — `kskbl` → `zdjd`, `xswl` → she echoes it back; the lexicon is `assets/abbrev.txt`.
 - **Clapbacks** — when she or her owner is insulted she fires back with a 9-tier line library (`assets/clapback.txt`, extensible). Soft replies get replaced, but she never touches sex, family, discrimination or real-world threats.
 - **Little helper** — in a DM from her owner she reports her own WeChat ID; after the owner grants "you may roast me" she may roast them in three sentences.
-- **Voice input** — incoming voice messages are transcribed before she replies; she only ever *sends* text.
-- **Web access** — the model decides whether a lookup is needed; Bing plus Bilibili/Weibo trending (routed per site), the Toutiao hot list and link-body extraction, all under a global timeout, with the current date in the prompt.
+- **Voice** — incoming voice messages are transcribed before she replies; with **Voice send** enabled she can also reply by voice through BreezeBlue, MiniMax or SiliconFlow.
+- **Web access** — the model decides whether a lookup is needed; Bing with a 360 fallback, Bilibili/Weibo trending (routed per site), the Toutiao hot list and link-body extraction, all under a global timeout, with the current date in the prompt.
+- **Diary** — writes a Markdown diary from the day's chats, at most one per day, saved as `data/diary/YYYY/MM-DD.md`.
+- **Moments** — reads the selected account's local cache in the launcher, with manual like, comment and copy-draft actions.
 - **Group management** — mute and unmute, switch model, change tone, clear memory, and an automatic "good night" on low battery.
 - **Stop everything** — `scripts\stop-all.ps1` or the launcher's **Stop** button stops kernel and bridge and writes a pause marker.
 - **WeChat bridge** — `examples/wechatauto_bridge.py`: read-only database access plus window automation, never injecting into WeChat.
@@ -155,6 +171,12 @@ Admin commands are sent in private chat. The full list (status, tone, length, mu
 
 `assets/personas/` holds one file per persona version; upgrades add files and never overwrite old ones. Import them from the bottom of the launcher's **Persona** page. Conventions and privacy rules are in [assets/personas/README.md](assets/personas/README.md).
 
+### Diary (Markdown)
+
+In the launcher's **Care & reminders** page you can enable the daily diary, set the generation time (local time, default `23:00`), or press **Write now**. The automatic switch is off by default and takes effect as soon as it is saved; the kernel must stay running and a chat model must be configured.
+
+The diary uses the current persona and model, is based on that day's chat material up to the generation time (at most the latest 300 messages / about 24,000 characters), and is saved by year as `data/diary/YYYY/MM-DD.md`, for example `data/diary/2026/11-06.md`. Manual and automatic generation share a one-per-day limit: if a file already exists for the day (including older naming), she skips without calling the model or overwriting it. Restarts do not duplicate it; a late start that day still catches up, past dates are not backfilled, no-chat days are skipped, and failures retry after five minutes. **Open diary folder** takes you straight to the files. The relevant config keys are `diary.enabled` and `diary.time`.
+
 ---
 
 ## Pause and resume
@@ -214,6 +236,7 @@ whale-girl/                        # same layout as the repository; runtime data
 ├─ assets/                         # persona presets and lexicons
 ├─ examples/                       # bridge entry and media fallbacks
 ├─ docs/                           # documentation
+├─ website/                        # static project site (no build step)
 ├─ vendor/                         # pinned copy of wechatauto
 ├─ tests/                          # tests
 ```

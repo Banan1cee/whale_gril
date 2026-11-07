@@ -61,11 +61,11 @@
 
 ```powershell
 # 1) 看签名状态和证书主体：应为 Valid，签发者 SignPath Foundation
-Get-AuthenticodeSignature .\whale-girl-4.0.0-setup.exe |
+Get-AuthenticodeSignature .\whale-girl-4.0.7-setup.exe |
     Format-List Status, StatusMessage, SignerCertificate
 
 # 2) 对照 Release 里挂的 SHA256SUMS.txt
-Get-FileHash .\whale-girl-4.0.0-setup.exe -Algorithm SHA256
+Get-FileHash .\whale-girl-4.0.7-setup.exe -Algorithm SHA256
 ```
 
 也可以右键 exe →「属性」→「数字签名」看签名者和时间戳。

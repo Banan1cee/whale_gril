@@ -2,7 +2,7 @@
 
 当前状态：`engine.py` 是原 `examples/wechatauto_bridge.py` 的完整迁移，
 入口已经拆成 `python -m bridge` / `examples/wechatauto_bridge.py` 薄壳。
-`engine.py` 共 4253 行，内部的 `main()` 仍然是巨型函数（约 3100 行闭包）；**截至 4.0 仍未拆**，后续按下面的顺序拆：
+`engine.py` 仍是主入口，`main()` 里还有一大段闭包；**按下面的顺序继续拆，每拆一块都必须先跑通现有测试**：
 
 ```
 bridge/
@@ -10,11 +10,14 @@ bridge/
 ├─ bg_sender.py     # 零焦点发送通道（已完成，见 docs/微信消息后台发送.md）
 ├─ msg_pipeline.py  # 消息调度：同一会话串行、跨会话并发（已完成）
 ├─ sticker_transport.py  # 表情包一次性发送（fail-closed，mock 可测）
-├─ engine.py        # 当前完整实现（待拆）
-├─ config.py        # TODO reload_config / read_config / build_bot_url / wait_for_server
-├─ wechat_db.py     # TODO looks_like_db_root / resolve_db_dir / find_account_dirs / list_accounts_cli
-├─ logging.py       # TODO log / log_throttled / boot / log_window_problem
-├─ guards.py        # TODO is_system_notice / duplicate_guard / rate_guard
+├─ config_values.py # 配置布尔/整数/小数、wechat.bgSend（已完成）
+├─ wechat_db.py     # 微信数据目录 / 多账号解析（已完成；engine 留同名薄封装）
+├─ bridge_log.py    # 日志级别/轮转/boot/窗口问题节流（已完成；log_throttled 仍在 engine）
+├─ guards.py        # 系统通知 / 重复消息 / 每分钟限流（已完成）
+├─ config.py        # read_config / build_bot_url / wait_for_server / ffmpeg（已完成）
+├─ voice.py         # 语音识别 Key / ASR 调用 / 转写清洗（已完成）
+├─ http_client.py   # 每线程一个 requests.Session，不读系统代理（已完成）
+├─ engine.py        # 主入口与尚未拆完的闭包（继续拆）
 ├─ window.py        # TODO hwnd 探测 / 前台切换 / 窗口状态快照还原
 ├─ sender.py        # TODO ensure_window / UIA 发送 / OCR 兜底 / 键盘通道
 ├─ receiver.py      # TODO 数据库轮询 / 消息归一化 / 去重

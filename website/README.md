@@ -14,7 +14,18 @@ python -m http.server 4173 --bind 127.0.0.1 --directory website
 
 ## 发布
 
-将 `website/` 中的文件部署到任何静态托管服务的站点根目录（例如 GitHub Pages、Cloudflare Pages 或 Nginx）。无构建命令，输出目录为 `website`。支持托管在子路径下。
+将 `website/` 中的文件部署到任何静态托管服务的站点根目录（例如 GitHub Pages、Cloudflare Pages 或 Nginx）。无构建命令，输出目录为 `website`。页面全部使用相对路径，支持托管在子路径下。
+
+### GitHub Pages
+
+GitHub Pages 的「Deploy from a branch」只能选仓库根目录或 `/docs`，不能直接选 `website/`；本项目用 `.github/workflows/pages.yml` 走官方 Actions 发布：
+
+1. 仓库 **Settings → Pages → Build and deployment → Source** 选 **GitHub Actions**。
+2. 推送到 `main`（只改 `website/**` 或 `pages.yml` 时自动触发），或在 Actions 里手动运行 **pages**。
+3. 站点地址为 `https://<用户名>.github.io/whale_girl/`；所有资源都走相对路径，不需要改 base path。
+4. 如果默认分支不叫 `main`，同步修改 `pages.yml` 里的 `branches`。
+
+工作流只发布 `website/`，不会把仓库里的源码、`docs/` 或其它文件带到站点上。使用 Actions 发布时不需要 Jekyll，也不需要额外构建步骤。
 
 ## 内容维护
 
@@ -26,7 +37,7 @@ python -m http.server 4173 --bind 127.0.0.1 --directory website
 - `images/launcher-icon.png`：与启动器 `launcher/Assets/app.png` 字节一致的品牌图标，同时用于页头、页脚和 favicon。图标原创角色作者为上善无形，本项目图标为二创作品；署名与使用边界见根目录 `NOTICE.md`。
 - `fonts/`：本地 Noto Sans SC（思源黑体体系）400 / 500 / 600 字重及 OFL 许可，统一中英文字形。字体按当前页面文案和 ASCII 字符子集化；新增中文文案时需重新生成子集，否则新增字会使用系统后备字体。字体来自 Google Fonts，总大小约 387 KiB，访客无需访问外部字体服务。
 
-发版后根据真实 Releases 更新报告与版本列表，不要展示未单独发行的仓库中间版本。当前只列真实发行过的三个 4.x 版本：4.0.6、4.0.5、4.0.1；4.0.2–4.0.4 未单独发版，内容已并入 4.0.5，页面脚注也说明这一点。站点不再提供独立更新日志栏目，完整历史仍以仓库 `CHANGELOG.md` 与 Releases 为准。下载按钮打开官方最新 Release，让用户选择实际存在的安装资产。作者寄语为明确标注的待确认草稿，正式上线前由作者确认或替换。
+发版后根据真实 Releases 更新报告与版本列表，不要展示未单独发行的仓库中间版本。当前只列真实发行过的三个 4.x 版本：4.0.7、4.0.6、4.0.5；4.0.2–4.0.4 未单独发版，内容已并入 4.0.5，页面脚注也说明这一点，更早的 4.0.1 与 3.x 版本从 Releases 查看。站点不再提供独立更新日志栏目，完整历史仍以仓库 `CHANGELOG.md` 与 Releases 为准。下载按钮打开官方最新 Release，让用户选择实际存在的安装资产。作者寄语为明确标注的待确认草稿，正式上线前由作者确认或替换。
 
 网站不收集访客数据；仅在浏览器 localStorage 保存主题偏好。所有对话展示均为示意文案。
 

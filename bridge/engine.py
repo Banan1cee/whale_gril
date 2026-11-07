@@ -58,6 +58,15 @@ from sticker_transport import (guarded_send as guarded_sticker_send, read_enable
                                account_evidence_allowed as sticker_account_evidence_ok,
                                alias_match as sticker_alias_match,
                                _is_blank as sticker_input_is_blank)
+from config_values import (as_bool as _as_bool, as_int as _as_int, as_float as _as_float,
+                           parse_bg_send as _parse_bg_send)
+from wechat_db import (DB_ROOT_NAMES,
+                       looks_like_db_root as _looks_like_db_root,
+                       iter_drive_roots,
+                       resolve_db_dir as _resolve_db_dir,
+                       find_account_dirs as _find_account_dirs,
+                       account_wxid,
+                       resolve_account_dir as _resolve_account_dir)
 
 try:                                    # UIA 自检/物化：挑真窗口 + 真判据
     from bridge import uia_boot
@@ -78,10 +87,20 @@ except OSError:
     CONFIG_MTIME_AT_START = 0.0
 LOG_FILE = os.path.join(ROOT, "data", "wechat-bridge-4x.log")
 # 日志级别：debug（详细）/ info（常规）/ error（仅错误），与 config.log.level 同步。
-# 桥接没有结构化日志，只能按关键词粗分：报错类永远写，排查噪音只在 debug 时写。
 LOG_LEVEL = "info"
-_LOG_ERROR_HINT = ("错误", "失败", "异常", "超时", "Traceback", "Exception", "Error", "error:", "❌")
-_LOG_DEBUG_HINT = ("跳过", "忽略", "热激活", "布局", "轮询", "重试", "装死", "收到")
+
+import bridge_log
+from bridge_log import (log, log_debug, log_warn, log_error, boot, log_window_problem)
+from guards import (is_system_notice, duplicate_guard, rate_guard, set_system_senders)
+import config as bridge_config
+from config import (read_config, build_bot_url,
+                    wait_for_server as _wait_for_server,
+                    ensure_ffmpeg_env as _ensure_ffmpeg_env)
+from voice import (resolve_voice_key as _resolve_voice_key, asr_transcribe, clean_transcript)
+bridge_log.configure(log_file=LOG_FILE,
+                     boot_log=os.path.join(ROOT, "data", "bridge-boot.log"),
+                     level=LOG_LEVEL)
+bridge_config.configure(ROOT, CONFIG_PATH)
 
 # 只回复这些会话（留空 = 全部会话都交给鲸鲸判断）
 # 例如 ["文件传输助手", "深海鱼塘"]
@@ -182,76 +201,6 @@ class _SendStateScope:
         return False
 
 
-def _as_bool(value, default=False):
-    """配置里的布尔：兼容写成字符串 "false" 的老配置。
-
-    以前 bool("false") 是 True —— 于是 care.allowGroups 明明写着 "false"，
-    桥接却当成「允许进群」。
-    """
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return value != 0
-    return str(value).strip().lower() in ("1", "true", "yes", "on", "开")
-
-
-def _as_int(value, default=0):
-    """配置里的整数：写成 "123" 也认，坏值给默认值，绝不让一个字段炸掉整段解析（M12）。"""
-    try:
-        return int(value)
-    except Exception:
-        try:
-            return int(float(value))
-        except Exception:
-            return default
-
-
-def _as_float(value, default=0.0):
-    """配置里的小数：坏值给默认值，绝不让一个字段炸掉整段解析（M12）。"""
-    try:
-        return float(value)
-    except Exception:
-        return default
-
-
-def _parse_bg_send(wechat_cfg):
-    """解析 `wechat.bgSend`（零焦点发送通道）。
-
-    默认全开：这是唯一不抢前台的通道，关掉就等于退回「发一条抢一次焦点」。
-    """
-    raw = (wechat_cfg or {}).get("bgSend")
-    if not isinstance(raw, dict):
-        raw = {}
-
-    def _num(key, default, lo, hi):
-        try:
-            v = float(raw.get(key, default))
-        except Exception:
-            v = float(default)
-        return min(hi, max(lo, v))
-
-    return {
-        "enabled": _as_bool(raw.get("enabled", True), True),
-        # 文档 §4.7：字节间隔 ≤45ms，太短会丢字；给个 20~80 的安全区间
-        "charGap": _num("charGapMs", 40, 20, 80) / 1000.0,
-        # 发完回读输入框是否清空；关掉能省 ~0.5s，但少了「真发出去」的证据
-        "verify": _as_bool(raw.get("verify", True), True),
-        # 后台通道失败时要不要退回会抢前台的旧通道
-        "fallback": _as_bool(raw.get("fallbackToForeground", True), True),
-        # GBK 编不了的字符（emoji 等）是跳过还是整条退回旧通道
-        "strip": _as_bool(raw.get("stripUnencodable", True), True),
-        # 微信缩在托盘里（窗口隐藏）时，用「显示但不激活」把它拉出来 —— 不抢前台
-        "unhide": _as_bool(raw.get("unhideWindow", True), True),
-        # WM_CHAR 的编码语义：auto = 按微信版本自动（4.2+ 用 UTF-16 码元）
-        "charMode": str(raw.get("charMode") or "auto").lower(),
-        # 后台通道的固定等待（秒）：缺省用 bg_sender.TIMING 的线上实测值，
-        # 这里只透传用户覆盖的那部分，让「想快一点」不用改代码。
-        "timing": raw.get("timing") if isinstance(raw.get("timing"), dict) else {},
-    }
-
-
 # 零焦点发送通道的默认值：config 读失败时也能工作（这个通道失败会自动退回旧通道，
 # 所以默认开着是安全的）。
 BG_SEND = {"enabled": True, "charGap": 0.04, "verify": True, "charMode": "auto",
@@ -279,6 +228,7 @@ try:
     try:
         _lv = str((_cfg.get("log") or {}).get("level") or "info").strip().lower()
         LOG_LEVEL = _lv if _lv in ("debug", "info", "error") else "info"
+        bridge_log.set_level(LOG_LEVEL)
     except Exception:
         pass
     _stale = (_cfg.get("wechat") or {}).get("staleAfterSec")
@@ -359,53 +309,11 @@ START_TS = time.time()
 
 
 # 同一类错误 10 分钟只记一行：没配看图 Key 时，每张图刷一条日志会淹掉真正的问题
-# 本机请求专用：不读系统代理。用户装了 Clash 之类的代理但没开时，
-# HTTP_PROXY 会让连 127.0.0.1 的请求也走代理 → 报「由于目标计算机积极拒绝」。
-import requests as _requests  # 延迟到这里再 import，避免顶部依赖顺序问题
-
-
-class _ThreadLocalHTTP:
-    """每个线程一个 `requests.Session`。
-
-    `requests.Session` 不是线程安全的，而 3.57 起消息是**跨会话并发**处理的
-    （`MessagePipeline`）。共用一个 Session 会出现连接池 / header 串台。
-    接口和 Session 一样（get / post / close），调用方不用改。
-    """
-
-    trust_env = False
-
-    def __init__(self):
-        self._local = threading.local()
-        self._all = []
-        self._guard = threading.Lock()
-
-    def _session(self):
-        s = getattr(self._local, "session", None)
-        if s is None:
-            s = _requests.Session()
-            s.trust_env = False          # 本机请求不读系统代理（Clash 没开时会积极拒绝）
-            self._local.session = s
-            with self._guard:
-                self._all.append(s)
-        return s
-
-    def get(self, *args, **kwargs):
-        return self._session().get(*args, **kwargs)
-
-    def post(self, *args, **kwargs):
-        return self._session().post(*args, **kwargs)
-
-    def close(self):
-        with self._guard:
-            for s in self._all:
-                try:
-                    s.close()
-                except Exception:
-                    pass
-            self._all.clear()
-
+# 本机请求客户端已拆到 bridge/http_client.py；这里只保留实例和 NO_PROXY 设置。
+from http_client import ThreadLocalHTTP as _ThreadLocalHTTP
 
 LOCAL_HTTP = _ThreadLocalHTTP()
+bridge_config.set_local_http(LOCAL_HTTP)
 os.environ["NO_PROXY"] = ",".join(filter(None, [os.environ.get("NO_PROXY", ""), "127.0.0.1,localhost,::1"]))
 _THROTTLE_LOG = {}
 # 和服务端的连接状态：用来只在「断开→恢复」时各打一次日志
@@ -534,6 +442,7 @@ def reload_config(path=None):
     # 忽略名单：系统会话是固定底表，配置里的只追加
     SYSTEM_SENDER_NAMES = set(BASE_SYSTEM_SENDERS)
     SYSTEM_SENDER_NAMES |= {str(x).strip() for x in (w.get("ignoreSenders") or []) if str(x).strip()}
+    set_system_senders(SYSTEM_SENDER_NAMES)
 
     ca = cfg.get("care") or {}
     global CARE_ENABLED, CARE_ALLOW_GROUPS, CARE_ONLY_MASTER, CARE_ALLOW_OTHERS
@@ -561,7 +470,7 @@ def reload_config(path=None):
             VOICE_MAX_SECONDS = float(vo.get("maxSeconds"))
     except Exception:
         pass
-    VOICE_API_KEY = _resolve_voice_key(cfg)
+    VOICE_API_KEY = _resolve_voice_key(cfg, VOICE_BASE_URL, ROOT)
 
     wxids = (((cfg.get("persona") or {}).get("master") or {}).get("wxids") or [])
     if wxids:
@@ -582,113 +491,21 @@ try:
     SYSTEM_SENDER_NAMES |= {str(x).strip() for x in (_wechat.get("ignoreSenders") or []) if str(x).strip()}
 except Exception:
     pass
+set_system_senders(SYSTEM_SENDER_NAMES)
 
 
 # 微信 4.x 数据目录的常见名字（不同版本 / 不同安装方式会有差异）
-DB_ROOT_NAMES = ("xwechat_files", "WeChat Files", "xwechat_files_data")
+# 实现在 wechat_db.py；这里保留同名薄封装，旧调用点和测试无需改。
 
 
 def looks_like_db_root(p):
-    """这个目录像不像微信 4.x 的数据根（下面有 <账号>/db_storage）。
-
-    兼容四种布局（以前只认第一种，文档写了后面几种却没实现）：
-      E:\\xwechat_files\\<账号>\\db_storage
-      E:\\xwechat_files\\db_storage            （账号目录层级被拍平）
-      直接把 <账号> 目录填进来（p\\db_storage）
-      直接把 db_storage 目录填进来
-    """
-    if not p or not os.path.isdir(p):
-        return False
-    # 直填账号目录 / 直填 db_storage
-    if os.path.isdir(os.path.join(p, "db_storage")):
-        return True
-    if os.path.basename(os.path.normpath(p)).lower() == "db_storage":
-        return True
-    bases = [p]
-    for name in DB_ROOT_NAMES:
-        bases.append(os.path.join(p, name))
-    for base in bases:
-        try:
-            entries = os.listdir(base)
-        except OSError:
-            continue
-        for name in entries:
-            if os.path.isdir(os.path.join(base, name, "db_storage")):
-                return True
-    return False
-
-
-def iter_drive_roots():
-    """列出真实的磁盘根（含 L:、网络映射盘、UNC），不再写死 C..K。"""
-    roots = []
-    try:
-        import string
-        for letter in string.ascii_uppercase:
-            root = letter + ":\\"
-            if os.path.isdir(root):
-                roots.append(root)
-    except Exception:
-        pass
-    try:
-        import psutil
-        for part in psutil.disk_partitions(all=False):
-            mp = str(part.mountpoint or "")
-            if mp and mp not in roots and os.path.isdir(mp):
-                roots.append(mp)
-    except Exception:
-        pass
-    return roots
+    """兼容旧调用：实现在 wechat_db.py。"""
+    return _looks_like_db_root(p)
 
 
 def resolve_db_dir(config_path=None, drives="CDEFGHIJK"):
-    """找微信 4.x 的数据库目录，比 wechatauto 自带的 auto_detect 更狠。
-
-    库自带的只查「文档 / 用户目录 / 注册表」，用户把微信文件存到别的盘
-    （很常见：E:\\xwechat_files、D:\\xwechat_files）就永远找不到，启动直接
-    RuntimeError 崩掉 —— 也就是用户截图里那一整段 Traceback。
-
-    顺序：config.json 的 wechat.dbDir → 正在运行的微信进程打开的文件 → 各盘根目录。
-    """
-    # 1) 配置里手填的
-    manual = ""
-    try:
-        with open(config_path or CONFIG_PATH, "r", encoding="utf-8-sig") as f:
-            manual = str(((json.load(f).get("wechat") or {}).get("dbDir") or "")).strip()
-    except Exception:
-        manual = ""
-    if manual and looks_like_db_root(manual):
-        return manual
-
-    # 2) 正在运行的微信进程打开着数据库文件 —— 直接反射出来，最准
-    try:
-        import psutil
-        for proc in psutil.process_iter(["name"]):
-            name = str(proc.info.get("name") or "").lower()
-            if not any(k in name for k in ("weixin", "wechat")):
-                continue
-            try:
-                open_files = proc.open_files()
-            except Exception:
-                continue
-            for item in open_files:
-                m = re.search(r"([\\/])(" + "|".join(DB_ROOT_NAMES) + r")([\\/]|$)",
-                              item.path or "", re.I)
-                if not m:
-                    continue
-                # 取「名字之前的那一段」作为盘符/目录，再拼回 xwechat_files
-                root = (item.path or "")[: m.start() + 1] + m.group(2)
-                if looks_like_db_root(root):
-                    return root
-    except Exception:
-        pass
-
-    # 3) 所有真实磁盘根（以前写死 C..K，L: 盘和网络盘永远找不到）
-    for root in iter_drive_roots():
-        for name in DB_ROOT_NAMES:
-            cand = os.path.join(root, name)
-            if looks_like_db_root(cand):
-                return cand
-    return ""
+    """兼容旧调用：实现在 wechat_db.py。"""
+    return _resolve_db_dir(config_path, drives, default_config_path=CONFIG_PATH)
 
 
 # ---------------------------------------------------------------------------
@@ -696,63 +513,13 @@ def resolve_db_dir(config_path=None, drives="CDEFGHIJK"):
 # ---------------------------------------------------------------------------
 
 def find_account_dirs(db_dir):
-    """列出 <db_dir> 下所有含 db_storage 的账号目录名。
-
-    不能按 wxid_ 前缀判断：设了自定义微信号的账号目录名不一定以 wxid_ 开头。
-    """
-    out = []
-    try:
-        for name in os.listdir(db_dir):
-            if os.path.isdir(os.path.join(db_dir, name, "db_storage")):
-                out.append(name)
-    except OSError:
-        return []
-    return sorted(out)
-
-
-def account_wxid(account):
-    """账号目录名去掉末尾 4 位哈希 = wxid（和 wechatauto 的 WeChatDB.wxid 同一套规则）。"""
-    return re.sub(r"_\w{4}$", "", str(account or ""))
+    """兼容旧调用：实现在 wechat_db.py。"""
+    return _find_account_dirs(db_dir)
 
 
 def resolve_account_dir(db_dir, wanted):
-    """把配置/网页里的账号写法解析成真实账号目录名。
-
-    依次尝试：完整目录名（wxid_xxx_cedb）→ 去掉 4 位哈希的 wxid（wxid_xxx）
-    → 唯一前缀 → 昵称（要开库读 contact.db，慢，所以放最后）。
-    返回目录名；匹配不到返回 ""。
-    """
-    wanted = str(wanted or "").strip()
-    if not wanted or not db_dir:
-        return ""
-    names = find_account_dirs(db_dir)
-    if not names:
-        return ""
-    if wanted in names:
-        return wanted
-    for n in names:
-        if account_wxid(n) == wanted:
-            return n
-    hit = [n for n in names if n.lower().startswith(wanted.lower())]
-    if len(hit) == 1:
-        return hit[0]
-    # 昵称匹配：只有前面都没命中才做（每个账号要开一次库，约 1 秒）
-    try:
-        from wechatauto import WeChatDB
-    except Exception:
-        return ""
-    for n in names:
-        try:
-            probe = WeChatDB(db_dir=db_dir, account=n)
-            if probe.account != n:
-                continue                     # 库自己换号了，别用它的昵称
-            info = probe.get_self_info() or {}
-            nick = str(info.get("nick_name") or info.get("remark") or "").strip()
-        except Exception:
-            continue
-        if nick and nick == wanted:
-            return n
-    return ""
+    """兼容旧调用：实现在 wechat_db.py。"""
+    return _resolve_account_dir(db_dir, wanted)
 
 
 def list_accounts_cli():
@@ -868,12 +635,8 @@ def write_accounts_cache(db_dir, account="", nick="", probe_others=True, deadlin
         return False
 
 
-# （原先这里还有一份 SYSTEM_SENDER_NAMES 的重复定义，已删除（M10）：两处快照时机不同、
-#   互相覆盖，ignoreSenders 的热更新会打摆子。名单只在上面定义一次。）
-_SYSTEM_TEXT_RE = __import__("re").compile(r"<a\s+href=|weixin://|&lt;a\s+href=", __import__("re").I)
-# 同一会话同一句话的重复回复保护（秒）与每分钟回复上限
-DUP_REPLY_WINDOW = 45
-MAX_REPLIES_PER_MIN = 8
+# 系统通知 / 去重 / 限流已拆到 bridge/guards.py；engine 只负责在启动和热更新时
+# 调用 set_system_senders() 同步系统号名单。
 # 单实例锁端口：被占用就说明已经有桥接在跑，直接退出
 BRIDGE_LOCK_PORT = 47821
 
@@ -888,42 +651,6 @@ VOICE_MAX_SECONDS = 120
 VOICE_SAMPLE_RATE = 16000
 
 
-def _resolve_voice_key(cfg):
-    """优先语音专用 Key；通用 Key 仅允许发往同一服务商的地址。"""
-    from urllib.parse import urlsplit
-    vo = (cfg.get("voice") or {}) if isinstance(cfg, dict) else {}
-    key = str(vo.get("apiKey") or "").strip()
-    if key:
-        return key
-    def origin(value):
-        try:
-            u = urlsplit(str(value or ""))
-            return (u.scheme.lower(), (u.hostname or "").lower(), u.port or (443 if u.scheme == "https" else 80))
-        except Exception:
-            return None
-    destination = origin(vo.get("baseUrl") or VOICE_BASE_URL)
-    host = destination[1] if destination else ""
-    try:
-        with open(os.path.join(ROOT, "data", "settings.json"), "r", encoding="utf-8-sig") as sf:
-            st = json.load(sf)
-        keys = st.get("keys") or {}
-        dedicated = str(st.get("voiceApiKey") or keys.get("voice") or "").strip()
-        if dedicated:
-            return dedicated
-        if host in {"dashscope.aliyuncs.com", "dashscope-intl.aliyuncs.com"}:
-            matching = str(keys.get("qwen") or (st.get("apiKey") if st.get("provider") == "qwen" else "") or "").strip()
-            if matching:
-                return matching
-        if destination and destination == origin(st.get("baseUrl")):
-            return str(st.get("apiKey") or "").strip()
-    except Exception:
-        pass
-    legacy = cfg.get("deepseek") or {}
-    if destination and destination == origin(legacy.get("baseUrl") or "https://api.deepseek.com"):
-        return str(legacy.get("apiKey") or "").strip()
-    return ""
-
-
 try:
     _voice_cfg = (_cfg.get("voice") or {})
     VOICE_ENABLED = _as_bool(_voice_cfg.get("enabled", True), True)
@@ -931,322 +658,25 @@ try:
     VOICE_MODEL = str(_voice_cfg.get("model") or VOICE_MODEL)
     VOICE_TIMEOUT = float(_voice_cfg.get("timeoutMs", 90000)) / 1000.0
     VOICE_MAX_SECONDS = float(_voice_cfg.get("maxSeconds", 120))
-    VOICE_API_KEY = _resolve_voice_key(_cfg)
+    VOICE_API_KEY = _resolve_voice_key(_cfg, VOICE_BASE_URL, ROOT)
 except Exception:
     pass
 
-
-def asr_transcribe(wav_bytes, api_key, model, base_url, timeout=90):
-    """把 wav 字节交给语音识别接口，返回文字；失败抛异常或返回空串。"""
-    import base64
-    import urllib.request
-
-    if not api_key:
-        raise RuntimeError("没有可用的语音识别 Key")
-    payload = {
-        "model": model,
-        "input": {
-            "messages": [{
-                "role": "user",
-                "content": [{"audio": "data:audio/wav;base64," + base64.b64encode(wav_bytes).decode()}],
-            }]
-        },
-    }
-    req = urllib.request.Request(
-        base_url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Authorization": "Bearer " + api_key, "Content-Type": "application/json"},
-    )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        data = json.loads(resp.read().decode("utf-8", "replace"))
-    try:
-        text = data["output"]["choices"][0]["message"]["content"][0]["text"]
-    except Exception:
-        text = ""
-    return str(text or "").strip()
-
-
-def clean_transcript(text):
-    """去掉只剩标点的转写结果。"""
-    t = str(text or "").strip()
-    t = t.strip("，,。.！!？?…~～、 ")
-    return t if len(t) >= 1 else ""
-
-_recent_dup = {}
-_reply_stamps = {}
-_guard_lock = threading.Lock()
 # 「演示模式」提示只喊一次，别每条都刷
 MOCK_NOTICED = {"done": False}
-
-
-def is_system_notice(username, nickname, content):
-    """系统号 / 通知类消息：带 weixin:// 链接、HTML 链接、或已知系统号名字。"""
-    if _SYSTEM_TEXT_RE.search(str(content or "")):
-        return True
-    name = str(nickname or "").strip()
-    if name in SYSTEM_SENDER_NAMES:
-        return True
-    uid = str(username or "")
-    if uid.startswith("gh_"):
-        return True
-    return False
-
-
-def duplicate_guard(chat_username, sender, content):
-    """同一人 45 秒内重复同一句 → 不再回（微信重投/通知刷屏）。"""
-    now = time.time()
-    key = (str(chat_username or ""), str(sender or ""), str(content or "").strip())
-    with _guard_lock:
-        last = _recent_dup.get(key, 0)
-        _recent_dup[key] = now
-        if len(_recent_dup) > 500:
-            for k, v in list(_recent_dup.items()):
-                if now - v > 600:
-                    _recent_dup.pop(k, None)
-        return now - last < DUP_REPLY_WINDOW
-
-
-def rate_guard(chat_username):
-    """同一会话一分钟内已经回了 MAX_REPLIES_PER_MIN 条 → 先停下，避免越聊越乱。"""
-    now = time.time()
-    key = str(chat_username or "")
-    with _guard_lock:
-        stamps = [t for t in _reply_stamps.get(key, []) if now - t < 60]
-        if len(stamps) >= MAX_REPLIES_PER_MIN:
-            _reply_stamps[key] = stamps
-            return False
-        stamps.append(now)
-        _reply_stamps[key] = stamps
-    return True
-
-
-BOOT_LOG = os.path.join(ROOT, "data", "bridge-boot.log")
-
-
-def boot(msg):
-    """启动诊断：只写文件，不依赖控制台（控制台被选中时 print 会卡住）"""
-    try:
-        os.makedirs(os.path.dirname(BOOT_LOG), exist_ok=True)
-        with open(BOOT_LOG, "a", encoding="utf-8") as f:
-            f.write("%s [pid %s] %s\n" % (time.strftime("%H:%M:%S"), os.getpid(), msg))
-    except Exception:
-        pass
 
 
 boot("脚本开始执行")
 
 
-def _log_allowed(level, text):
-    """控制台过滤：显式级别优先；老的 log() 命中报错词时抬成 warn，保持以前的可读性。
-
-    error 档 = 只留报错（显式 error，或老调用里命中报错词的那类），其余一律不打印。
-    """
-    if LOG_LEVEL == "debug":
-        return True
-    hinted = level == "info" and any(h in text for h in _LOG_ERROR_HINT)
-    if LOG_LEVEL == "error":
-        return level == "error" or hinted
-    if level in ("warn", "error") or hinted:
-        return True
-    return not any(h in text for h in _LOG_DEBUG_HINT)
-
-
-# 显式级别（2026-11 起）：以前所有行都是 log()，控制台只能按关键词猜「这句算不算报错」。
-# 现在 warn / error 有真级别，行首还带 [文件:行]，从日志能直接跳到代码。
-# 只给 warn/error 抓调用点：info/debug 是热路径，抓栈不值当。
-_LOGGER_CODES = set()
-
-
-def _caller_where():
-    """warn/error 用：调用点「文件:行」。engine.py 自己的行号也保留——它就是个巨型文件。"""
-    try:
-        frame = sys._getframe(1)
-        while frame is not None and frame.f_code in _LOGGER_CODES:
-            frame = frame.f_back
-        if frame is None:
-            return ""
-        name = os.path.basename(frame.f_code.co_filename)
-        if name.endswith(".py"):
-            name = name[:-3]
-        return "%s:%d" % (name, frame.f_lineno)
-    except Exception:                                  # noqa: BLE001
-        return ""
-
-
-def _emit_log(level, args, where=""):
-    text = " ".join(_fmt_log_arg(a) for a in args)
-    head = time.strftime("[%H:%M:%S] ") + level.upper()
-    line = head + " " + (("[" + where + "] ") if where else "") + text
-    # 文件：永远记全量（debug），出问题能溯源；界面/启动器控制台按 LOG_LEVEL 过滤。
-    try:
-        os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
-        _rotate_bridge_log()
-        with open(LOG_FILE, "a", encoding="utf-8") as f:
-            f.write(line + "\n")
-    except Exception:                                  # noqa: BLE001
-        pass
-    if not _log_allowed(level, text):
-        return
-    try:
-        print(line, flush=True)
-    except Exception:                                  # noqa: BLE001
-        pass
-
-
-def log(*args):
-    """老调用：info 级。"""
-    _emit_log("info", args)
-
-
-def log_debug(*args):
-    _emit_log("debug", args)
-
-
-def log_warn(*args):
-    """已降级/已自愈，但值得记一笔（切通道、跳过一次、重试成功）。"""
-    _emit_log("warn", args, _caller_where())
-
-
-def log_error(*args):
-    """这次功能真的坏了（发送彻底失败、写盘失败、配置读不出来）。"""
-    _emit_log("error", args, _caller_where())
-
-
-for _fn in (log, log_debug, log_warn, log_error, _emit_log):
-    _LOGGER_CODES.add(_fn.__code__)
-del _fn
-
-
-_last_rotate_check = [0.0]
-
-
-def _rotate_bridge_log():
-    """日志文件超过 10MB 就轮转成 .1（只留一份）。文件现在记 debug 全量，涨得比以前快。"""
-    import time as _t
-    now = _t.time()
-    if now - _last_rotate_check[0] < 60:
-        return
-    _last_rotate_check[0] = now
-    try:
-        if os.path.getsize(LOG_FILE) <= 10 * 1024 * 1024:
-            return
-        bak = LOG_FILE + ".1"
-        if os.path.exists(bak):
-            os.remove(bak)
-        os.replace(LOG_FILE, bak)
-    except Exception:
-        pass
-
-
-def _fmt_log_arg(a):
-    """日志参数不省略：异常展开完整 traceback，容器用 repr，字符串原样。"""
-    if isinstance(a, BaseException):
-        import traceback
-        return "".join(traceback.format_exception(type(a), a, a.__traceback__)).strip()
-    if isinstance(a, (dict, list, tuple, set)):
-        return repr(a)
-    return str(a)
-
-
-_win_problem_ts = {}
-
-
-def log_window_problem(where, err):
-    """窗口操作失败两分钟内只报一次。
-
-    挪不动/置顶不了窗口不该让整条发送失败（UIA 还能把字打进去），
-    更不该让看门狗以为“发送卡住”把桥接反复重启——那会一直弹「拒绝访问」。
-    """
-    now = time.time()
-    if now - _win_problem_ts.get(where, 0) < 120:
-        return
-    _win_problem_ts[where] = now
-    log_warn(where + "：", repr(err))
-
-
-def read_config():
-    cfg = {}
-    if os.path.exists(CONFIG_PATH):
-        try:
-            with open(CONFIG_PATH, "r", encoding="utf-8-sig") as f:
-                cfg = json.load(f)
-        except Exception as e:
-            log_error("读取 config.json 失败（会按默认值跑）：", e)
-    return cfg
-
-
-def build_bot_url(cfg):
-    # 端口优先级：环境变量 > 服务写下的实际端口 > config.server.port
-    # （服务用 --port= 启动时 config 里还是老端口，读文件才不会连错）
-    port = (cfg.get("server") or {}).get("port", 8787)
-    try:
-        with open(os.path.join(ROOT, "data", "server-port.txt"), "r", encoding="utf-8") as _pf:
-            _p = int((_pf.read() or "").strip())
-            if 0 < _p < 65536:
-                port = _p
-    except Exception:
-        pass
-    return os.environ.get("WHALE_BOT_URL", "http://127.0.0.1:%s/webhook/wechat" % port)
-
-
 def wait_for_server(url, timeout=30):
-    """等本地服务真的在监听。
-
-    用户最常见的坑：先点桥接、后点服务，或者两者同时启动。
-    服务从进程起来到 listen() 完成要 1~3 秒，这段时间桥接每来一条消息就报
-    「由于目标计算机积极拒绝，无法连接」。这里先等它起来，再开始监听。
-    """
-    import time as _t
-    health = url.rsplit("/webhook", 1)[0] + "/healthz"
-    deadline = _t.time() + max(5, timeout)
-    waited = 0
-    while _t.time() < deadline:
-        try:
-            r = LOCAL_HTTP.get(health, timeout=3)
-            body = r.json() if r.status_code == 200 else None
-            if (isinstance(body, dict) and body.get("ok") is True
-                    and body.get("up") is True and body.get("service") == "whale-girl"):
-                if waited > 0:
-                    log("服务已就绪（等了 %d 秒）" % waited)
-                return True
-        except Exception:
-            pass
-        if waited == 0:
-            log("等服务起来（最多 %d 秒）…" % timeout)
-        _t.sleep(1)
-        waited += 1
-    log_error("[!] 等了 %d 秒服务还没起来。先在启动器里点「启动」，等状态变成「运行中」再跑桥接。" % timeout)
-    return False
+    """兼容旧调用：实现在 config.py。"""
+    return _wait_for_server(url, timeout)
 
 
 def ensure_ffmpeg_env():
-    """微信 4.x 的普通图片是 HEVC(wxgf) 容器，要 ffmpeg 才能转成 jpg。
-
-    media 库用 shutil.which("ffmpeg") 找，很多机器装了 ffmpeg 但没加进 PATH，
-    结果图片一直转不出来、看图全是「图片输入格式/解析错误」。
-    这里先自己找一遍常见位置，找到就塞进 PATH。
-    """
-    import shutil
-    if shutil.which("ffmpeg"):
-        return True
-    cands = [
-        os.path.join(ROOT, "runtime", "ffmpeg", "bin"),
-        os.path.join(ROOT, "tools", "ffmpeg", "bin"),
-        r"C:\ffmpeg\bin", r"D:\ffmpeg\bin", r"E:\ffmpeg\bin", r"F:\ffmpeg\bin",
-        os.path.expanduser(r"~\ffmpeg\bin"),
-        os.path.expandvars(r"%LOCALAPPDATA%\Programs\ffmpeg\bin"),
-        r"C:\Program Files\ffmpeg\bin", r"D:\Program Files\ffmpeg\bin",
-    ]
-    for d in cands:
-        exe = os.path.join(d, "ffmpeg.exe")
-        if os.path.isfile(exe):
-            os.environ["PATH"] = d + os.pathsep + os.environ.get("PATH", "")
-            _bundled = os.path.join(ROOT, "runtime", "ffmpeg", "bin")
-            log("找到 ffmpeg：", exe, "（包里自带，微信图片是 wxgf/HEVC，靠它转 jpg）" if exe.lower().startswith(_bundled.lower()) else "（微信图片是 wxgf/HEVC，靠它转 jpg）")
-            return True
-    log_warn("[!] 没找到 ffmpeg：微信 4.x 的图片多是 wxgf/HEVC，没有它就看不了图。")
-    log("    装一个（解压到 C:\\ffmpeg 即可）或把 ffmpeg.exe 放进 runtime\\ffmpeg\\bin")
-    return False
+    """兼容旧调用：实现在 config.py。"""
+    return _ensure_ffmpeg_env()
 
 
 try:

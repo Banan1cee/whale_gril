@@ -34,5 +34,6 @@ test('restore_win_state 里用 ctypes 之前必须先 import', () => {
 });
 
 test('还原窗口状态失败不该刷成常规噪音（有专门的日志函数）', () => {
-  assert.match(src, /def log_window_problem/, '窗口类问题应该走节流日志');
+  const logSrc = fs.readFileSync(path.join(__dirname, '..', 'bridge', 'bridge_log.py'), 'utf8');
+  assert.match(logSrc, /def log_window_problem/, '窗口类问题应该走节流日志');
 });

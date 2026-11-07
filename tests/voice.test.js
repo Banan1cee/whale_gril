@@ -24,7 +24,8 @@ test('默认配置里有 voice，并且默认开启', () => {
 test('桥接遇到语音不再直接丢掉，而是先转文字', () => {
   assert.doesNotMatch(bridge, /已移除语音功能/);
   assert.match(bridge, /def transcribe_voice/);
-  assert.match(bridge, /def asr_transcribe/);
+  const voiceSrc = fs.readFileSync(path.join(root, 'bridge', 'voice.py'), 'utf8');
+  assert.match(voiceSrc, /def asr_transcribe/);
   assert.match(bridge, /download_voice/);
   assert.match(bridge, /pysilk\.decode/);
   assert.match(bridge, /对方发了一条语音，说的是/);
