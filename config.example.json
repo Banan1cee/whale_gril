@@ -1,6 +1,6 @@
 {
   "_说明": "鲸鲸的全部设置都在这里。改完直接存盘就生效（服务在跑会自动重新加载，不用重启）。data/ 和 config.json 都不会进 git。启动器「设置」里的东西存在 data/settings.json，优先级比这个文件高。",
-  "_模型服务": "provider 可选 deepseek / zhipu / siliconflow / qwen / tju / ollama / custom；本地地址（127.0.0.1、192.168.*）可以免 Key",
+  "_模型服务": "provider 可选 deepseek / zhipu / siliconflow / qwen / doubao / opencode / tju / ollama / custom；本地地址（127.0.0.1、192.168.*）可以免 Key",
   "provider": "deepseek",
   "server": {
     "host": "127.0.0.1",

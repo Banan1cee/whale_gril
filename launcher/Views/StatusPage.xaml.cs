@@ -30,13 +30,20 @@ namespace WhaleLauncher.Views
         };
 
         private DateTime _lastCare = DateTime.MinValue;
-        private DateTime _lastRecent = DateTime.MinValue;
         private RuntimeSupervisor.CareState _care;
+        private readonly System.Windows.Threading.DispatcherTimer _recentTimer;
+        private bool _recentBusy;
+        private string _recentJson = "";
 
         public StatusPage(RuntimeSupervisor sup)
         {
             InitializeComponent();
+            SmoothScroll.Attach(Recent);
             _sup = sup;
+            _recentTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+            _recentTimer.Tick += async (_, __) => await PollRecentAsync();
+            Loaded += async (_, __) => { _recentTimer.Start(); await PollRecentAsync(); };
+            Unloaded += (_, __) => _recentTimer.Stop();
             Loaded += async (_, __) => await RefreshAsync();
         }
 
@@ -50,11 +57,14 @@ namespace WhaleLauncher.Views
                 _lastCare = DateTime.Now;
                 await RefreshCareAsync(s);
             }
-            if ((DateTime.Now - _lastRecent).TotalSeconds >= 5)
-            {
-                _lastRecent = DateTime.Now;
-                await RefreshRecentAsync(s);
-            }
+        }
+
+        private async Task PollRecentAsync()
+        {
+            if (_recentBusy || !IsLoaded) return;
+            _recentBusy = true;
+            try { await RefreshRecentAsync(new Snapshot { NodeUp = _sup.NodeRunning }); }
+            finally { _recentBusy = false; }
         }
 
         private void Apply(Snapshot s)
@@ -151,6 +161,7 @@ namespace WhaleLauncher.Views
             if (!s.NodeUp)
             {
                 Recent.ItemsSource = null;
+                _recentJson = "";
                 RecentEmpty.Visibility = Visibility.Visible;
                 RecentEmpty.Text = "内核没起，看不到消息。";
                 RecentHint.Text = "";
@@ -159,6 +170,7 @@ namespace WhaleLauncher.Views
             try
             {
                 var json = await _http.GetStringAsync(_sup.Url + "/api/recent?limit=10");
+                if (!IsLoaded || json == _recentJson) return;
                 using var doc = JsonDocument.Parse(json);
                 var items = new List<RecentItem>();
                 if (doc.RootElement.TryGetProperty("items", out var arr) && arr.ValueKind == JsonValueKind.Array)
@@ -175,6 +187,7 @@ namespace WhaleLauncher.Views
                     }
                 }
                 Recent.ItemsSource = items;
+                _recentJson = json;
                 RecentEmpty.Visibility = items.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
                 if (items.Count == 0) RecentEmpty.Text = "还没有消息。先在微信里跟她说一句。";
                 RecentHint.Text = items.Count > 0 ? items.Count + " 条" : "";
@@ -182,10 +195,7 @@ namespace WhaleLauncher.Views
             catch
             {
                 // /api/recent 还没做，或者内核刚起
-                Recent.ItemsSource = null;
-                RecentEmpty.Visibility = Visibility.Visible;
-                RecentEmpty.Text = "还没有消息。她在微信里说上话之后，这里会显示最近 10 条。";
-                RecentHint.Text = "";
+                RecentHint.Text = "更新暂时失败，正在重试";
             }
         }
 
@@ -204,9 +214,9 @@ namespace WhaleLauncher.Views
         // ── 动作 ────────────────────────────────────────────────
         private async void OnRefresh(object sender, RoutedEventArgs e)
         {
-            _lastRecent = DateTime.MinValue;
             _lastCare = DateTime.MinValue;
             await RefreshAsync();
+            await PollRecentAsync();
         }
 
     }

@@ -27,6 +27,9 @@ release/
 .DS_Store
 Thumbs.db
 
+# 收集原图保留在本机；入库与发布只使用整理后的 assets/stickers。
+/鲸鲸表情包/
+
 # 微信安装包 / 本地工具（tools/ 是项目自己的热键脚本，要入库）
 # vendor/ 下是固定进仓库的上游源码（见 vendor/README.md），只忽略下载包与临时目录
 vendor/*.zip

@@ -65,6 +65,16 @@ const PROVIDERS = {
     // 百炼「视觉理解」列表里 qwen3.8-max / qwen3.7-plus 都在；qwen3.8-flash 只在文本生成里
     visionModels: ['qwen3.8-max', 'qwen3.7-plus'],
   },
+  doubao: {
+    label: '豆包 Doubao（火山方舟）',
+    baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+    model: 'doubao-seed-1-8-251228',
+    needsKey: true,
+    hint: 'console.volcengine.com/ark 创建 API Key；模型需先在「开通管理」开通。默认 doubao-seed-1-8-251228，也支持 doubao-seed-1-6-vision-250815 等视觉模型；模型名可填预置模型 ID 或 ep-xxxxx 接入点',
+    models: ['doubao-seed-1-8-251228', 'doubao-seed-1-6-vision-250815', 'doubao-seed-1-6-flash-250828'],
+    // 豆包 Seed 1.8 / 1.6 系列都能直接收图片，选它们当聊天模型时看图会自动跟随。
+    visionModels: ['doubao-seed-1-8-251228', 'doubao-seed-1-6-vision-250815', 'doubao-seed-1-6-flash-250828'],
+  },
   tju: {
     label: '天津大学 智能体广场（仅校内网）',
     baseUrl: 'https://ai.tju.edu.cn/api/v3',
@@ -74,11 +84,11 @@ const PROVIDERS = {
     models: ['tju-llm'],
   },
   ollama: {
-    label: '本地 Ollama（完全免费、可离线）',
+    label: 'Ollama / 自建 OpenAI 兼容接口（地址、模型可改）',
     baseUrl: 'http://127.0.0.1:11434/v1',
     model: 'qwen3:8b',
     needsKey: false,
-    hint: '装 Ollama 后跑 ollama pull qwen3:8b；数据不出本机，不用 Key',
+    hint: '接口地址和模型名都能自己填：本机默认 http://127.0.0.1:11434/v1，远程 Ollama、局域网或反向代理填对应地址即可。模型只是建议列表（qwen3:8b / llama3.1:8b），不是限制；有鉴权时也可以填 Key',
     models: ['qwen3:8b', 'llama3.1:8b'],
   },
   custom: {

@@ -98,7 +98,8 @@ function resolveKey(config) {
     }
   }
   const env = (config && config.env) || process.env || {};
-  const fromEnv = String(env.ZHIPU_API_KEY || env.VISION_API_KEY || '').trim();
+  const fromEnv = String(env.ARK_API_KEY || env.DOUBAO_API_KEY
+    || env.ZHIPU_API_KEY || env.VISION_API_KEY || '').trim();
   if (fromEnv) return fromEnv;
   return st.zhipu || '';
 }

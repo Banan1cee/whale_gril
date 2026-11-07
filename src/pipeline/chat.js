@@ -22,8 +22,7 @@ const persona = require('../persona');
 const features = require('../infra/features');
 const { matchMaster, isVerifiedOwner } = require('../core/master');
 const links = require('../adapters/links');
-const websearch = require('../adapters/websearch');
-const searchRouter = require('../adapters/searchRouter');
+const searchService = require('../services/search');
 const { LlmError } = require('../llm/client');
 const { describeError } = require('../infra/errors');
 const { saveSettings } = require('../infra/config');
@@ -738,157 +737,31 @@ class Bot {
       }
     }
 
-    // 需要最新信息时联网搜一下
-    let webText = '';
-    const webCfg = this.config.websearch || {};
-    const webOn = webCfg.enabled !== false;
-    // 路由、定位、天气/热榜及补搜共享预算，不能每一步重新等一个完整超时。
-    const webDeadline = Date.now() + Math.max(1, Number(webCfg.timeoutMs) || 8000);
-    const webRemaining = () => Math.max(0, webDeadline - Date.now());
-    // 触发判定通过之后才读链接：群里没叫她的消息不白抓一遍；读链接与联网搜索并行，
-    // 组提示词前一起 await，总耗时取两者较大的（共用 webDeadline）。
+    // 群聊触发判定后再并行获取链接和搜索资料，避免无关消息消耗网络预算。
     const linkUrls = (this.config.links && this.config.links.enabled === false)
       ? [] : links.extractUrls(clean.text || '');
     const linkTask = linkUrls.length ? this.readLink(linkUrls[0], key) : Promise.resolve('');
-    // 注意：以前只认「查一下/最新/多少钱」这类词。用户问「苹果出到几了」「现在几代」这种
-    // 口语问题时匹配不上，她就拿训练数据里的旧型号回答（实测把 iPhone 18 说成 16）。
-    const searchPattern = new RegExp(
-      [
-        '(查一下|查查|搜一下|搜搜|帮我查|帮我看看|最新|热搜|新闻|发生了什么|怎么回事|多少钱|什么价格|几块钱)',
-        '(什么时候|是谁|谁是|行情|报价|天气|下雨|下雪|气温|多少度|冷不冷|热不热|台风|雾霾|空气质量)',
-        '(出到|出到哪|第几代|几代|什么型号|哪个型号|哪个版本|什么版本|现在还|现在最新|今年|去年)',
-        '(苹果|iphone|ipad|华为|小米|三星|索尼|任天堂|switch|ps5|显卡|rtx|骁龙|麒麟|芯片|发布会)',
-      ].join('|'),
-      'i'
-    );
-    // 只按关键词触发，词库里没有的说法就永远不联网（「B站的热搜是什么」命中「热搜」，
-    // 但取的是头条榜，答非所问）。补一条「问句形态」兜底：在问事实、不是闲聊、不是问观点。
-    const ASK_FACT_RE = /(是什么|是谁|多少|几号|几点|怎么样|怎么|为什么|哪一?[个些张条]|哪个|有没有|是不是|能不能|会不会|可不可以|排行|排名|热搜|热榜|热门|最新|出到|第几)/;
-    const CHITCHAT_RE = /^(在吗|在不在|你好|嗨|hi|哈喽|早安|晚安|睡了|吃饭了吗|吃了吗|你在干嘛|在干啥|干啥呢|干嘛呢)/i;
-    const OPINION_RE = /(你觉得|你认为|你看|你怎么看|该不该|要不要|喜不喜欢|喜欢吗|讨厌|爱我吗|想我了吗)/;
-    const looksLikeFactQuestion = ASK_FACT_RE.test(clean.text || '')
-      && !CHITCHAT_RE.test(String(clean.text || '').trim())
-      && !OPINION_RE.test(clean.text || '');
-    // 主判断交给模型（语义），关键词只在模型不可用时兜底：
-    // 「小蓝鲸是什么梗」这种词库里没有的说法也会查，「你觉得呢」「在吗」不会被误触发。
-    //
-    // 但语义路由本身也是一次模型调用（上限 2 秒），实测每一句都要等它 —— 包括
-    // 「hello」「我要去上课了」这种明显不用查的闲聊。所以先用本地判据挡一道。
-    const kwHit = searchPattern.test(clean.text || '');
-    const askShape = /[?？]|吗|呢|什么|怎么|多少|几[个号点]|谁|哪|为什么|如何|查|搜|最新|今天|现在|价格|天气/
-      .test(clean.text || '');
-    // semanticRoute=true  → 每句都问模型（旧行为，最准，每句多 ~2 秒）
-    // semanticRoute=false → 完全不问，只按关键词
-    // 不配（默认）        → 只有「像问句/命中事实词」才问模型
-    const routeMode = webCfg.semanticRoute;
-    const wantRoute = routeMode === true
-      || (routeMode !== false && (kwHit || looksLikeFactQuestion || askShape));
-    let route = { need: false, query: '', site: '', city: '', fresh: 'normal', failed: true };
-    if (webOn && clean.text && wantRoute) {
+    const searchResult = await searchService.search({
+      text: clean.text,
+      history: () => this.recentHeard({ msg, key }).filter(line => line !== clean.text),
+      llm: this.llm, config: this.config.websearch || {}, now: this.now(),
+      trace: (stage, data) => this.logger?.info('[search] stage=' + stage + ' ' + JSON.stringify(data)),
+    });
+    if (searchResult.status !== 'skipped') {
       try {
-        route = await searchRouter.route(this.llm, clean.text, {
-          history: this.recentHeard({ msg, key }).filter((line) => line !== clean.text),
-          timeoutMs: Math.min(2000, Math.max(1, webRemaining())),
-          now: this.now(),
-        });
-      } catch { route = { need: false, query: '', site: '', failed: true }; }
-    }
-    const keywordFallback = route.failed && (searchPattern.test(clean.text || '') || looksLikeFactQuestion);
-    const shouldSearch = webOn && Boolean(clean.text) && (route.need || keywordFallback);
-    if (shouldSearch) {
-      try {
-        const isWeather = /(天气|下雨|下雪|气温|多少度|冷不冷|热不热|台风|雾霾|空气)/.test(clean.text);
-        // 模型给出的检索式已清洗；别再全局删除「吗/呢」等字符，可能属于专名。
-        let q = String(route.need && route.query ? route.query : clean.text).trim().slice(0, 100);
-        const site = /(b站|哔哩哔哩|bilibili)/i.test(clean.text) ? 'bilibili'
-          : /(微博|weibo)/i.test(clean.text) ? 'weibo'
-            : /(今日头条|头条)/.test(clean.text) ? 'toutiao' : route.site;
-        const siteDomain = { bilibili: 'bilibili.com', weibo: 'weibo.com', toutiao: 'toutiao.com' }[site];
-        if (isWeather) {
-          // 天气走专门的接口（open-meteo）：Bing 摘要常常只有「多云」没温度，还爱串城市。
-          // 城市来源顺序：模型从这句话里抄的地名 → 配置 websearch.city → 去掉天气词后的原句
-          // 交给 geocodeCity 解析 → 最后才按本机公网 IP 猜。不再用正则穷举城市。
-          let weatherCity = String(route.city || '').trim();
-          if (!weatherCity) weatherCity = String(webCfg.city || '').trim();
-          if (!weatherCity && webRemaining() > 0) {
-            const place = String(clean.text || '')
-              .replace(/(今天|明天|后天|大后天|现在|这几天|周末|早上|上午|中午|下午|晚上|夜里)/g, ' ')
-              .replace(/(天气|气温|温度|怎么样|如何|多少度|冷不冷|热不热|下雨|下雪|台风|雾霾|空气质量|要不要带伞|带伞)/g, ' ')
-              .replace(/[?？!！。，,、\s]+/g, ' ')
-              .trim();
-            if (place && place.length <= 40) {
-              try {
-                const placeHit = await websearch.geocodeCity(place, webRemaining());
-                if (placeHit && placeHit.name) weatherCity = placeHit.name;
-              } catch { /* 解析不出来就继续往下走 */ }
-            }
-          }
-          if (!weatherCity && webRemaining() > 0) {
-            try { weatherCity = await websearch.ipCity(webRemaining()); } catch { /* 忽略 */ }
-          }
-          if (weatherCity && webRemaining() > 0) {
-            try {
-              webText = await websearch.weatherText(weatherCity, { timeoutMs: webRemaining() });
-              if (webText && this.logger) this.logger.info('天气查询：' + weatherCity);
-            } catch { /* 落到搜索引擎 */ }
-          }
-          if (!webText) {
-            if (weatherCity) q = weatherCity + ' 天气';
-            else if (!/天气/.test(q)) q = q + ' 天气';
-          }
-        }
-        // 只有在问榜单/泛新闻时才取热榜；指定平台不等于要求该平台热搜。
-        // 实测：「苹果现在出到几了」加 2026 后，新文章反而被官方首页挤掉，时效性交给 dropStaleResults。
-        const wantsHotList = /(热搜|热榜|热点榜|排行榜|热门榜)/.test(clean.text)
-          || /(今天|今日|现在|刚刚|最新|最近|这两天)[^。！？!?\n]{0,8}(新闻|热点|大事|头条|发生了什么)/.test(clean.text)
-          || /^(?:今天|今日|现在|最新)?(?:有)?(?:什么)?(?:新闻|热点|大事件|头条)(?:是什么|有哪些|发生了什么|[?？])?$/.test(clean.text)
-          || /^(?:今天|今日|最近)?发生了什么[?？]?$/.test(clean.text);
-        if (!webText && wantsHotList && webRemaining() > 0) {
-          try {
-            if (site === 'bilibili') {
-              webText = await websearch.bilibiliHotText(10, webRemaining());
-            } else if (site === 'weibo') {
-              webText = await websearch.weiboHotText(10, webRemaining());
-            } else {
-              webText = await websearch.hotNewsText(8, webRemaining());
-            }
-          } catch { /* 同平台搜索兜底，不拿头条榜冒充 B站/微博榜 */ }
-        }
-        if (!webText && webRemaining() > 0) {
-          if (siteDomain) q = q + ' site:' + siteDomain;
-          // 时效由模型判（strict/normal/any），再按用户原话里的「今天/这周」收紧：
-          // 问今天的新闻时 90 天太松，会把四天前的稿子当今天的。
-          const freshAge = websearch.effectiveMaxAgeDays(
-            `${clean.text || ''} ${q}`,
-            route.failed ? undefined : route.fresh
-          );
-          webText = await websearch.searchText(q || String(clean.text).slice(0, 100), {
-            limit: 4,
-            timeoutMs: webRemaining(),
-            maxAgeDays: freshAge,
-          });
-        }
-        if (webText) this.logger && this.logger.info('联网搜索：' + String(clean.text).slice(0, 30));
-        // 联网结果只在这一轮的提示词里出现一次，下一轮就没了；
-        // 记一条账，她才能回答「你刚才查的什么」「查到了吗」。
         this.store.appendEvent(key, {
           type: 'web',
           detail: String(clean.text || '').slice(0, 60),
-          status: webText ? 'ok' : 'empty',
+          status: searchResult.status,
         });
-      } catch { /* ignore */ }
+      } catch (err) { this.logger?.warn('[search] stage=record_failed ' + describeError(err)); }
     }
     const linkText = await linkTask;
     msg.linkText = linkText;
-    // 搜到的东西必须真的送进提示词。以前只赋给局部变量、写了个日志就完事，
-    // msg 上从没挂过 webText，于是 persona 里那段「【刚联网搜到的资料】」永远是空——
-    // 表现就是「问她天气她不知道」，明明日志里已经搜到了。
-    msg.webText = webText;
-    // 空结果也要传递真实状态；不能让模型把「尝试过」说成「已查到」。
-    msg.webSearchStatus = shouldSearch ? (webText ? 'ok' : 'empty') : '';
-    // 现场问题：日志有「联网搜索」，回复却说「我记的是旧的」——光看日志分不清
-    // 资料到底有没有进提示词。这里把注入长度也记下来，一眼能对上。
-    if (webText && this.logger) this.logger.info('联网资料已注入提示词：' + String(webText).length + ' 字');
+    msg.webText = searchResult.text;
+    msg.webSearchStatus = searchResult.status === 'skipped' ? '' : searchResult.status;
+    msg.webSearchReason = searchResult.reason;
+    if (msg.webText) this.logger?.info('联网资料已注入提示词：' + msg.webText.length + ' 字');
 
     // 认真讨论（不是随口闲聊）→ 允许说长一点、有观点
     const discussPattern = /(讨论|探讨|你觉得|你怎么看|你认为|为什么|该不该|要不要|是不是应该|如何选择|怎么选|怎么看|有道理吗|值得吗|价值观|人生|意义|观点|看法|利弊|优缺点)/;
@@ -1038,7 +911,7 @@ class Bot {
     // features.staticSystem=false 时完全回到旧行为：所有内容都在 system，tail 为空串。
     const promptParts = persona.buildPromptParts({
       config: this.config,
-      msg: { ...msg, senderName: displayName, chatTitle: msg.chatTitle || session.title, isMaster, atMe, addressedToBot: Boolean(atMe || msg.replyToBot), mentionedNames, groupParticipants, linkText, discussion, groupStyleText, webText, fight, fightDirty, fightOnMaster, voiceRequested, replyToName: msg.replyToName, ts: nowMs },
+      msg: { ...msg, senderName: displayName, chatTitle: msg.chatTitle || session.title, isMaster, atMe, addressedToBot: Boolean(atMe || msg.replyToBot), mentionedNames, groupParticipants, linkText, discussion, groupStyleText, fight, fightDirty, fightOnMaster, voiceRequested, replyToName: msg.replyToName, ts: nowMs },
       profile,
       // 记忆不再进 system：人物卡/事件/摘要统一放最后一条 user 消息（mem.block）
       notes: [],
@@ -1618,7 +1491,10 @@ class Bot {
    */
   stickerFor(decision, text) {
     if (!stickers.isOn(this.config) || !this.stickerService) return null;
-    if (decision && decision.error) return null;
+    if (decision && decision.error) {
+      this.logger?.info('[sticker] stage=decision result=skip reason=reply_error');
+      return null;
+    }
     const msg = (decision && decision.msg) || {};
     if (msg.platform !== 'wechat' || !msg.chatId) return null;
     let category = decision && decision.stickerCategory;
@@ -1644,12 +1520,15 @@ class Bot {
           || stickers.defaultCategory(this.config);
       }
     }
-    if (!category) return null;
+    if (!category) {
+      this.logger?.info('[sticker] stage=decision result=skip reason=no_category_or_demand');
+      return null;
+    }
     if (decision) decision.stickerCategory = category;
     try {
       return this.stickerService.plan(msg, category);
     } catch (err) {
-      if (this.logger) this.logger.warn('挑表情包失败：' + (err && err.message ? err.message : err));
+      if (this.logger) this.logger.warn('[sticker] stage=plan result=failed ' + describeError(err));
       return null;
     }
   }
@@ -1943,6 +1822,7 @@ class Bot {
       return { action: 'ignore', reason: 'error' };
     }
     if (decision.action === 'ignore') {
+      this.logger?.info('[pipeline] result=skip reason=' + String(decision.reason || 'unspecified') + ' search=not_reached delivery=not_reached');
       try { this.store.checkpoint(decision.key); } catch { /* 忽略的消息也要留断点 */ }
       return { action: 'ignore', reason: decision.reason };
     }
@@ -2208,4 +2088,3 @@ class Bot {
 }
 
 module.exports = { Bot, extractCommand, COMMAND_HELP, isContextLengthError };
-
