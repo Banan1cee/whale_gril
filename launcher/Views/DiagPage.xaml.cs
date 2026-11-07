@@ -39,6 +39,7 @@ namespace WhaleLauncher.Views
         public DiagPage(RuntimeSupervisor sup)
         {
             InitializeComponent();
+            SmoothScroll.Attach(Logs);
             _sup = sup;
             CmbTail.SelectedIndex = 0;
 
@@ -320,9 +321,10 @@ namespace WhaleLauncher.Views
             if (sig == _lastLogSig && Logs.ItemsSource != null) return;
             _lastLogSig = sig;
 
+            var follow = SmoothScroll.AtEnd(Logs);
             Logs.ItemsSource = filtered;
-            if (filtered.Count > 0 && filtered.Count != _lastCount)
-                Logs.ScrollIntoView(filtered[filtered.Count - 1]);
+            if (filtered.Count > 0 && follow)
+                SmoothScroll.End(Logs);
             _lastCount = filtered.Count;
         }
 

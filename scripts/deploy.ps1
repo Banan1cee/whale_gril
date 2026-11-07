@@ -5,7 +5,7 @@
 或者把 data\、config.json 一起覆盖 —— 这两件事都真实发生过，代价是配置和聊天记忆丢了。
 
 它做的事：
-  1. robocopy 只同步代码，**永不**覆盖 data\、config.json、runtime\、日志、图片
+  1. robocopy 只同步代码与随包预设，**永不**覆盖 data\、config.json、runtime\、日志、用户图片
   2. 逐文件比对 MD5，确认关键文件真的过去了（不一致直接报错）
   3. -Restart 时重启服务（桥接归启动器管；命令行手动起桥接见 README「没有图形入口时怎么办」）
 
@@ -31,11 +31,15 @@ if ($Restart) {
 Write-Host "同步：$src  ->  $Target" -ForegroundColor Cyan
 
 # 1) 只同步代码
-$exclDirs = @('data', 'runtime', 'wechatauto_db', 'wechatauto_logs', '__pycache__', 'backup', '.tools', 'artifacts', 'bin', 'obj', 'publish', '.git', 'whale-girl-3.0-full')
+$exclDirs = @('data', 'runtime', 'wechatauto_db', 'wechatauto_logs', '__pycache__', 'backup', '.tools', 'artifacts', 'bin', 'obj', 'publish', '.git', 'whale-girl-3.0-full', '鲸鲸表情包')
 $exclFiles = @('config.json', '*.log', '*.png', '*.jpg', '*.bak-*')
 $rcArgs = @($src, $Target, '/E', '/NFL', '/NDL', '/NJH', '/NJS', '/NP', '/XD') + $exclDirs + @('/XF') + $exclFiles
 robocopy @rcArgs | Out-Null
 if ($LASTEXITCODE -ge 8) { throw "robocopy 失败，退出码 $LASTEXITCODE" }
+
+# 预设只同步到 assets；用户 data/stickers 中的修改不受部署影响。
+robocopy (Join-Path $src 'assets\stickers') (Join-Path $Target 'assets\stickers') /E /NFL /NDL /NJH /NJS /NP /R:1 /W:1 | Out-Null
+if ($LASTEXITCODE -ge 8) { throw "预设表情包复制失败，退出码 $LASTEXITCODE" }
 
 # 2) 校验关键文件（防止「改了但没过去」）
 $must = @(
@@ -43,6 +47,9 @@ $must = @(
   'src/pipeline/chat.js', 'src/adapters/vision.js', 'src/core/master.js', 'src/persona/index.js',
   'src/app.js', 'bridge/engine.py', 'scripts/tools/uia-diag.py', 'scripts/release-check.js'
 )
+$presetManifest = Get-Content (Join-Path $src 'assets\stickers\manifest.json') -Encoding UTF8 -Raw | ConvertFrom-Json
+$must += 'assets\stickers\manifest.json'
+$must += @($presetManifest.files | ForEach-Object { 'assets\stickers\' + $_.file.Replace('/', '\') })
 $bad = @()
 foreach ($f in $must) {
   $a = Join-Path $src $f; $b = Join-Path $Target $f

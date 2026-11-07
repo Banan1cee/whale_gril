@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 420" fill="none">
+  <defs>
+    <linearGradient id="ceramic" x1="260" y1="115" x2="340" y2="300" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#f1fffc"/><stop offset=".28" stop-color="#a3e0dc"/><stop offset=".58" stop-color="#4d9fa8"/><stop offset="1" stop-color="#173e59"/>
+    </linearGradient>
+    <linearGradient id="pearl" x1="200" y1="200" x2="290" y2="300" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#eafbf6"/><stop offset=".6" stop-color="#aacfd0"/><stop offset="1" stop-color="#44818d"/>
+    </linearGradient>
+    <linearGradient id="flipper" x1="270" y1="218" x2="337" y2="337" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#c3eae1"/><stop offset=".45" stop-color="#6cb3b5"/><stop offset="1" stop-color="#20546b"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="120" y1="125" x2="550" y2="250" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#effffb"/><stop offset=".5" stop-color="#e3fff8" stop-opacity=".55"/><stop offset="1" stop-color="#b2f5eb" stop-opacity="0"/>
+    </linearGradient>
+    <radialGradient id="highlight"><stop stop-color="#fff" stop-opacity=".55"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient>
+    <filter id="depth" x="-20%" y="-30%" width="150%" height="170%"><feDropShadow dx="0" dy="19" stdDeviation="17" flood-color="#174e62" flood-opacity=".16"/></filter>
+  </defs>
+  <g filter="url(#depth)">
+    <path d="M111 224c-17-18-16-46 6-68 37-38 102-52 171-35 56 14 86 39 121 53 38 16 64 5 91-31-25-4-47-19-53-47 31-2 55 9 69 27 7-33 27-53 58-58 7 32-8 61-33 78-20 82-79 130-168 145-110 19-207-3-262-64Z" fill="url(#ceramic)"/>
+    <path d="M105 205c39 34 106 38 170 31 63-6 104-1 149-14 35-10 66-28 88-53-28 66-78 106-139 119-109 19-207-3-262-64-5-6-7-12-6-19Z" fill="url(#pearl)"/>
+    <path d="M302 149c-4-17 3-32 15-44 5 24 19 39 39 51" fill="#70b9bd"/>
+    <path d="M260 225c15-2 33 7 40 23 12 30 29 53 59 83-46-3-84-22-109-57-16-21-13-44 10-49Z" fill="url(#flipper)"/>
+    <path d="M116 156c37-38 103-51 171-35 55 13 85 38 122 53 38 16 64 4 91-31" stroke="url(#rim)" stroke-width="2" stroke-linecap="round"/>
+    <path d="M118 217c19 9 41 14 64 15" stroke="#397a86" stroke-width="1.6" stroke-linecap="round"/>
+    <path d="M144 238c17 15 39 24 63 30m-43-23c15 14 34 22 54 27m-33-22c12 11 27 20 44 24" stroke="#619b9e" stroke-opacity=".35" stroke-width="1.2" stroke-linecap="round"/>
+    <ellipse cx="198" cy="211" rx="4.5" ry="5" fill="#153b49"/><circle cx="197" cy="209.5" r="1.3" fill="#f2fffc"/>
+    <ellipse cx="232" cy="149" rx="111" ry="35" transform="rotate(5 232 149)" fill="url(#highlight)"/>
+    <path d="M136 157c33-23 77-30 114-26" stroke="#fff" stroke-opacity=".35" stroke-width="2" stroke-linecap="round"/>
+  </g>
+</svg>

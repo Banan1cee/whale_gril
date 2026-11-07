@@ -16,51 +16,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const root = path.resolve(__dirname, '..');
-const bot = fs.readFileSync(path.join(root, 'src', 'pipeline', 'chat.js'), 'utf8');
-const persona = fs.readFileSync(path.join(root, 'src', 'persona', 'index.js'), 'utf8');
-const websearch = fs.readFileSync(path.join(root, 'src', 'adapters', 'websearch.js'), 'utf8');
 const config = require('../src/infra/config');
 
-test('搜到的资料真的挂到 msg 上（否则 persona 那段永远是空）', () => {
-  // persona 读的是 msg.webText
-  assert.match(persona, /msg\.webText/, 'persona 从 msg.webText 取资料');
-  // bot 必须真的写回去
-  assert.match(bot, /msg\.webText\s*=\s*webText/, 'bot 必须把 webText 挂到 msg 上');
-  // 不能只是赋值给局部变量就完事
-  const idx = bot.indexOf('msg.webText = webText');
-  assert.ok(idx > 0, '找不到赋值语句');
-  assert.ok(
-    bot.indexOf('let webText') < idx,
-    'webText 先声明、后挂到 msg 上'
-  );
-});
-
-test('天气走专门的接口，不再只靠搜索引擎摘要', () => {
-  assert.match(websearch, /open-meteo\.com/, '要接 open-meteo');
-  assert.match(websearch, /async function weatherText/, '要有 weatherText');
-  assert.match(websearch, /async function geocodeCity/, '要先地名转经纬度');
-  assert.match(websearch, /temperature_2m/, '要取实际温度');
-  assert.match(websearch, /apparent_temperature/, '要取体感温度');
-  assert.match(websearch, /precipitation_probability_max/, '要取降水概率');
-  // 天气代码要能翻成人话，不能把数字丢给模型
-  assert.match(websearch, /function wmoText/, '要有天气代码翻译');
-  assert.match(websearch, /雷阵雨/, '常见天气要能说清');
-  // 导出了才能用
-  assert.match(websearch, /weatherText,\s*\n?\s*wmoText/, 'weatherText 要导出');
-});
-
-test('bot 里天气优先走 weatherText，失败才退回搜索', () => {
-  assert.match(bot, /websearch\.weatherText\(/, '要调用 weatherText');
-  const wIdx = bot.indexOf('websearch.weatherText(');
-  const sIdx = bot.indexOf('websearch.searchText(');
-  assert.ok(wIdx > 0 && sIdx > wIdx, 'weatherText 要在 searchText 之前尝试');
-  // 城市从话里认，认不出用配置
-  assert.match(bot, /webCfg\.city/, '要读配置里的城市');
-  assert.match(bot, /weatherCity/, '要有「这次查哪个城市」的变量');
-  // 话里没说、配置也没填 → 按本机 IP 猜，别再搜到随机城市
-  assert.match(bot, /websearch\.ipCity\(/, '要用 IP 定位兜底');
-  assert.match(bot, /本机公网 IP/, '注释要说清为什么需要 IP 兜底');
-});
+// 资料注入、天气优先和回退通过 search-bot.test.js 的真实 decide 路径验证，
+// 不再绑定聊天模块内部变量名，避免拆服务后测试只验证代码长什么样。
 
 test('联网有开关，配置项齐全', () => {
   const ds = config.DEFAULT_CONFIG.websearch;
@@ -68,7 +27,6 @@ test('联网有开关，配置项齐全', () => {
   assert.equal(ds.enabled, true, '默认开着');
   assert.equal(typeof ds.city, 'string', 'city 是字符串（留空也行）');
   assert.ok(Number(ds.timeoutMs) > 0, '要有超时');
-  assert.match(bot, /webCfg\.enabled !== false/, 'bot 要尊重 enabled 开关');
   // 示例配置也要有，别让新用户漏掉
   const ex = JSON.parse(fs.readFileSync(path.join(root, 'config.example.json'), 'utf8'));
   assert.ok(ex.websearch, 'config.example.json 要有 websearch 段');
@@ -92,6 +50,7 @@ test('没配城市时按 IP 猜，失败可恢复且成功缓存（离线 transp
   let requests = 0;
   t.mock.method(https, 'get', (url, opts, callback) => {
     const req = new EventEmitter();
+    req.destroy = () => {};
     const attempt = ++requests;
     queueMicrotask(() => {
       if (attempt === 1) return req.emit('error', new Error('offline fixture'));

@@ -8,7 +8,7 @@ const assert = require('node:assert/strict');
 const { parseRoute, route, systemFor } = require('../src/adapters/searchRouter');
 
 test('路由提示词带上真实日期：判「今天/最新」不能靠训练数据', () => {
-  const system = systemFor(new Date(2026, 10, 3, 9, 5, 0));
+  const system = systemFor(new Date('2026-11-03T09:05:00+08:00'));
   assert.match(system, /现在是 2026-11-03 周二 09:05（北京时间）/);
   assert.match(system, /以这个时间为基准/);
 });
@@ -21,7 +21,7 @@ test('route 把当前时间传给模型（可注入 now，便于测试）', asyn
       return '{"need":false}';
     },
   };
-  await route(llm, '今天有什么新闻', { now: new Date(2026, 10, 3, 10, 30, 0) });
+  await route(llm, '今天有什么新闻', { now: new Date('2026-11-03T10:30:00+08:00') });
   assert.match(seen, /2026-11-03 周二 10:30/);
 });
 

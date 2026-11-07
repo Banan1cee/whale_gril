@@ -11,7 +11,7 @@
  */
 
 const SCHEMA_HINT = `只输出 JSON，不要解释、不要代码块围栏。格式：
-{"need":true,"query":"简短检索词（保留完整专名和型号）","site":"bilibili|weibo|toutiao|","city":"地名原文或空","fresh":"strict|normal|any"}
+{"need":true,"kind":"web|weather|hotlist","query":"简短检索词（保留完整专名和型号）","site":"bilibili|weibo|toutiao|","city":"地名原文或空","fresh":"strict|normal|any","timeRange":"current|today|tomorrow|week|history|future|any"}
 或
 {"need":false}`;
 
@@ -33,6 +33,10 @@ const SYSTEM = `你是一个检索路由器。判断用户这句话是否需要�
 - 只是在复述或回应上一句
 
 site 字段：明确提到 B站/哔哩哔哩 用 bilibili；明确提到微博 用 weibo；不指定留空。
+
+kind 字段：普通具体事实用 web；今明两天常规天气用 weather；要求整个平台榜单或泛热点新闻用 hotlist。
+具体人物/产品/事件的新闻用 web，不要用整个平台热榜替代。空气质量、台风路径、历史/远期天气用 web。
+timeRange 字段：按用户要求填 current（现在）、today、tomorrow、week、history、future 或 any（没要求）。
 
 city 字段：这句话提到地点就把地名原文抄进 city（保留用户写法，不翻译）；没提就留空。
 例如「明天上海会下雨吗」→ city 填「上海」；「明天会下雨吗」→ city 留空。
@@ -56,12 +60,16 @@ query 字段：写成「能直接粘进搜索引擎」的词。
 ${SCHEMA_HINT}`;
 
 const WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+const { remaining, errorInfo, report, searchError } = require('./search/transport');
 
 /** 把「现在是什么时间」告诉路由器：不然它判「今天/最新」只能凭训练数据。 */
 function systemFor(now = new Date()) {
-  const p = (n) => String(n).padStart(2, '0');
   const day = now instanceof Date && !Number.isNaN(now.getTime()) ? now : new Date();
-  const stamp = `${day.getFullYear()}-${p(day.getMonth() + 1)}-${p(day.getDate())} ${WEEKDAYS[day.getDay()]} ${p(day.getHours())}:${p(day.getMinutes())}`;
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Shanghai',
+    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+    .formatToParts(day).map(x => [x.type, x.value]));
+  const weekday = new Date(Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day))).getUTCDay();
+  const stamp = `${parts.year}-${parts.month}-${parts.day} ${WEEKDAYS[weekday]} ${parts.hour}:${parts.minute}`;
   return `${SYSTEM}
 
 现在是 ${stamp}（北京时间）。判断「今天 / 最新 / 这周」时以这个时间为基准；检索词里不要自己加年份，除非用户原话提到了。`;
@@ -89,46 +97,63 @@ function parseRoute(raw) {
     ? String(obj.fresh).trim() : 'normal';
   if (!need) return { need: false, query: '', site: '', city, fresh };
   if (!query) return null;
-  return { need: true, query, site, city, fresh };
+  const intent = {};
+  if (obj.kind != null) {
+    if (!['web', 'weather', 'hotlist'].includes(obj.kind)) return null;
+    intent.kind = obj.kind;
+  }
+  if (obj.timeRange != null) {
+    if (!['current', 'today', 'tomorrow', 'week', 'history', 'future', 'any'].includes(obj.timeRange)) return null;
+    intent.timeRange = obj.timeRange;
+  }
+  return { need: true, query, site, city, fresh, ...intent };
 }
 
 /**
  * @param {{ complete: Function }} llm
  * @param {string} text 用户这一句
- * @param {{history?: string[], timeoutMs?: number, now?: Date}} [opts]
- * @returns {Promise<{need:boolean,query:string,site:string,failed?:boolean}>}
+ * @param {{history?: string[], timeoutMs?: number, deadline?: number, signal?: AbortSignal, trace?: Function, now?: Date}} [opts]
+ * @returns {Promise<{need:boolean,query:string,site:string,city:string,fresh:string,kind?:string,timeRange?:string,failed?:boolean}>}
  */
 async function route(llm, text, opts = {}) {
   const said = String(text || '').trim().slice(0, 200);
   if (!said) return { need: false, query: '', site: '', city: '', fresh: 'normal' };
-  if (!llm || typeof llm.complete !== 'function') return { need: false, query: '', site: '', city: '', fresh: 'normal', failed: true };
+  if (!llm || typeof llm.complete !== 'function') {
+    report(opts.trace, 'route_failed', errorInfo(searchError('router_unavailable')));
+    return { need: false, query: '', site: '', city: '', fresh: 'normal', failed: true };
+  }
   const history = (opts.history || []).slice(-4).join('\n') || '（无）';
-  let timer;
+  let timer, abort;
   const controller = new AbortController();
   try {
     // complete 自身可能重试多次；辅助路由不能拖住真正的回复。
-    const timeoutMs = Math.max(1, Number(opts.timeoutMs) || 2000);
+    const timeoutMs = remaining({ ...opts, timeoutMs: opts.timeoutMs ?? 2000 });
+    if (opts.signal?.aborted || timeoutMs <= 0) throw searchError(opts.signal?.aborted ? 'aborted' : 'deadline_exceeded');
     const raw = await Promise.race([
       Promise.resolve().then(() => llm.complete({
         system: systemFor(opts.now),
         turns: [{ role: 'user', content: `最近的对话：\n${history}\n\n这句话：${said}` }],
-        maxTokens: 160,
+        maxTokens: 240,
         signal: controller.signal,
       })),
       new Promise((_, reject) => {
+        abort = () => { controller.abort(); reject(searchError('aborted')); };
+        opts.signal?.addEventListener('abort', abort, { once: true });
         timer = setTimeout(() => {
           controller.abort();
-          reject(new Error('route timeout'));
+          reject(searchError('deadline_exceeded'));
         }, timeoutMs);
       }),
     ]);
     const parsed = parseRoute(raw);
-    if (!parsed) return { need: false, query: '', site: '', city: '', fresh: 'normal', failed: true };
+    if (!parsed) throw searchError('invalid_route');
     return parsed;
-  } catch {
+  } catch (err) {
+    report(opts.trace, 'route_failed', errorInfo(err));
     return { need: false, query: '', site: '', city: '', fresh: 'normal', failed: true };
   } finally {
     clearTimeout(timer);
+    if (abort) opts.signal?.removeEventListener('abort', abort);
   }
 }
 

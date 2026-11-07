@@ -1,0 +1,41 @@
+name: pages
+
+# 静态官网：把 website/ 作为 GitHub Pages 站点发布。
+# GitHub Pages 的「Deploy from a branch」只支持仓库根目录或 /docs，
+# 不能直接选 website/，所以这里用官方 Actions 上传 artifact。
+# 使用前在仓库 Settings → Pages → Build and deployment 里把 Source 设为 GitHub Actions。
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'website/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: website
+
+      - id: deployment
+        uses: actions/deploy-pages@v4

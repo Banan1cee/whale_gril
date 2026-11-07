@@ -37,7 +37,7 @@ function startFake(handler) {
 }
 
 test('预设列表齐全，本地免 Key 规则清晰', () => {
-  for (const key of ['deepseek', 'zhipu', 'siliconflow', 'qwen', 'ollama', 'custom']) {
+  for (const key of ['deepseek', 'zhipu', 'siliconflow', 'qwen', 'doubao', 'ollama', 'custom']) {
     assert.ok(PROVIDERS[key], '缺少预设 ' + key);
     assert.ok(PROVIDERS[key].label);
   }
@@ -85,6 +85,9 @@ test('各家预设标出能看图的聊天模型（按官方文档，别瞎标�
   assert.ok(!PROVIDERS.qwen.visionModels.includes('qwen3.8-flash'), 'qwen3.8-flash 只在文本生成列表里');
   assert.ok(PROVIDERS.siliconflow.visionModels.includes('Qwen/Qwen3.8-27B'), '官方模型页写明是原生视觉语言模型');
   assert.ok(PROVIDERS.opencode.visionModels.includes('kimi-k3.1-pro'), 'Kimi K3.1 Pro 支持视觉输入');
+  assert.ok(PROVIDERS.doubao.visionModels.includes('doubao-seed-1-8-251228'), '豆包 Seed 1.8 支持多模态理解');
+  assert.ok(PROVIDERS.doubao.visionModels.includes('doubao-seed-1-6-vision-250815'), '豆包 1.6 视觉模型也能看图');
+  assert.equal(PROVIDERS.doubao.baseUrl, 'https://ark.cn-beijing.volces.com/api/v3');
 });
 
 test('Ollama 预设：不需要 Key，也不算演示模式', () => {
