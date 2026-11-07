@@ -334,9 +334,13 @@ namespace WhaleLauncher
             }
         }
 
-        public async Task StartAllAsync()
+        public async Task StartAllAsync(bool clearRestartHistory = true)
         {
-            lock (_processLock) _bridgeRestarts.Clear();   // 用户手动启动 = 重新计数
+            // 主窗口原来不清零，诊断入口原来清零；复用启动顺序不能顺带改变重启刹车。
+            if (clearRestartHistory)
+            {
+                lock (_processLock) _bridgeRestarts.Clear();
+            }
             StartNode();
             if (await WaitForNodeAsync()) StartBridge();
         }

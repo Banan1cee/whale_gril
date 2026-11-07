@@ -1,6 +1,7 @@
 import importlib.util
 import json
 from pathlib import Path
+import sys
 import tempfile
 import threading
 import ast
@@ -102,8 +103,10 @@ class LatencyTests(unittest.TestCase):
             self.assertEqual(v.synth_timeout({'SynthTimeoutSec':value}),expected)
 
     def test_engine_acquires_lock_only_after_synthesis(self):
-        tree=ast.parse((ROOT/'bridge'/'engine.py').read_text(encoding='utf-8-sig'))
-        fn=next(n for n in ast.walk(tree) if isinstance(n,ast.FunctionDef) and n.name=='send_voice_reply')
+        sys.path.insert(0, str(ROOT / 'tests'))
+        from bridge_ast import _TREES
+        fn=next(n for _p, tree in _TREES for n in ast.walk(tree)
+                if isinstance(n,ast.FunctionDef) and n.name=='send_voice_reply')
         self.assertFalse(any(isinstance(n,ast.With) for n in fn.body))
         call=fn.body[-1].value
         self.assertTrue(any(k.arg=='send_lock' for k in call.keywords))

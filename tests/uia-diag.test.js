@@ -11,7 +11,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const root = path.resolve(__dirname, '..');
-const bridge = fs.readFileSync(path.join(root, 'bridge', 'engine.py'), 'utf8');
+const bridge = require('./helpers/bridge-source');
 const diagPath = path.join(root, 'scripts', 'tools', 'uia-diag.py');
 
 test('桥接预热失败时会解释属于哪一类原因', () => {

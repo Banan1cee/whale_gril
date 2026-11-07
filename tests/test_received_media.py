@@ -22,16 +22,17 @@ except ImportError:
     HAS_CRYPTO = False
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'tests'))
 sys.path.insert(0, str(ROOT / 'bridge'))
 import emoji_vision
 from image_cache import bind_target_probe, V2_MAGIC
 
 
+from bridge_ast import load_function  # noqa: E402
+
+
 def nested(name, env):
-    tree = ast.parse((ROOT / 'bridge/engine.py').read_text(encoding='utf-8-sig'))
-    node = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == name)
-    exec(compile(ast.Module(body=[node], type_ignores=[]), '<bridge-test>', 'exec'), env)
-    return env[name]
+    return load_function(name, env)
 
 
 class ReceivedMediaTests(unittest.TestCase):

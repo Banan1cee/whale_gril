@@ -60,7 +60,7 @@ test('源码与调试台里不再提「主动分享 / 消息汇总」', () => {
 });
 
 test('桥接不再留 digest worker 和它的死参数', () => {
-  const engine = read('bridge/engine.py');
+  const engine = require('./helpers/bridge-source');
   assert.doesNotMatch(engine, /DIGEST_WORKER/, 'DIGEST_WORKER 是永远 None 的死变量');
   assert.doesNotMatch(engine, /send_guard/, 'send_guard 没有任何调用方传值');
   assert.doesNotMatch(engine, /digest_worker/, '桥接没有 digest worker，注释别再提');

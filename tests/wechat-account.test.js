@@ -136,7 +136,7 @@ test('心跳带上账号 → /api/status 里能读到「桥接当前在用哪个
 });
 
 test('切号后桥接没重启成功时，发送闸要拦住（别从旧号发出去）', () => {
-  const bridge = fs.readFileSync(path.join(__dirname, '..', 'bridge', 'engine.py'), 'utf8');
+  const bridge = require('./helpers/bridge-source');
   assert.match(bridge, /def configured_account_dir/, '要能读 config 里现在钉的是哪个号');
   const start = bridge.indexOf('def account_send_allowed');
   assert.ok(start > 0, '缺 account_send_allowed');
@@ -150,16 +150,16 @@ test('切号后桥接没重启成功时，发送闸要拦住（别从旧号发�
 });
 
 test('桥接源码里必须留着「钉账号」的关键代码（别被后来的改动弄丢）', () => {
-  const bridge = fs.readFileSync(path.join(__dirname, '..', 'bridge', 'engine.py'), 'utf8');
+  const bridge = require('./helpers/bridge-source');
   assert.match(bridge, /--list-accounts/, '要有给网页列账号的一次性模式');
   assert.match(bridge, /def resolve_account_dir/, '要能把目录名/wxid/昵称解析成账号目录');
   assert.match(bridge, /db\.account != acct/, '建库后要断言没被库偷偷换号');
   assert.match(bridge, /def ensure_account_window/, '发送前要确认窗口还活着');
   assert.match(bridge, /def account_send_allowed/, '要有统一的发送闸');
-  assert.match(bridge, /account_send_allowed\("UIA"\)/, 'UIA 发送要走账号闸');
-  assert.match(bridge, /account_send_allowed\("键盘通道"\)/, '键盘兜底也要走账号闸');
+  assert.match(bridge, /account_send_allowed\(['"]UIA['"]\)/, 'UIA 发送要走账号闸');
+  assert.match(bridge, /account_send_allowed\(['"]键盘通道['"]\)/, '键盘兜底也要走账号闸');
   assert.match(bridge, /os\._exit\(7\)/, '账号设置变了要 exit 7，交给启动器重新拉起');
-  assert.match(bridge, /"account": db\.account/, '心跳要上报当前账号');
+  assert.match(bridge, /['"]account['"]: db\.account/, '心跳要上报当前账号');
 
   const compat = fs.readFileSync(path.join(__dirname, '..', 'examples', 'uia_compat.py'), 'utf8');
   assert.match(compat, /def pin_window/, 'uia_compat 要能把引擎钉在指定窗口');

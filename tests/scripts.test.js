@@ -88,11 +88,11 @@ test('维护文档与 bug 台账在', () => {
   assert.match(bugs, /回归测试/, '每个 bug 要有回归测试列');
 });
 test('桥接会定时发心跳，网页才看得到「桥接在线 / UIA 不可用」', () => {
-  const bridge = fs.readFileSync(path.join(root, 'bridge', 'engine.py'), 'utf8');
+  const bridge = require('./helpers/bridge-source');
   assert.match(bridge, /def bridge_heartbeat/);
   assert.match(bridge, /\/api\/bridge\/heartbeat/);
-  assert.match(bridge, /UIA_CACHE\.get\("u"\)/);
-  assert.match(bridge, /"rest": resting/, 'rest 字段还要继续上报（前端在读）');
+  assert.match(bridge, /UIA_CACHE(?:\.get\(['"]u['"]\)|\[['"]u['"]\])/);
+  assert.match(bridge, /['"]rest['"]: resting/, 'rest 字段还要继续上报（前端在读）');
   assert.match(bridge, /resting = False/, '休息模式已删除，字段保留但恒为 false');
   assert.doesNotMatch(bridge, /def game_running\(/, '「打游戏就休息」已删除');
   assert.match(bridge, /time\.sleep\(20\)/, '20 秒一次');
@@ -165,29 +165,29 @@ test('发布自检会扫个人信息（密钥 / 真实 wxid / 群号 / 手机号
 });
 
 test('引用回复默认关闭（开着的话每条要多走一遍 UI，回复明显变慢）', () => {
-  const bridge = fs.readFileSync(path.join(root, 'bridge', 'engine.py'), 'utf8');
-  assert.match(bridge, /QUOTE_REPLY = bool\(_wechat\.get\("quoteReply", False\)\)/, '启动读配置时默认必须是 False');
-  assert.match(bridge, /QUOTE_REPLY = bool\(w\.get\("quoteReply", False\)\)/, '热重载时默认也必须是 False');
-  assert.doesNotMatch(bridge, /get\("quoteReply", True\)/, '不能有人再写回 True');
+  const bridge = require('./helpers/bridge-source');
+  assert.match(bridge, /QUOTE_REPLY = _as_bool\(_wechat\.get\(['"]quoteReply['"], False\), False\)/, '启动读配置时默认必须是 False');
+  assert.match(bridge, /QUOTE_REPLY = _as_bool\(w\.get\(['"]quoteReply['"], False\), False\)/, '热重载时默认也必须是 False');
+  assert.doesNotMatch(bridge, /get\(['"]quoteReply['"], True\)/, '不能有人再写回 True');
   const example = JSON.parse(fs.readFileSync(path.join(root, 'config.example.json'), 'utf8').replace(/^\uFEFF/, ''));
   assert.equal(example.wechat.quoteReply, false, 'config.example 里也应该是 false');
 });
 
 test('桥接启动失败要区分「缺 VC++ 运行库」和「缺 pip 包」', () => {
-  const bridge = fs.readFileSync(path.join(root, 'bridge', 'engine.py'), 'utf8');
+  const bridge = require('./helpers/bridge-source');
   assert.match(bridge, /_dll_issue/, '要有 DLL 判定');
   assert.match(bridge, /vc_redist/, '缺 DLL 时要引导装 VC++ 运行库');
   assert.match(bridge, /Windows Server 默认不装 MFC/, '要点明 Server 的情况');
 });
 
 test('打开微信数据库要有超时，不能一直卡着不监听', () => {
-  const bridge = fs.readFileSync(path.join(root, 'bridge', 'engine.py'), 'utf8');
+  const bridge = require('./helpers/bridge-source');
   assert.match(bridge, /_open_db_with_timeout/, 'DB 初始化要包超时');
   assert.match(bridge, /卡住超过 90 秒/, '超时要明确告诉用户');
 });
 
 test('桥接起来后写就绪文件（用来判断「起来了但没监听」）', () => {
-  const bridge = fs.readFileSync(path.join(root, 'bridge', 'engine.py'), 'utf8');
+  const bridge = require('./helpers/bridge-source');
   assert.match(bridge, /bridge-ready\.json/);
 });
 
@@ -217,12 +217,12 @@ test('README 不再引导用户去点脚本文件（入口只有 WhaleLauncher.e
 test('服务把实际端口写盘，桥接优先读（换端口不至于满屏积极拒绝）', () => {
   const server = fs.readFileSync(path.join(root, 'server.js'), 'utf8');
   assert.match(server, /server-port\.txt/, '服务要写实际端口');
-  const bridge = fs.readFileSync(path.join(root, 'bridge', 'engine.py'), 'utf8');
-  assert.match(bridge, /server-port\.txt/, '桥接要优先读它');
+  const bridgeConfig = fs.readFileSync(path.join(root, 'bridge', 'config.py'), 'utf8');
+  assert.match(bridgeConfig, /server-port\.txt/, '桥接要优先读它');
 });
 
 test('桥接启动前等服务就绪，连接中断要节流并给明确提示', () => {
-  const bridge = fs.readFileSync(path.join(root, 'bridge', 'engine.py'), 'utf8');
+  const bridge = require('./helpers/bridge-source');
   assert.match(bridge, /def wait_for_server/, '要有等待服务就绪');
   assert.match(bridge, /wait_for_server\(bot_url/, '监听前要调用');
   assert.match(bridge, /conn-refused/, '积极拒绝要走节流');

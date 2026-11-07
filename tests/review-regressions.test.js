@@ -50,7 +50,22 @@ test('启动器管道正常关闭内核并保存刚收到的会话', { timeout: 
   let output = '';
   child.stdout.on('data', b => { output += b; });
   child.stderr.on('data', b => { output += b; });
-  t.after(() => { if (child.exitCode === null) child.kill(); fs.rmSync(root, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 }); });
+  t.after(async () => {
+    if (child.exitCode === null) {
+      child.kill();
+      await once(child, 'exit').catch(() => {});
+    }
+    // Windows 上子进程退出后目录句柄可能晚一拍释放；直接 rm 会偶发 EPERM。
+    for (let i = 0; i < 10; i += 1) {
+      try {
+        fs.rmSync(root, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
+        break;
+      } catch (err) {
+        if (i === 9) throw err;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    }
+  });
   const portFile = path.join(root, 'data', 'server-port.txt');
   for (let i = 0; i < 150 && !fs.existsSync(portFile); i++) {
     assert.equal(child.exitCode, null, output);

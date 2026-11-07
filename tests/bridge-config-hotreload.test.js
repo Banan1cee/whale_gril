@@ -13,7 +13,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const root = path.resolve(__dirname, '..');
-const bridge = fs.readFileSync(path.join(root, 'bridge', 'engine.py'), 'utf8');
+const bridge = require('./helpers/bridge-source');
 
 test('桥接会热更新配置（改完不用重启）', () => {
   assert.match(bridge, /def reload_config/, '要有热更新函数');

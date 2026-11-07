@@ -109,16 +109,18 @@ class LoopTests(unittest.TestCase):
 
 class WiringTests(unittest.TestCase):
     def test_engine_imports_starts_and_retains_runner(self):
-        tree = ast.parse((ROOT / 'bridge/engine.py').read_text(encoding='utf-8-sig'))
+        app = ast.parse((ROOT / 'bridge/app.py').read_text(encoding='utf-8-sig'))
+        loop = ast.parse((ROOT / 'bridge/loop_mixin.py').read_text(encoding='utf-8-sig'))
         self.assertTrue(any(isinstance(n, ast.ImportFrom) and n.module == 'reminder_watch'
-                            and any(a.name == 'start_reminder_watch' for a in n.names)
-                            for n in ast.walk(tree)))
-        assignments = [n for n in ast.walk(tree) if isinstance(n, ast.Assign)
+                            and any(a.name == 'ReminderRunner' for a in n.names)
+                            for n in ast.walk(loop)))
+        assignments = [n for n in ast.walk(app) if isinstance(n, ast.Assign)
                        and isinstance(n.value, ast.Call)
-                       and isinstance(n.value.func, ast.Name)
-                       and n.value.func.id == 'start_reminder_watch']
+                       and isinstance(n.value.func, ast.Attribute)
+                       and n.value.func.attr == 'start_reminder_watch']
         self.assertEqual(len(assignments), 1)
-        self.assertEqual(assignments[0].targets[0].id, 'REMINDER_RUNNER')
+        self.assertIsInstance(assignments[0].targets[0], ast.Attribute)
+        self.assertEqual(assignments[0].targets[0].attr, 'REMINDER_RUNNER')
 
     def test_real_adapter_fetches_with_token_sends_target_and_acks(self):
         http = Mock()

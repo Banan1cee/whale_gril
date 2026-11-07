@@ -12,6 +12,8 @@ import sys
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT / 'tests') not in sys.path:
+    sys.path.insert(0, str(ROOT / 'tests'))
 if str(ROOT / 'bridge') not in sys.path:
     sys.path.insert(0, str(ROOT / 'bridge'))
 
@@ -30,25 +32,21 @@ def _module_regex(name):
     raise AssertionError('engine.py 里找不到 %s' % name)
 
 
-def _bridge_function(name, environment):
-    """把 engine.py 里的嵌套函数单独拿出来跑（和 test_sticker_transport 一个路子）。"""
-    tree = ast.parse(ENGINE.read_text(encoding='utf-8'))
-    definitions = [node for node in ast.walk(tree)
-                   if isinstance(node, ast.FunctionDef) and node.name == name]
-    if not definitions:
-        raise AssertionError('bridge function not found: %s' % name)
-    exec(compile(ast.fix_missing_locations(
-        ast.Module(body=definitions, type_ignores=[])), '<mock-only bridge function>', 'exec'), environment)
-    return environment[name]
+from bridge_ast import load_function, _TREES  # noqa: E402
 
+
+def _bridge_function(name, environment):
+    """把拆分后的桥接函数单独拿出来跑。"""
+    return load_function(name, environment)
 
 
 def _names_in_function(path, func_name):
-    """engine.py 里某个（可能是嵌套的）函数引用到的所有名字。"""
-    tree = ast.parse(path.read_text(encoding='utf-8'))
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == func_name:
-            return {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
+    """拆分后的桥接里，某个（可能是方法的）函数引用到的所有名字。"""
+    for _p, tree in _TREES:
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == func_name:
+                return ({n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
+                        | {n.attr for n in ast.walk(node) if isinstance(n, ast.Attribute)})
     raise AssertionError('%s 里找不到函数 %s' % (path, func_name))
 
 

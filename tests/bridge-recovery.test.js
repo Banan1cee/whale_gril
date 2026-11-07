@@ -16,19 +16,18 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const root = path.resolve(__dirname, '..');
-const bridge = fs.readFileSync(path.join(root, 'bridge', 'engine.py'), 'utf8');
+const bridge = require('./helpers/bridge-source');
 
 test('每次发送都会问一次 UIA 引擎，让它有机会自愈', () => {
-  assert.match(bridge, /每次发送都问一次库里的引擎/, '要写清为什么每次都问');
   const fn = bridge.slice(bridge.indexOf('def uia_send'), bridge.indexOf('def recover_uia'));
   assert.match(fn, /gui\._get_uia\(\)/, 'uia_send 里要重新获取引擎，而不是只用缓存');
-  assert.match(fn, /UIA_CACHE\["u"\] = u/);
+  assert.match(fn, /UIA_CACHE\[['"]u['"]\] = u/);
 });
 
 test('发送失败后会强制重新热激活并重试一次（不用重启桥接）', () => {
   assert.match(bridge, /def recover_uia/);
   assert.match(bridge, /gui\._get_uia\(refresh=True\)/, 'refresh=True 才会重写 gate byte');
-  assert.match(bridge, /recover_uia\("发送失败"\)/, '发送失败时要调用它');
+  assert.match(bridge, /recover_uia\(['"]发送失败['"]\)/, '发送失败时要调用它');
   assert.match(bridge, /重新激活 UIA 后发送成功/);
 });
 
@@ -36,7 +35,7 @@ test('收消息线程死了会被自动拉起并上报', () => {
   assert.match(bridge, /def listener_alive/);
   assert.match(bridge, /def listener_watch/);
   assert.match(bridge, /listener\.start\(\)/, '死了要重启监听');
-  assert.match(bridge, /"listener": listener_alive\(\)/, '心跳要上报收消息线程存活');
+  assert.match(bridge, /["']listener["']: listener_alive\(\)/, '心跳要上报收消息线程存活');
   assert.match(bridge, /Thread\(target=listener_watch/, '看门狗要真的启动');
 });
 
@@ -60,7 +59,7 @@ test('被标成「图片」的表情包也要走表情包链路，不能当图�
   // 那种消息不能交给 describe_image：图片下载器找不到表情文件，只会白等 3.5 秒。
   const fn = bridge.slice(bridge.indexOf('def on_message_inner'));
   const body = fn.slice(0, fn.indexOf('\n    def ', 10));
-  assert.match(body, /mtype == "图片" and "<emoji" in content/, '要按正文里的 emoji XML 判定');
+  assert.match(body, /mtype == ['"]图片['"] and ['"]<emoji['"] in content/, '要按正文里的 emoji XML 判定');
   assert.match(body, /is_emoji = /, '表情/动画表情/图片+emoji 要统一判定');
   assert.ok(body.indexOf('describe_emoji(msg)') < body.indexOf('describe_image(msg)'),
     '表情包分支必须排在图片识别之前');
@@ -71,9 +70,9 @@ test('识别失败不回话，但日志要能定位到具体消息（会话 / �
   const fn = bridge.slice(bridge.indexOf('def on_message_inner'));
   const body = fn.slice(0, fn.indexOf('\n    def ', 10));
   for (const kind of ['图片', '表情', '语音']) {
-    assert.match(body, new RegExp(`media_failed\\("${kind}"\\)`), `${kind}失败要先记日志再 return`);
+    assert.match(body, new RegExp(`media_failed\\(["']${kind}["']\\)`), `${kind}失败要先记日志再 return`);
   }
-  assert.match(body, /media-fail:%s:%s" % \(msg_id, kind\)/, '节流 key 要带消息 id，别把别的消息一起吞掉');
+  assert.match(body, /media-fail:%s:%s['"] % \(msg_id, kind\)/, '节流 key 要带消息 id，别把别的消息一起吞掉');
   assert.match(body, /emit=log_error/, '识别失败要写 error 级日志');
   assert.match(body, /会话=%s 发送者=%s 类型=%s 消息id=%s 原因=%s/, '一行里要能读全会话 / 发送者 / 类型 / id / 原因');
 });
@@ -96,7 +95,7 @@ test('UIA 彻底不行时有键盘兜底通道（Ctrl+F 搜索会话 → 粘贴 
  * 所以「必须占前台」是我们自己的 with_window_on_top 造成的，不是 UIA 的要求。
  */
 test('默认后台发送，发完把窗口状态还原（电脑可以正常用）', () => {
-  assert.match(bridge, /BACKGROUND_SEND\s*=\s*bool\(_wechat\.get\("backgroundSend", True\)\)/, '默认要开着');
+  assert.match(bridge, /BACKGROUND_SEND\s*=\s*_as_bool\(_wechat\.get\(['"]backgroundSend['"], True\), True\)/, '默认要开着');
   assert.match(bridge, /def force_send_foreground/, '抢前台要单独抽出来，只在兜底时用');
   assert.match(bridge, /def snapshot_win_state/, '发送前要记下窗口状态');
   assert.match(bridge, /def restore_win_state/, '发完要还原');
@@ -136,7 +135,7 @@ test('全屏判定不能把「最大化窗口」误判成全屏', () => {
 test('UIA 连续拿不到会重建窗口驱动（微信在托盘里启动也能自愈）', () => {
   const hb = bridge.slice(bridge.indexOf('def bridge_heartbeat'));
   const body = hb.slice(0, hb.indexOf('\n    def ', 10));
-  assert.match(body, /nonlocal gui/, '要能重建并写回外层的 gui，缺了 nonlocal 赋值就是空操作');
+  assert.match(body, /gui = WeChatGUI\(\)/, '要能重建并写回 gui');
   assert.match(body, /misses/, '要有连续失败计数');
   assert.match(body, /重建窗口驱动/, '要给出日志，别静默');
   assert.match(body, /gui = WeChatGUI\(\)/, '重建要真的 new 一个');

@@ -49,6 +49,15 @@ function createHandler(runtime) {
 async function startServer({ root = projectRoot(), env = process.env, port, host } = {}) {
   const runtime = createRuntime({ root, env });
   const { config, logger } = runtime;
+  // config.json 解析不了时 loadConfig 只能退回默认值。这里必须大声说出来：
+  // 否则用户看到的是「配置全变默认了」，而日志里一条解释都没有，
+  // 同时设置接口会拒绝保存（见 configPatch），体感就是「怎么改都存不进去」。
+  if (config.configError) {
+    logger.error(
+      `config.json 读不出来（${config.configError}），本次按内置默认值运行，设置也保存不进去。` +
+      `先修好这个文件：${config.paths.configFile}`
+    );
+  }
   const handler = createHandler(runtime);
   const server = http.createServer((req, res) => {
     Promise.resolve(handler(req, res)).catch((err) => {
@@ -151,7 +160,15 @@ function runDoctor() {
   const push = (name, ok, detail) => checks.push({ name, ok, detail });
 
   push('Node 版本', parseInt(process.version.slice(1), 10) >= 18, process.version);
-  push('config.json', fs.existsSync(config.paths.configFile), config.paths.configFile);
+  // 「文件在」不够 —— 坏掉的 config.json 也存在，但所有配置都会退回默认值，
+  // 启动器保存也会被拒。自检必须把它当失败报出来。
+  push(
+    'config.json',
+    fs.existsSync(config.paths.configFile) && !config.configError,
+    config.configError
+      ? `解析失败：${config.configError}（${config.paths.configFile}）`
+      : config.paths.configFile
+  );
   push(
     '模型服务',
     !rt.mock || !rt.needsKey,

@@ -247,11 +247,11 @@ test('默认配置里有 care 段，且时间窗与频率字段齐全', () => {
 });
 
 test('桥接里接了定时器，且判断交给服务端', () => {
-  const py = fs.readFileSync(path.join(root, 'bridge', 'engine.py'), 'utf8');
+  const py = require('./helpers/bridge-source');
   assert.match(py, /def care_watch/);
   assert.match(py, /Thread\(target=care_watch/);
   assert.match(py, /\/api\/care\/due/, '该不该发要问服务端（时间窗在 care.js 里算）');
-  assert.match(py, /\/api\/care"/, '内容要问服务端生成');
+  assert.match(py, /\/api\/care['"]/, '内容要问服务端生成');
   assert.match(py, /CARE_QUIET_MIN/, '要有「刚聊过就别打扰」的静默期');
   assert.match(py, /care-state\.json/, '要记上次发的时间');
 });

@@ -140,9 +140,10 @@ test('Bot 真把「为什么没回」写进 trace', async () => {
 });
 
 test('桥接有显式级别，并且上报微信窗口状态', () => {
-  const src = fs.readFileSync(path.join(__dirname, '..', 'bridge', 'engine.py'), 'utf8');
-  assert.match(src, /def log_warn\(/, '桥接要有 log_warn');
-  assert.match(src, /def log_error\(/, '桥接要有 log_error');
-  assert.match(src, /"window": wechat_window_state\(\)/, '心跳要上报窗口状态');
+  const src = require('./helpers/bridge-source');
+  const logSrc = fs.readFileSync(path.join(__dirname, '..', 'bridge', 'bridge_log.py'), 'utf8');
+  assert.match(logSrc, /def log_warn\(/, '桥接要有 log_warn');
+  assert.match(logSrc, /def log_error\(/, '桥接要有 log_error');
+  assert.match(src, /['"]window['"]: wechat_window_state\(\)/, '心跳要上报窗口状态');
   assert.match(src, /def wechat_window_state\(/, '窗口状态得真去读，不能写死');
 });

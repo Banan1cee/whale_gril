@@ -15,7 +15,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const root = path.resolve(__dirname, '..');
-const src = fs.readFileSync(path.join(root, 'bridge', 'engine.py'), 'utf8');
+const src = require('./helpers/bridge-source');
 
 test('桥接启动调用的是无参闭包版 start_reminder_watch', () => {
   assert.match(src, /def start_reminder_watch\(\):/, 'main() 里的无参闭包版不见了');
