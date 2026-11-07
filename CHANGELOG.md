@@ -6,6 +6,7 @@
 
 - 新增独立静态官网与 GitHub Pages 工作流，支持响应式布局、明暗主题及减少动画偏好。
 - 网站仅展示已发行版本，不提前宣称本批次为正式发行。
+- 新增 `website/CNAME`，自定义域名为 `www.bot.zyyc.cc`；首页补充 canonical，部署说明补充 DNS 指向 `banan1cee.github.io` 与 HTTPS 开启步骤。
 
 ### 改进 · 启动器滚动与会话刷新
 

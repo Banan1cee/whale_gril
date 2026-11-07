@@ -27,6 +27,18 @@ GitHub Pages 的「Deploy from a branch」只能选仓库根目录或 `/docs`，
 
 工作流只发布 `website/`，不会把仓库里的源码、`docs/` 或其它文件带到站点上。使用 Actions 发布时不需要 Jekyll，也不需要额外构建步骤。
 
+### 自定义域名 `www.bot.zyyc.cc`
+
+仓库已经在 `website/CNAME` 里写入 `www.bot.zyyc.cc`。还需要在 GitHub 和 DNS 侧各做一步：
+
+1. **DNS**：给 `www.bot.zyyc.cc` 添加 CNAME，指向 `banan1cee.github.io`。
+   - 如果 DNS 服务商管理的是 `zyyc.cc` 区域，记录名填 `www.bot`。
+   - 如果管理的是 `bot.zyyc.cc` 区域，记录名填 `www`。
+2. **GitHub**：仓库 **Settings → Pages → Custom domain** 填 `www.bot.zyyc.cc`，保存并等 DNS 检查通过。
+3. DNS 生效后勾选 **Enforce HTTPS**；证书签发可能需要几分钟到几十分钟。
+
+`website/CNAME` 会随 Actions 产物一起发布；如果以后换域名，改这个文件并同步修改 GitHub Pages 的自定义域名设置。
+
 ## 内容维护
 
 - `index.html`：宣传内容、更新报告弹窗、最近发行版本、作者寄语、下载链接与 SEO 描述。
