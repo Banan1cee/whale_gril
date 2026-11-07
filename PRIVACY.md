@@ -1,4 +1,4 @@
-# 鲸鲸（whale_gril）隐私政策
+# 鲸鲸（whale_girl）隐私政策
 
 **生效日期：2026-11-07**
 **适用版本：4.0.x 及以后（启动器、Node 内核、微信桥接；源码运行同理）**
@@ -32,9 +32,8 @@
 | 人设与词库 | `data/persona.json`、`data/slang.txt` | 你对人设、称呼、群聊风格的调整和自定义词条 | 组装提示词；直到修改或删除 |
 | 联系人/账号缓存 | `data/contacts-cache.json`、`data/accounts.json` | 联系人昵称、wxid、群标识；微信账号目录和昵称 | 白名单、主动搭话、账号选择；直到刷新或删除 |
 | 提醒 | `data/reminders.json` | 提醒内容、时间、目标会话、发送结果 | 到点提醒；直到完成或删除 |
-| 日记 | `data/diary/YYYY/MM-DD.md` | 按当天聊天素材生成的 Markdown 日记 | 本地留存；每天最多一篇，直到删除 |
 | 媒体缓存 | `data/media-cache/` | 微信图片、表情包转码结果、语音转出的 wav 等 | 识别、发送和重试；默认按保留天数和总量清理，可配置 |
-| 表情包库 | `data/stickers/`、`data/收集的表情包/` | 你上传的表情包；开启自动收集后保存的收到图片 | 发表情包；直到你删除 |
+| 表情包库 | `data/stickers/` | 你上传的表情包 | 发表情包；直到你删除 |
 | 语音发送任务 | `data/voice-send.json`、`data/voice-send-jobs/`、`data/voice-send-tests/` | 语音发送开关、临时合成任务和测试文件 | 生成并发送语音；任务完成后清理，异常时可能暂留 |
 | 运行日志 | `data/*.log`、`data/logs/run-*/`、`wechatauto_logs/` | 启动状态、错误、窗口/账号现场、消息数量；部分调试日志可能含会话名或消息片段 | 排查故障；按大小轮转并只保留有限份 |
 | 记忆备份 | `data/backups/` | 记忆快照 | 防误删；默认最多 20 份 |

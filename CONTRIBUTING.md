@@ -5,9 +5,9 @@
 ## 一、本地跑起来
 
 ```bash
-# 需要 Node.js 18+（只跑网页版 / 单元测试就够）
+# 需要 Node.js 18+（只跑内核 / 单元测试就够）
 node -v
-npm start            # 打开 http://127.0.0.1:8787
+npm start            # 只启动内核 HTTP API（127.0.0.1:8787）；界面请用 WhaleLauncher.exe
 
 # 接微信才需要 Python 3.12
 python -m pip install -r requirements.txt
@@ -20,7 +20,7 @@ python -m pip install -r requirements.txt
 
 1. 先看 `BUGS.md`：每个 bug 的现象 / 根因 / 修复 / 回归测试都记在里面，别重复踩
 2. 看 `CHANGELOG.md`：确认你要改的东西没人正在做
-3. `npm test` 先跑一遍，确认基线是绿的（当前 Node 817 + Python 119，CI 实测）
+3. `npm test` 先跑一遍，确认基线是绿的（Node 全量 `tests/*.test.js` + Python `tests/test_*.py`，CI 实测）
 
 ## 三、提 PR 的步骤
 

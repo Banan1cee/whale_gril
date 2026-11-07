@@ -16,10 +16,10 @@
 ### 校验下载
 
 ```powershell
-Get-FileHash .\whale-girl-4.0.0-setup.exe -Algorithm SHA256   # 对照 SHA256SUMS.txt
+Get-FileHash .\whale-girl-4.0.7-setup.exe -Algorithm SHA256   # 对照 SHA256SUMS.txt
 ```
 
 ## 其它安装方式
 
-想自己跑源码（macOS / Linux / 想改代码）见 README 的「快速开始（源码版）」，
-需要 Node.js 18+。
+想自己跑源码（macOS / Linux / 想改代码）见 [CONTRIBUTING.md](../CONTRIBUTING.md)，
+需要 Node.js 18+；接微信还需要 Python 3.12。

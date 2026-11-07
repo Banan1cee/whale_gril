@@ -1,6 +1,6 @@
 ﻿# 鲸鲸 · 一键终止所有
-# 停掉：服务（8787）、微信桥接、启动器窗口，并写 data\PAUSED 防止被启动器自动拉起
-# 用法：关掉启动器后运行 powershell -File scripts\stop-all.ps1
+# 停掉：服务（8787）、微信桥接，并写 data\PAUSED 防止被启动器自动拉起
+# 不关闭启动器窗口：请先关掉启动器，再运行 powershell -File scripts\stop-all.ps1
 param(
   [switch]$Quiet,
   [string]$AppRoot = ''
