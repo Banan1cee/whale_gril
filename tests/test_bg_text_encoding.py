@@ -85,13 +85,13 @@ def test_detect_uses_sniff_for_old_version_and_caches():
     calls = []
     try:
         bg_sender._detect_char_mode_by_version = lambda hwnd=0: 'gbk'
-        bg_sender.sniff_char_mode = lambda h, log=None: (calls.append(h), 'utf16')[1]
+        bg_sender.sniff_char_mode = lambda h, **kwargs: (calls.append(h), 'utf16')[1]
         bg_sender.find_hwnd = lambda: 0
         bg_sender._DETECTED_MODES.clear()
         assert bg_sender.detect_char_mode(123456) == 'utf16'
         assert calls == [123456]
         # 同一窗口第二次直接命中缓存，不再探测
-        bg_sender.sniff_char_mode = lambda h, log=None: 'gbk'
+        bg_sender.sniff_char_mode = lambda h, **kwargs: 'gbk'
         assert bg_sender.detect_char_mode(123456) == 'utf16'
     finally:
         (bg_sender._detect_char_mode_by_version, bg_sender.sniff_char_mode,
@@ -105,7 +105,7 @@ def test_detect_without_hwnd_does_not_touch_wechat():
     hit = []
     try:
         bg_sender._detect_char_mode_by_version = lambda hwnd=0: 'gbk'
-        bg_sender.sniff_char_mode = lambda h, log=None: hit.append(h) or 'utf16'
+        bg_sender.sniff_char_mode = lambda h, **kwargs: hit.append(h) or 'utf16'
         bg_sender._DETECTED_MODES.clear()
         assert bg_sender.detect_char_mode(0) == 'gbk'
         assert hit == []
