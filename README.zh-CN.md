@@ -18,8 +18,6 @@
 > `data\`（聊天记忆 / Key / 称呼）和 `config.json`（主人名单 / token）全程不动，上一版留下的
 > `personas\`、`resources\`、旧位置的 `runtime\vb-cable` 会顺手清掉，不会越装越大。
 >
-> 源码版（自己解压 zip 那种）仍然用 **`powershell -File scripts\update.ps1`**，规则见下面的「更新到新版本」。
->
 > 想手动备份也行：`node scripts\memory-tool.js export <文件>` 导出 json，`restore <文件>` 放回去（启动器诊断页「数据维护」也是同一套）。详见下面的「更新到新版本」。
 >
 > **旧版（3.x）的 `data\store.json` 会被自动识别并转成 4.0 格式**：直接把旧 `data\` 合并进来启动即可，
@@ -28,10 +26,7 @@
 >
 > ---
 >
-> 这里的 `Code → Download ZIP` 只有 **400 KB 源码**（不含运行时，也不含你本地的 Key 和聊天记录）。从源码跑有两条路：
-> 1. 跑 **`powershell -File scripts\setup-runtime.ps1`** —— 自动下载 Node + Python 并把微信依赖装进 `runtime\`，之后和安装包一样用；
-> 2. 或者自己装 Node 18+（`npm start` 启动内核），接微信再装 Python 3.12 + `pip install -r requirements.txt`。
->    （wechatauto 由仓库 `vendor/wechatauto` 提供，pip 不需要装它；源码直跑桥接时把 `vendor` 加进 `PYTHONPATH` 即可）
+> 这里的 `Code → Download ZIP` 只有源码树（不含运行时，也不含你本地的 Key 和聊天记录）。正常使用请从 Releases 安装；构建和开发说明见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 一个能真正聊天的「鲸鱼娘」：**微信群自动回复 + B 站热搜/视频信息 + 联网查资料**，设置与诊断全在启动器里。
 
@@ -41,7 +36,6 @@
 
 ## 实验性表情包
 
-「表情包」页的「自动收集收到的表情包」开关默认关闭，开启后桥接约 5 秒内应用。原图单独保存到 `data/收集的表情包/`，按内容去重，GIF 保留动画，不自动加入发送图库；可点「打开收集文件夹」查看。收集的是桥接实际接收到并处理的表情消息，不扫描历史记录。获取依赖微信本地缓存或消息里的可用下载地址，失败时跳过；保存不依赖模型识图成功。
 
 随包提供 27 张鲸鲸预设 PNG（傲娇、炸毛、开心各 9 张）。首次启动内核并开启表情包功能后，后台导入当前图库，不覆盖已有图片；删除的预设不会在重启后自动补回。总开关仍默认关闭。
 
@@ -57,6 +51,12 @@
 
 更新记录见 [CHANGELOG.md](CHANGELOG.md)。
 
+## 语音发送（可选）
+
+启动器「语音发送」页可以让她在文字之外发语音。支持 BreezeBlue、MiniMax、硅基流动三家，各自独立保存加密密钥、模型、音色和语气，切换厂商不会覆盖别家的选择；MiniMax 可按名称或语言搜索官方音色，硅基流动会按模型切换并保留音色。
+
+发送依赖 **VB-CABLE** 虚拟声卡，安装包只附带官方驱动安装程序，首次使用按页面提示安装并选择设备。合成超时或未开始录音会回退文字；发送结果未确认时不会自动重发。语音配额与计费由各厂商账户决定。
+
 ## 功能
 
 - **一个入口**：界面只有启动器（WPF + .NET 10），浏览器不再有控制台；`8787` 只留 HTTP API。
@@ -67,22 +67,21 @@
 - **懂缩写**：`kskbl` → 回 `zdjd`，`xswl` → `我也xswl`；词表在 `assets/abbrev.txt`。
 - **会回怼**：被骂或主人被骂时按「贴吧老哥」火力回，台词库 `assets/clapback.txt` 分 9 档可自己加；说软话会被换掉，但不碰性/家人/歧视/线下威胁。
 - **小助手**：主人私聊问「我微信多少」回自己的号；授权「可以损我」后可点名损三句。
-- **听得懂语音**：别人发语音先转文字再接话；她自己只发文字。
-- **联网**：模型判断该不该查，Bing + B站/微博热搜（按站点分流）+ 头条热榜 + 链接正文抓取，有总超时，提示词自带当前日期。
+- **听得懂语音**：别人发语音先转文字再接话；开启「语音发送」后也能用 BreezeBlue / MiniMax / 硅基流动 发语音。
+- **联网**：模型判断该不该查，Bing + 360 备用源 + B站/微博热搜（按站点分流）+ 头条热榜 + 链接正文抓取，有总超时，提示词自带当前日期。
 - **群管理**：禁言群、解禁、改模型、切语气、清记忆、低电量自动发晚安。
 - **一键终止所有**：`scripts\stop-all.ps1` 或启动器「停止」，服务与桥接全停并写暂停标记。
 - **微信桥接**：`examples/wechatauto_bridge.py`，只读数据库 + 窗口操作，不注入微信。
-- **零 npm 依赖**：不用 `npm install`；发行包自带 `runtime\`，本仓库是源码版。
+- **零 npm 依赖**：不用 `npm install`；发行包自带运行时，本仓库是源码树。
 
 ---
 
 ## 安装（Windows · 安装包）
 
-> 本仓库是**源码版，不含 `runtime\`**，请直接看下一节。想直接用请到 [Releases](https://github.com/Banan1cee/whale_girl/releases/latest) 下 `whale-girl-*-setup.exe`。
->
+> 本仓库只有**源码，不含 `runtime\`**。想直接用请到 [Releases](https://github.com/Banan1cee/whale_girl/releases/latest) 下 `whale-girl-*-setup.exe`。
 > **装到纯英文路径**（例如 `D:\whale-girl-4.0`）。放在带中文的目录里，微信那侧的自动发送会失败并一直报「拒绝访问」，原因见下面「接入微信群」里的说明。
 
-1. 双击 `whale-girl-4.0.5-setup.exe`，一路下一步（不需要管理员权限）
+1. 双击 `whale-girl-4.0.7-setup.exe`，一路下一步（不需要管理员权限）
 2. 装完双击桌面上的 **鲸鲸**，点右上角「启动」——内核和桥接都由它拉起（`8787` 只给启动器与桥接调用，没有网页界面）
 3. 在「状态」页看到内核、桥接都亮起就能用
 
@@ -90,7 +89,7 @@
 
 桥接同理：启动器点「启动」时会一起拉起，用的是包内那套 Python（已经装好 wechatauto、pywin32、uiautomation、Pillow、cryptography、pysilk 等依赖）。
 
-唯一还需要你的东西：**一个登录着的微信小号**，和**一个模型 API Key**（DeepSeek / 智谱 / 千问任选）。
+唯一还需要你的东西：**一个登录着的微信小号**，和**一个模型 API Key**（DeepSeek / 智谱 / 千问任选）。支持的 provider：`deepseek` / `zhipu` / `siliconflow` / `qwen` / `doubao`（火山方舟）/ `opencode` / `ollama`（本地或自建，地址和模型可改）/ `custom`（任何 OpenAI 兼容接口）。
 
 ## 更新到新版本
 
@@ -103,74 +102,25 @@
 - 下载允许走系统代理；断网时用本地缓存，从没拉成功过就放行，不挡你启动
 - 强制更新分四档（正常 / 提示 / 强制 / 拦截），由清单远程调参
 
-### 源码版（解压 zip 那种）
-
-不用手动下载解压，在启动器里点「检查更新」，或跑 `powershell -File scripts\update.ps1`，
-它会自己查最新 release、下载、校验、覆盖；`data\`（聊天记忆）和 `config.json`（Key）全程不动。
-
-```
-[回车] 现在更新     [r] 回滚上次更新     [q] 退出
-```
-
-- **校验**：按官方 API 给的 `sha256` 比对，对不上直接中止，不会装半个包。
-- **失败自动回滚**：覆盖后自检版本号 / 记忆条数 / `config.json` 哈希，任一项不过就用备份还原。
-- **官方连不上**：自动换镜像（`ghfast.top` / `gh-proxy.com` / `gh-proxy.org` / `ghproxy.net`，只搬运、不参与校验）；查版本接口被墙时先走 `gh-proxy.com`、`gh-proxy.org` 的 API 转发，全都挂了再从镜像页面抠版本号。
-  也可以自己下 zip，跑 `scripts\update.ps1 <zip 路径>` 离线装。
-- **只看版本**：`scripts\update.ps1 -Check`；**手动回滚**：`scripts\update.ps1 -Rollback`。
-- **第一次用（换过文件夹）**：目录里没有 `data\` 时会先找旧安装，按「最后保存时间」从新到旧列出（带会话数/条数），回车即搬、输序号换一个、`s` 跳过；
-  也可以直接指定：`scripts\update.ps1 -Migrate -FromDir "D:\whale-girl-3.50"`。
-- **Low 完整性标签**：安装目录带 Low 标签时 node 写不了 `%TEMP%`（报 `EPERM`），更新前会自动把
-  `runtime\node.exe` / `python.exe` 标回 Medium；修不动就改用安装目录里的临时目录，更新照样能跑。
-
-> 自己改过源码要注意：更新是整包覆盖，会把你改过的文件换掉。检测到本地有自定义功能时，
-> 脚本会列出来并要求确认（`-Force` 可跳过确认）。
-
 ## 没有图形入口时怎么办
 
-仓库根目录只剩 `WhaleLauncher.exe` 一个双击入口，其余全是命令行脚本。启动器打不开、
-或者要在一台没有图形界面的机器上自救时，用这几条：
-
-| 场景 | 命令 |
-| --- | --- |
-| 装 Node / Python 和桥接依赖 | `powershell -File scripts\setup-runtime.ps1` |
-| 清残留进程（8787 被占、桥接赖着不走） | 先关掉启动器，再 `powershell -File scripts\stop-all.ps1` |
-| 恢复出厂（清空记忆与配置） | 启动器「诊断」页「重置全部」，或 `powershell -File scripts\factory-reset.ps1 -Yes` |
-| 更新到新版本 | 启动器「检查更新」，或 `powershell -File scripts\update.ps1` |
-| 只读诊断 UIA（不改任何东西） | `python scripts\tools\uia-check.py` |
-| 往文件传输助手发一条真实测试消息 | `python examples\uia_selftest.py` |
-## 快速开始（源码版 / 命令行 / macOS / Linux）
-
-```bash
-# 1. 需要 Node.js 18+
-node -v
-
-# 2. 直接启动（不需要 npm install）
-npm start
-```
-
-没填 API Key 时会用内置台词演示；在启动器「设置」里选服务商、填 Key 即可接真模型。
-
-首次启动会自动把 `config.example.json` 复制成 `config.json`；**`config.json` 和 `data/` 里是你的 Key、聊天记录和主人名单，已在 `.gitignore` 里排除，别提交**。
-
-支持的 provider：`deepseek` / `zhipu` / `siliconflow` / `qwen` / `ollama`（本地）/ `custom`（任何 OpenAI 兼容接口）。
+先用启动器「诊断」页。命令行自救步骤见 [docs/维护手册.md](docs/维护手册.md)，不属于正常安装流程。
 
 ---
 
 ## 接入微信群（Windows）
 
 前提：Windows + 已登录的微信 4.x + 管理员权限。双击 `WhaleLauncher.exe` 点「启动」，内核与桥接一起拉起。
-源码直跑：`py -3.12 -m pip install -r requirements.txt`，把 `vendor` 加进 `PYTHONPATH`，再运行 `python examples/wechatauto_bridge.py`。
 详细说明（UIA 提权、多开、纯英文路径、故障码）见 [docs/接入微信.md](docs/接入微信.md)。
 
 ### 一键终止所有（`scripts\stop-all.ps1`）
 
-先关掉启动器，再跑 `powershell -File scripts\stop-all.ps1`，它会依次停掉：
+先关掉启动器，再跑 `powershell -File scripts\stop-all.ps1`，它会停掉：
 
 - 鲸鲸服务（占用 8787 的进程）
 - 微信桥接（`wechatauto_bridge.py`）
-- 启动器窗口（不关的话它会把桥接重新拉起来）
 
-同时会写 `data\PAUSED`，防止任何自动重启。脚本会多扫三遍，因为杀父进程时可能正好有子进程在启动；最后会打印结果，停干净了显示绿色，没停干净会列出残留 pid。
+脚本**不会关闭启动器窗口**，启动器要你自己先关。它会写 `data\PAUSED` 防止自动重启，停止前先保存最新记忆；因为杀父进程时可能正好有子进程在启动，会多扫三遍，最后打印结果，停干净了显示绿色，没停干净会列出残留 pid。
 
 恢复：重新打开 `WhaleLauncher.exe` 点「启动」（启动器会清掉 `PAUSED`）。
 
@@ -178,7 +128,7 @@ npm start
 
 ## 谁可以当管理员
 
-源码版不写死任何人的微信 ID，部署者自己决定：
+项目不写死任何人的微信 ID，部署者自己决定：
 
 ```json
 "persona": {
@@ -209,22 +159,14 @@ npm start
 
 `assets/personas/` 一版一个文件，升级新增、不覆盖旧版；在启动器「人设」页底部导入。目录约定与隐私红线见 [assets/personas/README.md](assets/personas/README.md)。
 
-### 日记（Markdown）
-
-启动器「主动与提醒」页可开启「每天自动写日记」，设置生成时间（电脑本地时间，默认 `23:00`），也可点「立即写一篇」手动生成。自动开关默认关闭；保存后立即生效，需保持内核运行并配置聊天模型。
-
-日记沿用当前人设和模型，依据当天截至生成时的聊天素材（最多最近 300 条、约 24,000 字符）写成，按年份保存到 `data/diary/YYYY/MM-DD.md`，例如 `data/diary/2026/11-06.md`。手动与自动合计每天最多一篇；发现当天已有文件（包括旧格式日记）就跳过，不再调用模型，也不覆盖。重启不会重复；当天晚启动会补写，过去日期不补写。当天无聊天不生成，失败五分钟后重试。「打开日记文件夹」可直接查看文件。配置对应 `diary.enabled` 和 `diary.time`。
-
----
-
 ## 一键终止 / 继续
 
-关掉启动器（或跑 `scripts\stop-all.ps1`）停掉服务 + 桥接（不发任何消息）并写 `data/PAUSED`；
+先在启动器点「停止」并关闭启动器；需要清理残留时，再跑 `scripts\stop-all.ps1`，停掉服务 + 桥接（不发任何消息）并写 `data/PAUSED`；
 重新打开 `WhaleLauncher.exe` 点「启动」即恢复（它会清掉暂停标记）。
 
 ## 配置
 
-复制示例配置再改（`config.json` 已被 `.gitignore` 忽略）：`cp config.example.json config.json`
+安装版在启动器「设置」页配置。高级用户可以直接编辑 `config.json`；模板是 `config.example.json`，`config.json` 已被 `.gitignore` 忽略。
 
 | 字段 | 说明 |
 | --- | --- |
@@ -274,6 +216,7 @@ whale-girl/                        # 与仓库一致，运行数据不入库
 ├─ assets/                         # 人设预设与词库
 ├─ examples/                       # 桥接入口与媒体兜底
 ├─ docs/                           # 文档
+├─ website/                        # 静态官网（无构建、无运行时依赖）
 ├─ vendor/                         # 固定版 wechatauto
 ├─ tests/                          # 测试
 ```
@@ -285,14 +228,7 @@ whale-girl/                        # 与仓库一致，运行数据不入库
 
 ## 开发与测试
 
-```bash
-npm test          # node --test "tests/*.test.js"（只跑 tests 目录，别扫到 runtime\python 里自带的 .js）
-node server.js --doctor   # 自检
-```
-
-- 人设 / 词库：`data/persona.json`、`data/slang.txt`（启动器「人设」页改的是同一份）
-- 想改触发逻辑：`src/bot.js` 的 `computeTrigger`
-- 想改提示词：`src/persona.js` 的 `buildSystem`
+开发、测试和构建说明见 [CONTRIBUTING.md](CONTRIBUTING.md)。普通用户按上面的安装包使用即可。
 
 ---
 

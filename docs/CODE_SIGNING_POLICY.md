@@ -3,7 +3,7 @@
 > Free code signing provided by [SignPath.io](https://about.signpath.io),
 > certificate by [SignPath Foundation](https://signpath.org).
 
-本文件说明鲸鲸（whale_gril）的 Windows 发行包是怎么签名的、谁有权批准、怎么验证。
+本文件说明鲸鲸（whale_girl）的 Windows 发行包是怎么签名的、谁有权批准、怎么验证。
 对应的流水线在 [`.github/workflows/installer.yml`](.github/workflows/installer.yml)。
 
 > **许可提示：** 本项目自 4.0.x 起采用 **AGPL-3.0-only**（OSI 认可的开源许可证）。
@@ -61,11 +61,11 @@
 
 ```powershell
 # 1) 看签名状态和证书主体：应为 Valid，签发者 SignPath Foundation
-Get-AuthenticodeSignature .\whale-girl-4.0.0-setup.exe |
+Get-AuthenticodeSignature .\whale-girl-4.0.7-setup.exe |
     Format-List Status, StatusMessage, SignerCertificate
 
 # 2) 对照 Release 里挂的 SHA256SUMS.txt
-Get-FileHash .\whale-girl-4.0.0-setup.exe -Algorithm SHA256
+Get-FileHash .\whale-girl-4.0.7-setup.exe -Algorithm SHA256
 ```
 
 也可以右键 exe →「属性」→「数字签名」看签名者和时间戳。

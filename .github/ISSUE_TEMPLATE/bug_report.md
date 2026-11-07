@@ -11,7 +11,7 @@ labels: bug
 
 ## 版本
 
-- 安装包版本（如 `鲸鲸-4.0.0-alpha-setup.exe`）：
+- 安装包版本（如 `whale-girl-4.0.7-setup.exe`）：
 - 启动器版本（窗口左下角 / `WhaleLauncher.exe` 属性里的版本）：
 - 鲸鲸版本（`/api/status` 里的 `version`）：
 - 微信版本：
