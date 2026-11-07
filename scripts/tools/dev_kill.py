@@ -15,7 +15,7 @@ def wanted(p):
     if "WhaleLauncher.exe" in (p.name() or ""):
         return True
     for m in MARKERS:
-        if m in cmd and "whale_gril" in cmd.replace("\\", "/").lower():
+        if m in cmd and any(repo in cmd.replace("\\", "/").lower() for repo in ("whale_girl", "whale_gril")):
             return True
     return False
 

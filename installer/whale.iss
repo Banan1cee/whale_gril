@@ -99,7 +99,7 @@ Source: "..\examples\*"; DestDir: "{app}\examples"; Flags: ignoreversion recurse
 ; （它也是 CPython 标准库 python312.zip 所在目录，所以绝不能整体排除 *.zip）
 ; 注意：pythonwin 目录里放着 win32ui.pyd / win32uiole.pyd，wechatauto 截图要用，绝不能整目录排除。
 Source: "..\runtime\*"; DestDir: "{app}\runtime"; Flags: ignoreversion recursesubdirs createallsubdirs; \
-    Excludes: "wheelhouse\*,.temp\*,.uv-cache\*,.built,__pycache__\*,*.cat,vb-cable\*"
+    Excludes: "wheelhouse\*,.temp\*,.uv-cache\*,.built,__pycache__\*,vb-cable\*"
 ; 虚拟声卡安装包放在安装目录根部：用户反馈在 runtime 深处根本找不到。
 ; 官方 Pack45 内文件必须同目录，所以整文件夹搬，不拆散。
 Source: "..\runtime\vb-cable\*"; DestDir: "{app}\VB-CABLE虚拟声卡"; \

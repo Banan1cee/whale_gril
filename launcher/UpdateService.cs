@@ -38,7 +38,7 @@ namespace WhaleLauncher
         }
 
         // 资产名与 installer/whale.iss 的 OutputBaseFilename=whale-girl-{#AppVersion}-setup 对应
-        private const string ReleasePage = "https://github.com/Banan1cee/whale_gril/releases/latest";
+        private const string ReleasePage = "https://github.com/Banan1cee/whale_girl/releases/latest";
 
         /// <summary>
         /// 安装包和校验清单的候选源，顺序就是尝试顺序：GitHub 直连在前，镜像兜底。
@@ -51,10 +51,10 @@ namespace WhaleLauncher
         /// </summary>
         private static readonly string[] AssetBases =
         {
-            "https://github.com/Banan1cee/whale_gril/releases/latest/download",
-            "https://gh-proxy.com/https://github.com/Banan1cee/whale_gril/releases/latest/download",
-            "https://ghfast.top/https://github.com/Banan1cee/whale_gril/releases/latest/download",
-            "https://ghproxy.net/https://github.com/Banan1cee/whale_gril/releases/latest/download",
+            "https://github.com/Banan1cee/whale_girl/releases/latest/download",
+            "https://gh-proxy.com/https://github.com/Banan1cee/whale_girl/releases/latest/download",
+            "https://ghfast.top/https://github.com/Banan1cee/whale_girl/releases/latest/download",
+            "https://ghproxy.net/https://github.com/Banan1cee/whale_girl/releases/latest/download",
         };
 
         // 不调 GitHub API：未认证的 60 次/小时/IP 在共享网络里很容易用完，而且只会更慢。

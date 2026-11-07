@@ -26,6 +26,7 @@ public static class VoiceSendGuide
             "先打开本页第一行的实验开关。运行包只附带驱动安装文件；解压、打开启动器和打开实验开关都不会替你安装 Windows 驱动。\n"+
             "点击本页底部「安装 VB-CABLE 官方驱动」，在 Windows 权限提示里允许操作，再按官方窗口中的 Install Driver 完成安装，按提示重启电脑。不要选择 Remove Driver。\n"+
             "如果 Windows 声音设备里已经有 CABLE Input 和 CABLE Output，可跳过安装。安装后看不到设备时，先重启，再点本页「刷新声卡」。\n"+
+            "如果提示缺少 .cat 或错误 Error -106 / 0xE000022F，是驱动包缺少签名目录文件；请重新取得官方完整 Pack45 并完整解压，不要只复制安装 EXE。本页安装按钮会先核对整包文件。\n"+
             "如果提示运行包缺少驱动，包内那份在安装目录的 VB-CABLE虚拟声卡 文件夹里（含 VBCABLE_Setup_x64.exe 和同目录的驱动文件）；也可以使用教程末尾的 VB-CABLE 官网链接下载并完整解压官方驱动包，再运行其中的 VBCABLE_Setup_x64.exe；不要只取出一个 exe，安装需要同目录的其他驱动文件。");
         ActionButton("前往本页的驱动安装按钮",goToDriver);
 
@@ -34,17 +35,24 @@ public static class VoiceSendGuide
             "要改的是发送语音消息的快捷键，不是把说话识别成文字的「语音输入」。如果微信没有「发语音」或不接受该组合，先检查微信是否支持电脑端发语音；遇到按键冲突可另选组合。\n"+
             "回到本页，把「微信录音快捷键」也选成 Ctrl+Tab。两边必须完全一致；后续录音由程序自动按住和松开，无需你手动按键。");
 
-        Step("3. 到 BreezeBlue 官网获取自己的 API Key",
-            "点击下方官网入口，注册或登录 BreezeBlue；进入开发者控制台的 API Keys 页面，创建并复制自己的密钥。把它粘贴到本页「BreezeBlue Key」里，不要填到「语音（识别）」或普通聊天模型的 Key 栏。\n"+
-            "填好 Key 后，页面已预选「中英双语版（默认，中文性能更好）」和「大肥鱼（机灵版）」，无需先读取列表。点击「测试 API Key 连接」确认连接与鉴权；15 秒没有完成会显示连接超时。失败时检查网络、密钥是否复制完整以及官网账户状态。合成语音还需要账户具备相应额度和权限。\n"+
-            "Key 会在点击保存时加密保存在本机；已经保存后留空可沿用。不要把自己的密钥发到群里。");
+        Step("3. 选择语音厂商，获取对应的 API Key",
+            "本页支持 BreezeBlue、MiniMax 和硅基流动。先选「语音厂商」，再点「打开当前厂商的 Key 页面」注册或登录，创建自己的密钥，填入下方当前厂商的 API Key。不要填到「语音（识别）」或普通聊天模型的 Key 栏。\n"+
+            "点击「测试 API Key 连接」确认连接与鉴权；测试不合成语音，不能保证账户有足够额度。每个厂商使用自己的账户余额，密钥互不通用。失败时检查网络、密钥、账户状态及模型权限。\n"+
+            "Key 在点击保存时加密保存在本机，各厂商独立存储，留空只沿用当前厂商保存的 Key。切换厂商后须点击「保存语音配置」才用于自动回复。不要把密钥发到群里。");
         Link("打开 BreezeBlue 官方 API Keys 页面",KeyUrl);
+        Link("MiniMax 官网 / 开放平台 · platform.minimax.cn","https://platform.minimax.cn");
+        Link("MiniMax · 创建 / 管理 API Key","https://platform.minimax.cn/console/keys");
+        Link("MiniMax · 语音模型说明与系统音色列表","https://platform.minimax.cn/docs/faq/system-voice-id");
+        Link("硅基流动官网 · siliconflow.cn","https://www.siliconflow.cn");
+        Link("硅基流动 · 创建 / 管理 API Key","https://cloud.siliconflow.cn/account/ak");
+        Link("硅基流动 · 语音模型与音色使用文档","https://docs.siliconflow.cn/docs/userguide/capabilities/text-to-speech");
 
         Step("4. 直接使用默认模型和音色",
-            "新配置的「语音模型」默认是 Breeze TTS 2 中英双语版，旁边标注「默认，中文性能更好」；「回复音色」默认是大肥鱼（机灵版）。按这套默认配置继续即可，不需要下载本地语音模型，也不需要手动选择音色或填写 ID。\n"+
-            "如果要生成其他语言，可在「语音模型」中改为多语言版。要换其他声音，再填写「搜索其他音色」，点击「读取模型和音色（不合成、不发送）」，从「回复音色」下拉框选择。刷新列表会保留当前选择，音色一次最多返回 100 个。\n"+
+            "BreezeBlue 默认中英双语版 / 大肥鱼（机灵版）；MiniMax 默认 Speech 2.8 Turbo / 俏皮萌妹（普通话）；硅基流动默认 CosyVoice 2 / 温柔女声 Claire。默认音色可以直接使用，无需下载本地模型。\n"+
+            "MiniMax 模型包含 Speech 2.8、2.6、02 和 01，每个系列均有 Turbo / HD，内置官方系统音色列表。硅基流动可选择 CosyVoice 2 和 MOSS-TTSD，每个模型有 8 个系统音色；选择模型时会同步对应音色，MOSS 自动添加说话人标签。\n"+
+            "要换其他声音，可直接在下拉框选择预置音色，或点击「读取模型和音色」获取账户的自定义音色。MiniMax 支持系统、复刻和设计音色；硅基流动只展示当前模型对应的自定义音色，也可从接口读取新增的语音合成模型。\n"+
             "已有配置会保留你之前选择的模型与音色。只有需要手动填写官网提供的 ID 时，才展开「高级：手动填写模型 / 音色 ID」。\n"+
-            "语气指令可以留空，也可填写例如「自然、轻松地说」。聊天模型负责生成回复正文，语音模型负责把同一段正文读出来。");
+            "BreezeBlue 和硅基流动 CosyVoice 2 的语气指令可留空，也可填写例如「自然、轻松地说」。MiniMax 和 MOSS 本页不发送自由语气指令，使用所选音色与正文。聊天模型负责生成回复正文，语音模型负责把正文读出来。");
 
         Step("5. 把虚拟声卡接到微信麦克风",
             "在本页点击「刷新声卡」，把播放端选为 CABLE Input（VB-Audio Virtual Cable）。在微信能选择麦克风的音视频／设备设置中，把输入设备选为 CABLE Output。\n"+
@@ -52,7 +60,7 @@ public static class VoiceSendGuide
             "声音路线：本程序 → CABLE Input → 虚拟声卡 → CABLE Output → 微信麦克风。Input 和 Output 名字看似相反，按上面的两端分别选择即可。不要勾选「侦听此设备」来代替连接。");
 
         Step("6. 保存设置，启动内核和桥接",
-            "先确认普通文字聊天能正常回复。填好 Key 并测试连接，保持预选的中英双语模型和大肥鱼（机灵版），核对两边快捷键一致、虚拟声卡已选好后，点击「保存语音配置」。\n"+
+            "先确认普通文字聊天能正常回复。选择厂商，填好对应 Key 并测试连接，确认模型和音色、两边快捷键一致、虚拟声卡已选好后，点击「保存语音配置」。\n"+
             "在启动器中启动内核与微信桥接，确认桥接绑定的是用于测试的微信账号。刚更新程序后，请退出重开启动器并重启桥接。Windows 若提示麦克风权限，请允许微信访问。\n"+
             "首次调试建议把随机概率设为 0%，先做文件传输助手测试，确认成功后再设置日常概率。");
 
@@ -79,7 +87,7 @@ public static class VoiceSendGuide
             "• 微信收到空白语音：先检查程序选 CABLE Input、微信选 CABLE Output，再检查输入音量、静音和麦克风权限。\n"+
             "• 结果未确认：先查看文件传输助手，不要自动重复点发送；保留界面提示，反馈时附微信版本和操作步骤。\n"+
             "• 只在部分会话不发：检查群聊／私聊范围、概率、实验开关和桥接绑定账号；先用固定的文件传输助手测试排除配置问题。");
-        var sources=Text("官方资料：BreezeBlue · breezeblue.ai；VB-CABLE · vb-audio.com/Cable/。驱动为 VB-Audio Donationware，可向官方捐赠或购买许可。");
+        var sources=Text("官方资料：BreezeBlue · breezeblue.ai；MiniMax · platform.minimax.cn；硅基流动 · docs.siliconflow.cn；VB-CABLE · vb-audio.com/Cable/。驱动为 VB-Audio Donationware。");
         body.Children.Add(sources);
         Link("打开 VB-CABLE 官方下载与安装说明","https://vb-audio.com/Cable/");
         return card;

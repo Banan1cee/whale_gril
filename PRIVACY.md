@@ -1,4 +1,4 @@
-# 鲸鲸（whale_gril）隐私政策
+# 鲸鲸（whale_girl）隐私政策
 
 **生效日期：2026-11-07**
 **适用版本：4.0.x 及以后（启动器、Node 内核、微信桥接；源码运行同理）**
@@ -146,9 +146,9 @@
 
 ## 10. 联系方式
 
-- 一般问题、隐私疑问：<https://github.com/Banan1cee/whale_gril/issues>
+- 一般问题、隐私疑问：<https://github.com/Banan1cee/whale_girl/issues>
 - 安全问题：建议使用 GitHub Security Advisory，不要在公开 Issue 里贴 API Key、聊天记录或完整日志。
-- 项目地址：<https://github.com/Banan1cee/whale_gril>
+- 项目地址：<https://github.com/Banan1cee/whale_girl>
 
 ---
 

@@ -3,7 +3,7 @@
 > Free code signing provided by [SignPath.io](https://about.signpath.io),
 > certificate by [SignPath Foundation](https://signpath.org).
 
-本文件说明鲸鲸（whale_gril）的 Windows 发行包是怎么签名的、谁有权批准、怎么验证。
+本文件说明鲸鲸（whale_girl）的 Windows 发行包是怎么签名的、谁有权批准、怎么验证。
 对应的流水线在 [`.github/workflows/installer.yml`](.github/workflows/installer.yml)。
 
 > **许可提示：** 本项目自 4.0.x 起采用 **AGPL-3.0-only**（OSI 认可的开源许可证）。
@@ -47,7 +47,7 @@
 | Approvers（批准签名） | [@Banan1cee](https://github.com/Banan1cee) | 在 SignPath 里逐次批准发行签名 |
 
 协作改动请走 Pull Request；`main` 的每次发版都由 Approver 在 SignPath 后台确认后才会签名。
-贡献者名单见 [GitHub contributors](https://github.com/Banan1cee/whale_gril/graphs/contributors)。
+贡献者名单见 [GitHub contributors](https://github.com/Banan1cee/whale_girl/graphs/contributors)。
 
 ## 隐私政策（privacy policy）
 

@@ -2,14 +2,14 @@
 
 # 🐋 Whale Girl — a DeepSeek-powered WeChat companion bot
 
-[![GitHub release](https://img.shields.io/github/v/release/Banan1cee/whale_gril)](https://github.com/Banan1cee/whale_gril/releases/latest)
+[![GitHub release](https://img.shields.io/github/v/release/Banan1cee/whale_girl)](https://github.com/Banan1cee/whale_girl/releases/latest)
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D18-339933)](https://nodejs.org/)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D4)
-[![GitHub stars](https://img.shields.io/github/stars/Banan1cee/whale_gril)](https://github.com/Banan1cee/whale_gril/stargazers)
+[![GitHub stars](https://img.shields.io/github/stars/Banan1cee/whale_girl)](https://github.com/Banan1cee/whale_girl/stargazers)
 
 > **Just want to run it?** Grab the latest `whale-girl-*-setup.exe` (about 168 MB) from
-> [Releases](https://github.com/Banan1cee/whale_gril/releases/latest).
+> [Releases](https://github.com/Banan1cee/whale_girl/releases/latest).
 > The installer ships Node, Python 3.12 and the .NET 10 desktop runtime, so **nothing has to be downloaded afterwards**.
 > Installation itself does not trigger UAC — only a machine without .NET 10 gets one extra elevation prompt.
 > When it finishes, a desktop shortcut opens the launcher.
@@ -76,11 +76,10 @@ See [CHANGELOG.md](CHANGELOG.md) for the change history.
 
 ## Install (Windows, installer)
 
-> This repository contains **source only, without `runtime\`**. To use the bot, download `whale-girl-*-setup.exe` from [Releases](https://github.com/Banan1cee/whale_gril/releases/latest).
->
+> This repository contains **source only, without `runtime\`**. To use the bot, download `whale-girl-*-setup.exe` from [Releases](https://github.com/Banan1cee/whale_girl/releases/latest).
 > **Install to an ASCII-only path** (for example `D:\whale-girl-4.0`). Inside a path containing Chinese characters, WeChat automation fails with a continuous "access denied" error; the reason is explained under "WeChat bridge" below.
 
-1. Run `whale-girl-4.0.5-setup.exe` and click Next through the wizard (no administrator rights needed).
+1. Run `whale-girl-4.0.7-setup.exe` and click Next through the wizard (no administrator rights needed).
 2. When it finishes, open the **Whale Girl** shortcut on the desktop and press **Start** in the top-right corner — the launcher brings up the kernel and the bridge (`8787` is used only by the launcher and the bridge; there is no web UI).
 3. Once the **Status** page shows both kernel and bridge as running, you are good to go.
 
@@ -240,7 +239,7 @@ Development, tests and build instructions are in [CONTRIBUTING.md](CONTRIBUTING.
 
 ## Download
 
-Only download installers from **GitHub Releases**: <https://github.com/Banan1cee/whale_gril/releases>.
+Only download installers from **GitHub Releases**: <https://github.com/Banan1cee/whale_girl/releases>.
 Checksums and verification commands are in [docs/DOWNLOAD.md](docs/DOWNLOAD.md).
 
 ## Code signing policy

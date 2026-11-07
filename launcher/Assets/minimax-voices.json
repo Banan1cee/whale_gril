@@ -1,0 +1,1310 @@
+[
+  {
+    "Id": "male-qn-qingse",
+    "Name": "青涩青年音色 · 中文 (普通话)"
+  },
+  {
+    "Id": "male-qn-jingying",
+    "Name": "精英青年音色 · 中文 (普通话)"
+  },
+  {
+    "Id": "male-qn-badao",
+    "Name": "霸道青年音色 · 中文 (普通话)"
+  },
+  {
+    "Id": "male-qn-daxuesheng",
+    "Name": "青年大学生音色 · 中文 (普通话)"
+  },
+  {
+    "Id": "female-shaonv",
+    "Name": "少女音色 · 中文 (普通话)"
+  },
+  {
+    "Id": "female-yujie",
+    "Name": "御姐音色 · 中文 (普通话)"
+  },
+  {
+    "Id": "female-chengshu",
+    "Name": "成熟女性音色 · 中文 (普通话)"
+  },
+  {
+    "Id": "female-tianmei",
+    "Name": "甜美女性音色 · 中文 (普通话)"
+  },
+  {
+    "Id": "male-qn-qingse-jingpin",
+    "Name": "青涩青年音色-beta · 中文 (普通话)"
+  },
+  {
+    "Id": "male-qn-jingying-jingpin",
+    "Name": "精英青年音色-beta · 中文 (普通话)"
+  },
+  {
+    "Id": "male-qn-badao-jingpin",
+    "Name": "霸道青年音色-beta · 中文 (普通话)"
+  },
+  {
+    "Id": "male-qn-daxuesheng-jingpin",
+    "Name": "青年大学生音色-beta · 中文 (普通话)"
+  },
+  {
+    "Id": "female-shaonv-jingpin",
+    "Name": "少女音色-beta · 中文 (普通话)"
+  },
+  {
+    "Id": "female-yujie-jingpin",
+    "Name": "御姐音色-beta · 中文 (普通话)"
+  },
+  {
+    "Id": "female-chengshu-jingpin",
+    "Name": "成熟女性音色-beta · 中文 (普通话)"
+  },
+  {
+    "Id": "female-tianmei-jingpin",
+    "Name": "甜美女性音色-beta · 中文 (普通话)"
+  },
+  {
+    "Id": "clever_boy",
+    "Name": "聪明男童 · 中文 (普通话)"
+  },
+  {
+    "Id": "cute_boy",
+    "Name": "可爱男童 · 中文 (普通话)"
+  },
+  {
+    "Id": "lovely_girl",
+    "Name": "萌萌女童 · 中文 (普通话)"
+  },
+  {
+    "Id": "cartoon_pig",
+    "Name": "卡通猪小琪 · 中文 (普通话)"
+  },
+  {
+    "Id": "bingjiao_didi",
+    "Name": "病娇弟弟 · 中文 (普通话)"
+  },
+  {
+    "Id": "junlang_nanyou",
+    "Name": "俊朗男友 · 中文 (普通话)"
+  },
+  {
+    "Id": "chunzhen_xuedi",
+    "Name": "纯真学弟 · 中文 (普通话)"
+  },
+  {
+    "Id": "lengdan_xiongzhang",
+    "Name": "冷淡学长 · 中文 (普通话)"
+  },
+  {
+    "Id": "badao_shaoye",
+    "Name": "霸道少爷 · 中文 (普通话)"
+  },
+  {
+    "Id": "tianxin_xiaoling",
+    "Name": "甜心小玲 · 中文 (普通话)"
+  },
+  {
+    "Id": "qiaopi_mengmei",
+    "Name": "俏皮萌妹 · 中文 (普通话)"
+  },
+  {
+    "Id": "wumei_yujie",
+    "Name": "妩媚御姐 · 中文 (普通话)"
+  },
+  {
+    "Id": "diadia_xuemei",
+    "Name": "嗲嗲学妹 · 中文 (普通话)"
+  },
+  {
+    "Id": "danya_xuejie",
+    "Name": "淡雅学姐 · 中文 (普通话)"
+  },
+  {
+    "Id": "Chinese (Mandarin)_Reliable_Executive",
+    "Name": "沉稳高管 · 中文 (普通话)"
+  },
+  {
+    "Id": "Chinese (Mandarin)_News_Anchor",
+    "Name": "新闻女声 · 中文 (普通话)"
+  },
+  {
+    "Id": "Chinese (Mandarin)_Mature_Woman",
+    "Name": "傲娇御姐 · 中文 (普通话)"
+  },
+  {
+    "Id": "Chinese (Mandarin)_Unrestrained_Young_Man",
+    "Name": "不羁青年 · 中文 (普通话)"
+  },
+  {
+    "Id": "Arrogant_Miss",
+    "Name": "嚣张小姐 · 中文 (普通话)"
+  },
+  {
+    "Id": "Robot_Armor",
+    "Name": "机械战甲 · 中文 (普通话)"
+  },
+  {
+    "Id": "Chinese (Mandarin)_Kind-hearted_Antie",
+    "Name": "热心大婶 · 中文 (普通话)"
+  },
+  {
+    "Id": "Chinese (Mandarin)_HK_Flight_Attendant",
+    "Name": "港普空姐 · 中文 (普通话)"
+  },
+  {
+    "Id": "Chinese (Mandarin)_Humorous_Elder",
+    "Name": "搞笑大爷 · 中文 (普通话)"
+  },
+  {
+    "Id": "Chinese (Mandarin)_Gentleman",
+    "Name": "温润男声 · 中文 (普通话)"
+  },
+  {
+    "Id": "Chinese (Mandarin)_Warm_Bestie",
+    "Name": "温暖闺蜜 · 中文 (普通话)"
+  },
+  {
+    "Id": "Chinese (Mandarin)_Male_Announcer",
+    "Name": "播报男声 · 中文 (普通话)"
+  },
+  {
+    "Id": "Chinese (Mandarin)_Sweet_Lady",
+    "Name": "甜美女声 · 中文 (普通话)"
+  },
+  {
+    "Id": "Chinese (Mandarin)_Southern_Young_Man",
+    "Name": "南方小哥 · 中文 (普通话)"
+  },
+  {
+    "Id": "Chinese (Mandarin)_Wise_Women",
+    "Name": "阅历姐姐 · 中文 (普通话)"
+  },
+  {
+    "Id": "Chinese (Mandarin)_Gentle_Youth",
+    "Name": "温润青年 · 中文 (普通话)"
+  },
+  {
+    "Id": "Chinese (Mandarin)_Warm_Girl",
+    "Name": "温暖少女 · 中文 (普通话)"
+  },
+  {
+    "Id": "Chinese (Mandarin)_Kind-hearted_Elder",
+    "Name": "花甲奶奶 · 中文 (普通话)"
+  },
+  {
+    "Id": "Chinese (Mandarin)_Cute_Spirit",
+    "Name": "憨憨萌兽 · 中文 (普通话)"
+  },
+  {
+    "Id": "Chinese (Mandarin)_Radio_Host",
+    "Name": "电台男主播 · 中文 (普通话)"
+  },
+  {
+    "Id": "Chinese (Mandarin)_Lyrical_Voice",
+    "Name": "抒情男声 · 中文 (普通话)"
+  },
+  {
+    "Id": "Chinese (Mandarin)_Straightforward_Boy",
+    "Name": "率真弟弟 · 中文 (普通话)"
+  },
+  {
+    "Id": "Chinese (Mandarin)_Sincere_Adult",
+    "Name": "真诚青年 · 中文 (普通话)"
+  },
+  {
+    "Id": "Chinese (Mandarin)_Gentle_Senior",
+    "Name": "温柔学姐 · 中文 (普通话)"
+  },
+  {
+    "Id": "Chinese (Mandarin)_Stubborn_Friend",
+    "Name": "嘴硬竹马 · 中文 (普通话)"
+  },
+  {
+    "Id": "Chinese (Mandarin)_Crisp_Girl",
+    "Name": "清脆少女 · 中文 (普通话)"
+  },
+  {
+    "Id": "Chinese (Mandarin)_Pure-hearted_Boy",
+    "Name": "清澈邻家弟弟 · 中文 (普通话)"
+  },
+  {
+    "Id": "Chinese (Mandarin)_Soft_Girl",
+    "Name": "柔和少女 · 中文 (普通话)"
+  },
+  {
+    "Id": "Cantonese_ProfessionalHost（F)",
+    "Name": "专业女主持 · 中文 (粤语)"
+  },
+  {
+    "Id": "Cantonese_GentleLady",
+    "Name": "温柔女声 · 中文 (粤语)"
+  },
+  {
+    "Id": "Cantonese_ProfessionalHost（M)",
+    "Name": "专业男主持 · 中文 (粤语)"
+  },
+  {
+    "Id": "Cantonese_PlayfulMan",
+    "Name": "活泼男声 · 中文 (粤语)"
+  },
+  {
+    "Id": "Cantonese_CuteGirl",
+    "Name": "可爱女孩 · 中文 (粤语)"
+  },
+  {
+    "Id": "Cantonese_KindWoman",
+    "Name": "善良女声 · 中文 (粤语)"
+  },
+  {
+    "Id": "Santa_Claus",
+    "Name": "Santa Claus · 英文"
+  },
+  {
+    "Id": "Grinch",
+    "Name": "Grinch · 英文"
+  },
+  {
+    "Id": "Rudolph",
+    "Name": "Rudolph · 英文"
+  },
+  {
+    "Id": "Arnold",
+    "Name": "Arnold · 英文"
+  },
+  {
+    "Id": "Charming_Santa",
+    "Name": "Charming Santa · 英文"
+  },
+  {
+    "Id": "Charming_Lady",
+    "Name": "Charming Lady · 英文"
+  },
+  {
+    "Id": "Sweet_Girl",
+    "Name": "Sweet Girl · 英文"
+  },
+  {
+    "Id": "Cute_Elf",
+    "Name": "Cute Elf · 英文"
+  },
+  {
+    "Id": "Attractive_Girl",
+    "Name": "Attractive Girl · 英文"
+  },
+  {
+    "Id": "Serene_Woman",
+    "Name": "Serene Woman · 英文"
+  },
+  {
+    "Id": "English_Trustworthy_Man",
+    "Name": "Trustworthy Man · 英文"
+  },
+  {
+    "Id": "English_Graceful_Lady",
+    "Name": "Graceful Lady · 英文"
+  },
+  {
+    "Id": "English_Aussie_Bloke",
+    "Name": "Aussie Bloke · 英文"
+  },
+  {
+    "Id": "English_Whispering_girl",
+    "Name": "Whispering girl · 英文"
+  },
+  {
+    "Id": "English_Diligent_Man",
+    "Name": "Diligent Man · 英文"
+  },
+  {
+    "Id": "English_Gentle-voiced_man",
+    "Name": "Gentle-voiced man · 英文"
+  },
+  {
+    "Id": "Japanese_IntellectualSenior",
+    "Name": "Intellectual Senior · 日文"
+  },
+  {
+    "Id": "Japanese_DecisivePrincess",
+    "Name": "Decisive Princess · 日文"
+  },
+  {
+    "Id": "Japanese_LoyalKnight",
+    "Name": "Loyal Knight · 日文"
+  },
+  {
+    "Id": "Japanese_DominantMan",
+    "Name": "Dominant Man · 日文"
+  },
+  {
+    "Id": "Japanese_SeriousCommander",
+    "Name": "Serious Commander · 日文"
+  },
+  {
+    "Id": "Japanese_ColdQueen",
+    "Name": "Cold Queen · 日文"
+  },
+  {
+    "Id": "Japanese_DependableWoman",
+    "Name": "Dependable Woman · 日文"
+  },
+  {
+    "Id": "Japanese_GentleButler",
+    "Name": "Gentle Butler · 日文"
+  },
+  {
+    "Id": "Japanese_KindLady",
+    "Name": "Kind Lady · 日文"
+  },
+  {
+    "Id": "Japanese_CalmLady",
+    "Name": "Calm Lady · 日文"
+  },
+  {
+    "Id": "Japanese_OptimisticYouth",
+    "Name": "Optimistic Youth · 日文"
+  },
+  {
+    "Id": "Japanese_GenerousIzakayaOwner",
+    "Name": "Generous Izakaya Owner · 日文"
+  },
+  {
+    "Id": "Japanese_SportyStudent",
+    "Name": "Sporty Student · 日文"
+  },
+  {
+    "Id": "Japanese_InnocentBoy",
+    "Name": "Innocent Boy · 日文"
+  },
+  {
+    "Id": "Japanese_GracefulMaiden",
+    "Name": "Graceful Maiden · 日文"
+  },
+  {
+    "Id": "Korean_SweetGirl",
+    "Name": "Sweet Girl · 韩文"
+  },
+  {
+    "Id": "Korean_CheerfulBoyfriend",
+    "Name": "Cheerful Boyfriend · 韩文"
+  },
+  {
+    "Id": "Korean_EnchantingSister",
+    "Name": "Enchanting Sister · 韩文"
+  },
+  {
+    "Id": "Korean_ShyGirl",
+    "Name": "Shy Girl · 韩文"
+  },
+  {
+    "Id": "Korean_ReliableSister",
+    "Name": "Reliable Sister · 韩文"
+  },
+  {
+    "Id": "Korean_StrictBoss",
+    "Name": "Strict Boss · 韩文"
+  },
+  {
+    "Id": "Korean_SassyGirl",
+    "Name": "Sassy Girl · 韩文"
+  },
+  {
+    "Id": "Korean_ChildhoodFriendGirl",
+    "Name": "Childhood Friend Girl · 韩文"
+  },
+  {
+    "Id": "Korean_PlayboyCharmer",
+    "Name": "Playboy Charmer · 韩文"
+  },
+  {
+    "Id": "Korean_ElegantPrincess",
+    "Name": "Elegant Princess · 韩文"
+  },
+  {
+    "Id": "Korean_BraveFemaleWarrior",
+    "Name": "Brave Female Warrior · 韩文"
+  },
+  {
+    "Id": "Korean_BraveYouth",
+    "Name": "Brave Youth · 韩文"
+  },
+  {
+    "Id": "Korean_CalmLady",
+    "Name": "Calm Lady · 韩文"
+  },
+  {
+    "Id": "Korean_EnthusiasticTeen",
+    "Name": "Enthusiastic Teen · 韩文"
+  },
+  {
+    "Id": "Korean_SoothingLady",
+    "Name": "Soothing Lady · 韩文"
+  },
+  {
+    "Id": "Korean_IntellectualSenior",
+    "Name": "Intellectual Senior · 韩文"
+  },
+  {
+    "Id": "Korean_LonelyWarrior",
+    "Name": "Lonely Warrior · 韩文"
+  },
+  {
+    "Id": "Korean_MatureLady",
+    "Name": "Mature Lady · 韩文"
+  },
+  {
+    "Id": "Korean_InnocentBoy",
+    "Name": "Innocent Boy · 韩文"
+  },
+  {
+    "Id": "Korean_CharmingSister",
+    "Name": "Charming Sister · 韩文"
+  },
+  {
+    "Id": "Korean_AthleticStudent",
+    "Name": "Athletic Student · 韩文"
+  },
+  {
+    "Id": "Korean_BraveAdventurer",
+    "Name": "Brave Adventurer · 韩文"
+  },
+  {
+    "Id": "Korean_CalmGentleman",
+    "Name": "Calm Gentleman · 韩文"
+  },
+  {
+    "Id": "Korean_WiseElf",
+    "Name": "Wise Elf · 韩文"
+  },
+  {
+    "Id": "Korean_CheerfulCoolJunior",
+    "Name": "Cheerful Cool Junior · 韩文"
+  },
+  {
+    "Id": "Korean_DecisiveQueen",
+    "Name": "Decisive Queen · 韩文"
+  },
+  {
+    "Id": "Korean_ColdYoungMan",
+    "Name": "Cold Young Man · 韩文"
+  },
+  {
+    "Id": "Korean_MysteriousGirl",
+    "Name": "Mysterious Girl · 韩文"
+  },
+  {
+    "Id": "Korean_QuirkyGirl",
+    "Name": "Quirky Girl · 韩文"
+  },
+  {
+    "Id": "Korean_ConsiderateSenior",
+    "Name": "Considerate Senior · 韩文"
+  },
+  {
+    "Id": "Korean_CheerfulLittleSister",
+    "Name": "Cheerful Little Sister · 韩文"
+  },
+  {
+    "Id": "Korean_DominantMan",
+    "Name": "Dominant Man · 韩文"
+  },
+  {
+    "Id": "Korean_AirheadedGirl",
+    "Name": "Airheaded Girl · 韩文"
+  },
+  {
+    "Id": "Korean_ReliableYouth",
+    "Name": "Reliable Youth · 韩文"
+  },
+  {
+    "Id": "Korean_FriendlyBigSister",
+    "Name": "Friendly Big Sister · 韩文"
+  },
+  {
+    "Id": "Korean_GentleBoss",
+    "Name": "Gentle Boss · 韩文"
+  },
+  {
+    "Id": "Korean_ColdGirl",
+    "Name": "Cold Girl · 韩文"
+  },
+  {
+    "Id": "Korean_HaughtyLady",
+    "Name": "Haughty Lady · 韩文"
+  },
+  {
+    "Id": "Korean_CharmingElderSister",
+    "Name": "Charming Elder Sister · 韩文"
+  },
+  {
+    "Id": "Korean_IntellectualMan",
+    "Name": "Intellectual Man · 韩文"
+  },
+  {
+    "Id": "Korean_CaringWoman",
+    "Name": "Caring Woman · 韩文"
+  },
+  {
+    "Id": "Korean_WiseTeacher",
+    "Name": "Wise Teacher · 韩文"
+  },
+  {
+    "Id": "Korean_ConfidentBoss",
+    "Name": "Confident Boss · 韩文"
+  },
+  {
+    "Id": "Korean_AthleticGirl",
+    "Name": "Athletic Girl · 韩文"
+  },
+  {
+    "Id": "Korean_PossessiveMan",
+    "Name": "Possessive Man · 韩文"
+  },
+  {
+    "Id": "Korean_GentleWoman",
+    "Name": "Gentle Woman · 韩文"
+  },
+  {
+    "Id": "Korean_CockyGuy",
+    "Name": "Cocky Guy · 韩文"
+  },
+  {
+    "Id": "Korean_ThoughtfulWoman",
+    "Name": "Thoughtful Woman · 韩文"
+  },
+  {
+    "Id": "Korean_OptimisticYouth",
+    "Name": "Optimistic Youth · 韩文"
+  },
+  {
+    "Id": "Spanish_SereneWoman",
+    "Name": "Serene Woman · 西班牙文"
+  },
+  {
+    "Id": "Spanish_MaturePartner",
+    "Name": "Mature Partner · 西班牙文"
+  },
+  {
+    "Id": "Spanish_CaptivatingStoryteller",
+    "Name": "Captivating Storyteller · 西班牙文"
+  },
+  {
+    "Id": "Spanish_Narrator",
+    "Name": "Narrator · 西班牙文"
+  },
+  {
+    "Id": "Spanish_WiseScholar",
+    "Name": "Wise Scholar · 西班牙文"
+  },
+  {
+    "Id": "Spanish_Kind-heartedGirl",
+    "Name": "Kind-hearted Girl · 西班牙文"
+  },
+  {
+    "Id": "Spanish_DeterminedManager",
+    "Name": "Determined Manager · 西班牙文"
+  },
+  {
+    "Id": "Spanish_BossyLeader",
+    "Name": "Bossy Leader · 西班牙文"
+  },
+  {
+    "Id": "Spanish_ReservedYoungMan",
+    "Name": "Reserved Young Man · 西班牙文"
+  },
+  {
+    "Id": "Spanish_ConfidentWoman",
+    "Name": "Confident Woman · 西班牙文"
+  },
+  {
+    "Id": "Spanish_ThoughtfulMan",
+    "Name": "Thoughtful Man · 西班牙文"
+  },
+  {
+    "Id": "Spanish_Strong-WilledBoy",
+    "Name": "Strong-willed Boy · 西班牙文"
+  },
+  {
+    "Id": "Spanish_SophisticatedLady",
+    "Name": "Sophisticated Lady · 西班牙文"
+  },
+  {
+    "Id": "Spanish_RationalMan",
+    "Name": "Rational Man · 西班牙文"
+  },
+  {
+    "Id": "Spanish_AnimeCharacter",
+    "Name": "Anime Character · 西班牙文"
+  },
+  {
+    "Id": "Spanish_Deep-tonedMan",
+    "Name": "Deep-toned Man · 西班牙文"
+  },
+  {
+    "Id": "Spanish_Fussyhostess",
+    "Name": "Fussy hostess · 西班牙文"
+  },
+  {
+    "Id": "Spanish_SincereTeen",
+    "Name": "Sincere Teen · 西班牙文"
+  },
+  {
+    "Id": "Spanish_FrankLady",
+    "Name": "Frank Lady · 西班牙文"
+  },
+  {
+    "Id": "Spanish_Comedian",
+    "Name": "Comedian · 西班牙文"
+  },
+  {
+    "Id": "Spanish_Debator",
+    "Name": "Debator · 西班牙文"
+  },
+  {
+    "Id": "Spanish_ToughBoss",
+    "Name": "Tough Boss · 西班牙文"
+  },
+  {
+    "Id": "Spanish_Wiselady",
+    "Name": "Wise Lady · 西班牙文"
+  },
+  {
+    "Id": "Spanish_Steadymentor",
+    "Name": "Steady Mentor · 西班牙文"
+  },
+  {
+    "Id": "Spanish_Jovialman",
+    "Name": "Jovial Man · 西班牙文"
+  },
+  {
+    "Id": "Spanish_SantaClaus",
+    "Name": "Santa Claus · 西班牙文"
+  },
+  {
+    "Id": "Spanish_Rudolph",
+    "Name": "Rudolph · 西班牙文"
+  },
+  {
+    "Id": "Spanish_Intonategirl",
+    "Name": "Intonate Girl · 西班牙文"
+  },
+  {
+    "Id": "Spanish_Arnold",
+    "Name": "Arnold · 西班牙文"
+  },
+  {
+    "Id": "Spanish_Ghost",
+    "Name": "Ghost · 西班牙文"
+  },
+  {
+    "Id": "Spanish_HumorousElder",
+    "Name": "Humorous Elder · 西班牙文"
+  },
+  {
+    "Id": "Spanish_EnergeticBoy",
+    "Name": "Energetic Boy · 西班牙文"
+  },
+  {
+    "Id": "Spanish_WhimsicalGirl",
+    "Name": "Whimsical Girl · 西班牙文"
+  },
+  {
+    "Id": "Spanish_StrictBoss",
+    "Name": "Strict Boss · 西班牙文"
+  },
+  {
+    "Id": "Spanish_ReliableMan",
+    "Name": "Reliable Man · 西班牙文"
+  },
+  {
+    "Id": "Spanish_SereneElder",
+    "Name": "Serene Elder · 西班牙文"
+  },
+  {
+    "Id": "Spanish_AngryMan",
+    "Name": "Angry Man · 西班牙文"
+  },
+  {
+    "Id": "Spanish_AssertiveQueen",
+    "Name": "Assertive Queen · 西班牙文"
+  },
+  {
+    "Id": "Spanish_CaringGirlfriend",
+    "Name": "Caring Girlfriend · 西班牙文"
+  },
+  {
+    "Id": "Spanish_PowerfulSoldier",
+    "Name": "Powerful Soldier · 西班牙文"
+  },
+  {
+    "Id": "Spanish_PassionateWarrior",
+    "Name": "Passionate Warrior · 西班牙文"
+  },
+  {
+    "Id": "Spanish_ChattyGirl",
+    "Name": "Chatty Girl · 西班牙文"
+  },
+  {
+    "Id": "Spanish_RomanticHusband",
+    "Name": "Romantic Husband · 西班牙文"
+  },
+  {
+    "Id": "Spanish_CompellingGirl",
+    "Name": "Compelling Girl · 西班牙文"
+  },
+  {
+    "Id": "Spanish_PowerfulVeteran",
+    "Name": "Powerful Veteran · 西班牙文"
+  },
+  {
+    "Id": "Spanish_SensibleManager",
+    "Name": "Sensible Manager · 西班牙文"
+  },
+  {
+    "Id": "Spanish_ThoughtfulLady",
+    "Name": "Thoughtful Lady · 西班牙文"
+  },
+  {
+    "Id": "Portuguese_SentimentalLady",
+    "Name": "Sentimental Lady · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_BossyLeader",
+    "Name": "Bossy Leader · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_Wiselady",
+    "Name": "Wise lady · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_Strong-WilledBoy",
+    "Name": "Strong-willed Boy · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_Deep-VoicedGentleman",
+    "Name": "Deep-voiced Gentleman · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_UpsetGirl",
+    "Name": "Upset Girl · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_PassionateWarrior",
+    "Name": "Passionate Warrior · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_AnimeCharacter",
+    "Name": "Anime Character · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_ConfidentWoman",
+    "Name": "Confident Woman · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_AngryMan",
+    "Name": "Angry Man · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_CaptivatingStoryteller",
+    "Name": "Captivating Storyteller · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_Godfather",
+    "Name": "Godfather · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_ReservedYoungMan",
+    "Name": "Reserved Young Man · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_SmartYoungGirl",
+    "Name": "Smart Young Girl · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_Kind-heartedGirl",
+    "Name": "Kind-hearted Girl · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_Pompouslady",
+    "Name": "Pompous lady · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_Grinch",
+    "Name": "Grinch · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_Debator",
+    "Name": "Debator · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_SweetGirl",
+    "Name": "Sweet Girl · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_AttractiveGirl",
+    "Name": "Attractive Girl · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_ThoughtfulMan",
+    "Name": "Thoughtful Man · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_PlayfulGirl",
+    "Name": "Playful Girl · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_GorgeousLady",
+    "Name": "Gorgeous Lady · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_LovelyLady",
+    "Name": "Lovely Lady · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_SereneWoman",
+    "Name": "Serene Woman · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_SadTeen",
+    "Name": "Sad Teen · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_MaturePartner",
+    "Name": "Mature Partner · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_Comedian",
+    "Name": "Comedian · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_NaughtySchoolgirl",
+    "Name": "Naughty Schoolgirl · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_Narrator",
+    "Name": "Narrator · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_ToughBoss",
+    "Name": "Tough Boss · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_Fussyhostess",
+    "Name": "Fussy hostess · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_Dramatist",
+    "Name": "Dramatist · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_Steadymentor",
+    "Name": "Steady Mentor · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_Jovialman",
+    "Name": "Jovial Man · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_CharmingQueen",
+    "Name": "Charming Queen · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_SantaClaus",
+    "Name": "Santa Claus · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_Rudolph",
+    "Name": "Rudolph · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_Arnold",
+    "Name": "Arnold · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_CharmingSanta",
+    "Name": "Charming Santa · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_CharmingLady",
+    "Name": "Charming Lady · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_Ghost",
+    "Name": "Ghost · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_HumorousElder",
+    "Name": "Humorous Elder · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_CalmLeader",
+    "Name": "Calm Leader · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_GentleTeacher",
+    "Name": "Gentle Teacher · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_EnergeticBoy",
+    "Name": "Energetic Boy · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_ReliableMan",
+    "Name": "Reliable Man · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_SereneElder",
+    "Name": "Serene Elder · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_GrimReaper",
+    "Name": "Grim Reaper · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_AssertiveQueen",
+    "Name": "Assertive Queen · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_WhimsicalGirl",
+    "Name": "Whimsical Girl · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_StressedLady",
+    "Name": "Stressed Lady · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_FriendlyNeighbor",
+    "Name": "Friendly Neighbor · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_CaringGirlfriend",
+    "Name": "Caring Girlfriend · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_PowerfulSoldier",
+    "Name": "Powerful Soldier · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_FascinatingBoy",
+    "Name": "Fascinating Boy · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_RomanticHusband",
+    "Name": "Romantic Husband · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_StrictBoss",
+    "Name": "Strict Boss · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_InspiringLady",
+    "Name": "Inspiring Lady · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_PlayfulSpirit",
+    "Name": "Playful Spirit · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_ElegantGirl",
+    "Name": "Elegant Girl · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_CompellingGirl",
+    "Name": "Compelling Girl · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_PowerfulVeteran",
+    "Name": "Powerful Veteran · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_SensibleManager",
+    "Name": "Sensible Manager · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_ThoughtfulLady",
+    "Name": "Thoughtful Lady · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_TheatricalActor",
+    "Name": "Theatrical Actor · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_FragileBoy",
+    "Name": "Fragile Boy · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_ChattyGirl",
+    "Name": "Chatty Girl · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_Conscientiousinstructor",
+    "Name": "Conscientious Instructor · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_RationalMan",
+    "Name": "Rational Man · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_WiseScholar",
+    "Name": "Wise Scholar · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_FrankLady",
+    "Name": "Frank Lady · 葡萄牙文"
+  },
+  {
+    "Id": "Portuguese_DeterminedManager",
+    "Name": "Determined Manager · 葡萄牙文"
+  },
+  {
+    "Id": "French_Male_Speech_New",
+    "Name": "Level-Headed Man · 法文"
+  },
+  {
+    "Id": "French_Female_News Anchor",
+    "Name": "Patient Female Presenter · 法文"
+  },
+  {
+    "Id": "French_CasualMan",
+    "Name": "Casual Man · 法文"
+  },
+  {
+    "Id": "French_MovieLeadFemale",
+    "Name": "Movie Lead Female · 法文"
+  },
+  {
+    "Id": "French_FemaleAnchor",
+    "Name": "Female Anchor · 法文"
+  },
+  {
+    "Id": "French_MaleNarrator",
+    "Name": "Male Narrator · 法文"
+  },
+  {
+    "Id": "Indonesian_SweetGirl",
+    "Name": "Sweet Girl · 印尼文"
+  },
+  {
+    "Id": "Indonesian_ReservedYoungMan",
+    "Name": "Reserved Young Man · 印尼文"
+  },
+  {
+    "Id": "Indonesian_CharmingGirl",
+    "Name": "Charming Girl · 印尼文"
+  },
+  {
+    "Id": "Indonesian_CalmWoman",
+    "Name": "Calm Woman · 印尼文"
+  },
+  {
+    "Id": "Indonesian_ConfidentWoman",
+    "Name": "Confident Woman · 印尼文"
+  },
+  {
+    "Id": "Indonesian_CaringMan",
+    "Name": "Caring Man · 印尼文"
+  },
+  {
+    "Id": "Indonesian_BossyLeader",
+    "Name": "Bossy Leader · 印尼文"
+  },
+  {
+    "Id": "Indonesian_DeterminedBoy",
+    "Name": "Determined Boy · 印尼文"
+  },
+  {
+    "Id": "Indonesian_GentleGirl",
+    "Name": "Gentle Girl · 印尼文"
+  },
+  {
+    "Id": "German_FriendlyMan",
+    "Name": "Friendly Man · 德文"
+  },
+  {
+    "Id": "German_SweetLady",
+    "Name": "Sweet Lady · 德文"
+  },
+  {
+    "Id": "German_PlayfulMan",
+    "Name": "Playful Man · 德文"
+  },
+  {
+    "Id": "Russian_HandsomeChildhoodFriend",
+    "Name": "Handsome Childhood Friend · 俄文"
+  },
+  {
+    "Id": "Russian_BrightHeroine",
+    "Name": "Bright Queen · 俄文"
+  },
+  {
+    "Id": "Russian_AmbitiousWoman",
+    "Name": "Ambitious Woman · 俄文"
+  },
+  {
+    "Id": "Russian_ReliableMan",
+    "Name": "Reliable Man · 俄文"
+  },
+  {
+    "Id": "Russian_CrazyQueen",
+    "Name": "Crazy Girl · 俄文"
+  },
+  {
+    "Id": "Russian_PessimisticGirl",
+    "Name": "Pessimistic Girl · 俄文"
+  },
+  {
+    "Id": "Russian_AttractiveGuy",
+    "Name": "Attractive Guy · 俄文"
+  },
+  {
+    "Id": "Russian_Bad-temperedBoy",
+    "Name": "Bad-tempered Boy · 俄文"
+  },
+  {
+    "Id": "Italian_BraveHeroine",
+    "Name": "Brave Heroine · 意大利文"
+  },
+  {
+    "Id": "Italian_Narrator",
+    "Name": "Narrator · 意大利文"
+  },
+  {
+    "Id": "Italian_WanderingSorcerer",
+    "Name": "Wandering Sorcerer · 意大利文"
+  },
+  {
+    "Id": "Italian_DiligentLeader",
+    "Name": "Diligent Leader · 意大利文"
+  },
+  {
+    "Id": "Arabic_CalmWoman",
+    "Name": "Calm Woman · 阿拉伯文"
+  },
+  {
+    "Id": "Arabic_FriendlyGuy",
+    "Name": "Friendly Guy · 阿拉伯文"
+  },
+  {
+    "Id": "Turkish_CalmWoman",
+    "Name": "Calm Woman · 土耳其文"
+  },
+  {
+    "Id": "Turkish_Trustworthyman",
+    "Name": "Trustworthy man · 土耳其文"
+  },
+  {
+    "Id": "Ukrainian_CalmWoman",
+    "Name": "Calm Woman · 乌克兰文"
+  },
+  {
+    "Id": "Ukrainian_WiseScholar",
+    "Name": "Wise Scholar · 乌克兰文"
+  },
+  {
+    "Id": "Dutch_kindhearted_girl",
+    "Name": "Kind-hearted girl · 荷兰文"
+  },
+  {
+    "Id": "Dutch_bossy_leader",
+    "Name": "Bossy leader · 荷兰文"
+  },
+  {
+    "Id": "Vietnamese_kindhearted_girl",
+    "Name": "Kind-hearted girl · 越南文"
+  },
+  {
+    "Id": "Thai_male_1_sample8",
+    "Name": "Serene Man · 泰文"
+  },
+  {
+    "Id": "Thai_male_2_sample2",
+    "Name": "Friendly Man · 泰文"
+  },
+  {
+    "Id": "Thai_female_1_sample1",
+    "Name": "Confident Woman · 泰文"
+  },
+  {
+    "Id": "Thai_female_2_sample2",
+    "Name": "Energetic Woman · 泰文"
+  },
+  {
+    "Id": "Polish_male_1_sample4",
+    "Name": "Male Narrator · 波兰文"
+  },
+  {
+    "Id": "Polish_male_2_sample3",
+    "Name": "Male Anchor · 波兰文"
+  },
+  {
+    "Id": "Polish_female_1_sample1",
+    "Name": "Calm Woman · 波兰文"
+  },
+  {
+    "Id": "Polish_female_2_sample3",
+    "Name": "Casual Woman · 波兰文"
+  },
+  {
+    "Id": "Romanian_male_1_sample2",
+    "Name": "Reliable Man · 罗马尼亚文"
+  },
+  {
+    "Id": "Romanian_male_2_sample1",
+    "Name": "Energetic Youth · 罗马尼亚文"
+  },
+  {
+    "Id": "Romanian_female_1_sample4",
+    "Name": "Optimistic Youth · 罗马尼亚文"
+  },
+  {
+    "Id": "Romanian_female_2_sample1",
+    "Name": "Gentle Woman · 罗马尼亚文"
+  },
+  {
+    "Id": "greek_male_1a_v1",
+    "Name": "Thoughtful Mentor · 希腊文"
+  },
+  {
+    "Id": "Greek_female_1_sample1",
+    "Name": "Gentle Lady · 希腊文"
+  },
+  {
+    "Id": "Greek_female_2_sample3",
+    "Name": "Girl Next Door · 希腊文"
+  },
+  {
+    "Id": "czech_male_1_v1",
+    "Name": "Assured Presenter · 捷克文"
+  },
+  {
+    "Id": "czech_female_5_v7",
+    "Name": "Steadfast Narrator · 捷克文"
+  },
+  {
+    "Id": "czech_female_2_v2",
+    "Name": "Elegant Lady · 捷克文"
+  },
+  {
+    "Id": "finnish_male_3_v1",
+    "Name": "Upbeat Man · 芬兰文"
+  },
+  {
+    "Id": "finnish_male_1_v2",
+    "Name": "Friendly Boy · 芬兰文"
+  },
+  {
+    "Id": "finnish_female_4_v1",
+    "Name": "Assetive Woman · 芬兰文"
+  },
+  {
+    "Id": "hindi_male_1_v2",
+    "Name": "Trustworthy Advisor · 印地文"
+  },
+  {
+    "Id": "hindi_female_2_v1",
+    "Name": "Tranquil Woman · 印地文"
+  },
+  {
+    "Id": "hindi_female_1_v2",
+    "Name": "News Anchor · 印地文"
+  }
+]

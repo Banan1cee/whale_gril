@@ -26,8 +26,8 @@ python -m pip install -r requirements.txt
 
 ```bash
 # 1. fork 到自己账号，然后
-git clone https://github.com/<你的用户名>/whale_gril.git
-cd whale_gril
+git clone https://github.com/<你的用户名>/whale_girl.git
+cd whale_girl
 git checkout -b fix/一句话说明
 
 # 2. 改代码 + 补测试

@@ -12,6 +12,9 @@ class Program {
  static byte[] Wav(double s){using var m=new MemoryStream();using(var w=new WaveFileWriter(new NAudio.Utils.IgnoreDisposeStream(m),new WaveFormat(16000,16,1))){var b=new byte[(int)(s*32000)];w.Write(b,0,b.Length);}return m.ToArray();}
  static async Task Main(){var dir=Path.Combine(Path.GetTempPath(),"voice-check-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(dir);try{
  await BreezeChecks.Run(dir);
+ VbCableChecks.Run(dir);
+ await StreamingWaveChecks.Run(dir);
+ await ProviderChecks.Run(dir);
  await LatencyChecks.Run(dir);
  await AutoVoiceChecks.Run(dir);
  ExperimentalVoiceChecks.Run(dir);
