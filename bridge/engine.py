@@ -2670,6 +2670,8 @@ def main():
             # 后台通道自己核对过「点开的是不是目标会话」，不是就一个字都没打。
             # 属于「发错人」红线，不许再换通道重试（换通道还是打进当前会话）。
             raise ChatIdentityError("后台通道：当前会话不是目标 %r" % chat_display_name)
+        if why == "content_mismatch":
+            raise DraftDirtyError("正文回读校验未通过，本次输入已清理，未发送（%s）" % why)
         if why in ("input_dirty", "residue_left", "input_not_empty"):
             raise DraftDirtyError("输入框存在草稿或正文校验失败，请检查草稿后再试（%s）" % why)
         if ok:

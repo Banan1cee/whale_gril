@@ -5,6 +5,7 @@
 
 | # | 现象 | 根因 | 修复 | 版本 | 回归测试 |
 | --- | --- | --- | --- | --- | --- |
+| 58 | 微信输入框先显示正常中文，随后变成乱码并停止发送 | 4.0.7 把一次正文回读不符直接当成编码错误；失败样本多数跟在多行回复后，后台 WM_CHAR 不能可靠输入换行 | 后台气泡用空格分隔多行；等待 UIA 回读稳定，短探测确认后才重试；验证失败时保留已验证编码、停止发送，只清理可确认属于本次的错误草稿 | 4.0.8 | `tests/bridge-adaptive-encoding.test.js`（执行 `tests/test_bg_live_encoding.py`） |
 | 57 | 硅基流动发送短测试语音却提示超过 55 秒 | 实测 HTTP 200 的 WAV 仍含 RIFF/data 未知长度标记，171350 字节 PCM 被 NAudio 按 4294967040 字节计时 | 完整下载后按真实样本数回填未知长度字段，不修饰普通截断文件；明确显示实际时长 | 4.0.7 | `tests/voice-send/StreamingWaveChecks.cs` |
 | 56 | 用户反馈旧运行包缺少 CAT 签名文件，声卡驱动安装报 Error -106 / 0xE000022F | 旧 runtime 打包排除 *.cat；下载缓存与安装烟测仅检查 EXE/readme，无法拦截残缺驱动包 | 移除 CAT 排除规则，使用官方 Pack45 全文件哈希清单校验下载缓存、安装/覆盖升级产物及界面驱动安装入口 | 4.0.7 | `tests/vb-cable-package.test.js`、`tests/voice-send/VbCableChecks.cs` |
 | 55 | 搜索超时后仍可能再发一次纠错请求 | 毫秒定时器与浮点截止时间存在舍入差异 | 记录总超时状态，阻止后续补充请求 | 4.0.6 | `tests/search-network.test.js` |

@@ -55,9 +55,9 @@ test('data/accounts.json 缺失时桥接自己补写（删 data 也能自愈）'
 });
 
 test('WM_CHAR 编码：auto 模式真的打一个字回读实测', () => {
-  assert.match(BG, /def sniff_char_mode\(hwnd, log=None\):/, '缺检测试函数');
+  assert.match(BG, /def sniff_char_mode\(hwnd, log=None, chat=None\):/, '缺检测试函数');
   assert.match(BG, /sender\.type_text\("鲸"/, '探测必须真的往输入框打字');
-  assert.match(BG, /got\.strip\(\) == "鲸"/, '必须回读比对');
+  assert.match(BG, /if got == "鲸":/, '必须回读比对');
   assert.match(BG, /GetValuePattern\(\)\.SetValue\(""\)/, '探测后必须用 UIA 清空输入框');
   assert.match(BG, /_DETECT_DIRTY/, '清不干净要能拦住发送');
   assert.match(
