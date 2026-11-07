@@ -17,6 +17,7 @@ from unittest.mock import Mock, patch
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'tests'))
 sys.path.insert(0, str(ROOT / 'bridge'))
 import sticker_transport as transport
 
@@ -452,29 +453,15 @@ class TransportTest(unittest.TestCase):
             transport.resolve_target(self.db, 'Peer')
 
 
+from bridge_ast import init, load_function
+
 BRIDGE = ROOT / 'bridge' / 'engine.py'
 
 
 def bridge_functions(names, environment):
-    source = ast.parse(BRIDGE.read_text(encoding='utf-8'))
-    definitions = [node for node in ast.walk(source)
-                   if isinstance(node, ast.FunctionDef) and node.name in names]
-    if {node.name for node in definitions} != set(names):
-        raise AssertionError('bridge function not found')
-    # Test closures are represented by the fake globals dictionary, never by a
-    # real main()/bridge instance. Preserve assignment semantics for gui.
-    class ClosureGlobals(ast.NodeTransformer):
-        def visit_Nonlocal(self, node):
-            return ast.copy_location(ast.Global(names=node.names), node)
-    definitions = [ClosureGlobals().visit(node) for node in definitions]
-    # 被抽函数会引用 engine.py 里的模块级辅助类（如 send_sticker 用的
-    # _SendStateScope 发送看门狗作用域）。只抽 FunctionDef 会让这些类在 mock
-    # 环境里缺失，报成 NameError 假回归 —— 这里把被抽函数体实际引用到的
-    # 顶层类定义一并搬进来。
-    classes = [node for node in source.body
-               if isinstance(node, ast.ClassDef) and node.name in _referenced_names(definitions)]
-    exec(compile(ast.fix_missing_locations(ast.Module(body=classes + definitions, type_ignores=[])),
-                 '<mock-only bridge functions>', 'exec'), environment)
+    init(environment)
+    for name in names:
+        load_function(name, environment)
     return environment
 
 
@@ -845,12 +832,12 @@ class BridgeContractTest(unittest.TestCase):
         compile(BRIDGE.read_text(encoding='utf-8'), str(BRIDGE), 'exec')
 
     def test_dormant_worker_always_started_not_gated_at_construction(self):
-        source = ast.parse(BRIDGE.read_text(encoding='utf-8'))
+        source = ast.parse((ROOT / 'bridge' / 'app.py').read_text(encoding='utf-8'))
         parents = {child: node for node in ast.walk(source) for child in ast.iter_child_nodes(node)}
         starts = [node for node in ast.walk(source) if isinstance(node, ast.Call)
                   and isinstance(node.func, ast.Attribute) and node.func.attr == 'Thread'
-                  and any(k.arg == 'target' and isinstance(k.value, ast.Name)
-                          and k.value.id == 'sticker_test_loop' for k in node.keywords)]
+                  and any(k.arg == 'target' and isinstance(k.value, ast.Attribute)
+                          and k.value.attr == 'sticker_test_loop' for k in node.keywords)]
         self.assertEqual(len(starts), 1)
         node = starts[0]
         while node in parents:

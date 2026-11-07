@@ -127,10 +127,10 @@ test('C3：全被判过期时退回原始结果，不能让她「搜不到」', 
 });
 
 test('C1：桥接里识别失败日志走节流函数', () => {
-  const src = fs.readFileSync(path.join(ROOT, 'bridge', 'engine.py'), 'utf8');
+  const src = require('./helpers/bridge-source');
   assert.match(src, /def log_throttled/, '要有节流函数');
-  assert.match(src, /log_throttled\("img-fail:/, '看图失败要走节流');
-  assert.match(src, /log_throttled\("voice-fail:/, '语音失败要走节流');
+  assert.match(src, /log_throttled\(['"]img-fail:/, '看图失败要走节流');
+  assert.match(src, /log_throttled\(['"]voice-fail:/, '语音失败要走节流');
   assert.doesNotMatch(src, /\n\s+log\("第 %d 段识别失败/, '不能再无条件刷日志');
 });
 
@@ -161,4 +161,3 @@ test('C2：不写配置也有默认清理策略（config.storage 必须存在）
   assert.equal(cfg2.storage.mediaKeepDays, 30, '用户自己配的要生效');
   fs.rmSync(dir, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
 });
-

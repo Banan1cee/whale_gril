@@ -254,15 +254,7 @@ class LiveEncodingTests(unittest.TestCase):
 class DirtyDraftPipelineTests(unittest.TestCase):
     def test_bridge_does_not_fall_back_or_disable_chat_after_dirty_draft(self):
         # 只提取发送闭包，避开 main 的真实微信连接；执行的仍是实际桥接代码。
-        file = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'bridge', 'engine.py')
-        with open(file, encoding='utf-8') as source:
-            tree = ast.parse(source.read())
-        functions = []
-        for name in ('bg_send', 'send_text'):
-            fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == name)
-            fn.body = [ast.copy_location(ast.Global(names=n.names), n) if isinstance(n, ast.Nonlocal) else n for n in fn.body]
-            functions.append(fn)
-        compiled = compile(ast.fix_missing_locations(ast.Module(body=functions, type_ignores=[])), file, 'exec')
+        from bridge_ast import init, load_function
         for reason in ('input_dirty', 'residue_left', 'input_not_empty', 'content_mismatch'):
             with self.subTest(reason=reason):
                 draft_error = type('DraftDirtyError', (RuntimeError,), {})
@@ -277,7 +269,9 @@ class DirtyDraftPipelineTests(unittest.TestCase):
                     SEND_STATE={}, gui=None, WeChatGUI=fallback)
                 module = SimpleNamespace(configure=Mock(), send=Mock(return_value=(False, reason)))
                 with patch.dict(sys.modules, {'bg_sender': module}):
-                    exec(compiled, env)
+                    init(env)
+                    load_function('bg_send', env)
+                    load_function('send_text', env)
                     self.assertFalse(env['send_text']('测试正文', '测试群'))
                 fallback.assert_not_called()
                 self.assertEqual(env['dead_chats'], set())

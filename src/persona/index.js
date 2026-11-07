@@ -1482,6 +1482,8 @@ module.exports = {
   cleanIncomingForPersona,
   splitBubbles,
   aliasList,
+  slangTerms,
+  slangTerms,
   emojiChanceFor,
   kaomojiPick,
   KAOMOJI,

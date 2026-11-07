@@ -79,7 +79,7 @@ function coerceValue(config, dotted, value) {
 
 /** 给界面看的配置：去掉内部字段，密钥留空但告诉它「配没配」 */
 function publicConfig(config) {
-  const internal = new Set(['env', 'paths', 'root', 'configExists']);
+  const internal = new Set(['env', 'paths', 'root', 'configExists', 'configError']);
   const out = JSON.parse(JSON.stringify(config, (k, v) => (internal.has(k) ? undefined : v)));
   const secrets = {};
   for (const p of SECRET_PATHS) {
@@ -175,8 +175,16 @@ function applyConfigPatch(runtime, patch) {
   let raw = {};
   try {
     raw = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')) || {};
-  } catch {
-    raw = {};
+  } catch (err) {
+    // 只有「文件不存在」（首次运行）才从 {} 起步；JSON 坏了 / 没权限一律拒绝写入，
+    // 否则启动器每点一次保存就把整份 config.json 覆盖成「只有本次改的字段」。
+    if (err && err.code === 'ENOENT') raw = {};
+    else {
+      throw Object.assign(
+        new Error(`config.json 读不出来（${(err && err.message) || err}），已拒绝保存，免得把整份配置覆盖掉。先手工修好 config.json 再改设置。`),
+        { statusCode: 500 }
+      );
+    }
   }
   const changed = [];
   const pending = [];
@@ -314,8 +322,16 @@ function saveConfigPatch(config, patch) {
   let raw = {};
   try {
     raw = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')) || {};
-  } catch {
-    raw = {};
+  } catch (err) {
+    // 只有「文件不存在」（首次运行）才从 {} 起步；JSON 坏了 / 没权限一律拒绝写入，
+    // 否则启动器每点一次保存就把整份 config.json 覆盖成「只有本次改的字段」。
+    if (err && err.code === 'ENOENT') raw = {};
+    else {
+      throw Object.assign(
+        new Error(`config.json 读不出来（${(err && err.message) || err}），已拒绝保存，免得把整份配置覆盖掉。先手工修好 config.json 再改设置。`),
+        { statusCode: 500 }
+      );
+    }
   }
   for (const [dotted, next] of pending) {
     setByPath(raw, dotted, next);

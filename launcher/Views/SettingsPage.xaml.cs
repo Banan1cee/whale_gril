@@ -478,13 +478,6 @@ namespace WhaleLauncher.Views
             return 0;
         }
 
-        private Border BuildSection(SectionSpec spec)
-        {
-            var card = Card(spec.Title, spec.Note, out var body);
-            foreach (var f in spec.Fields) body.Children.Add(BuildField(f));
-            return card;
-        }
-
         // ── 单个字段 ────────────────────────────────────────────
         /// <param name="compact">两列并排时用的紧凑标签列</param>
         /// <param name="width">单独指定标签列宽（不传就按 compact 取默认值）</param>

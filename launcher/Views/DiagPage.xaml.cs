@@ -592,19 +592,6 @@ namespace WhaleLauncher.Views
             try { return Directory.GetFiles(dir); } catch { return Array.Empty<string>(); }
         }
 
-        private string LatestRunDir()
-        {
-            try
-            {
-                var root = Path.Combine(_sup.DataDir, "logs");
-                if (!Directory.Exists(root)) return null;
-                return Directory.GetDirectories(root, "run-*")
-                    .OrderByDescending(d => Path.GetFileName(d), StringComparer.OrdinalIgnoreCase)
-                    .FirstOrDefault();
-            }
-            catch { return null; }
-        }
-
         private IEnumerable<string> RunDirs()
         {
             try

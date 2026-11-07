@@ -35,31 +35,59 @@ function newestDbMtime(storageDir) {
   return newest;
 }
 
-/** 扫 dbDir 下所有账号目录（判定标准：子目录里有 db_storage） */
+/** 微信 4.x 数据目录的常见名字（和桥接 bridge/wechat_db.py 的 DB_ROOT_NAMES 保持一致） */
+const DB_ROOT_NAMES = ['xwechat_files', 'WeChat Files', 'xwechat_files_data'];
+
+/**
+ * 扫 dbDir 下所有账号目录（判定标准：子目录里有 db_storage）。
+ *
+ * 口径必须和桥接 `looks_like_db_root` / `find_account_dirs` 一致，四种布局都认：
+ *   1) <dbDir>/<账号>/db_storage                        标准
+ *   2) <dbDir>/xwechat_files/<账号>/db_storage           数据根填高了一层
+ *   3) <dbDir>/db_storage                                直填账号目录
+ *   4) dbDir 本身就是 …/<账号>/db_storage                 直填 db_storage
+ * 以前只数直接子目录，于是用户把 dbDir 填成 `E:\WeChat Files`（真实库在它下面的
+ * `xwechat_files` 里）时，启动器列账号 0 个，桥接也报「一个都没有」。
+ */
 function scanWechatAccounts(dbDir) {
   const out = [];
   if (!dbDir) return out;
-  let names = [];
-  try {
-    names = fs.readdirSync(dbDir);
-  } catch {
-    return out;
-  }
-  for (const name of names) {
-    const dir = path.join(dbDir, name);
+  const seen = new Set();
+  const push = (account, storage) => {
+    if (!account || seen.has(account)) return;
+    seen.add(account);
+    out.push({
+      account,
+      // 目录名末尾 4 位是微信加的哈希，去掉就是 wxid（和 wechatauto 的规则一致）
+      wxid: account.replace(/_\w{4}$/, ''),
+      lastActive: newestDbMtime(storage),
+    });
+  };
+  const bases = [dbDir, ...DB_ROOT_NAMES.map((n) => path.join(dbDir, n))];
+  for (const base of bases) {
+    let names = [];
     try {
-      if (!fs.statSync(dir).isDirectory()) continue;
+      names = fs.readdirSync(base);
     } catch {
       continue;
     }
-    const storage = path.join(dir, 'db_storage');
-    if (!fs.existsSync(storage)) continue;
-    out.push({
-      account: name,
-      // 目录名末尾 4 位是微信加的哈希，去掉就是 wxid（和 wechatauto 的规则一致）
-      wxid: name.replace(/_\w{4}$/, ''),
-      lastActive: newestDbMtime(storage),
-    });
+    for (const name of names) {
+      const dir = path.join(base, name);
+      try {
+        if (!fs.statSync(dir).isDirectory()) continue;
+      } catch {
+        continue;
+      }
+      const storage = path.join(dir, 'db_storage');
+      if (fs.existsSync(storage)) push(name, storage);
+    }
+  }
+  const norm = path.normalize(dbDir);
+  const direct = path.join(dbDir, 'db_storage');
+  if (fs.existsSync(direct)) {
+    push(path.basename(norm), direct);
+  } else if (path.basename(norm).toLowerCase() === 'db_storage') {
+    push(path.basename(path.dirname(norm)), norm);
   }
   out.sort((a, b) => b.lastActive - a.lastActive);
   return out;

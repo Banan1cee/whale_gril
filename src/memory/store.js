@@ -22,36 +22,13 @@ const relations = require('./relations');
 const { LIMITS, DAY_MS } = require('./constants');
 const { estimateTokens, estimateBudgetTokens } = require('./tokens');
 const { describeError } = require('../infra/errors');
+const { readJson, readJournal } = require('../infra/jsonFile');
 
 /* ------------------------------ 旧文件读取（兼容工具） ------------------------------ */
 
-function readJsonQuiet(file) {
-  try {
-    return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
-  } catch {
-    return null;
-  }
-}
-
-function readJournal(file) {
-  let raw = '';
-  try {
-    raw = fs.readFileSync(file + '.journal', 'utf8');
-  } catch {
-    return [];
-  }
-  const out = [];
-  for (const line of raw.split('\n')) {
-    const s = line.trim();
-    if (!s) continue;
-    try { out.push(JSON.parse(s)); } catch { /* 半截行 */ }
-  }
-  return out;
-}
-
 /** 旧版 store.json + journal 的合并读取；v2 不再写这个文件，只给迁移/工具用 */
 function readStoreFile(file) {
-  const snap = readJsonQuiet(file) || {};
+  const snap = readJson(file) || {};
   const base = {
     version: snap.version || 1,
     savedAt: snap.savedAt || null,
@@ -921,4 +898,3 @@ class Store {
 }
 
 module.exports = { Store, readStoreFile, trimText };
-

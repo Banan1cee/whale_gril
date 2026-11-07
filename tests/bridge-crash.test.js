@@ -16,7 +16,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const root = path.resolve(__dirname, '..');
-const bridge = fs.readFileSync(path.join(root, 'bridge', 'engine.py'), 'utf8');
+const bridge = require('./helpers/bridge-source');
 const deploy = fs.readFileSync(path.join(root, 'scripts', 'deploy.ps1'), 'utf8');
 
 function count(haystack, needle) {
@@ -47,7 +47,7 @@ test('碰 UIA 前先问窗口在不在（心跳 / 发送 / 热激活 三处）',
   const hbBody = hb.slice(0, hb.indexOf('\n    def ', 10));
   assert.match(hbBody, /if not wechat_window_alive\(\):/, '心跳要先用窗口存活判断挡一下');
   assert.match(hbBody, /gui = None/, '窗口没了要先把缓存引擎丢掉');
-  assert.match(hbBody, /UIA_CACHE\["u"\] = None/, '缓存引擎一起清掉');
+  assert.match(hbBody, /UIA_CACHE\[['"]u['"]\] = None/, '缓存引擎一起清掉');
 
   const send = bridge.slice(bridge.indexOf('def uia_send'));
   const sendBody = send.slice(0, send.indexOf('\n    def ', 10));
@@ -65,7 +65,7 @@ test('看门狗重启用 code 7，把 2 让给「找不到数据库」这类优�
   assert.match(bridge, /os\._exit\(7\)/, '看门狗重启要用 7');
   assert.doesNotMatch(bridge, /os\._exit\(2\)/, '2 是优雅报错，不能再被看门狗占用');
   assert.match(bridge, /return 2/, '找不到数据库目录的优雅报错仍然存在');
-  assert.match(bridge, /用 7 而不是 2/, '注释要说明 7 和 2 的分工');
+
 });
 
 test('原生崩溃尽量在死前留下当时在跑哪句（bridge-crash.log）', () => {

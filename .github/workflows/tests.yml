@@ -104,7 +104,14 @@ jobs:
         if: always()
         run: node scripts/privacy-scan.js .
 
-      - name: Node 单元测试（不需要装任何依赖）
+      # Node 回归也会启动 Python 并通过 bridge_ast 导入真实桥接模块，
+      # 因此 requests、图片解码和 AES 依赖必须在两组测试之前就绪。
+      - name: Python 依赖（Node / Python 桥接回归）
+        if: always()
+        shell: pwsh
+        run: python -m pip install --disable-pip-version-check --quiet pillow cryptography requests
+
+      - name: Node 单元测试（零 npm 依赖，含 Python 桥接回归）
         if: always()
         shell: pwsh
         # 注意：pwsh 不会展开引号里的通配符，所以走 npm test（内部是
@@ -123,14 +130,6 @@ jobs:
             Write-Output "::error title=node-tests::$msg"
             exit $code
           }
-
-      # 图片 / 表情包回归要真解码：Pillow 解图与抽帧、cryptography 试 AES 回源解密、
-      # requests 被 bridge/engine.py 导入。这三个随包 runtime 里本来就有，CI 不装就等于
-      # 把「真实解码路径」整组跳过（test_received_media.py 会 skip），等于没守。
-      - name: Python 依赖（看图 / 表情包回归）
-        if: always()
-        shell: pwsh
-        run: python -m pip install --disable-pip-version-check --quiet pillow cryptography requests
 
       - name: Python 单元测试
         if: always()

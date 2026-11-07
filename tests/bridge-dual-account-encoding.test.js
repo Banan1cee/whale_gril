@@ -17,7 +17,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const ROOT = path.resolve(__dirname, '..');
-const ENGINE = fs.readFileSync(path.join(ROOT, 'bridge/engine.py'), 'utf8');
+const ENGINE = require('./helpers/bridge-source');
 const BG = fs.readFileSync(path.join(ROOT, 'bridge/bg_sender.py'), 'utf8');
 
 test('双开认窗：候选窗口不再被 pick_window() 砍成一个', () => {
@@ -25,7 +25,7 @@ test('双开认窗：候选窗口不再被 pick_window() 砍成一个', () => {
   assert.doesNotMatch(ENGINE, /if\s+good\s+and\s+h\s*!=\s*good/, '候选窗口又被单个 pick_window 结果过滤了');
   assert.match(
     ENGINE,
-    /pinned = int\(ACCOUNT\.get\("hwnd"\) or 0\) if ACCOUNT\.get\("verified"\) else 0/,
+    /pinned = int\(ACCOUNT\.get\(["']hwnd["']\) or 0\) if ACCOUNT\.get\(["']verified["']\) else 0/,
     '只有已确认的账号窗口才允许当过滤器'
   );
   // 每个候选窗口单独校验 Weixin.dll
@@ -41,7 +41,7 @@ test('双开认窗：已锁定的窗口失效就重新认，不顺手换成大�
 test('UIA 预热不会把未确认的窗口写进 ACCOUNT', () => {
   assert.match(
     ENGINE,
-    /if h and h != prefer and ACCOUNT\.get\("verified"\):\s*\n\s*ACCOUNT\["hwnd"\] = h/,
+    /if h and h != prefer and ACCOUNT\.get\(["']verified["']\):\s*\n\s*ACCOUNT\[["']hwnd["']\] = h/,
     '预热阶段会把按面积挑中的大号窗口钉成账号窗口'
   );
 });
@@ -50,7 +50,7 @@ test('data/accounts.json 缺失时桥接自己补写（删 data 也能自愈）'
   assert.match(ENGINE, /def write_accounts_cache\(db_dir/, '缺 write_accounts_cache');
   assert.match(ENGINE, /def _heal_accounts_cache\(\):/, '缺启动自愈线程');
   assert.match(ENGINE, /write_accounts_cache\(db\.db_dir or db_dir, db\.account, _self_nick\)/);
-  assert.match(ENGINE, /"accounts\.json"/);
+  assert.match(ENGINE, /["']accounts\.json["']/);
   assert.match(ENGINE, /find_account_dirs\(db_dir\)/, '补写时必须扫全部账号目录，不能只写当前号');
 });
 

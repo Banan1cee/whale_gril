@@ -124,7 +124,7 @@ namespace WhaleLauncher.Views
                 var res = await Api.Post(_sup.Url, "/api/config", body);
                 if (!res.Ok)
                 {
-                    SetError("保存失败：" + Detail(res));
+                    SetError("保存失败：" + Api.Detail(res));
                     Status?.Invoke("白名单 / 黑名单保存失败，界面先保留旧值。");
                     return;
                 }
@@ -263,14 +263,6 @@ namespace WhaleLauncher.Views
 
         private static string ArrayLiteral(IEnumerable<string> ids)
             => "[" + string.Join(",", ids.Select(i => "\"" + Api.Esc(i) + "\"")) + "]";
-
-        private static string Detail(ApiResult res)
-        {
-            var raw = (res?.Raw ?? "").Trim();
-            if (raw.Length == 0) return res?.Error ?? "";
-            raw = raw.Replace("\r", " ").Replace("\n", " ");
-            return raw.Length > 120 ? raw.Substring(0, 120) + "…" : raw;
-        }
 
         private static string GetStr(JsonElement e, string name)
             => e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String

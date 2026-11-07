@@ -10,7 +10,7 @@ const path = require('node:path');
 
 const root = path.resolve(__dirname, '..');
 const visionSrc = fs.readFileSync(path.join(root, 'src', 'adapters', 'vision.js'), 'utf8');
-const bridgeSrc = fs.readFileSync(path.join(root, 'bridge', 'engine.py'), 'utf8');
+const bridgeSrc = require('./helpers/bridge-source');
 
 test('视觉提示词要求逐条转写，并且分清左右气泡', () => {
   assert.match(visionSrc, /对方：/, '要教它标「对方：」');
@@ -31,7 +31,7 @@ test('视觉模型的输出上限给满（智谱上限 1024，不能再被截断
 });
 
 test('桥接优先拿完整图，不拿缩略图', () => {
-  assert.match(bridgeSrc, /for _tier in \("full", "best"\)/, '要按 full → best 顺序取图');
+  assert.match(bridgeSrc, /for _tier in \(['"]full['"], ['"]best['"]\)/, '要按 full → best 顺序取图');
   assert.match(bridgeSrc, /tier=_tier/);
   assert.match(bridgeSrc, /图片档位/, '要记日志，方便排查');
 });

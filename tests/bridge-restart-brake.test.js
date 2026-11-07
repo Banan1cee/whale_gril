@@ -50,7 +50,7 @@ test('RuntimeSupervisor：桥接起来/重启都由它负责（不再有外部�
 });
 
 test('engine.py：视频号卡片装死不接话（UIA 卡死的触发面）', () => {
-  const py = read('bridge/engine.py');
+  const py = require('./helpers/bridge-source');
   assert.match(py, /finderfeed/, '要认视频号卡片的 XML');
   assert.match(py, /收到视频号卡片，装死/, '视频号卡片不识别不回，避免拉起视频号窗口');
   // 仍要保留普通链接分享的处理

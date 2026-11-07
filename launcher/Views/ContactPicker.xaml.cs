@@ -142,7 +142,7 @@ namespace WhaleLauncher.Views
 
             if (!res.Ok)
             {
-                ShowState("联系人接口还没就绪（GET /api/wechat/contacts 失败）。" + Detail(res), true);
+                ShowState("联系人接口还没就绪（GET /api/wechat/contacts 失败）。" + Api.Detail(res), true);
                 UpdateFooter();
                 return;
             }
@@ -232,14 +232,6 @@ namespace WhaleLauncher.Views
             StateText.Text = text ?? "";
             StateText.Foreground = error ? (Brush)FindResource("Bad") : (Brush)FindResource("Dim");
             StateText.Visibility = Visibility.Visible;
-        }
-
-        private static string Detail(ApiResult res)
-        {
-            var raw = (res?.Raw ?? "").Trim();
-            if (raw.Length == 0) return res?.Error ?? "";
-            raw = raw.Replace("\r", " ").Replace("\n", " ");
-            return raw.Length > 120 ? raw.Substring(0, 120) + "…" : raw;
         }
 
         private static string GetStr(JsonElement e, string name)

@@ -19,7 +19,7 @@ const { execFileSync } = require('node:child_process');
 
 const root = path.resolve(__dirname, '..');
 const fallback = fs.readFileSync(path.join(root, 'examples', 'media_fallback.py'), 'utf8');
-const bridge = fs.readFileSync(path.join(root, 'bridge', 'engine.py'), 'utf8');
+const bridge = require('./helpers/bridge-source');
 
 test('兜底模块存在，且会替换「找图片 / 密钥探针 / 模板」三处', () => {
   assert.match(fallback, /def install_media_fallback/);
