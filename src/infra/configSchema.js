@@ -59,6 +59,7 @@ const FIELDS = {
   'sticker.demandChance': { type: 'float', min: 0, max: 1 },
   // 命中提醒的轮次，模型没写标记也由程序补一张（1.0 + 开启才约等于每轮都发）。
   'sticker.ensureSend': { type: 'bool' },
+  'sticker.collectReceived': { type: 'bool' },
 
   // ---- 记忆（旧键，运行时只读 constants.js）----
   // 唯一生效的可调项：对话预算（不含 system prompt）。没有上限：
@@ -89,6 +90,8 @@ const FIELDS = {
   'env.autoDetect': { type: 'bool' },
   // ---- 提醒（规则字段和 care 对齐，配置独立）----
   'reminder.enabled': { type: 'bool' },
+  'diary.enabled': { type: 'bool' },
+  'diary.time': { type: 'string', maxLen: 5, pattern: /^([01]\d|2[0-3]):[0-5]\d$/ },
   'reminder.maxPerDay': { type: 'int', min: 0, max: 200 },
   'reminder.quietAfterMinutes': { type: 'int', min: 0, max: 1440 },
 
@@ -177,6 +180,7 @@ function checkValue(value, spec) {
   }
   if (spec.type === 'string') {
     if (typeof value !== 'string') return `应该是字符串，实际是 ${JSON.stringify(value)}`;
+    if (spec.pattern && !spec.pattern.test(value)) return '请填写 24 小时制时间 HH:mm（如 23:00）';
     if (spec.maxLen && value.length > spec.maxLen) return `太长（最多 ${spec.maxLen} 个字符）`;
     return null;
   }

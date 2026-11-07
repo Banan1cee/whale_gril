@@ -90,7 +90,7 @@ test('C3-2：「今天」把丢旧结果的阈值收紧到 2 天，四天前的�
   assert.equal(websearch.effectiveMaxAgeDays('今天显卡多少钱', 'strict'), 2);
   assert.equal(websearch.effectiveMaxAgeDays('显卡行情', 'strict'), 90);
   assert.equal(websearch.effectiveMaxAgeDays('这周发布会', 'normal'), 7);
-  assert.equal(websearch.effectiveMaxAgeDays('今天有什么新闻', 'any'), null);
+  assert.equal(websearch.effectiveMaxAgeDays('今天有什么新闻', 'any'), 2);
 });
 
 test('C3：问「最新」时丢掉明显过期结果', () => {
@@ -121,9 +121,9 @@ test('C3：模型判的时效三档决定丢弃阈值（strict 90 / normal 365 /
   assert.deepEqual(websearch.dropStaleResults('随便', results, { maxAgeDays: 365 }).map((x) => x.title), ['近文', '中年']);
   assert.equal(websearch.dropStaleResults('随便', results, { maxAgeDays: null }).length, 3);
 });
-test('C3：全被判过期时退回原始结果，不能让她「搜不到」', () => {
+test('C3：全被判过期时如实返回无有效结果', () => {
   const results = [{ title: '旧文', snippet: '2010年3月4日 z' }];
-  assert.equal(websearch.dropStaleResults('最新显卡', results).length, 1);
+  assert.equal(websearch.dropStaleResults('最新显卡', results).length, 0);
 });
 
 test('C1：桥接里识别失败日志走节流函数', () => {
@@ -161,4 +161,3 @@ test('C2：不写配置也有默认清理策略（config.storage 必须存在）
   assert.equal(cfg2.storage.mediaKeepDays, 30, '用户自己配的要生效');
   fs.rmSync(dir, { recursive: true, force: true, maxRetries: 6, retryDelay: 60 });
 });
-

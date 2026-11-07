@@ -34,7 +34,6 @@ namespace WhaleLauncher
         private bool _busy;
         private bool _refreshing;
         private bool _memoryNoticeChecked;
-        private Snapshot _last;
 
         private static readonly NavEntry[] NavKeys =
         {
@@ -60,6 +59,7 @@ namespace WhaleLauncher
             VersionText.Text = ver.Length > 0 ? "v" + ver : "v?";
 
             foreach (var k in NavKeys) Nav.Items.Add(k);
+            Nav.Items.Add(new NavEntry { Key = "朋友圈", Label = "朋友圈", Icon = NavKeys[2].Icon });
             Nav.Items.Insert(3, new NavEntry { Key = "语音发送", Label = "语音发送", Icon = Geometry.Parse("M9 3h6v12H9z M5 10v3a7 7 0 0 0 14 0v-3 M12 20v3 M8 23h8") });
             Nav.SelectedIndex = 0;
 
@@ -558,6 +558,7 @@ namespace WhaleLauncher
                 case "人设": return new PersonaPage(_sup);
                 case "表情包": return new StickerPage(_sup);
                 case "语音发送": return new VoiceSendPage(_sup);
+                case "朋友圈": return new MomentsPage(_sup);
                 case "主动与提醒": return new ReminderPage(_sup);
                 case "微信桥接": return new BridgePage(_sup);
                 case "诊断": return new DiagPage(_sup);
@@ -597,8 +598,7 @@ namespace WhaleLauncher
                 {
                     BtnToggle.IsEnabled = false;
                     _sup.Say("— 启动中 —");
-                    _sup.StartNode();
-                    if (await _sup.WaitForNodeAsync()) _sup.StartBridge();
+                    await _sup.StartAllAsync(clearRestartHistory: false);
                 }
             }
             finally
@@ -619,8 +619,7 @@ namespace WhaleLauncher
                 _sup.Say("— 重启中 —");
                 await Task.Run(() => _sup.StopAll());
                 await Task.Delay(600);
-                _sup.StartNode();
-                if (await _sup.WaitForNodeAsync()) _sup.StartBridge();
+                await _sup.StartAllAsync(clearRestartHistory: false);
             }
             finally
             {
@@ -651,7 +650,6 @@ namespace WhaleLauncher
             try
             {
                 var s = await _sup.ProbeAsync();
-                _last = s;
 
                 // 内核每次就绪后查一次：启动时自动迁移了旧记忆就弹一次提示（ack 后不再弹）
                 if (!s.NodeReady) _memoryNoticeChecked = false;
@@ -696,13 +694,5 @@ namespace WhaleLauncher
             finally { _refreshing = false; }
         }
 
-        private static string Uptime(long sec)
-        {
-            if (sec <= 0) return "0 秒";
-            var t = TimeSpan.FromSeconds(sec);
-            if (t.TotalHours >= 1) return $"{(int)t.TotalHours}:{t.Minutes:00}:{t.Seconds:00}";
-            if (t.TotalMinutes >= 1) return $"{t.Minutes} 分 {t.Seconds:00} 秒";
-            return $"{t.Seconds} 秒";
-        }
     }
 }

@@ -468,7 +468,7 @@ function webSearchContext(msg, now) {
       '程序确实能联网查资料，但本次只有以上资料；不要否认联网能力，也不要声称已经读过未抓取的正文或完成了未发生的核实。',
     ].join('\n');
   }
-  if (msg.webSearchStatus === 'empty') {
+  if (msg.webSearchStatus === 'empty' || msg.webSearchStatus === 'failed') {
     return '【本次联网状态】已尝试查询，但本次查询失败或无有效资料。没有可引用的检索结果；不要声称“已查到/刚核实”，不要编造当前型号、价格或热点。说明本次具体未能确认的事实即可，不要否认所有联网能力，也不要照抄固定推脱台词。';
   }
   return '';
@@ -1482,6 +1482,7 @@ module.exports = {
   cleanIncomingForPersona,
   splitBubbles,
   aliasList,
+  slangTerms,
   emojiChanceFor,
   kaomojiPick,
   KAOMOJI,

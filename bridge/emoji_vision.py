@@ -5,6 +5,7 @@ import html
 import io
 import os
 import re
+import tempfile
 from urllib.parse import urlparse, urljoin
 
 MAX_BYTES = 8 * 1024 * 1024
@@ -86,7 +87,29 @@ def sources(account_dir, attrs, digest, allow_network, fetch):
             continue
 
 
-def load_preview(account_dir, content, allow_network=False, fetch=None):
+def save_original(directory, data, image_format):
+    """原始字节落盘，不把识图拼接 PNG 当成收到的动画。"""
+    ext = {'GIF': '.gif', 'PNG': '.png', 'JPEG': '.jpg', 'WEBP': '.webp'}.get(image_format)
+    if not ext or not data or len(data) > MAX_BYTES:
+        return None
+    name = hashlib.sha256(data).hexdigest() + ext
+    target = os.path.join(directory, name)
+    if os.path.isfile(target):
+        return target
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix='.collect-', suffix='.tmp', dir=directory)
+    try:
+        with os.fdopen(fd, 'wb') as stream:
+            stream.write(data)
+        # 同一内容在不同会话并发到达时仍然只产生一个文件。
+        os.replace(tmp, target)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+    return target
+
+
+def load_preview(account_dir, content, allow_network=False, fetch=None, on_original=None):
     attrs = attributes(content)
     digest = attrs.get('md5', '').lower()
     if not re.fullmatch(r'[0-9a-f]{32}', digest):
@@ -94,6 +117,8 @@ def load_preview(account_dir, content, allow_network=False, fetch=None):
     from PIL import Image
     for data in sources(account_dir, attrs, digest, allow_network, fetch or fetch_asset):
         if len(data) > MAX_BYTES:
+            continue
+        if hashlib.md5(data).hexdigest() != digest:
             continue
         try:
             with Image.open(io.BytesIO(data)) as image:
@@ -119,6 +144,8 @@ def load_preview(account_dir, content, allow_network=False, fetch=None):
                 output = io.BytesIO()
                 preview.save(output, format='PNG')
                 if output.tell() <= MAX_BYTES:
+                    if on_original:
+                        on_original(data, image.format)
                     return output.getvalue(), len(frames)
         except (OSError, ValueError, EOFError, Image.DecompressionBombError):
             continue

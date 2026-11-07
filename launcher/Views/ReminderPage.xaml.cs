@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -54,6 +56,8 @@ namespace WhaleLauncher.Views
             TxtMaxPerDay.LostFocus += async (_, __) => await SaveRulesAsync();
             TxtQuiet.LostFocus += async (_, __) => await SaveRulesAsync();
             ChkEnabled.Click += async (_, __) => await SaveRulesAsync();
+            ChkDiaryEnabled.Click += async (_, __) => await SaveDiaryAsync();
+            TxtDiaryTime.LostFocus += async (_, __) => await SaveDiaryAsync();
             foreach (var box in new[] { TxtCareEvery, TxtCareJitter, TxtCareMax, TxtCareQuiet, TxtCareWindows })
                 box.LostFocus += async (_, __) => await SaveCareAsync();
             foreach (var chk in new[] { ChkCareEnabled, ChkCareOnlyMaster, ChkCareGroups, ChkCareOthers })
@@ -123,6 +127,7 @@ namespace WhaleLauncher.Views
                     EmptyText.Visibility = Visibility.Collapsed;
                 }
                 LoadRules(res.Prop("rules"), full || !_formsLoaded);
+                await LoadDiaryAsync(full || !_formsLoaded);
                 if (full || !_formsLoaded) await LoadCareAsync();   // 周期刷新不碰表单，免得覆盖正在编辑的值（M30）
                 _formsLoaded = true;
                 StatusText.Text = "共 " + rows.Count + " 条 · " + DateTime.Now.ToString("HH:mm:ss") + " 刷新";
@@ -143,6 +148,65 @@ namespace WhaleLauncher.Views
         {
             _lastLoad = DateTime.MinValue;
             await RefreshAsync(true);   // 手动刷新 = 全量回填（M30）
+        }
+
+        private async Task LoadDiaryAsync(bool full)
+        {
+            var res = await Api.Get(_sup.Url, "/api/diary");
+            if (!res.Ok) { DiaryStatus.Text = "读取日记状态失败：" + res.Error; return; }
+            if (full)
+            {
+                if (!ChkDiaryEnabled.IsKeyboardFocusWithin) ChkDiaryEnabled.IsChecked = res.Prop("enabled").ValueKind == JsonValueKind.True;
+                if (!TxtDiaryTime.IsKeyboardFocusWithin) TxtDiaryTime.Text = res.Str("time");
+            }
+            DiaryStatus.Text = res.Str("message");
+            BtnWriteDiary.IsEnabled = res.Str("status") != "running";
+        }
+
+        private async void OnSaveDiary(object sender, RoutedEventArgs e) => await SaveDiaryAsync();
+
+        private async Task SaveDiaryAsync()
+        {
+            if (!_sup.NodeRunning) { DiarySettingsStatus.Text = "请先启动内核，再保存日记设置。"; return; }
+            var time = TxtDiaryTime.Text.Trim();
+            if (!System.Text.RegularExpressions.Regex.IsMatch(time, @"^([01]\d|2[0-3]):[0-5]\d$"))
+            {
+                DiarySettingsStatus.Text = "时间请填 HH:mm，例如 23:00。";
+                return;
+            }
+            try
+            {
+                var res = await Api.Post(_sup.Url, "/api/config", JsonSerializer.Serialize(new
+                {
+                    patch = new Dictionary<string, object> { ["diary.enabled"] = ChkDiaryEnabled.IsChecked == true, ["diary.time"] = time }
+                }));
+                DiarySettingsStatus.Text = res.Ok ? "日记设置已保存" : "保存失败：" + res.Error;
+            }
+            catch (Exception ex) { DiarySettingsStatus.Text = Api.FriendlyError(ex); }
+        }
+
+        private async void OnWriteDiary(object sender, RoutedEventArgs e)
+        {
+            BtnWriteDiary.IsEnabled = false;
+            try
+            {
+                var res = await Api.Post(_sup.Url, "/api/diary/generate", "{}");
+                DiaryStatus.Text = res.Ok ? res.Str("message") : "生成失败：" + res.Error;
+                if (res.Ok) await LoadDiaryAsync(false);
+                else BtnWriteDiary.IsEnabled = true;
+            }
+            catch (Exception ex) { DiaryStatus.Text = Api.FriendlyError(ex); BtnWriteDiary.IsEnabled = true; }
+        }
+
+        private void OnOpenDiary(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                var dir = Path.Combine(_sup.DataDir, "diary");
+                Directory.CreateDirectory(dir);
+                Process.Start(new ProcessStartInfo("explorer.exe", "\"" + dir + "\"") { UseShellExecute = true });
+            }
+            catch (Exception ex) { DiaryStatus.Text = Api.FriendlyError(ex); }
         }
 
         private async void OnCancelReminder(object sender, RoutedEventArgs e)

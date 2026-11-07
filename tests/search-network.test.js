@@ -80,6 +80,26 @@ const bing = (...rows) => rows.map(([title, url, snippet = title]) =>
   `<li class="b_algo"><h2><a href="${url}">${title}</a></h2><p>${snippet}</p></li>`).join('');
 const one = bing(['显卡行情 A', 'https://example.test/a']);
 
+test('search trace reports source/filter evidence without query or body and cannot break results', async (t) => {
+  fakeHttps(t, () => ({ body: bing(['显卡行情 A', 'https://example.test/a'], ['显卡行情 B', 'https://example.test/b']) }));
+  const events = [];
+  const results = await web.search('显卡行情', { trace: (stage, data) => events.push({ stage, ...data }) });
+  assert.ok(results.length > 0);
+  assert.ok(events.some(e => e.stage === 'filter' && e.parsed === 2));
+  assert.ok(events.some(e => e.stage === 'result' && e.sources.includes('example.test')));
+  assert.ok(!JSON.stringify(events).includes('显卡行情'));
+  const again = await web.search('显卡行情', { trace: () => { throw new Error('broken logger'); } });
+  assert.deepEqual(again, results);
+});
+
+test('search transport failure reports type/code/status instead of silently returning empty', async (t) => {
+  fakeHttps(t, () => ({ error: 'private query detail' }));
+  const events = [];
+  assert.deepEqual(await web.search('显卡行情', { trace: (stage, data) => events.push({ stage, ...data }) }), []);
+  assert.ok(events.some(e => e.stage === 'failed' && e.type === 'Error'));
+  assert.ok(!JSON.stringify(events).includes('private'));
+});
+
 test('route input survives the real client payload contract (content, not text)', async () => {
   let payload;
   const client = Object.assign(Object.create(DeepSeekClient.prototype), { maxTokens: 700, temperature: 0.7, provider: 'test', logger: null });
@@ -274,4 +294,119 @@ test('weather geocoding and forecast use one total deadline', async (t) => {
   // 共用 → 约 300ms 收工；各等一个完整超时 → 600ms 起步。
   // 阈值取 500（离 600 有明显距离），给并行跑测试文件时卡顿的 CI 留余量。
   assert.ok(elapsed < 500, `共享预算失效：耗时 ${elapsed}ms（两步各等一个超时会是 600ms+）`);
+});
+
+const so = (title, url, snippet = title) => `<li class="res-list" data-result-type="normal"><h3 class="res-title"><a href="https://www.so.com/link?m=fixture" data-mdurl="${url}">${title}</a></h3><p class="res-desc">${snippet}</p></li>`;
+
+test('360 解析真实地址、摘要和实体，丢弃广告、不透明跳转和危险链接', () => {
+  const { parseSo360 } = require('../src/adapters/search/so360');
+  const html = so('<em>显卡</em>报价', 'https://example.test/price?id=1&amp;utm_source=so', '5天前&nbsp;-&nbsp;显卡价格')
+    + '<li class="res-list"><h3 class="res-title"><a href="https://www.so.com/link?m=opaque">不透明</a></h3></li>'
+    + '<li class="res-list"><h3 class="res-title"><a href="javascript:alert(1)">危险</a></h3></li>'
+    + '<li class="advert"><h3 class="res-title"><a href="https://ad.test/">广告</a></h3></li>';
+  assert.deepEqual(parseSo360(html), [{ title: '显卡报价', url: 'https://example.test/price?id=1', snippet: '5天前 - 显卡价格' }]);
+});
+
+test('360 验证码与明确无结果分开报告', async t => {
+  const provider = require('../src/adapters/search/so360');
+  fakeHttps(t, call => new URL(call.url).searchParams.get('q') === 'blocked'
+    ? { body: '<html>安全验证 请输入验证码</html>' } : { body: '<html>没有找到相关结果</html>' });
+  await assert.rejects(provider.search('blocked', { timeoutMs: 1000 }), { code: 'blocked' });
+  assert.deepEqual(await provider.search('empty', { timeoutMs: 1000 }), []);
+});
+
+test('首源失败后备用源恢复，并保留尝试原因和来源时间', async t => {
+  const calls = fakeHttps(t, call => call.url.includes('www.so.com')
+    ? { body: so('显卡行情', 'https://example.test/new') }
+    : { status: 503 });
+  const value = await web.searchResult('显卡行情', { timeoutMs: 1000 });
+  assert.equal(value.status, 'ok');
+  assert.equal(value.items[0].provider, 'so360');
+  assert.ok(Date.parse(value.items[0].fetchedAt));
+  assert.equal(value.items[0].publishedAt, null);
+  assert.ok(value.attempts.some(x => x.code === 'http_error' && x.status === 'failed' && x.error.status === 503));
+  assert.ok(calls.some(x => x.url.includes('www.so.com')));
+});
+
+test('首源全部过期时继续备用检索，旧资料仅保留为诊断证据', async t => {
+  fakeHttps(t, call => call.url.includes('www.so.com')
+    ? { body: so('显卡今日报价', 'https://example.test/new', '刚刚 显卡报价') }
+    : { body: bing(['显卡报价', 'https://example.test/old', '2010年3月4日 显卡报价']) });
+  const value = await web.searchResult('今天显卡价格', { timeoutMs: 1000, maxAgeDays: 2 });
+  assert.equal(value.status, 'ok');
+  assert.deepEqual(value.items.map(x => x.url), ['https://example.test/new']);
+  assert.equal(value.staleItems.length, 1);
+});
+
+test('所有源只有旧资料时返回 stale_only，不伪造成功', async t => {
+  fakeHttps(t, call => call.url.includes('www.so.com') ? { body: '' }
+    : { body: bing(['显卡报价', 'https://example.test/old', '2010年3月4日 显卡报价']) });
+  const value = await web.searchResult('今天显卡价格', { timeoutMs: 1000, maxAgeDays: 2 });
+  assert.equal(value.status, 'empty');
+  assert.equal(value.reason, 'stale_only');
+  assert.deepEqual(value.items, []);
+});
+
+test('实际返回域名也必须符合平台约束，备用源不能绕过', async t => {
+  const calls = fakeHttps(t, call => call.url.includes('www.so.com')
+    ? { body: so('三体动画', 'https://www.bilibili.com/video/test') }
+    : { body: bing(['三体动画', 'https://other.test/video']) });
+  const value = await web.searchResult('三体动画 site:bilibili.com', { timeoutMs: 1000 });
+  assert.deepEqual(value.items.map(x => new URL(x.url).hostname), ['www.bilibili.com']);
+  for (const call of calls) assert.match(new URL(call.url).searchParams.get('q'), /site:bilibili\.com/);
+});
+
+test('解析结构变化与空结果有不同状态，错误不泄露页面内容', async t => {
+  const events = [];
+  fakeHttps(t, () => ({ body: '<html>private-page-body changed markup</html>' }));
+  const value = await web.searchResult('显卡行情', { timeoutMs: 1000, trace: (stage, data) => events.push({ stage, ...data }) });
+  assert.equal(value.status, 'failed');
+  assert.equal(value.reason, 'parse_error');
+  assert.doesNotMatch(JSON.stringify(events), /private-page-body|显卡行情/);
+});
+
+test('传输调用者取消会销毁请求，零预算不会偷偷重置为八秒', async t => {
+  const { getText } = require('../src/adapters/search/transport');
+  const controller = new AbortController();
+  const calls = fakeHttps(t, () => ({ never: true }));
+  await assert.rejects(getText('https://example.test/', { timeoutMs: 0 }), { code: 'deadline_exceeded' });
+  assert.equal(calls.length, 0);
+  const pending = getText('https://example.test/', { signal: controller.signal, timeoutMs: 1000 });
+  controller.abort();
+  await assert.rejects(pending, { code: 'aborted' });
+  assert.equal(calls[0].destroyed, true);
+});
+
+test('天气超时仍有预算走搜索回退，底层天气连接确实关闭', async t => {
+  const { search } = require('../src/services/search');
+  const calls = fakeHttps(t, call => call.url.includes('geocoding-api')
+    ? { body: JSON.stringify({ results: [{ name: '测试城', latitude: 30, longitude: 120 }] }) }
+    : call.url.includes('api.open-meteo') ? { drip: true }
+      : { body: bing(['测试城明天天气', 'https://example.test/weather'], ['测试城天气预报', 'https://example.test/forecast']) });
+  const value = await search({ text: '测试城明天天气', config: { timeoutMs: 700 },
+    llm: { complete: async () => '{"need":true,"kind":"weather","query":"测试城 明天 天气","city":"测试城","timeRange":"tomorrow"}' } });
+  assert.equal(value.status, 'ok');
+  assert.equal(calls.find(x => new URL(x.url).hostname === 'api.open-meteo.com').destroyed, true);
+  assert.ok(calls.some(x => x.url.includes('bing.com')));
+  assert.ok(value.attempts.some(x => x.provider === 'open-meteo' && x.code === 'deadline_exceeded'));
+});
+
+test('热榜返回缺失结构不能伪装成没有热点，失败后可重查且成功缓存', async t => {
+  let n = 0;
+  const calls = fakeHttps(t, () => ++n === 1 ? { body: '{"unexpected":[]}' }
+    : { body: '{"data":{"trending":{"list":[{"keyword":"测试热点"}]}}}' });
+  const first = await web.hotlistResult('bilibili', { timeoutMs: 1000 });
+  assert.equal(first.reason, 'parse_error');
+  const good = await web.hotlistResult('bilibili', { timeoutMs: 1000 });
+  const cached = await web.hotlistResult('bilibili', { timeoutMs: 1000 });
+  assert.equal(good.status, 'ok');
+  assert.equal(good.items[0].url, 'https://search.bilibili.com/all?keyword=' + encodeURIComponent('测试热点'));
+  assert.deepEqual(cached.items, good.items);
+  assert.equal(calls.length, 2);
+});
+
+test('Bing 跳转链接还原真实来源并去掉跟踪参数', () => {
+  const target = 'https://example.test/article?utm_source=bing&id=1#section';
+  const html = bing(['显卡行情', 'https://www.bing.com/ck/a?u=a1' + Buffer.from(target).toString('base64url')]);
+  assert.equal(web.parseBing(html)[0].url, 'https://example.test/article?id=1');
 });

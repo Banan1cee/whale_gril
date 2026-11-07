@@ -25,7 +25,9 @@ const { StickerService } = require('./services/stickerService');
 const stickersAdapter = require('./adapters/stickers');
 const probe = require('./infra/probe');
 const { ContactsCache } = require('./services/contacts');
+const { MomentsService } = require('./services/moments');
 const { ReminderService } = require('./services/reminderService');
+const { DiaryService } = require('./services/diary');
 const locationProbe = require('./services/location');
 
 const VERSION = require('../package.json').version;
@@ -120,6 +122,8 @@ function createRuntime({ root = path.resolve(__dirname, '..'), env = process.env
   } catch { /* 定时器起不来不影响主流程 */ }
 
   runtime.llm = new DeepSeekClient({ config, logger: child('llm') });
+  runtime.diary = new DiaryService(config, { store, llm: runtime.llm, logger: child('diary') });
+  runtime.diary.start();
   // 记忆层用同一个模型做 episode 摘要/抽取（后台跑，不在回复热路径）
   store.llm = runtime.llm;
   // 判定链：为什么回 / 为什么不回。默认只记原因和状态；正文在 data/trace/raw 里留 24 小时，
@@ -145,6 +149,7 @@ function createRuntime({ root = path.resolve(__dirname, '..'), env = process.env
   runtime.bot.stickerService = runtime.stickerService;
   // 联系人缓存：桥接推上来的 wxid 清单，给启动器选择器和 care 白名单用
   runtime.contacts = new ContactsCache(config, { logger: child('contacts') });
+  runtime.moments = new MomentsService();
   // 提醒：到点由桥接来取（/api/reminders/due），这里只管存和状态
   runtime.reminders = new ReminderService(config, {
     logger: child('reminder'),

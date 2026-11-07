@@ -21,9 +21,6 @@
 > (owner list, token) are left untouched, while leftovers from older versions (`personas\`, `resources\`,
 > the old `runtime\vb-cable` location) are cleaned up so the install does not keep growing.
 >
-> Running from source (an extracted zip)? Keep using **`powershell -File scripts\update.ps1`**; the rules are
-> described under "Updating to a new version" below.
->
 > Prefer a manual backup: `node scripts\memory-tool.js export <file>` writes a JSON export and
 > `restore <file>` puts it back (the launcher's Diagnostics page uses the same commands).
 >
@@ -34,10 +31,7 @@
 >
 > ---
 >
-> `Code → Download ZIP` is only the **400 KB source tree** (no runtimes, no keys, no chat history). There are two ways to run from source:
-> 1. `powershell -File scripts\setup-runtime.ps1` — downloads Node and Python and installs the WeChat dependencies into `runtime\`, after which it behaves like the packaged edition;
-> 2. or install Node 18+ yourself (`npm start` runs the kernel) and, for WeChat, Python 3.12 plus `pip install -r requirements.txt`.
->    (`wechatauto` comes from `vendor/wechatauto` in this repository, so pip does not install it; add `vendor` to `PYTHONPATH` when running the bridge from source.)
+> `Code → Download ZIP` contains the source tree only (no runtimes, keys or chat history). Normal use should install from Releases; build and development instructions live in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 A companion bot that actually talks: **automatic replies in WeChat groups, Bilibili/Weibo trending topics, and live web lookups**. Settings and diagnostics live in the launcher.
 
@@ -76,13 +70,13 @@ See [CHANGELOG.md](CHANGELOG.md) for the change history.
 - **Group management** — mute and unmute, switch model, change tone, clear memory, and an automatic "good night" on low battery.
 - **Stop everything** — `scripts\stop-all.ps1` or the launcher's **Stop** button stops kernel and bridge and writes a pause marker.
 - **WeChat bridge** — `examples/wechatauto_bridge.py`: read-only database access plus window automation, never injecting into WeChat.
-- **Zero npm dependencies** — no `npm install`; release bundles carry `runtime\`, this repository is the source edition.
+- **Zero npm dependencies** — no `npm install`; release bundles carry the runtime, while this repository contains the source tree.
 
 ---
 
 ## Install (Windows, installer)
 
-> This repository is the **source edition without `runtime\`** — see the next section. To use the bot directly, download `whale-girl-*-setup.exe` from [Releases](https://github.com/Banan1cee/whale_gril/releases/latest).
+> This repository contains **source only, without `runtime\`**. To use the bot, download `whale-girl-*-setup.exe` from [Releases](https://github.com/Banan1cee/whale_gril/releases/latest).
 >
 > **Install to an ASCII-only path** (for example `D:\whale-girl-4.0`). Inside a path containing Chinese characters, WeChat automation fails with a continuous "access denied" error; the reason is explained under "WeChat bridge" below.
 
@@ -94,7 +88,7 @@ The installer bundles a **Node.js runtime** (`runtime\node.exe`), a **Python run
 
 The same applies to the bridge: pressing **Start** launches it with the bundled Python, which already has `wechatauto`, `pywin32`, `uiautomation`, `Pillow`, `cryptography`, `pysilk` and friends installed.
 
-The only things you must supply: **a logged-in secondary WeChat account** and **one model API key** (DeepSeek / Zhipu / Qwen, your pick).
+The only things you must supply: **a logged-in secondary WeChat account** and **one model API key** (DeepSeek / Zhipu / Qwen, your pick). Supported providers: `deepseek` / `zhipu` / `siliconflow` / `qwen` / `ollama` (local) / `custom` (any OpenAI-compatible endpoint).
 
 ## Updating to a new version
 
@@ -107,51 +101,9 @@ Press **Check for updates** in the launcher: it reads `release-manifest.json`, d
 - Downloads honour the system proxy; offline it falls back to a local cache, and if that never succeeded the update is skipped rather than blocking startup.
 - Forced updates have four levels (normal / notify / force / block), tunable remotely from the manifest.
 
-### Source edition (extracted zip)
-
-No manual download required: press **Check for updates** in the launcher, or run `powershell -File scripts\update.ps1`; it finds the latest release, downloads it, verifies it and overwrites the installation, leaving `data\` and `config.json` alone.
-
-```
-[Enter] update now    [r] roll back last update    [q] quit
-```
-
-- **Verification** — the `sha256` from the official API is checked; a mismatch aborts instead of installing half a package.
-- **Automatic rollback** — after overwriting, the version, memory count and `config.json` hash are re-checked; any failure restores the backup.
-- **Mirrors** — if GitHub is unreachable, a mirror is tried (`ghfast.top` / `gh-proxy.com` / `gh-proxy.org` / `ghproxy.net`, transport only, never verification); when the version API is blocked, the `gh-proxy.com` / `gh-proxy.org` API proxies are used, and only after that is the version scraped from a mirror page. You can also download the zip yourself and run `scripts\update.ps1 <zip-path>`.
-- **Check only** — `scripts\update.ps1 -Check`; **manual rollback** — `scripts\update.ps1 -Rollback`.
-- **First run in a moved directory** — if `data\` is missing, it looks for older installations, lists them newest-first with session and message counts, then moves the chosen one on Enter (`s` skips, a number picks another). Or point at one directly: `scripts\update.ps1 -Migrate -FromDir "D:\whale-girl-3.50"`.
-- **Low integrity label** — if the install directory carries the Low label, node cannot write `%TEMP%` (`EPERM`); before updating, `runtime\node.exe` and `python.exe` are relabelled Medium, and a writable temp directory inside the install path is used if that fails.
-
-> If you modified the source, note that the update replaces files wholesale. When local customisations are detected, the script lists them and asks for confirmation (`-Force` skips the prompt).
-
 ## When the launcher won't open
 
-The repository root has exactly one double-click entry, `WhaleLauncher.exe`; everything else is a command-line script. Use these when the launcher fails, or on a machine without a GUI:
-
-| Situation | Command |
-| --- | --- |
-| Install Node / Python and bridge dependencies | `powershell -File scripts\setup-runtime.ps1` |
-| Clean up stuck processes (8787 occupied, bridge won't die) | close the launcher, then `powershell -File scripts\stop-all.ps1` |
-| Factory reset (wipe memory and config) | launcher → **Diagnostics** → **Reset everything**, or `powershell -File scripts\factory-reset.ps1 -Yes` |
-| Update | **Check for updates** in the launcher, or `powershell -File scripts\update.ps1` |
-| Read-only UIA diagnostics (changes nothing) | `python scripts\tools\uia-check.py` |
-| Send one real test message to File Transfer | `python examples\uia_selftest.py` |
-
-## Quick start (source / CLI / macOS / Linux)
-
-```bash
-# 1. Node.js 18+
-node -v
-
-# 2. Start the kernel (no npm install needed)
-npm start
-```
-
-Without an API key the kernel runs in demo mode with built-in lines; pick a provider and paste a key in the launcher's **Settings**.
-
-On first start `config.example.json` is copied to `config.json`. **`config.json` and `data/` hold your keys, chat history and owner list — both are git-ignored, never commit them.**
-
-Supported providers: `deepseek` / `zhipu` / `siliconflow` / `qwen` / `ollama` (local) / `custom` (any OpenAI-compatible endpoint).
+Use the launcher's **Diagnostics** page first. Command-line recovery steps are documented in [docs/维护手册.md](docs/维护手册.md); they are not part of normal installation.
 
 ---
 
@@ -159,19 +111,13 @@ Supported providers: `deepseek` / `zhipu` / `siliconflow` / `qwen` / `ollama` (l
 
 Requirements: Windows, a logged-in WeChat 4.x, administrator rights. Double-click `WhaleLauncher.exe` and press **Start**; kernel and bridge come up together.
 
-Running from source: `py -3.12 -m pip install -r requirements.txt`, put `vendor` on `PYTHONPATH`, then run `python examples/wechatauto_bridge.py`.
-
 Details (UIA elevation, multiple accounts, ASCII-only paths, error codes) are in the WeChat integration guide under [`docs/`](docs/).
 
 ### Stop everything (`scripts\stop-all.ps1`)
 
-Close the launcher first, then run `powershell -File scripts\stop-all.ps1`. It stops, in order:
+Close the launcher first, then run `powershell -File scripts\stop-all.ps1`. It stops the Whale Girl kernel (whatever holds port 8787) and the WeChat bridge (`wechatauto_bridge.py`).
 
-- the Whale Girl kernel (whatever holds port 8787),
-- the WeChat bridge (`wechatauto_bridge.py`),
-- the launcher window (if left open it would restart the bridge).
-
-It also writes `data\PAUSED` so nothing restarts automatically, scans three extra times because a child process may spawn while its parent is being killed, and finally prints a green "clean" line or the list of leftover PIDs.
+The script does **not** close the launcher window; close it yourself first. It writes `data\PAUSED` so nothing restarts automatically, saves the latest memory before killing, scans three times because a child process may spawn while its parent is being killed, and finally prints a green "clean" line or the list of leftover PIDs.
 
 To resume: open `WhaleLauncher.exe` and press **Start** (the launcher clears `PAUSED`).
 
@@ -179,7 +125,7 @@ To resume: open `WhaleLauncher.exe` and press **Start** (the launcher clears `PA
 
 ## Who can be an admin
 
-The open-source edition hard-codes nobody's WeChat ID — the deployer decides:
+The project hard-codes nobody's WeChat ID — the deployer decides:
 
 ```json
 "persona": {
@@ -214,11 +160,11 @@ Admin commands are sent in private chat. The full list (status, tone, length, mu
 
 ## Pause and resume
 
-Close the launcher (or run `scripts\stop-all.ps1`): kernel and bridge stop without sending anything and `data/PAUSED` is written. Open `WhaleLauncher.exe` and press **Start** to resume — it clears the pause marker.
+Press **Stop** in the launcher, then close it. If you need to clean up leftovers, run `scripts\stop-all.ps1`: kernel and bridge stop without sending anything and `data/PAUSED` is written. Open `WhaleLauncher.exe` and press **Start** to resume — it clears the pause marker.
 
 ## Configuration
 
-Copy the example and edit it (`config.json` is git-ignored): `cp config.example.json config.json`
+The installed edition is configured in the launcher's **Settings** page. Advanced users can edit `config.json` directly; `config.example.json` is the template and `config.json` is git-ignored.
 
 | Field | Meaning |
 | --- | --- |
@@ -277,16 +223,9 @@ Not committed, generated at runtime: `data/` (keys, memory, logs), `runtime/` (b
 
 ---
 
-## Development and testing
+## Development
 
-```bash
-npm test                  # node --test "tests/*.test.js" (tests/ only, never runtime\python)
-node server.js --doctor   # self-check
-```
-
-- Persona / lexicon: `data/persona.json`, `data/slang.txt` (the launcher's **Persona** page edits the same files).
-- Trigger logic: `computeTrigger` in `src/bot.js`.
-- Prompt building: `buildSystem` in `src/persona.js`.
+Development, tests and build instructions are in [CONTRIBUTING.md](CONTRIBUTING.md). Normal user setup is the installer above.
 
 ---
 

@@ -25,7 +25,7 @@ import subprocess
 import threading
 import time
 from ctypes import wintypes
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 # 树里出现这些类名，才算「会话列表真的物化了」。只看根窗口类名不算。
 TREE_MARKERS = (

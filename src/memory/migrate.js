@@ -13,29 +13,13 @@
  */
 const fs = require('node:fs');
 const path = require('node:path');
-const { readJson } = require('../infra/jsonFile');
+const { readJson, readJournal } = require('../infra/jsonFile');
 const personCard = require('./personCard');
 const compression = require('./compression');
 const { writeJsonAtomic } = require('./chatStore');
 const { describeError } = require('../infra/errors');
 
 const LEGACY_SOURCES = ['memory.json', 'store.json'];
-
-function readJournal(file) {
-  let raw = '';
-  try {
-    raw = fs.readFileSync(file + '.journal', 'utf8');
-  } catch {
-    return [];
-  }
-  const out = [];
-  for (const line of raw.split('\n')) {
-    const s = line.trim();
-    if (!s) continue;
-    try { out.push(JSON.parse(s)); } catch { /* 半截行跳过 */ }
-  }
-  return out;
-}
 
 /** 快照 + 增量合并；旧版本把最新数据放在 journal 里 */
 function mergeStoreSessions(snap, journal = []) {

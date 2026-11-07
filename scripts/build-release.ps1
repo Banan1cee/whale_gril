@@ -40,10 +40,15 @@ $build = Join-Path $env:TEMP ('whale-build-' + [guid]::NewGuid().ToString('N').S
 $stage = Join-Path $build $pkgName
 New-Item -ItemType Directory $stage -Force | Out-Null
 $rcArgs = @($root, $stage, '/E', '/NFL', '/NDL', '/NJH', '/NJS', '/NP', '/XD',
-  'data', 'runtime', '.tools', 'artifacts', 'bin', 'obj', 'publish', '.git', 'wechatauto_db', 'wechatauto_logs', '__pycache__', 'whale-girl-*-full', 'backup',
+  'data', 'runtime', '.tools', 'artifacts', 'bin', 'obj', 'publish', '.git', 'wechatauto_db', 'wechatauto_logs', '__pycache__', 'whale-girl-*-full', 'backup', '鲸鲸表情包',
   '/XF', 'config.json', '*.log', '*.png', '*.jpg', '*.bak-*')
 robocopy @rcArgs | Out-Null
 if ($LASTEXITCODE -ge 8) { Pop-Location; throw "robocopy 失败 $LASTEXITCODE" }
+
+# 普通图片仍排除，但随包预设是程序资源，不能被全局 *.png / *.jpg 规则漏掉。
+$presetSource = Join-Path $root 'assets\stickers'
+robocopy $presetSource (Join-Path $stage 'assets\stickers') /E /NFL /NDL /NJH /NJS /NP /R:1 /W:1 | Out-Null
+if ($LASTEXITCODE -ge 8) { Pop-Location; throw "预设表情包复制失败 $LASTEXITCODE" }
 
 # 使用已发布的启动器，避免根目录正在运行的旧 exe 被打入新包。
 $publishedLauncher = Join-Path $root 'launcher\publish\WhaleLauncher.exe'
@@ -111,6 +116,7 @@ $checks = @(
   @{ entry = 'src/core/master.js'; needle = 'matchMaster'; label = '主人判定' },
   @{ entry = 'scripts/tools/uia-diag.py'; needle = 'QACCESSIBLE_ACTIVE_RVA_BY_VERSION'; label = 'UIA 诊断工具' }
 )
+$presetManifest = Get-Content (Join-Path $root 'assets\stickers\manifest.json') -Encoding UTF8 -Raw | ConvertFrom-Json
 foreach ($zipPath in @($srcZip, $fullZip) | Where-Object { $_ }) {
   $zip = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
   foreach ($c in $checks) {
@@ -118,6 +124,16 @@ foreach ($zipPath in @($srcZip, $fullZip) | Where-Object { $_ }) {
     if (-not $e) { throw "$(Split-Path $zipPath -Leaf) 里缺 $($c.entry)" }
     $sr = New-Object System.IO.StreamReader($e.Open()); $txt = $sr.ReadToEnd(); $sr.Close()
     if (-not $txt.Contains($c.needle)) { throw "$(Split-Path $zipPath -Leaf) 的 $($c.entry) 不含「$($c.label)」" }
+  }
+  foreach ($image in $presetManifest.files) {
+    $entryName = 'assets/stickers/' + $image.file
+    $entry = $zip.Entries | Where-Object { $_.FullName.Replace('\', '/').EndsWith('/' + $entryName) } | Select-Object -First 1
+    if (-not $entry) { throw "$(Split-Path $zipPath -Leaf) 里缺预设图片 $entryName" }
+    $stream = $entry.Open()
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try { $digest = [BitConverter]::ToString($sha.ComputeHash($stream)).Replace('-', '').ToLowerInvariant() }
+    finally { $sha.Dispose(); $stream.Dispose() }
+    if ($digest -ne $image.sha256) { throw "$(Split-Path $zipPath -Leaf) 的预设图片校验失败：$entryName" }
   }
   $zip.Dispose()
   Write-Host "  ✓ $(Split-Path $zipPath -Leaf) 通过 $($checks.Count) 项内容检查"

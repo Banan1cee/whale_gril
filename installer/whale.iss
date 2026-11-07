@@ -88,10 +88,12 @@ Source: "..\server.js"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\package.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\config.example.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\NOTICE.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\src\*"; DestDir: "{app}\src"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "__pycache__\*,*.pyc"
 Source: "..\bridge\*"; DestDir: "{app}\bridge"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "__pycache__\*,*.pyc"
 Source: "..\assets\personas\*"; DestDir: "{app}\assets\personas"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "persona-fight.json,persona-tieba.json"
 Source: "..\assets\*.txt"; DestDir: "{app}\assets"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "clapback-fight.txt"
+Source: "..\assets\stickers\*"; DestDir: "{app}\assets\stickers"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\examples\*"; DestDir: "{app}\examples"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "__pycache__\*,*.pyc"
 ; runtime：内置 node.exe + CPython + .NET 运行时安装包；wheelhouse 是构建缓存，不进包
 ; （它也是 CPython 标准库 python312.zip 所在目录，所以绝不能整体排除 *.zip）

@@ -108,6 +108,13 @@ namespace WhaleLauncher.Views
             var tLoad = Stopwatch.StartNew();
             var online = _sup.NodeRunning;
             ChkEnabled.IsEnabled = TxtDir.IsEnabled = online;
+            ChkCollect.IsEnabled = online;
+            if (online && !ChkCollect.IsKeyboardFocusWithin)
+            {
+                var cfg = await Api.Get(_sup.Url, "/api/config");
+                if (cfg.Ok && cfg.Prop("config").TryGetProperty("sticker", out var sticker))
+                    ChkCollect.IsChecked = sticker.TryGetProperty("collectReceived", out var collect) && BoolProp(collect);
+            }
 
             var view = new ViewData();
             var tFetch = Stopwatch.StartNew();
@@ -635,6 +642,34 @@ namespace WhaleLauncher.Views
         {
             // 右上角：整个表情包库根目录（data/stickers）
             await ShowStickerFolder("");
+        }
+
+        private async void OnToggleCollect(object sender, RoutedEventArgs e)
+        {
+            var enabled = ChkCollect.IsChecked == true;
+            ChkCollect.IsEnabled = false;
+            try
+            {
+                var res = await Api.Post(_sup.Url, "/api/config", JsonSerializer.Serialize(new
+                {
+                    patch = new Dictionary<string, object> { ["sticker.collectReceived"] = enabled }
+                }));
+                if (!res.Ok) ChkCollect.IsChecked = !enabled;
+                CollectStatus.Text = res.Ok ? "已保存，桥接将在约 5 秒内应用" : "保存失败：" + res.Error;
+            }
+            catch (Exception ex) { ChkCollect.IsChecked = !enabled; CollectStatus.Text = Api.FriendlyError(ex); }
+            finally { ChkCollect.IsEnabled = _sup.NodeRunning; }
+        }
+
+        private void OnOpenCollected(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                var dir = Path.Combine(_sup.DataDir, "收集的表情包");
+                Directory.CreateDirectory(dir);
+                Process.Start(new ProcessStartInfo("explorer.exe", "\"" + dir + "\"") { UseShellExecute = true });
+            }
+            catch (Exception ex) { CollectStatus.Text = Api.FriendlyError(ex); }
         }
 
         private async void OnOpenCategoryFolder(object sender, RoutedEventArgs e)

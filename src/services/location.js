@@ -12,10 +12,10 @@
  *   2. IP 兜底：系统定位被关掉、没有权限、拿不到时才用（`adapters/websearch` 的 ipCity）。
  *      这条会跟着出口 IP 走，挂 VPN 时可能显示成别的国家/城市 —— 所以文案里必须写明。
  *
- * 隐私（红线，改这里之前先看 docs/PRIVACY.md）：
+ * 隐私（红线，改这里之前先看根目录 PRIVACY.md）：
  *   - 只留「市」一级（区县留给手填：实测定位落点会偏到隔壁区，说错区比只说市更糟）；
  *   - 街道门牌、镇、村、经纬度都不进提示词；
- *   - 坐标只在内存里用一次，拿到地名就丢，不落盘、不写日志（日志只记来源和精度）。
+ *   - 定位结果只留内存，不落盘；日志只记来源和成功状态，不含地名、坐标或精度。
  *
  * 术语：`accuracy` 是系统给的误差半径（米）。50 公里意味着「就在这个圈里」，
  * 这时连区都点不准，所以括注里一直写「只到市」。
@@ -247,8 +247,8 @@ async function detect({ logger = null, ipFallback = true } = {}) {
     if (admin) {
       const text = composeLocation(admin, pos.accuracyM);
       if (text) {
-        // 只有地名和精度进日志，坐标用完就丢
-        logger && logger.debug && logger.debug(`所在地：系统定位 ${text}（精度约 ${formatAccuracy(pos.accuracyM) || '未知'}）`);
+        // DEBUG 同样会落盘，不能把提示词中的位置泄露到诊断日志。
+        logger && logger.debug && logger.debug('[location] source=system result=available');
         return { text, source: 'system', accuracyM: pos.accuracyM, at: Date.now() };
       }
     }
@@ -265,7 +265,7 @@ async function detect({ logger = null, ipFallback = true } = {}) {
           if (place && place.name) text = tidy(place.name);
         } catch { /* 换不出来就用原名 */ }
         if (text) {
-          logger && logger.debug && logger.debug(`所在地：按出口 IP 推算 ${text}`);
+          logger && logger.debug && logger.debug('[location] source=ip result=available');
           return { text, source: 'ip', accuracyM: 0, at: Date.now() };
         }
       }

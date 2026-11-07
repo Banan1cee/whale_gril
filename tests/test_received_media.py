@@ -115,6 +115,69 @@ class ReceivedMediaTests(unittest.TestCase):
         self.assertEqual(count, 1)
         self.assertEqual(Image.open(io.BytesIO(preview)).size, (40, 30))
 
+    def test_collection_keeps_original_gif_animation_and_deduplicates(self):
+        frames = [Image.new('RGB', (12, 10), color) for color in ('red', 'green', 'blue')]
+        buf = io.BytesIO()
+        frames[0].save(buf, format='GIF', save_all=True, append_images=frames[1:], duration=[100, 200, 300], loop=0)
+        raw = buf.getvalue()
+        digest = hashlib.md5(raw).hexdigest()
+        content = '<emoji md5="' + digest + '" cdnurl="https://wxapp.tc.qq.com/a"/>'
+        directory = self.root / '收集的表情包'
+        callback = lambda data, fmt: emoji_vision.save_original(directory, data, fmt)
+        for _ in range(2):
+            preview, _ = emoji_vision.load_preview(self.root, content, True, lambda _: raw, callback)
+        files = list(directory.iterdir())
+        self.assertEqual(len(files), 1)
+        self.assertEqual(files[0].suffix, '.gif')
+        self.assertEqual(files[0].read_bytes(), raw)
+        with Image.open(files[0]) as image:
+            self.assertEqual(image.n_frames, 3)
+            self.assertEqual(image.info['loop'], 0)
+            image.seek(1)
+            self.assertEqual(image.info['duration'], 200)
+        self.assertNotEqual(preview, raw)
+
+    def test_collection_is_independent_of_vision_success_and_send_switch(self):
+        raw = self.image.read_bytes()
+        digest = hashlib.md5(raw).hexdigest()
+        cache = self.root / 'cache/month/Emoticon' / digest[:2] / digest
+        cache.parent.mkdir(parents=True)
+        cache.write_bytes(raw)
+        env, post, _ = self.env(None)
+        env.update(ROOT=str(self.root), STICKER_COLLECT=True, STICKER_TEST_ON=False,
+                   db=types.SimpleNamespace(account_dir=str(self.root)))
+        post.return_value.json = lambda: {'ok': False, 'error': '识别不可用'}
+        describe = nested('describe_emoji', env)
+        self.assertEqual(describe({'content': '<emoji md5="' + digest + '"/>'}), '')
+        files = list((self.root / 'data/收集的表情包').iterdir())
+        self.assertEqual(len(files), 1)
+        self.assertEqual(files[0].read_bytes(), raw)
+        files[0].unlink()
+        env['STICKER_COLLECT'] = False
+        describe({'content': '<emoji md5="' + digest + '"/>'})
+        self.assertEqual(list((self.root / 'data/收集的表情包').iterdir()), [])
+
+    def test_collection_write_failure_does_not_break_vision(self):
+        raw = self.image.read_bytes()
+        digest = hashlib.md5(raw).hexdigest()
+        cache = self.root / 'cache/month/Emoticon' / digest[:2] / digest
+        cache.parent.mkdir(parents=True)
+        cache.write_bytes(raw)
+        (self.root / 'data').write_text('阻止创建目录')
+        env, _, _ = self.env(None)
+        env.update(ROOT=str(self.root), STICKER_COLLECT=True, db=types.SimpleNamespace(account_dir=str(self.root)))
+        self.assertEqual(nested('describe_emoji', env)({'content': '<emoji md5="' + digest + '"/>'}), '蓝色图片')
+        self.assertTrue(any('表情包收集失败 type=' in str(call) for call in env['log'].call_args_list))
+
+    def test_collection_rejects_wrong_local_hash(self):
+        digest = 'a' * 32
+        cache = self.root / 'cache/month/Emoticon' / digest[:2] / digest
+        cache.parent.mkdir(parents=True)
+        cache.write_bytes(self.image.read_bytes())
+        callback = Mock()
+        self.assertIsNone(emoji_vision.load_preview(self.root, '<emoji md5="' + digest + '"/>', on_original=callback))
+        callback.assert_not_called()
+
     @unittest.skipUnless(HAS_CRYPTO, '需要 cryptography 才能校验 AES 回源解密')
     def test_encrypted_cdn_sticker_is_verified_after_decryption(self):
         raw = self.image.read_bytes()
@@ -123,7 +186,11 @@ class ReceivedMediaTests(unittest.TestCase):
         cipher = Cipher(algorithms.AES(key), modes.CBC(bytes(16))).encryptor()
         encrypted = cipher.update(raw + bytes([padding]) * padding) + cipher.finalize()
         content = '<emoji md5="' + hashlib.md5(raw).hexdigest() + '" aeskey="' + key.hex() + '" encrypturl="https://wxapp.tc.qq.com/a"/>'
-        self.assertIsNotNone(emoji_vision.load_preview(self.root, content, allow_network=True, fetch=lambda u: encrypted))
+        saved = []
+        self.assertIsNotNone(emoji_vision.load_preview(self.root, content, allow_network=True,
+                                                     fetch=lambda u: encrypted,
+                                                     on_original=lambda data, fmt: saved.append(data)))
+        self.assertEqual(saved, [raw])
 
 
 class MediaFailureLogTests(unittest.TestCase):

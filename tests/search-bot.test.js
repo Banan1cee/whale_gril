@@ -9,7 +9,13 @@ const { Bot } = require('../src/pipeline/chat');
 const { Store } = require('../src/memory/store');
 const { DEFAULT_CONFIG } = require('../src/infra/config');
 const web = require('../src/adapters/websearch');
+const places = require('../src/adapters/search/weather');
+const { result } = require('../src/core/search/result');
 const { promptOf } = require('./support/prompt');
+
+function evidence(method) {
+  return result([{ title: 'TEST EVIDENCE ' + method, snippet: '测试资料', url: 'https://example.test/source', provider: 'fixture' }]);
+}
 
 function fixture(t, { answer = '{"need":false}', enabled = true, timeoutMs = 1000, city = '', semanticRoute = true } = {}) {
   const config = JSON.parse(JSON.stringify(DEFAULT_CONFIG));
@@ -26,12 +32,12 @@ function fixture(t, { answer = '{"need":false}', enabled = true, timeoutMs = 100
   } };
   const bot = new Bot({ config, store, llm, logger: null, mockChunkDelayMs: 0 });
   const calls = [];
-  for (const method of ['searchText', 'bilibiliHotText', 'weiboHotText', 'hotNewsText', 'weatherText', 'ipCity', 'geocodeCity']) {
-    t.mock.method(web, method, async (...args) => {
+  for (const method of ['searchResult', 'hotlistResult', 'weatherResult', 'ipCity', 'geocodeCity']) {
+    t.mock.method(['ipCity', 'geocodeCity'].includes(method) ? places : web, method, async (...args) => {
       calls.push({ method, args });
       if (method === 'ipCity') return '';
       if (method === 'geocodeCity') return null;
-      return 'TEST EVIDENCE ' + method;
+      return evidence(method);
     });
   }
   const msg = (text) => ({ platform: 'web', chatId: 'search-test', chatType: 'private', senderId: 'user', senderName: '小海', text });
@@ -60,7 +66,7 @@ test('router receives previous conversation under the actual session key', async
 test('site hint on a specific Bilibili question does not force a hot list', async (t) => {
   const f = fixture(t, { answer: '{"need":true,"query":"B站 三体动画 更新进度","site":"bilibili"}' });
   const decision = await f.bot.decide(f.msg('B站三体动画更新到哪了'));
-  assert.deepEqual(f.calls.map((x) => x.method), ['searchText']);
+  assert.deepEqual(f.calls.map((x) => x.method), ['searchResult']);
   assert.equal(f.calls[0].args[0], 'B站 三体动画 更新进度 site:bilibili.com');
   assert.match(decision.msg.webText, /TEST EVIDENCE/);
   assert.match(promptOf(decision), /TEST EVIDENCE/);
@@ -68,54 +74,57 @@ test('site hint on a specific Bilibili question does not force a hot list', asyn
 
 test('Bilibili hot-list failure searches Bilibili, never substitutes Toutiao', async (t) => {
   const f = fixture(t, { answer: '{"need":true,"query":"B站热搜","site":"bilibili"}' });
-  t.mock.method(web, 'bilibiliHotText', async () => { f.calls.push({ method: 'bilibiliHotText' }); return ''; });
+  t.mock.method(web, 'hotlistResult', async (site) => { f.calls.push({ method: 'hotlistResult', site }); return result(); });
   const decision = await f.bot.decide(f.msg('B站的热搜是什么'));
-  assert.deepEqual(f.calls.map((x) => x.method), ['bilibiliHotText', 'searchText']);
+  assert.deepEqual(f.calls.map((x) => x.method), ['hotlistResult', 'searchResult']);
+  assert.equal(f.calls[0].site, 'bilibili');
   assert.match(f.calls[1].args[0], /site:bilibili\.com/);
-  assert.match(promptOf(decision), /TEST EVIDENCE searchText/);
+  assert.match(promptOf(decision), /TEST EVIDENCE searchResult/);
 });
 
 test('throwing Weibo hot list still falls back to same-site web search', async (t) => {
   const f = fixture(t, { answer: '{"need":true,"query":"微博热榜","site":"weibo"}' });
-  t.mock.method(web, 'weiboHotText', async () => { throw new Error('offline'); });
+  t.mock.method(web, 'hotlistResult', async site => { assert.equal(site, 'weibo'); throw new Error('offline'); });
   await f.bot.decide(f.msg('微博热榜'));
-  assert.deepEqual(f.calls.map((x) => x.method), ['searchText']);
+  assert.deepEqual(f.calls.map((x) => x.method), ['searchResult']);
   assert.match(f.calls[0].args[0], /site:weibo\.com/);
 });
 
 test('successful named hot list is injected without cross-platform fallback', async (t) => {
   const f = fixture(t, { answer: '{"need":true,"query":"微博热搜","site":"weibo"}' });
   const decision = await f.bot.decide(f.msg('微博热搜'));
-  assert.deepEqual(f.calls.map((x) => x.method), ['weiboHotText']);
-  assert.match(promptOf(decision), /TEST EVIDENCE weiboHotText/);
+  assert.deepEqual(f.calls.map((x) => x.method), ['hotlistResult']);
+  assert.equal(f.calls[0].args[0], 'weibo');
+  assert.match(promptOf(decision), /TEST EVIDENCE hotlistResult/);
 });
 
 test('generic news keeps Toutiao, but topic-specific news searches the actual topic', async (t) => {
   const f = fixture(t, { answer: '{"need":true,"query":"今日新闻"}' });
   await f.bot.decide(f.msg('今日新闻'));
-  assert.deepEqual(f.calls.map((x) => x.method), ['hotNewsText']);
+  assert.deepEqual(f.calls.map((x) => x.method), ['hotlistResult']);
+  assert.equal(f.calls[0].args[0], 'toutiao');
   f.calls.length = 0;
   await f.bot.decide(f.msg('小米汽车召回的新闻有哪些'));
-  assert.deepEqual(f.calls.map((x) => x.method), ['searchText']);
+  assert.deepEqual(f.calls.map((x) => x.method), ['searchResult']);
 });
 
 test('「今天的热点新闻」这种带修饰的句子也走实时热榜，不拿几天前的搜索结果冒充今天', async (t) => {
   const f = fixture(t, { answer: '{"need":true,"query":"今天的热点新闻"}' });
   await f.bot.decide(f.msg('今天的热点新闻'));
-  assert.deepEqual(f.calls.map((x) => x.method), ['hotNewsText']);
+  assert.deepEqual(f.calls.map((x) => x.method), ['hotlistResult']);
 });
 
 test('问「今天」的会变信息时，丢旧结果的阈值收紧到 2 天', async (t) => {
   const f = fixture(t, { answer: '{"need":true,"query":"今天 显卡 价格","fresh":"strict"}' });
   await f.bot.decide(f.msg('今天显卡多少钱'));
-  assert.equal(f.calls[0].method, 'searchText');
+  assert.equal(f.calls[0].method, 'searchResult');
   assert.equal(f.calls[0].args[1].maxAgeDays, 2);
 });
 
 test('malformed need falls back to rules rather than silently skipping search', async (t) => {
   const f = fixture(t, { answer: '{"query":"显卡行情","need":"maybe"}' });
   await f.bot.decide(f.msg('查一下显卡行情'));
-  assert.deepEqual(f.calls.map((x) => x.method), ['searchText']);
+  assert.deepEqual(f.calls.map((x) => x.method), ['searchResult']);
 });
 
 test('explicit no-search and disabled networking perform no fetch', async (t) => {
@@ -134,16 +143,17 @@ test('query names are not globally stripped or given an unrelated year', async (
   assert.equal(f.calls[0].args[0], '哆啦A梦 iPhone 16 Pro 价格');
 });
 
-test('failed or empty search is explicitly reported to the final persona, not forged as success', async (t) => {
+for (const status of ['empty', 'failed']) test(`${status} search is explicitly reported to the final persona, not forged as success`, async (t) => {
   const f = fixture(t, { answer: '{"need":true,"query":"显卡行情"}' });
-  t.mock.method(web, 'searchText', async () => '');
+  t.mock.method(web, 'searchResult', async () => result([], { status, reason: status === 'failed' ? 'http_error' : 'no_results' }));
   const decision = await f.bot.decide(f.msg('查一下显卡行情'));
   assert.equal(decision.msg.webText, '');
-  assert.equal(decision.msg.webSearchStatus, 'empty');
+  assert.equal(decision.msg.webSearchStatus, status);
   const seen = promptOf(decision);
   assert.match(seen, /本次查询失败或无有效资料/);
   assert.doesNotMatch(seen, /【刚联网搜到的资料】/);
   assert.doesNotMatch(seen, /我记的是旧的，你查一下现在到哪了/);
+  assert.match(seen, status === 'failed' ? /联网查询[^\n]*—— 失败/ : /联网查询[^\n]*—— 没有结果/);
 });
 
 for (const customPrompt of ['', '自定义人设测试']) {
@@ -193,7 +203,7 @@ test('链接读取和联网搜索并行，总耗时取两者最大值', async (t
     spans.push({ name, start, end: Date.now() });
     return value;
   };
-  t.mock.method(web, 'searchText', () => timed('search', 80, 'TEST EVIDENCE searchText'));
+  t.mock.method(web, 'searchResult', () => timed('search', 80, evidence('searchResult')));
   f.bot.linkReader = (url) => timed('link', 80, { ok: true, url, kind: 'web', title: '标题', description: '简介', article: '' });
   const started = Date.now();
   const decision = await f.bot.decide(f.msg('查一下显卡行情 https://example.com/a'));
@@ -213,19 +223,19 @@ test('weather result goes through actual decide into the final persona prompt', 
   // 模型把地名抄进 city；它优先于配置里的 city（上海）
   const f = fixture(t, { answer: '{"need":true,"query":"北京 天气","city":"北京"}', city: '上海' });
   const decision = await f.bot.decide(f.msg('北京天气怎么样'));
-  assert.deepEqual(f.calls.map((x) => x.method), ['weatherText']);
+  assert.deepEqual(f.calls.map((x) => x.method), ['weatherResult']);
   assert.equal(f.calls[0].args[0], '北京');
-  assert.match(promptOf(decision), /TEST EVIDENCE weatherText/);
+  assert.match(promptOf(decision), /TEST EVIDENCE weatherResult/);
 });
 
 test('模型没给地名时，去掉天气词后交给 geocodeCity 解析', async (t) => {
   const f = fixture(t, { answer: '{"need":true,"query":"明天会下雨吗"}' });
-  t.mock.method(web, 'geocodeCity', async (name) => {
+  t.mock.method(places, 'geocodeCity', async (name) => {
     f.calls.push({ method: 'geocodeCity', args: [name] });
     return name.includes('杭州') ? { name: '杭州' } : null;
   });
   await f.bot.decide(f.msg('杭州明天会下雨吗'));
-  assert.deepEqual(f.calls.map((x) => x.method), ['geocodeCity', 'weatherText']);
+  assert.deepEqual(f.calls.map((x) => x.method), ['geocodeCity', 'weatherResult']);
   assert.match(f.calls[0].args[0], /杭州/);
   assert.equal(f.calls[1].args[0], '杭州');
 });
@@ -233,12 +243,13 @@ test('模型没给地名时，去掉天气词后交给 geocodeCity 解析', asyn
 test('weather and fallback search receive decreasing shared deadline budgets', async (t) => {
   const f = fixture(t, { answer: '{"need":true,"query":"北京 天气","city":"北京"}', timeoutMs: 100 });
   let weatherBudget;
-  t.mock.method(web, 'weatherText', async (_, opts) => {
+  t.mock.method(web, 'weatherResult', async (_, opts) => {
     weatherBudget = opts.timeoutMs;
     await new Promise((resolve) => setTimeout(resolve, 25));
-    return '';
+    return result();
   });
   await f.bot.decide(f.msg('北京天气'));
-  assert.deepEqual(f.calls.map((x) => x.method), ['searchText']);
-  assert.ok(f.calls[0].args[1].timeoutMs <= weatherBudget - 15);
+  assert.deepEqual(f.calls.map((x) => x.method), ['searchResult']);
+  assert.ok(weatherBudget < 100, '天气阶段为搜索回退预留预算');
+  assert.ok(f.calls[0].args[1].timeoutMs <= 100 - 15, '回退仍受本轮总预算约束');
 });

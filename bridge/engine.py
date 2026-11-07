@@ -41,7 +41,6 @@ os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
 os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 import sys
-import subprocess
 import threading
 import time
 
@@ -108,6 +107,7 @@ CARE_ALLOW_OTHERS = False
 CARE_QUIET_MIN = 20.0
 # Fail closed even when an earlier setting makes startup config parsing fail.
 STICKER_TEST_ON = False
+STICKER_COLLECT = False
 # 账号名同样必须在启动配置解析失败时存在（M12）：它丢了，config_watch 会把
 # 「没解析出来」误判成「账号变了」，走 os._exit(7) 无限重启。
 ACCOUNT_WANTED = ""
@@ -338,6 +338,7 @@ try:
     CARE_QUIET_MIN = _as_float(_care.get("quietAfterMinutes", 20) or 0, 20.0)
     # 表情包（实验性）：总闸在 features.stickers。关着就不轮询、不发图、日志一句不提。
     STICKER_TEST_ON = _as_bool(((_cfg.get("features") or {}).get("stickers", False)), False)
+    STICKER_COLLECT = _as_bool((_cfg.get("sticker") or {}).get("collectReceived", False), False)
     MASTER_WXID = (((_cfg.get("persona") or {}).get("master") or {}).get("wxids") or [''])[0]
 except Exception as _boot_cfg_err:                # noqa: BLE001
     # 以前这里 except: pass：一个坏值把后续解析全截断了都不知道（M12）。
@@ -466,7 +467,7 @@ def reload_config(path=None):
     """
     global QUOTE_REPLY, KEYBOARD_FALLBACK, BACKGROUND_SEND, LOW_BATTERY_PCT, GOODNIGHT_TEXT
     global BG_SEND, PIPELINE_WORKERS, PIPELINE_QUEUE_LIMIT
-    global ACCOUNT_GUARD, WINDOW_HWND, STICKER_TEST_ON
+    global ACCOUNT_GUARD, WINDOW_HWND, STICKER_TEST_ON, STICKER_COLLECT
     global CARE_ENABLED, CARE_QUIET_MIN
     global STALE_AFTER, SYSTEM_SENDER_NAMES, BASE_SYSTEM_SENDERS, MASTER_WXID
     global VOICE_ENABLED, VOICE_BASE_URL, VOICE_MODEL, VOICE_API_KEY, VOICE_TIMEOUT, VOICE_MAX_SECONDS
@@ -482,6 +483,7 @@ def reload_config(path=None):
     # 桥接先起、后开总闸就永久不生效（测试队列停在「排队中」，回复也不带图）。
     try:
         STICKER_TEST_ON = _as_bool(((cfg.get("features") or {}).get("stickers", False)), False)
+        STICKER_COLLECT = _as_bool((cfg.get("sticker") or {}).get("collectReceived", False), False)
     except Exception:
         pass
 
@@ -3707,11 +3709,21 @@ def main():
         """表情包 → 文字描述；失败返回空串（调用方跳过，不回话）。"""
         try:
             import base64
-            from emoji_vision import load_preview
+            from emoji_vision import load_preview, save_original
+            def collect_original(raw, image_format):
+                if not STICKER_COLLECT:
+                    return
+                try:
+                    save_original(os.path.join(ROOT, 'data', '收集的表情包'), raw, image_format)
+                except Exception as exc:
+                    # 收集失败不能使本来能识别的消息变成不回复；不记录原图或下载地址。
+                    log('表情包收集失败 type=%s code=%s status=%s detail=保存原图失败' %
+                        (type(exc).__name__, getattr(exc, 'errno', '') or '', getattr(exc, 'status_code', '') or ''))
             preview = None
             # 本地缓存落盘比消息入库慢：三轮等本地，最后一轮才允许回源 CDN。
             for attempt in range(4):
-                preview = load_preview(db.account_dir, msg.get("content"), allow_network=(attempt == 3))
+                preview = load_preview(db.account_dir, msg.get("content"), allow_network=(attempt == 3),
+                                       on_original=collect_original if STICKER_COLLECT else None)
                 if preview:
                     break
                 if attempt < 3:
@@ -4052,16 +4064,20 @@ def main():
                     claim_and_send_sticker(sticker, expected_chat=target, expected_username=username)
                 return
 
-            log("回复", ("群" if is_group else "私聊"), target, "→", nickname, "：", (bubbles[0] or "")[:40])
+            log('[delivery] stage=reply chatType=%s bubbles=%d chars=%d' %
+                ('group' if is_group else 'private', len(bubbles), sum(len(x or '') for x in bubbles)))
 
             first = True
             # Select once per complete reply, never once per text bubble.
+            if data.get('error') or data.get('commandType'):
+                log('[voice] stage=decision result=skip reason=error_or_command_reply')
             if (not data.get("error") and not data.get("commandType")
-                    and voice_reply.choose(voice_reply.settings(ROOT), content, is_group, random.random)):
+                    and voice_reply.choose(voice_reply.settings(ROOT), content, is_group, random.random, log=log)):
                 spoken = "\n".join(line.strip() for line in bubbles if line.strip())
                 if send_voice_reply(spoken, target, username):
+                    log('[delivery] stage=voice result=handled textFallback=false stickerFallback=false reason=voice_may_have_sent')
                     return  # Voice replaces text and stickers; uncertain sends are not repeated.
-                log("语音合成或准备失败，回退本条原始文字：", target)
+                log('[voice] stage=delivery result=text_fallback reason=prepare_or_synthesis_failed')
             for line in bubbles:
                 if not line:
                     continue
@@ -4080,7 +4096,7 @@ def main():
                     if not line.startswith("@"):
                         line = "@%s %s" % (mention, line)
                 if not send_text(line, target, username, quote_text=(content if first and QUOTE_REPLY else None)):
-                    log("文字发送失败，停止本次后续气泡和表情包：", target)
+                    log('[delivery] stage=text result=failed reason=send_failed remainingBubbles=cancelled stickers=cancelled')
                     return
                 first = False
                 time.sleep(0.6)
@@ -4089,6 +4105,8 @@ def main():
             _stk = data.get("sticker") or None
             if STICKER_TEST_ON and isinstance(_stk, dict):
                 claim_and_send_sticker(_stk, expected_chat=target, expected_username=username)
+            elif STICKER_TEST_ON:
+                log('[sticker] stage=delivery result=skip reason=no_job_in_reply')
         except Exception as e:
             log("处理消息异常：", repr(e))
 
@@ -4773,6 +4791,27 @@ def main():
     # 两者同名，历史上调用处照模块级签名传过关键字参数，启动必抛 TypeError。
     global REMINDER_RUNNER
     REMINDER_RUNNER = start_reminder_watch()
+    # 复用已钉住账号的 DB；只有启动器明确请求时才读 sns.db，不干扰收发线程。
+    moments_reader = None
+    try:
+        from moments import MomentsReader
+        def moments_interact(action, query):
+            from moments_actions import perform
+            from wechatauto import WeChat
+            # 与聊天发送共用锁和账号检查，避免朋友圈评论落入聊天输入框。
+            with send_lock:
+                if game_running() or foreground_is_fullscreen() or not account_send_allowed('朋友圈'):
+                    return False
+                with gui_lock:
+                    if gui is None:
+                        return False
+                    bind_gui_window(gui)
+                    return perform(WeChat(gui=gui, db=db).Moment, action, query)
+        moments_reader = MomentsReader(db, LOCAL_HTTP, bot_url.rsplit('/webhook', 1)[0],
+                                       {'x-bot-token': token, 'x-whale-bridge': '1'}, log,
+                                       interact=moments_interact).start()
+    except Exception as exc:
+        log('朋友圈读取通道未启动 type=%s' % type(exc).__name__)
     log("已启动。鲸鲸地址：", bot_url)
 
     # 就绪标记：外部（守护脚本 / 自检）据此判断「进程在，但可能卡在初始化」
@@ -4794,6 +4833,8 @@ def main():
             time.sleep(1)
     except KeyboardInterrupt:
         log("正在退出…")
+        if moments_reader is not None:
+            moments_reader.stop()
         if REMINDER_RUNNER is not None:
             try:
                 REMINDER_RUNNER.stop()

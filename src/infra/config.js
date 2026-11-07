@@ -178,6 +178,7 @@ const DEFAULT_CONFIG = {
   // 提醒：规则和 care 同语义（每天上限 / 刚聊过先跳过），配置独立、界面独立。
   // 提醒不设时间段：它是用户指定的准点事件，卡时间窗只会让提醒发不出去。
   reminder: { enabled: true, maxPerDay: 0, quietAfterMinutes: 0 },
+  diary: { enabled: false, time: '23:00' },
   // 别人发链接时，读一下标题/摘要/文章正文（视频只读得到文案）
   links: { enabled: true, timeoutMs: 6000, cacheMinutes: 60 },
   // 魔咒：主人私聊/群里输入这段数字后，获得一段时间的「管理员权限」
@@ -185,6 +186,7 @@ const DEFAULT_CONFIG = {
   // 表情包（实验性）：总闸在 features.stickers，这里只管「怎么挑、发多勤」。
   // 关闭时整个功能不生效：不挑图、不回包带字段、桥接不轮询、测试接口 404。
   sticker: {
+    collectReceived: false,
     dir: 'data/stickers',
     // 三类内置 + 自定义分类：发哪一类仍由模型在回复里用 [[sticker:分类]] 决定，
     // 程序不猜情绪、不按概率配图。demandChance 只决定“这一轮要不要在尾部提醒她带一张”，

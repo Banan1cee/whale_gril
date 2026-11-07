@@ -3,6 +3,8 @@
 const crypto = require('node:crypto');
 const path = require('node:path');
 const stickers = require('../adapters/stickers');
+const { installPresets } = require('../adapters/stickerPresets');
+const { describeError } = require('../infra/errors');
 const probe = require('../infra/probe');
 const ACTIVE = new Set(['queued', 'reserved', 'sending']);
 const TERMINAL = new Set(['confirmed', 'unconfirmed', 'failed', 'cancelled']);
@@ -103,6 +105,14 @@ class StickerService {
     const dir = stickers.stickerDir(this.config, this.config.root);
     try {
       this.restoreBuiltinDirs();
+      try {
+        const installed = await installPresets(this.config, this.config.root);
+        if (installed && this.logger) this.logger.info(`预设表情包已导入：${installed} 张（不覆盖已有图片）`);
+      } catch (err) {
+        const detail = '预设表情包导入失败：' + describeError(err);
+        state.errors.push(detail);
+        if (this.logger) this.logger.warn(detail);
+      }
       const report = await stickers.migrateLegacyAsync(this.config, this.config.root, {
         onProgress: (partial, total) => {
           state.done = partial.moved + partial.deduplicated;
@@ -115,7 +125,7 @@ class StickerService {
       this._discoveredAt = 0;
       this.ensureDiscovered();
       state.done = report.moved + report.deduplicated;
-      state.errors = report.errors.slice(0, 20);
+      state.errors = state.errors.concat(report.errors).slice(0, 20);
       const m = report;
       if (m && (m.moved || m.deduplicated) && this.logger) {
         this.logger.info(`表情包旧分类已并入「开心」：迁移 ${m.moved} 张、去重 ${m.deduplicated} 张`
@@ -211,7 +221,11 @@ class StickerService {
   }
   /** category 由模型在回复里用 [[sticker:分类]] 指定；没给就什么都不发 */
   plan(msg, category = '') {
-    if (!this.reconcile() || msg?.platform !== 'wechat' || !msg.chatId) return null;
+    if (!this.reconcile()) return null;
+    if (msg?.platform !== 'wechat' || !msg.chatId) {
+      this.logger?.info('[sticker] stage=plan result=skip reason=unsupported_target');
+      return null;
+    }
     const key = `wechat:${msg.chatId}`;
     const chatName = msg.chatTitle || msg.chatId;
     // No cooldown after a completed send. An in-flight job remains exclusive until
@@ -219,10 +233,14 @@ class StickerService {
     // 同一会话只允许一条在飞任务：既比会话 key，也比会话名。
     // 手动排队的测试任务 key 为空，只比 key 挡不住它。
     if ([...this.jobs.values()].some(
-      (j) => ACTIVE.has(j.status) && (j.key === key || j.chat === chatName))) return null;
+      (j) => ACTIVE.has(j.status) && (j.key === key || j.chat === chatName))) {
+      this.logger?.info('[sticker] stage=plan result=skip reason=job_in_flight');
+      return null;
+    }
     const hit = stickers.pick({ config: this.config, root: this.config.root, category,
       recent: this.recent.get(key) || [], rng: this.rng });
     if (!hit) {
+      this.logger?.info('[sticker] stage=plan result=skip reason=' + (category ? 'no_usable_image' : 'model_no_category'));
       if (category && this.logger) this.logger.warn(`表情包分类「${category}」没有对应图片，这次没发`);
       return null;
     }
@@ -231,6 +249,7 @@ class StickerService {
       this.logger.warn(`表情包分类「${hit.fallbackFrom}」不存在或无图，改发「${to}」`);
     }
     const added = this.add(hit, chatName, msg.chatId, key, 'reserved');
+    this.logger?.info('[sticker] stage=plan result=reserved job=' + added.id);
     const job = this.jobs.get(added.id);
     // 会话 key 和聊天记录一致（wechat:u:/wechat:g:），ack 回来才写得到同一段上下文
     if (job) job.sessionKey = `wechat:${msg.chatType === 'group' ? 'g' : 'u'}:${String(msg.chatId).slice(0, 120)}`;
@@ -262,6 +281,7 @@ class StickerService {
       job.status = 'failed'; job.error = '表情包文件已删除或不安全'; this._note(job, 'failed'); throw fail(job.error);
     }
     job.status = 'sending';
+    this.logger?.info('[sticker] stage=claim result=sending job=' + job.id);
     return { ...job };
   }
   ack(id, status, error = '') {
@@ -276,6 +296,16 @@ class StickerService {
       this.recent.set(job.key, [...(this.recent.get(job.key) || []), job.path].slice(-10));
     }
     this._note(job, status);
+    const reason = !job.error ? 'none'
+      : /timeout|超时/i.test(job.error) ? 'timeout'
+        : /draft|草稿/i.test(job.error) ? 'draft_not_clear'
+          : /account|账号/i.test(job.error) ? 'account_not_verified'
+            : /chat|target|会话|目标/i.test(job.error) ? 'target_not_verified'
+              : /window|foreground|focus|窗口|前台|焦点/i.test(job.error) ? 'window_not_ready'
+                : /disabled|cancel|关闭|取消/i.test(job.error) ? 'disabled_or_cancelled'
+                  : /image|file|图片|文件/i.test(job.error) ? 'media_invalid'
+                    : /confirm|确认/i.test(job.error) ? 'delivery_unconfirmed' : 'bridge_reported_error';
+    this.logger?.info('[sticker] stage=ack result=' + status + ' job=' + job.id + ' reason=' + reason);
     return { ...job };
   }
   gate(id = '') {
@@ -370,20 +400,9 @@ class StickerService {
     return { demandChance: chance, ensureSend: Boolean(ensure) };
   }
 
-  /** 表情包频率 / 必发：和 stickerLibraryLocal.js 的读法保持一致（离线在线看到同一个值） */
-  _demandSettings() {
-    const sticker = this.config.sticker || {};
-    const raw = Number(sticker.demandChance);
-    const chance = Number.isFinite(raw) ? Math.max(0, Math.min(1, raw)) : 0.7;
-    const ensure = [true, 1, 'true', '1', 'on', 'yes'].includes(
-      typeof sticker.ensureSend === 'string' ? sticker.ensureSend.toLowerCase() : sticker.ensureSend);
-    return { demandChance: chance, ensureSend: Boolean(ensure) };
-  }
-
   _statusPayload(dir, emotions, queue) {
     return { ok: true, enabled: true, generation: this.generation, dir, migration: this.migration,
       configuredDir: this.config.sticker?.dir || '',
-      ...this._demandSettings(),
       ...this._demandSettings(),
       maintenance: { ...this.maintenance, errors: this.maintenance.errors.slice(0, 5) },
       testChat: this.config.sticker?.testChat || '文件传输助手', emotions, ...queue };

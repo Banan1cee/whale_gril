@@ -134,7 +134,27 @@ try {
   check('package.json 可解析', false, e.message);
 }
 
-// 8) 不能把自己的隐私带进包里：密钥、真实 wxid、账号目录名、群号、手机号、邮箱、
+// 8) 通用复制规则排除了 PNG，预设必须单独进包；逐张校验，不能只检查清单还在。
+try {
+  const crypto = require('node:crypto');
+  const manifest = JSON.parse(read('assets/stickers/manifest.json'));
+  const files = manifest.files;
+  if (manifest.version !== 1 || !Array.isArray(files) || files.length !== 27) throw new Error('预设清单应包含 27 张图片');
+  if (new Set(files.map(item => item.file)).size !== files.length) throw new Error('预设清单包含重复文件');
+  for (const label of ['傲娇', '开心', '炸毛']) {
+    if (files.filter(item => item.file.startsWith(label + '/')).length !== 9) throw new Error(label + ' 应包含 9 张图片');
+  }
+  for (const item of files) {
+    if (!/^(傲娇|开心|炸毛)\/whale-[a-f0-9]{16}\.png$/.test(item.file)) throw new Error('预设文件路径无效');
+    const bytes = fs.readFileSync(path.join(root, 'assets', 'stickers', item.file));
+    if (crypto.createHash('sha256').update(bytes).digest('hex') !== item.sha256) throw new Error('预设图片缺失或校验失败：' + item.file);
+  }
+  check('预设表情包清单及图片完整', true, '三类各 9 张，27 张 SHA-256 一致');
+} catch (e) {
+  check('预设表情包清单及图片完整', false, e.message);
+}
+
+// 9) 不能把自己的隐私带进包里：密钥、真实 wxid、账号目录名、群号、手机号、邮箱、
 //    本机用户名路径，以及 exe/dll 里的调试路径。
 //    这些以前都漏过：BUGS.md 写了真实路径、真实小号目录名进了测试、带 PDB 路径的 exe
 //    进了仓库。规则与遍历统一收在 scripts/privacy-scan.js，这里只把它接进自检。

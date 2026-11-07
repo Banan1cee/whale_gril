@@ -133,6 +133,14 @@ namespace WhaleLauncher
             return text;
         }
 
+        public static string Detail(ApiResult res)
+        {
+            var raw = (res?.Raw ?? "").Trim();
+            if (raw.Length == 0) return res?.Error ?? "";
+            raw = raw.Replace("\r", " ").Replace("\n", " ");
+            return raw.Length > 120 ? raw.Substring(0, 120) + "…" : raw;
+        }
+
         public static string Esc(string s)
         {
             if (s == null) return "";

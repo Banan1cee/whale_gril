@@ -26,6 +26,24 @@
                       HorizontalScrollBarVisibility="Disabled" FocusVisualStyle="{x:Null}">
             <StackPanel Margin="0,0,10,0">
 
+                <Border Style="{StaticResource Card}" Padding="12" Margin="0,0,0,12">
+                    <StackPanel>
+                        <TextBlock Text="日记" Style="{StaticResource H2}" Margin="0,0,0,6" />
+                        <TextBlock Text="沿用当前人设和聊天模型，根据当天聊天写 Markdown 日记，保存到 data/diary/年份/月-日.md（如 2026/11-06.md）。手动和自动每天合计一篇，当天已有就跳过。内核运行时按电脑本地时间生成；当天错过时间会补写，过去日期不补写。当天无聊天则跳过。"
+                                   Style="{StaticResource Small}" TextWrapping="Wrap" Margin="0,0,0,10" />
+                        <CheckBox x:Name="ChkDiaryEnabled" Content="每天自动写日记（默认关闭）" Margin="0,0,0,8" />
+                        <WrapPanel>
+                            <TextBlock Text="生成时间（HH:mm）" Style="{StaticResource Small}" VerticalAlignment="Center" Margin="0,0,10,0" />
+                            <TextBox x:Name="TxtDiaryTime" Text="23:00" Width="80" Margin="0,0,10,0" />
+                            <Button x:Name="BtnSaveDiary" Content="保存日记设置" Style="{StaticResource Primary}" Click="OnSaveDiary" Margin="0,0,10,0" />
+                            <Button x:Name="BtnWriteDiary" Content="立即写一篇" Style="{StaticResource Ghost}" Click="OnWriteDiary" Margin="0,0,10,0" />
+                            <Button Content="打开日记文件夹" Style="{StaticResource Ghost}" Click="OnOpenDiary" />
+                        </WrapPanel>
+                        <TextBlock x:Name="DiarySettingsStatus" Style="{StaticResource Small}" TextWrapping="Wrap" Margin="0,8,0,0" />
+                        <TextBlock x:Name="DiaryStatus" Style="{StaticResource Small}" TextWrapping="Wrap" Margin="0,4,0,0" />
+                    </StackPanel>
+                </Border>
+
                 <!-- 提醒规则：字段语义和「主动搭话」一致，但这是提醒自己的配置 -->
                 <Border Style="{StaticResource Card}" Padding="12" Margin="0,0,0,12">
                     <StackPanel>

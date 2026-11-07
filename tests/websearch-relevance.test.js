@@ -47,8 +47,8 @@ test('真正相关的资料不会被误杀', () => {
   assert.equal(websearch.keepRelevant('显卡行情', [{ title: '【显卡】显卡报价大全-ZOL', snippet: '行情', url: 'u' }]).length, 1);
 });
 
-test('品牌口语归一成可检索型号名', () => {
-  assert.match(websearch.cleanQuery('苹果最新的机器是什么'), /iPhone/);
+test('明确产品线才归一品牌，模糊机器保留苹果', () => {
+  assert.match(websearch.cleanQuery('苹果最新的机器是什么'), /苹果/);
   assert.match(websearch.cleanQuery('苹果最新的笔记本'), /Mac/);
   assert.equal(websearch.cleanQuery('帮我查一下现在的显卡行情'), '显卡行情');
 });

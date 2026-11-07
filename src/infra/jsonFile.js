@@ -17,4 +17,21 @@ function readJson(file, fallback = null) {
   }
 }
 
-module.exports = { readJson };
+/** 旧快照的增量日志可能因断电留下半截行；跳过坏行，但不改写原始文件。 */
+function readJournal(file) {
+  let raw = '';
+  try {
+    raw = fs.readFileSync(file + '.journal', 'utf8');
+  } catch {
+    return [];
+  }
+  const out = [];
+  for (const line of raw.split('\n')) {
+    const s = line.trim();
+    if (!s) continue;
+    try { out.push(JSON.parse(s)); } catch { /* 半截行跳过 */ }
+  }
+  return out;
+}
+
+module.exports = { readJson, readJournal };
